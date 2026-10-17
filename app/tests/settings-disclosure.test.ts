@@ -18,12 +18,12 @@ test("one action verifies download, placement, CPU and saved global selection", 
   assert.match(view, /get_model_download_catalog/);
   assert.match(view, /read_model_download/);
   assert.match(view, /downloads.set/);
-  assert.match(view, /sourceType === "download" && item.download\?\.recipeHash === option.review.recipeHash/);
+  assert.match(view, /sourceType === "download" && canReuseOfficialModel\(item, option\)/);
 });
 test("uncertain model writers are retained until cancellation and durable readback", () => {
   const view = source("model-inspection.tsx");
   assert.match(view, /let unresolved: Pending \| null = null/);
-  assert.match(view, /retain\(\{ token, stage, \.\.\.context \}\)/);
+  assert.match(view, /retain\(\{ token, stage, \.\.\.context, startedAtMs: startedAt.current! \}\)/);
   assert.match(view, /lifetime.active \|\| !lifetime.cancelled/);
   assert.match(view, /item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded/);
   assert.match(view, /assertDownloadCopyResult\(await invoke\("get_downloaded_model_placement_result"/);
@@ -35,7 +35,7 @@ test("uncertain model writers are retained until cancellation and durable readba
 test("local import is removed and unverified installed runtimes cannot be executed", () => {
   const view = source("model-inspection.tsx");
   assert.doesNotMatch(view, /ModelImportGuide|ローカルから取り込む|place_model_package|inspect_model_package|<CommonModal/);
-  assert.match(view, /disabled=\{item.sourceType !== "download" && !canReviewApplication\(item\)\}/);
+  assert.match(view, /disabled=\{!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication\(item.entry\)\}/);
   assert.match(view, /entry.sourceType !== "download" && !canReviewApplication\(entry\)\) throw Error/);
   const native=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
   assert.doesNotMatch(native,/inspect_model_package|select_model_files|place_model_package|mod model_file_dialog/);

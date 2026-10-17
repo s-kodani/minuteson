@@ -94,10 +94,19 @@ fn worker_fixture_rows(
     std::fs::write(&embedding, mode).unwrap();
     std::fs::write(&cli, b"fixture").unwrap();
     let mut engine = SherpaConfig {
-        executable: Fingerprint::capture(&cli, &|| false).unwrap(),
-        segmentation_model: Fingerprint::capture(&segmentation, &|| false).unwrap(),
-        embedding_model: Fingerprint::capture(&embedding, &|| false).unwrap(),
-        runtime_libraries: vec![Fingerprint::capture(&library, &|| false).unwrap()],
+        executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
+        segmentation_model: Fingerprint::capture(
+            &segmentation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
+        embedding_model: Fingerprint::capture(&embedding, &crate::test_support::never_cancelled)
+            .unwrap(),
+        runtime_libraries: vec![Fingerprint::capture(
+            &library,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()],
         threads: 1,
         cluster_threshold_milli: 500,
         window_shift_milli: 500,
@@ -129,7 +138,7 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
     )
     .unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
-    engine.executable = Fingerprint::capture(&cli, &|| false).unwrap();
+    engine.executable = Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap();
     let helper = PathBuf::from(
         std::env::var("MON_EMBEDDING_HELPER").expect("dedicated check must provide signed helper"),
     );
@@ -170,9 +179,14 @@ fn saved_run_worker_preserves_pcm_times_edits_and_matches_features_not_local_lab
         let original = storage.load_current_analysis(&meeting).unwrap().unwrap();
         let draft = storage.load_transcript_draft(&meeting).unwrap();
         assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, job.id);
-        let id = process(&storage, &job.id, &|| false, &|_| {})
-            .unwrap()
-            .unwrap();
+        let id = process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
+        .unwrap()
+        .unwrap();
         let candidate = storage
             .load_visible_analysis(&meeting, &id)
             .unwrap()
@@ -255,11 +269,16 @@ fn saved_run_worker_preserves_pcm_times_edits_and_matches_features_not_local_lab
 fn saved_run_worker_pause_retry_reopen_reuses_exact_completed_features() {
     let (root, storage, meeting, job) = worker_fixture("voice_fixture", None);
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|snapshot| {
-        if snapshot.completed_units == 1 && snapshot.state == "running" {
-            storage.request_job_pause(&job.id, "user").unwrap();
+    assert!(process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.completed_units == 1 && snapshot.state == "running" {
+                storage.request_job_pause(&job.id, "user").unwrap();
+            }
         }
-    })
+    )
     .unwrap()
     .is_none());
     let saved = storage.fixed_job_input(&job.id).unwrap();
@@ -287,9 +306,14 @@ fn saved_run_worker_pause_retry_reopen_reuses_exact_completed_features() {
     drop(storage);
     let storage = Storage::open(root.path().to_owned()).unwrap();
     assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, retry.id);
-    let id = process(&storage, &retry.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let id = process(
+        &storage,
+        &retry.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(storage.fixed_job_input(&job.id).unwrap(), saved);
     assert_eq!(
         storage.fixed_job_input(&retry.id).unwrap().1.unwrap()["outputs"][0],
@@ -323,21 +347,26 @@ fn saved_run_worker_rejects_changed_gap_at_publication_and_changed_model_at_resu
         let original = storage.load_current_analysis(&meeting).unwrap();
         let draft = storage.load_transcript_draft(&meeting).unwrap();
         storage.acquire_next_job().unwrap().unwrap();
-        let output = process(&storage, &job.id, &|| false, &|snapshot| {
-            if snapshot.state == "running"
-                && snapshot.completed_units == if change_gap { 2 } else { 1 }
-            {
-                if change_gap {
-                    crate::storage::with_test_database(&storage, |connection| {
-                        connection
-                            .execute("UPDATE audio_gaps SET reason_code='changed'", [])
-                            .unwrap()
-                    });
-                } else {
-                    storage.request_job_pause(&job.id, "user").unwrap();
+        let output = process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|snapshot| {
+                if snapshot.state == "running"
+                    && snapshot.completed_units == if change_gap { 2 } else { 1 }
+                {
+                    if change_gap {
+                        crate::storage::with_test_database(&storage, |connection| {
+                            connection
+                                .execute("UPDATE audio_gaps SET reason_code='changed'", [])
+                                .unwrap()
+                        });
+                    } else {
+                        storage.request_job_pause(&job.id, "user").unwrap();
+                    }
                 }
-            }
-        });
+            },
+        );
         if change_gap {
             assert!(output.is_err());
         } else {
@@ -345,7 +374,13 @@ fn saved_run_worker_rejects_changed_gap_at_publication_and_changed_model_at_resu
             std::fs::write(root.path().join("embedding.onnx"), b"same_voice_fixture").unwrap();
             storage.resume_job(&job.id).unwrap();
             storage.acquire_next_job().unwrap().unwrap();
-            assert!(process(&storage, &job.id, &|| false, &|_| {}).is_err());
+            assert!(process(
+                &storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
+            .is_err());
             assert_eq!(std::fs::read(root.path().join("calls")).unwrap(), b"x");
         }
         assert_eq!(storage.load_current_analysis(&meeting).unwrap(), original);
@@ -365,7 +400,7 @@ fn fixture() -> (tempfile::TempDir, Storage, String, Parameters, JobSpec) {
     let file = |name: &str| {
         let path = root.path().join(name);
         std::fs::write(&path, b"fixture").unwrap();
-        Fingerprint::capture(&path, &|| false).unwrap()
+        Fingerprint::capture(&path, &crate::test_support::never_cancelled).unwrap()
     };
     let helper = file("helper");
     let library = file("libsherpa-onnx-c-api.dylib");
@@ -451,7 +486,7 @@ fn known_diarization_conditions_and_feature_windows_are_fixed_and_not_local_requ
             &spec,
             &parameters,
             index,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     }
@@ -490,13 +525,27 @@ fn known_diarization_result_refuses_wrong_origin_run_window_vector_and_partial_f
         };
         let changed: ResultFile = serde_json::from_value(bytes).unwrap();
         assert!(
-            validate_result(&changed, &spec, &parameters, 1, &|| false).is_err(),
+            validate_result(
+                &changed,
+                &spec,
+                &parameters,
+                1,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{field}"
         );
     }
     let mut changed = valid.clone();
     changed.features.as_mut().unwrap()[0].first_frame += 1;
-    assert!(validate_result(&changed, &spec, &parameters, 1, &|| false).is_err());
+    assert!(validate_result(
+        &changed,
+        &spec,
+        &parameters,
+        1,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let mut changed = serde_json::to_value(valid).unwrap();
     changed["features"][0]["output"]["vectorBits"][0] = json!("7fc00000");
     assert!(validate_result(
@@ -504,7 +553,7 @@ fn known_diarization_result_refuses_wrong_origin_run_window_vector_and_partial_f
         &spec,
         &parameters,
         1,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
 }
@@ -552,7 +601,7 @@ fn tiny_turns_keep_local_groups_and_exact_overlap_without_fabricating_feature_sa
                 speaker: 1,
             },
         ],
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(selected.groups.len(), 2);
@@ -579,7 +628,7 @@ fn tiny_turns_keep_local_groups_and_exact_overlap_without_fabricating_feature_sa
                 speaker: 1,
             },
         ],
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(selected.windows.len(), 1);
@@ -637,26 +686,38 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
     for partial in [false, true] {
         let (root, storage, _meeting, job) = worker_fixture("voice_fixture", None);
         storage.acquire_next_job().unwrap().unwrap();
-        process(&storage, &job.id, &|| false, &|snapshot| {
-            if partial && snapshot.completed_units == 1 && snapshot.state == "running" {
-                storage.request_job_pause(&job.id, "user").unwrap();
-            }
-        })
+        process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|snapshot| {
+                if partial && snapshot.completed_units == 1 && snapshot.state == "running" {
+                    storage.request_job_pause(&job.id, "user").unwrap();
+                }
+            },
+        )
         .unwrap();
         let saved = storage.fixed_job_input(&job.id).unwrap();
         let calls = std::fs::read(root.path().join("calls")).unwrap();
         let features = std::fs::read(root.path().join("embedding.log")).unwrap();
         let destination = tempfile::tempdir().unwrap();
         let archive = destination.path().join("known.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let target_root = tempfile::tempdir().unwrap();
         let target = Storage::open(target_root.path().to_owned()).unwrap();
         let prepared = target
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let confirmation = prepared.preview().confirmation_id;
         let receipt = prepared
-            .publish(&target, &confirmation, &|| false, &|_| {})
+            .publish(
+                &target,
+                &confirmation,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         let restored_meeting = &receipt.meeting_ids[0];
         let jobs = target.list_jobs(restored_meeting).unwrap();
@@ -693,8 +754,14 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
         let rebuilt_parameters = envelope(&rebuilt.0).unwrap().diarization;
         let checkpoint: Checkpoint = serde_json::from_value(rebuilt.1.unwrap()).unwrap();
         for (index, output) in checkpoint.outputs.iter().enumerate() {
-            let restored_result =
-                load_output(&target, &rebuilt.0, &rebuilt_parameters, output, &|| false).unwrap();
+            let restored_result = load_output(
+                &target,
+                &rebuilt.0,
+                &rebuilt_parameters,
+                output,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let old_checkpoint: Checkpoint =
                 serde_json::from_value(saved.1.clone().unwrap()).unwrap();
             let old_parameters = envelope(&saved.0).unwrap().diarization;
@@ -703,7 +770,7 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 &saved.0,
                 &old_parameters,
                 &old_checkpoint.outputs[index],
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             assert_eq!(restored_result.features, old_result.features);
@@ -755,15 +822,18 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 .join("models");
             let package = uuid::Uuid::new_v4().to_string();
             let check = uuid::Uuid::new_v4().to_string();
-            let inspected =
-                crate::model_inspection::inspect(package_source.path(), &|| false).unwrap();
+            let inspected = crate::model_inspection::inspect(
+                package_source.path(),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             crate::model_placement::place(
                 &target,
                 &models,
                 package_source.path(),
                 &package,
                 &inspected.review_hash,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             let report = crate::model_compatibility::check(
@@ -772,7 +842,7 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 &check,
                 &package,
                 &inspected.review_hash,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             assert_eq!(serde_json::to_value(report).unwrap()["state"], "succeeded");
@@ -786,7 +856,7 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 &package,
                 &inspected.review_hash,
                 &check,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             let retry = crate::model_rebinding::apply(
@@ -794,7 +864,7 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 &models,
                 &uuid::Uuid::new_v4().to_string(),
                 &preview,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             assert_eq!(
@@ -806,9 +876,14 @@ fn saved_run_worker_additive_restore_preserves_features_and_resumes_without_reex
                 before_retry_calls
             );
             assert_eq!(target.acquire_next_job().unwrap().unwrap().id, retry.id);
-            let id = process(&target, &retry.id, &|| false, &|_| {})
-                .unwrap()
-                .unwrap();
+            let id = process(
+                &target,
+                &retry.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(
                 std::fs::read(root.path().join("calls")).unwrap().len(),
                 before_retry_calls.len() + 1
@@ -865,7 +940,12 @@ fn saved_run_worker_keeps_real_overlap_and_refuses_requested_count_that_would_me
             "0.000 -- 4.000 speaker_00\n2.000 -- 3.000 speaker_01\n4.000 -- 5.000 speaker_01\n",
         );
         storage.acquire_next_job().unwrap().unwrap();
-        let output = process(&storage, &job.id, &|| false, &|_| {});
+        let output = process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        );
         if count.is_some() {
             assert!(output.is_err());
             assert!(storage
@@ -920,13 +1000,20 @@ fn saved_run_worker_automatic_handoff_preserves_existing_text_without_explicit_r
     sherpa.standard.min_duration_off_ms = 0;
     storage.save_diarization_preferences(0, sherpa).unwrap();
     storage.ensure_analysis_flow(&meeting).unwrap();
-    crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
+    crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     let transcription = storage.acquire_next_job().unwrap().unwrap();
     assert_eq!(transcription.kind, "transcription");
-    crate::transcription::process(&storage, &transcription.id, &|| false, &|_| {})
-        .unwrap()
+    crate::transcription::process(
+        &storage,
+        &transcription.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
+    crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
-    crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
     let flow = storage.analysis_flow(&meeting).unwrap().unwrap();
     assert_eq!(flow.stage, "diarization", "{:?}", flow.error_message);
     let job = storage.acquire_next_job().unwrap().unwrap();
@@ -936,10 +1023,16 @@ fn saved_run_worker_automatic_handoff_preserves_existing_text_without_explicit_r
         storage.fixed_job_input(&job.id).unwrap().0.parameters["schemaVersion"],
         2
     );
-    let id = super::super::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
+    let id = super::super::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
+    crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
-    crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
     let flow = storage.analysis_flow(&meeting).unwrap().unwrap();
     assert_eq!(flow.stage, "attention", "{:?}", flow.error_message);
     assert_eq!(

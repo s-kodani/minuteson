@@ -31,11 +31,17 @@ impl Fixture {
         match operation {
             Some(id) => self
                 .analysis
-                .begin_audio_deletion_maintenance(&self.audio.storage, id, false, false, &|| false)
+                .begin_audio_deletion_maintenance(
+                    &self.audio.storage,
+                    id,
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap(),
             None => self
                 .analysis
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap(),
         }
     }
@@ -46,7 +52,7 @@ impl Fixture {
             Work::AudioDeletion(AudioTarget::Fresh(self.audio.meeting.clone()), previous),
             &s,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
     }
@@ -62,7 +68,7 @@ impl Fixture {
             Work::AudioDeletion(AudioTarget::Pending(operation.into()), previous),
             &s,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
     }
@@ -177,16 +183,21 @@ fn audio_controller_review_is_readonly_paged_and_has_no_serialized_permit() {
 fn audio_controller_requires_live_shared_lease_and_rejects_busy_recording() {
     let f = Fixture::new();
     let result = Work::AudioDeletion(AudioTarget::Fresh(f.audio.meeting.clone()), None)
-        .run_admitted(&f.audio.storage, &|| false, &|_| {}, None);
+        .run_admitted(
+            &f.audio.storage,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+            None,
+        );
     assert!(result.error.is_some() && result.selection.is_none());
     assert!(f
         .analysis
-        .begin_data_maintenance(true, false, &|| false)
+        .begin_data_maintenance(true, false, &crate::test_support::never_cancelled)
         .is_err());
     let lease = f.lease(None);
     assert!(f
         .analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     drop(lease);
     assert_eq!(f.count(), 0);
@@ -774,7 +785,7 @@ fn audio_controller_cold_restart_keep_requires_native_admission_and_another_rest
     assert!(f.audio.storage.data_write_blocked());
     assert!(f
         .analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     let pending = f.pending(&operation);
     assert!(pending.audio_deletion_preview.as_ref().unwrap().pending);
@@ -838,15 +849,23 @@ fn audio_controller_completed_receipt_can_be_acknowledged_without_another_consen
 fn audio_controller_cancelled_lease_is_not_reused_after_exit_is_aborted() {
     let f = Fixture::new();
     let lease = f.lease(None);
-    let mut prepared =
-        audio_deletion::Prepared::fresh(&f.audio.storage, &f.audio.meeting, &lease, &|| false)
-            .unwrap();
+    let mut prepared = audio_deletion::Prepared::fresh(
+        &f.audio.storage,
+        &f.audio.meeting,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let confirmation = prepared.preview().confirmation_id;
     f.analysis.begin_exit().unwrap();
     f.analysis.abort_shutdown();
     assert!(lease.cancelled());
     assert!(prepared
-        .refresh(&f.audio.storage, &lease, &|| false)
+        .refresh(
+            &f.audio.storage,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(prepared
         .execute(
@@ -854,7 +873,7 @@ fn audio_controller_cancelled_lease_is_not_reused_after_exit_is_aborted() {
             &lease,
             &confirmation,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -893,7 +912,13 @@ fn audio_controller_malformed_and_oversized_records_remain_visible_without_autho
         assert!(f.audio.storage.create_meeting("MUST NOT WRITE").is_err());
         assert!(f
             .analysis
-            .begin_audio_deletion_maintenance(&f.audio.storage, &operation, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &f.audio.storage,
+                &operation,
+                false,
+                false,
+                &crate::test_support::never_cancelled
+            )
             .is_err());
     }
 }

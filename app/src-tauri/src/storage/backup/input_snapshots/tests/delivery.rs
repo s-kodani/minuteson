@@ -11,8 +11,15 @@ fn restored() -> (
     let f = fixture();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("restored-delivery.monbackup");
-    f.storage.create_backup_archive(&path, &|| false).unwrap();
-    let archive = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    f.storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let archive = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting, owner) =
         restore(&archive, output.path(), root.path(), &f.meeting, &f.session);
@@ -97,7 +104,8 @@ fn restored_delivery_is_in_actual_meeting_deletion_scope_and_old_review_cannot_e
     let admission = AnalysisController::default();
     let lease = admission.begin_notice_storage().unwrap();
     let notice = microphone(&page(&controller, &storage, &lease));
-    let mut stale = Prepared::fresh(&storage, &meeting, &|| false).unwrap();
+    let mut stale =
+        Prepared::fresh(&storage, &meeting, &crate::test_support::never_cancelled).unwrap();
     assert!(stale.preview().execute_allowed);
     ack(
         &controller,
@@ -113,7 +121,7 @@ fn restored_delivery_is_in_actual_meeting_deletion_scope_and_old_review_cannot_e
     let progress = delivery_text(&storage, &owner);
     drop(lease);
     let maintenance = admission
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(stale
         .execute(
@@ -121,7 +129,7 @@ fn restored_delivery_is_in_actual_meeting_deletion_scope_and_old_review_cannot_e
             &maintenance,
             &stale.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .is_err());
@@ -132,7 +140,8 @@ fn restored_delivery_is_in_actual_meeting_deletion_scope_and_old_review_cannot_e
     );
     assert!(storage.get_meeting(&meeting).unwrap().is_some());
 
-    let mut current = Prepared::fresh(&storage, &meeting, &|| false).unwrap();
+    let mut current =
+        Prepared::fresh(&storage, &meeting, &crate::test_support::never_cancelled).unwrap();
     let confirmation = current.preview().confirmation_id;
     let receipt = current
         .execute(
@@ -140,7 +149,7 @@ fn restored_delivery_is_in_actual_meeting_deletion_scope_and_old_review_cannot_e
             &maintenance,
             &confirmation,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -380,7 +389,9 @@ fn restored_delivery_two_rebackups_keep_display_progress_flat_without_stamping_s
     let immutable = payload(&first.connection.lock().unwrap(), &first_owner);
     let current = delivery_text(&first, &first_owner);
     let path = output.path().join("after-render.monbackup");
-    first.create_backup_archive(&path, &|| false).unwrap();
+    first
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(delivery_text(&first, &first_owner), current);
     assert_eq!(
         payload(&first.connection.lock().unwrap(), &first_owner),
@@ -397,7 +408,12 @@ fn restored_delivery_two_rebackups_keep_display_progress_flat_without_stamping_s
         )
         .unwrap()
         .is_none());
-    let archive = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    let archive = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         archive
             .database
@@ -469,7 +485,9 @@ fn restored_delivery_two_rebackups_keep_display_progress_flat_without_stamping_s
         "render",
     );
     let path = output.path().join("second-render.monbackup");
-    second.create_backup_archive(&path, &|| false).unwrap();
+    second
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         second
             .connection
@@ -483,7 +501,12 @@ fn restored_delivery_two_rebackups_keep_display_progress_flat_without_stamping_s
             .unwrap(),
         transfer
     );
-    let archive = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    let archive = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let third_root = tempfile::tempdir().unwrap();
     let (third, third_meeting, third_owner) = restore(
         &archive,
@@ -569,7 +592,10 @@ fn restored_delivery_corrupt_mutable_state_is_not_reseeded_and_writer_drift_is_f
     }
     let output = tempfile::tempdir().unwrap();
     assert!(storage
-        .create_backup_archive(&output.path().join("corrupt.monbackup"), &|| false)
+        .create_backup_archive(
+            &output.path().join("corrupt.monbackup"),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
 }
 
@@ -1177,7 +1203,7 @@ fn restored_delivery_transfer_rejects_wrong_bindings_duplicate_missing_and_forei
         ) {
             Ok(_) => {
                 assert!(
-                    validate_database(&db, &|| false).is_err(),
+                    validate_database(&db, &crate::test_support::never_cancelled).is_err(),
                     "accepted DB {change}"
                 );
                 db.execute("DELETE FROM recording_sessions WHERE id=?1", params![other])
@@ -1191,7 +1217,7 @@ fn restored_delivery_transfer_rejects_wrong_bindings_duplicate_missing_and_forei
         params![other, other_meeting, "failed", config, bound, valid],
     )
     .unwrap();
-    validate_database(&db, &|| false).unwrap();
+    validate_database(&db, &crate::test_support::never_cancelled).unwrap();
     assert!(db
         .execute(
             "UPDATE recording_sessions SET input_delivery_transfer_json=NULL WHERE id=?1",

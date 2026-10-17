@@ -6,6 +6,7 @@ use crate::storage::{
 };
 use std::path::Path;
 
+#[cfg(test)]
 pub(crate) fn preview(
     storage: &Storage,
     models_root: &Path,
@@ -13,6 +14,29 @@ pub(crate) fn preview(
     package: &str,
     review: &str,
     check: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<ApplyPreview, String> {
+    preview_with_threads(
+        storage,
+        models_root,
+        name,
+        package,
+        review,
+        check,
+        None,
+        cancelled,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preview_with_threads(
+    storage: &Storage,
+    models_root: &Path,
+    name: ProfileName,
+    package: &str,
+    review: &str,
+    check: &str,
+    diarization_threads: Option<u32>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<ApplyPreview, String> {
     let (record, directory) = crate::model_compatibility::verify_success(
@@ -23,7 +47,13 @@ pub(crate) fn preview(
         review,
         cancelled,
     )?;
-    let result = storage.preview_model_profile(name, &record, &directory, check)?;
+    let result = storage.preview_model_profile_with_threads(
+        name,
+        &record,
+        &directory,
+        check,
+        diarization_threads,
+    )?;
     if cancelled() {
         return Err("モデル適用の事前確認を取り消しました".into());
     }

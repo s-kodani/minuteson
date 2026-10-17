@@ -71,7 +71,8 @@ fn id() -> String {
 }
 
 fn listed(root: &Path) -> Value {
-    serde_json::to_value(catalog::catalog(root, &|| false).unwrap()).unwrap()
+    serde_json::to_value(catalog::catalog(root, &crate::test_support::never_cancelled).unwrap())
+        .unwrap()
 }
 #[test]
 fn catalog_missing_root_is_read_only_and_private_unknowns_are_preserved() {
@@ -132,9 +133,9 @@ fn catalog_rejects_links_public_roots_cancellation_and_mutating_directory_snapsh
     assert!(catalog::catalog(&root, &|| true).is_err());
     let linked = temp.path().canonicalize().unwrap().join("linked");
     symlink(&root, &linked).unwrap();
-    assert!(catalog::catalog(&linked, &|| false).is_err());
+    assert!(catalog::catalog(&linked, &crate::test_support::never_cancelled).is_err());
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(catalog::catalog(&root, &|| false).is_err());
+    assert!(catalog::catalog(&root, &crate::test_support::never_cancelled).is_err());
 }
 #[test]
 fn catalog_does_not_follow_canonical_uuid_symlink_entries() {
@@ -190,7 +191,7 @@ fn future_placement_metadata_budget_is_rejected_before_directory_or_fetch() {
         &id(),
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut |_, _, _, _, _, _| {
             fetched += 1;
@@ -238,7 +239,7 @@ fn copy_result_binds_history_to_original_download_and_survives_restart_without_b
         &receipt.recipe_hash,
         &package,
         &receipt.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert!(storage
@@ -326,7 +327,7 @@ fn synthetic_stage(root: &Path, operation: &str) -> DownloadReceipt {
         operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut |url, _, _, output, _, notify| {
             let archive = model_archive();
@@ -339,7 +340,12 @@ fn synthetic_stage(root: &Path, operation: &str) -> DownloadReceipt {
     .unwrap()
 }
 fn read(root: &Path, operation: &str) -> Result<Readback, String> {
-    readback(root, operation, &recipe().hash().unwrap(), &|| false)
+    readback(
+        root,
+        operation,
+        &recipe().hash().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
 }
 
 #[test]
@@ -377,7 +383,7 @@ fn readback_missing_marker_preserves_partial_and_does_not_create_missing_or_unkn
         &operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut |_, _, _, file, _, _| {
             file.write_all(b"part").unwrap();
@@ -490,7 +496,13 @@ fn readback_rejects_links_wrong_confirmation_cancel_and_parent_substitution() {
     let root = private_root(&temp);
     let operation = id();
     synthetic_stage(&root, &operation);
-    assert!(readback(&root, &operation, &"a".repeat(64), &|| false).is_err());
+    assert!(readback(
+        &root,
+        &operation,
+        &"a".repeat(64),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(readback(&root, &operation, &recipe().hash().unwrap(), &|| true).is_err());
     assert!(read(&root, "../outside").is_err());
     let recovered = read(&root, &operation).unwrap();
@@ -521,7 +533,7 @@ fn downloaded_placement_is_distinct_idempotent_private_and_persistent_without_ex
             &receipt.recipe_hash,
             &package,
             &receipt.report.review_hash,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert!(placed.placement_recorded && !placed.ready);
@@ -574,7 +586,9 @@ fn downloaded_placement_is_distinct_idempotent_private_and_persistent_without_ex
         "download"
     );
     assert_eq!(reopened.list_meetings().unwrap().len(), 1);
-    assert!(reopened.prepare_backup_snapshot(&|| false).is_ok());
+    assert!(reopened
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_ok());
 }
 
 #[test]
@@ -594,7 +608,7 @@ fn incomplete_download_or_stale_review_never_creates_placement_intent() {
         &receipt.recipe_hash,
         &id(),
         &"a".repeat(64),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     // Simulate a missing marker after process interruption, not a resume.
@@ -611,7 +625,7 @@ fn incomplete_download_or_stale_review_never_creates_placement_intent() {
         &receipt.recipe_hash,
         &id(),
         &receipt.report.review_hash,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(!models.exists());
@@ -669,7 +683,9 @@ fn download_record_rejects_origin_schema_hash_and_database_source_relabel() {
     drop(db);
     let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
     assert!(storage.list_model_placements().is_err());
-    assert!(storage.prepare_backup_snapshot(&|| false).is_err());
+    assert!(storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
 }
 
 #[test]
@@ -708,7 +724,7 @@ fn interrupted_downloaded_copy_remains_unavailable_after_restart_and_preserves_p
         &receipt.recipe_hash,
         &package,
         &receipt.report.review_hash,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(bytes, std::fs::read(file).unwrap());
@@ -938,7 +954,7 @@ fn direct_fetch(server: &Server, size: u64, hash: &str) -> (Result<(), String>, 
         size,
         hash,
         &mut output,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_| {},
         Duration::from_secs(3),
     );
@@ -1103,7 +1119,7 @@ fn streamed_download_preserves_bound_intent_rechecks_all_files_and_never_install
         &operation,
         &recipe,
         &server,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |n, total| progress.push((n, total)),
     )
     .unwrap();
@@ -1152,7 +1168,7 @@ fn streamed_download_preserves_bound_intent_rechecks_all_files_and_never_install
         &operation,
         &recipe,
         &server,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {}
     )
     .is_err());
@@ -1337,7 +1353,7 @@ fn stalled_server_deadline_kills_and_reaps_only_owned_transport() {
         BIN.len() as u64,
         &hash(BIN),
         &mut output,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_| {},
         Duration::from_millis(150),
     );
@@ -1361,7 +1377,7 @@ fn changed_destination_and_corrupt_fetched_bytes_leave_no_completion_and_preserv
             &operation,
             &recipe,
             &recipe.hash().unwrap(),
-            &|| false,
+            &crate::test_support::never_cancelled,
             &mut |_, _| {},
             &mut |_, size, _, output, _, notify| {
                 output.write_all(&vec![b'x'; size as usize]).unwrap();
@@ -1403,7 +1419,7 @@ fn occupied_operation_and_linked_staging_root_are_not_adopted_or_overwritten() {
         &operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut never_connect
     )
@@ -1419,7 +1435,7 @@ fn occupied_operation_and_linked_staging_root_are_not_adopted_or_overwritten() {
         &id(),
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut never_connect
     )
@@ -1439,7 +1455,7 @@ fn altered_manifest_cannot_relabel_verified_download_as_another_model_or_license
         &operation,
         &recipe,
         &server,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |n, total| {
             if n == total && !changed {
                 changed = true;
@@ -1507,7 +1523,7 @@ fn unwinding_progress_callback_reaps_owned_transport_and_closes_its_connection()
             BIN.len() as u64,
             &hash(BIN),
             &mut output,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &mut |_| panic!("synthetic progress panic"),
             Duration::from_secs(3),
         );

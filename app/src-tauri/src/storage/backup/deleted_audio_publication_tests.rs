@@ -36,10 +36,12 @@ fn native_record(target: &Storage, meeting: &str) -> String {
 
 fn fully_delete(storage: &Storage, meeting: &str) -> String {
     use crate::{analysis_worker::AnalysisController, storage::deletion::operations};
-    let mut prepared = operations::Prepared::fresh(storage, meeting, &|| false).unwrap();
+    let mut prepared =
+        operations::Prepared::fresh(storage, meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     let preview = prepared.preview();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let done = prepared
         .execute(
@@ -47,7 +49,7 @@ fn fully_delete(storage: &Storage, meeting: &str) -> String {
             &lease,
             &preview.confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -63,7 +65,9 @@ fn deletion_relocation_real_restored_audio_history_and_supersession_keep_no_cons
     deleted(&source, &meeting);
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("deletion-relocation-input.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     for full in [false, true] {
         let target = Storage::open(
             root.path()
@@ -71,11 +75,16 @@ fn deletion_relocation_real_restored_audio_history_and_supersession_keep_no_cons
         )
         .unwrap();
         let selected = target
-            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .prepare_additive_restore(&path, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let preview = selected.preview();
         let restored_meeting = selected
-            .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &target,
+                &preview.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap()
             .meeting_ids[0]
             .clone();
@@ -88,9 +97,15 @@ fn deletion_relocation_real_restored_audio_history_and_supersession_keep_no_cons
             db.query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [&operation], |r|r.get::<_, String>(0)).unwrap()
         };
         let before = record(&target.connection.lock().unwrap());
-        let snapshot = target.prepare_relocation_snapshot(&|| false).unwrap();
-        let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
-        handoff.verify(&|| false).unwrap();
+        let snapshot = target
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let handoff = snapshot
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        handoff
+            .verify(&crate::test_support::never_cancelled)
+            .unwrap();
         let envelope: serde_json::Value = serde_json::from_slice(handoff.bytes()).unwrap();
         let records = envelope["deletion_history"]["records"].as_array().unwrap();
         assert!(records.iter().any(
@@ -140,7 +155,7 @@ fn audio_supersession_full_deletion_of_native_history_excludes_it_from_real_back
     assert!(source.get_meeting(&meeting).unwrap().is_none());
     let db = source.connection.lock().unwrap();
     assert_eq!(
-        audio::backup_deleted(&source, &db, &|| false).unwrap(),
+        audio::backup_deleted(&source, &db, &crate::test_support::never_cancelled).unwrap(),
         std::collections::BTreeSet::from([history.clone()])
     );
     assert!(db
@@ -181,16 +196,23 @@ fn audio_supersession_real_restored_history_full_deletion_keeps_original_no_cons
     deleted(&source, &meeting);
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("input.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target_root = root.path().join("retirement-target");
     let target = Storage::open(target_root.clone()).unwrap();
     let available = tests::meeting(&target, "KEEP AVAILABLE");
     let selected = target
-        .prepare_additive_restore(&path, &|| false, &|_| {})
+        .prepare_additive_restore(&path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let preview = selected.preview();
     let restored_meeting = selected
-        .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap()
         .meeting_ids[0]
         .clone();
@@ -211,10 +233,17 @@ fn audio_supersession_real_restored_history_full_deletion_keeps_original_no_cons
         let path = output
             .path()
             .join(format!("retired-round-{round}.monbackup"));
-        let backup = target.create_backup_archive(&path, &|| false).unwrap();
+        let backup = target
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
         assert_eq!(backup.meeting_count, 1);
         assert_eq!(backup.deleted_audio_meeting_count, 0);
-        let archive = read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+        let archive = read(
+            &mut File::open(&path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!serde_json::to_string(&archive.manifest)
             .unwrap()
             .contains("audioHistorySupersession"));
@@ -231,12 +260,17 @@ fn audio_supersession_real_restored_history_full_deletion_keeps_original_no_cons
         );
         let next = Storage::open(root.path().join(format!("retired-round-{round}"))).unwrap();
         let selected = next
-            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .prepare_additive_restore(&path, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let preview = selected.preview();
         assert_eq!(preview.deleted_audio_meeting_count, 0);
         let published = selected
-            .publish(&next, &preview.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &next,
+                &preview.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         assert_eq!(published.meeting_ids.len(), 1);
         assert!(next.recorded_audio_plan(&published.meeting_ids[0]).is_ok());
@@ -255,12 +289,14 @@ fn deleted_audio_publication_selection_preview_is_read_only_replay_restart_and_t
     let output = tempfile::tempdir().unwrap();
     for round in 0..3 {
         let path = output.path().join(format!("round-{round}.monbackup"));
-        let backup = source.create_backup_archive(&path, &|| false).unwrap();
+        let backup = source
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
         let target_root = root.path().join(format!("round-{round}"));
         let target = Storage::open(target_root.clone()).unwrap();
         let before = publication::tests::all_rows(&target.connection.lock().unwrap());
         let mut selected = target
-            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .prepare_additive_restore(&path, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let preview = selected.preview();
         assert_eq!(preview.deleted_audio_meeting_count, 1);
@@ -273,14 +309,26 @@ fn deleted_audio_publication_selection_preview_is_read_only_replay_restart_and_t
             publication::tests::all_rows(&target.connection.lock().unwrap()),
             before
         );
-        let refreshed = selected.refresh(&target, &|| false, &|_| {}).unwrap();
+        let refreshed = selected
+            .refresh(&target, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap();
         assert_eq!(refreshed.batch_id, preview.batch_id);
         assert_ne!(refreshed.confirmation_id, preview.confirmation_id);
         assert!(selected
-            .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &target,
+                &preview.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .is_err());
         let receipt = selected
-            .publish(&target, &refreshed.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &target,
+                &refreshed.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         assert!(!receipt.already_published);
         assert_eq!(receipt.deleted_audio_meeting_count, 1);
@@ -297,9 +345,12 @@ fn deleted_audio_publication_selection_preview_is_read_only_replay_restart_and_t
         let op = native_record(&target, &new);
         let published = publication::tests::all_rows(&target.connection.lock().unwrap());
         let replay = selected
-            .publish(&target, &refreshed.confirmation_id, &|| false, &|_| {
-                panic!("terminal replay must not rebuild")
-            })
+            .publish(
+                &target,
+                &refreshed.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| panic!("terminal replay must not rebuild"),
+            )
             .unwrap();
         assert!(replay.already_published);
         assert_eq!(replay.meeting_ids, receipt.meeting_ids);
@@ -315,9 +366,12 @@ fn deleted_audio_publication_selection_preview_is_read_only_replay_restart_and_t
         drop(target);
         let target = Storage::open(target_root).unwrap();
         let replay = selected
-            .publish(&target, &refreshed.confirmation_id, &|| false, &|_| {
-                panic!("restart replay must not rebuild")
-            })
+            .publish(
+                &target,
+                &refreshed.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| panic!("restart replay must not rebuild"),
+            )
             .unwrap();
         assert!(replay.already_published);
         assert_eq!(replay.meeting_ids, receipt.meeting_ids);
@@ -339,7 +393,9 @@ fn deleted_audio_publication_mixed_archive_and_new_batches_preserve_available_ne
     deleted(&source, &second);
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("mixed.monbackup");
-    let backup = source.create_backup_archive(&path, &|| false).unwrap();
+    let backup = source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target = Storage::open(root.path().join("mixed-target")).unwrap();
     let existing = tests::meeting(&target, "keep existing");
     let before = target.recorded_audio_plan(&existing).unwrap();
@@ -348,7 +404,7 @@ fn deleted_audio_publication_mixed_archive_and_new_batches_preserve_available_ne
     let mut meetings = std::collections::BTreeSet::new();
     for _ in 0..2 {
         let selected = target
-            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .prepare_additive_restore(&path, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let preview = selected.preview();
         assert_eq!(preview.deleted_audio_meeting_count, 2);
@@ -358,7 +414,12 @@ fn deleted_audio_publication_mixed_archive_and_new_batches_preserve_available_ne
         );
         assert!(batches.insert(preview.batch_id.clone()));
         let receipt = selected
-            .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &target,
+                &preview.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         assert_eq!(receipt.meeting_ids.len(), 3);
         let mut deleted_count = 0;
@@ -395,9 +456,17 @@ fn deleted_audio_publication_late_cancellation_rolls_back_native_record_and_file
     let output = tempfile::tempdir().unwrap();
     let (archive, _) = write(&source, output.path());
     let batch = Uuid::new_v4().to_string();
-    let ids = RestoreIds::prepare(&archive, output.path(), &batch, &|| false).unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let ids = RestoreIds::prepare(
+        &archive,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let new = ids.get("meetings", "", &meeting).unwrap();
     let op = ids
         .get(
@@ -462,8 +531,14 @@ fn deleted_audio_publication_late_cancellation_rolls_back_native_record_and_file
     let target = Storage::open(target_root).unwrap();
     let replay = {
         let db = target.connection.lock().unwrap();
-        match RestoreIds::prepare_for_batch(&archive, output.path(), &batch, &db, &|| false)
-            .unwrap()
+        match RestoreIds::prepare_for_batch(
+            &archive,
+            output.path(),
+            &batch,
+            &db,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
         {
             BatchPreparation::Pending(ids) => ids,
             _ => panic!("cancelled transaction must not publish"),
@@ -480,10 +555,19 @@ fn deleted_audio_publication_late_cancellation_rolls_back_native_record_and_file
             .unwrap(),
         op
     );
-    let fixed = FixedData::new(&replay, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(
+        &replay,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(matches!(
-        target.publish_restore(&sealed, &replay, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &replay, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
     assert_eq!(native_record(&target, &new), op);
@@ -501,20 +585,22 @@ fn deleted_audio_publication_commit_failure_rolls_back_unavailable_marker_and_pr
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let target = Storage::open(root.path().join("commit-target")).unwrap();
     let existing = tests::meeting(&target, "keep on commit failure");
     let before = target.recorded_audio_plan(&existing).unwrap();
     {
         let mut db = target.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
-        BatchPlan::new(&ids, &|| false)
+        BatchPlan::new(&ids, &crate::test_support::never_cancelled)
             .unwrap()
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap();
         tx.commit().unwrap();
     }
@@ -550,7 +636,9 @@ fn deleted_audio_publication_commit_failure_rolls_back_unavailable_marker_and_pr
             }
         }))
         .unwrap();
-    assert!(target.publish_restore(&sealed, &ids, &|| false).is_err());
+    assert!(target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     target
         .connection
@@ -576,7 +664,9 @@ fn deleted_audio_publication_commit_failure_rolls_back_unavailable_marker_and_pr
         0
     );
     assert!(matches!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
     native_record(&target, &new);
@@ -592,27 +682,39 @@ fn deleted_audio_publication_omissions_require_persisted_native_record_not_only_
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    let seed = Seed::prepare(&sealed, &ids, &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    let seed = Seed::prepare(&sealed, &ids, &crate::test_support::never_cancelled).unwrap();
     let target = Storage::open(root.path().join("omission-target")).unwrap();
     let mut db = target.connection.lock().unwrap();
     let mut tx = db.transaction().unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON").unwrap();
-    publication::append(&tx, sealed.connection(), &|| false).unwrap();
+    publication::append(
+        &tx,
+        sealed.connection(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     tx.execute(
         "UPDATE restore_batches SET state='published',published_at=?1 WHERE batch_id=?2",
         params![crate::storage::now_ms().unwrap(), ids.batch_id],
     )
     .unwrap();
-    assert!(crate::storage::backup::exclusions::retain(&tx, &ids, &|| false).is_err());
+    assert!(crate::storage::backup::exclusions::retain(
+        &tx,
+        &ids,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(
         tx.query_row("SELECT count(*) FROM restore_omitted_assets", [], |r| r
             .get::<_, i64>(0))
@@ -621,6 +723,12 @@ fn deleted_audio_publication_omissions_require_persisted_native_record_not_only_
     );
     // Missing rows, an otherwise valid published ledger and even a real sealed
     // seed do not stand in for the persisted typed native unavailable marker.
-    assert!(restored::verify_retained(&tx, &target.managed_anchor, &seed, &|| false).is_err());
+    assert!(restored::verify_retained(
+        &tx,
+        &target.managed_anchor,
+        &seed,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     tx.rollback().unwrap();
 }

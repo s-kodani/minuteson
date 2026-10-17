@@ -1,7 +1,7 @@
 use super::*;
 fn lease() -> crate::analysis_worker::data_maintenance::DataMaintenanceLease {
     crate::analysis_worker::AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 use std::{cell::Cell, path::PathBuf};
@@ -39,15 +39,31 @@ impl Fixture {
         }
     }
     fn prepared(&self) -> Prepared {
-        Prepared::fresh(&self.storage, &self.meeting, &|| false).unwrap()
+        Prepared::fresh(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn pending(&self) -> Prepared {
         let p = self.prepared();
         let Target::Fresh(c) = &p.target else {
             unreachable!()
         };
-        intent::prepare(&self.storage, &p.preview.operation_id, c, &|| false).unwrap();
-        Prepared::pending(&self.storage, &p.preview.operation_id, &|| false).unwrap()
+        intent::prepare(
+            &self.storage,
+            &p.preview.operation_id,
+            c,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        Prepared::pending(
+            &self.storage,
+            &p.preview.operation_id,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn unaffected(&self) {
         assert!(self.storage.get_meeting(&self.other).unwrap().is_some());
@@ -63,7 +79,14 @@ fn deletion_review_is_read_only_and_wrong_confirmation_never_writes_or_removes()
     assert_eq!(p.preview.bytes, 6);
     assert!(listing(&f.storage).unwrap().items.is_empty());
     assert!(p
-        .execute(&f.storage, &lease(), "wrong", false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            "wrong",
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     assert!(listing(&f.storage).unwrap().items.is_empty());
     assert!(f.audio.exists());
@@ -79,7 +102,7 @@ fn automatic_cleanup_cancels_unstarted_without_deleting_changed_audio() {
         &f.storage,
         &lease(),
         &p.preview.operation_id,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .unwrap());
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP CHANGED AUDIO");
@@ -116,7 +139,7 @@ fn automatic_cleanup_finishes_fixed_scope_and_preserves_reappeared_files() {
             &f.storage,
             &lease(),
             &p.preview.operation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(result, !changed);
@@ -144,14 +167,14 @@ fn automatic_cleanup_requires_active_admission_and_honors_cancellation() {
     .is_err());
     let analysis = crate::analysis_worker::AnalysisController::default();
     let invalid = analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     analysis.begin_exit().unwrap();
     assert!(crate::storage::deletion::automatic::meeting(
         &f.storage,
         &invalid,
         &p.preview.operation_id,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(f.audio.exists());
@@ -164,19 +187,38 @@ fn deletion_confirmed_pipeline_only_acknowledges_after_files_rows_and_wal_comple
     let mut p = f.prepared();
     let id = p.preview.confirmation_id.clone();
     let r = p
-        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert!(r.deleted && !r.retained && !r.restart_required);
     assert!(!f.audio.exists());
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
     assert!(!f.storage.data_write_blocked());
     f.unaffected();
-    let mut replay = Prepared::pending(&f.storage, &r.operation_id, &|| false).unwrap();
+    let mut replay = Prepared::pending(
+        &f.storage,
+        &r.operation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(replay.preview.phase, "awaiting_ack");
     let id = replay.preview.confirmation_id.clone();
     assert!(
         replay
-            .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+            .execute(
+                &f.storage,
+                &lease(),
+                &id,
+                false,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .unwrap()
             .deleted
     );
@@ -190,14 +232,29 @@ fn deletion_unregistered_contents_require_separate_explicit_decision_before_any_
     let id = p.preview.confirmation_id.clone();
     assert_eq!(p.preview.unregistered_count, 1);
     assert!(p
-        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     assert!(listing(&f.storage).unwrap().items.is_empty());
     assert!(unknown.exists() && f.audio.exists());
-    p.refresh(&f.storage, &|| false).unwrap();
-    let id = p.preview.confirmation_id.clone();
-    p.execute(&f.storage, &lease(), &id, true, &|| false, &|_| {})
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
         .unwrap();
+    let id = p.preview.confirmation_id.clone();
+    p.execute(
+        &f.storage,
+        &lease(),
+        &id,
+        true,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     assert!(!unknown.exists());
     f.unaffected();
 }
@@ -212,19 +269,41 @@ fn deletion_changed_scope_requires_new_review_and_rejects_old_confirmation() {
         .rename_meeting(&f.meeting, "変更後", meeting.lock_version)
         .unwrap();
     assert!(p
-        .execute(&f.storage, &lease(), &old, false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            &old,
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     assert!(listing(&f.storage).unwrap().items.is_empty());
-    p.refresh(&f.storage, &|| false).unwrap();
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(p.preview.operation_id, op);
     assert_eq!(p.preview.title, "変更後");
     assert_ne!(p.preview.confirmation_id, old);
     assert!(p
-        .execute(&f.storage, &lease(), &old, false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            &old,
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     let id = p.preview.confirmation_id.clone();
-    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
-        .unwrap();
+    p.execute(
+        &f.storage,
+        &lease(),
+        &id,
+        false,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     f.unaffected();
 }
 #[test]
@@ -305,14 +384,22 @@ fn deletion_cancel_after_start_reloads_durable_progress_and_requires_explicit_re
             &f.storage,
             &lease(),
             &p.preview.confirmation_id.clone(),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
-    p.refresh(&f.storage, &|| false).unwrap();
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(p.preview.execute_allowed);
     let id = p.preview.confirmation_id.clone();
-    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
-        .unwrap();
+    p.execute(
+        &f.storage,
+        &lease(),
+        &id,
+        false,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     f.unaffected();
 }
 #[test]
@@ -338,10 +425,18 @@ fn deletion_cancel_at_database_handoff_reports_partial_files_and_resumes_origina
     assert_eq!(p.preview.phase, "database");
     assert_eq!(p.preview.processed_paths, p.preview.path_count);
     assert!(!p.preview.row_phase_committed);
-    p.refresh(&f.storage, &|| false).unwrap();
-    let id = p.preview.confirmation_id.clone();
-    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
         .unwrap();
+    let id = p.preview.confirmation_id.clone();
+    p.execute(
+        &f.storage,
+        &lease(),
+        &id,
+        false,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     f.unaffected();
 }
 #[test]
@@ -349,16 +444,29 @@ fn deletion_unstarted_keep_preserves_changed_contents_and_replays_without_claimi
     let f = Fixture::new();
     let mut p = f.pending();
     std::fs::write(&f.audio, b"KEEP CHANGED").unwrap();
-    p.refresh(&f.storage, &|| false).unwrap();
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(!p.preview.execute_allowed && p.preview.keep_allowed);
     let id = p.preview.confirmation_id.clone();
-    let r = p.keep(&f.storage, &lease(), &id, &|| false).unwrap();
+    let r = p
+        .keep(
+            &f.storage,
+            &lease(),
+            &id,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     assert!(r.retained && !r.deleted);
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP CHANGED");
     assert!(
-        p.keep(&f.storage, &lease(), &id, &|| false)
-            .unwrap()
-            .retained
+        p.keep(
+            &f.storage,
+            &lease(),
+            &id,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .retained
     );
     assert!(!f.storage.data_write_blocked());
     f.unaffected();
@@ -373,9 +481,16 @@ fn deletion_cold_pending_review_skips_recovery_and_requires_restart_after_resolu
     drop(f.storage);
     let storage = Storage::open(root.clone()).unwrap();
     assert!(storage.data_write_blocked());
-    let mut p = Prepared::pending(&storage, &op, &|| false).unwrap();
+    let mut p = Prepared::pending(&storage, &op, &crate::test_support::never_cancelled).unwrap();
     let id = p.preview.confirmation_id.clone();
-    let r = p.keep(&storage, &lease(), &id, &|| false).unwrap();
+    let r = p
+        .keep(
+            &storage,
+            &lease(),
+            &id,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     assert!(r.restart_required);
     assert!(storage.data_write_blocked());
     assert!(audio.exists());
@@ -404,12 +519,20 @@ fn deletion_partial_changed_contents_remain_visible_but_are_never_automatically_
         .is_err());
     std::fs::create_dir_all(f.audio.parent().unwrap()).unwrap();
     std::fs::write(&f.audio, b"KEEP NEW").unwrap();
-    p.refresh(&f.storage, &|| false).unwrap();
+    p.refresh(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(!p.preview.execute_allowed && !p.preview.keep_allowed);
     assert!(p.preview.resume_reason.is_some());
     let id = p.preview.confirmation_id.clone();
     assert!(p
-        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP NEW");
 }
@@ -425,7 +548,13 @@ fn deletion_wrong_kind_corrupt_receipt_and_other_pending_operation_never_grant_a
     let Target::Unstarted(ref saved) = p.target else {
         unreachable!()
     };
-    let _writer = super::super::fence::write_prepared(&f.storage, &db, saved, &|| false).unwrap();
+    let _writer = super::super::fence::write_prepared(
+        &f.storage,
+        &db,
+        saved,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute(
         "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
         params![id],
@@ -446,7 +575,13 @@ fn deletion_other_pending_kind_is_not_a_deletion_admission_or_silently_ignored()
     let Target::Unstarted(ref saved) = p.target else {
         unreachable!()
     };
-    let writer = super::super::fence::write_prepared(&f.storage, &db, saved, &|| false).unwrap();
+    let writer = super::super::fence::write_prepared(
+        &f.storage,
+        &db,
+        saved,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![other,f.other,"0".repeat(64)]).unwrap();
     drop(writer);
     drop(db);
@@ -463,14 +598,19 @@ fn deletion_actual_lease_cancellation_stops_even_when_caller_check_ignores_it() 
     let id = p.preview.confirmation_id.clone();
     let analysis = crate::analysis_worker::AnalysisController::default();
     let lease = analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(p
-        .execute(&f.storage, &lease, &id, false, &|| false, &|phase| if phase
-            == "delete_scope_fixed"
-        {
-            analysis.begin_exit().unwrap()
-        })
+        .execute(
+            &f.storage,
+            &lease,
+            &id,
+            false,
+            &crate::test_support::never_cancelled,
+            &|phase| if phase == "delete_scope_fixed" {
+                analysis.begin_exit().unwrap()
+            }
+        )
         .is_err());
     assert!(p.preview.pending && p.preview.keep_allowed);
     assert_eq!(p.preview.phase, "not_started");
@@ -497,10 +637,22 @@ fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() 
     let copied = Storage::open(destination.path().into()).unwrap();
     assert!(copied.data_write_blocked());
     assert!(authorize_review(&copied, Some(&p.preview.operation_id)).is_err());
-    assert!(Prepared::pending(&copied, &p.preview.operation_id, &|| false).is_err());
+    assert!(Prepared::pending(
+        &copied,
+        &p.preview.operation_id,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let mut original = p;
     let id = original.preview.confirmation_id.clone();
-    assert!(original.keep(&copied, &lease(), &id, &|| false).is_err());
+    assert!(original
+        .keep(
+            &copied,
+            &lease(),
+            &id,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     assert!(copied.data_write_blocked());
     assert!(f.audio.exists());
     f.unaffected();

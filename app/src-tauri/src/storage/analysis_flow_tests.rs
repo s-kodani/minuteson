@@ -25,7 +25,9 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     let emb = root.join("emb.onnx");
     std::fs::write(&seg, b"segmentation").unwrap();
     std::fs::write(&emb, b"embedding").unwrap();
-    let proof = |p: &Path| crate::local_engine::Fingerprint::capture(p, &|| false).unwrap();
+    let proof = |p: &Path| {
+        crate::local_engine::Fingerprint::capture(p, &crate::test_support::never_cancelled).unwrap()
+    };
     let engine = crate::diarization::sherpa::SherpaConfig {
         executable: proof(&cli),
         segmentation_model: proof(&seg),
@@ -59,19 +61,19 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     (s, m)
 }
 fn advance(s: &Storage) {
-    analysis_flow::advance(s, &|| false, &|_| {}).unwrap();
+    analysis_flow::advance(s, &crate::test_support::never_cancelled, &|_| {}).unwrap();
 }
 fn transcribe(s: &Storage) -> String {
     let job = s.acquire_local_inference_job().unwrap().unwrap();
     assert_eq!(job.kind, "transcription");
-    transcription::process(s, &job.id, &|| false, &|_| {})
+    transcription::process(s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap()
 }
 fn diarize(s: &Storage) -> String {
     let job = s.acquire_local_inference_job().unwrap().unwrap();
     assert_eq!(job.kind, "diarization");
-    diarization::process(s, &job.id, &|| false, &|_| {})
+    diarization::process(s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap()
 }
@@ -291,7 +293,9 @@ fn failed_diarization_keeps_saved_input_and_requires_a_fresh_global_generation()
     advance(&s);
     std::fs::write(root.path().join("fail-diarization"), b"fail").unwrap();
     let job = s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {}).is_err());
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {}).is_err()
+    );
     let job = s
         .finish_job(&job.id, 0, "failed", Some("diarization_failed"))
         .unwrap();
@@ -322,7 +326,8 @@ fn failed_diarization_keeps_saved_input_and_requires_a_fresh_global_generation()
         expected: s.regeneration_admission(&m).unwrap(),
         speaker_counts: vec![],
     };
-    s.regenerate_analysis(&next, &|| false).unwrap();
+    s.regenerate_analysis(&next, &crate::test_support::never_cancelled)
+        .unwrap();
     advance(&s);
     transcribe(&s);
     advance(&s);
@@ -443,7 +448,7 @@ fn flow_plan_is_immutable_hashed_and_job_scope_is_guarded() {
     db.execute_batch("DROP TRIGGER analysis_flow_plan_fixed; UPDATE analysis_flows SET plan_hash=printf('%064d',0)").unwrap();
     drop(db);
     assert!(s.analysis_flow(&m).is_err());
-    assert!(analysis_flow::advance(&s, &|| false, &|_| {}).is_err());
+    assert!(analysis_flow::advance(&s, &crate::test_support::never_cancelled, &|_| {}).is_err());
 }
 
 #[test]

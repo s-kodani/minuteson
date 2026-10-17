@@ -36,7 +36,7 @@ test("scripts raw HTML dangerous links and all image sources are inert in the ac
 test("only a well-formed saved-audio interval becomes a play button, never an external href",()=>{
   const html=render("[00:00:01–00:00:02](audio:00:00:01-00:00:02) [別のリンク](audio:00:00:09-00:00:11) [不正](audio:00:00:02-00:00:01)");
   assert.equal((html.match(/<button /g)??[]).length,1);
-  assert.ok(html.includes("この区間を再生: 00:00:01–00:00:02"));
+  assert.ok(html.includes("この区間の開始時刻から再生: 00:00:01–00:00:02"));
   assert.ok(html.includes("<svg"));assert.doesNotMatch(html,/\bhref=/);
   assert.ok(html.includes("別のリンク"));assert.ok(html.includes("不正"));
 });

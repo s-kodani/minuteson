@@ -61,8 +61,8 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
     .unwrap();
     std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = WhisperConfig {
-        executable: Fingerprint::capture(&cli_path, &|| false).unwrap(),
-        model: Fingerprint::capture(&model_path, &|| false).unwrap(),
+        executable: Fingerprint::capture(&cli_path, &crate::test_support::never_cancelled).unwrap(),
+        model: Fingerprint::capture(&model_path, &crate::test_support::never_cancelled).unwrap(),
         vad_model: None,
         threads: 1,
         use_gpu: false,
@@ -102,9 +102,14 @@ fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape
     );
     assert_eq!(fixed.0.parameters["units"][0]["coreEnd"], 70400);
     storage.acquire_next_job().unwrap().unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert!(storage
         .prepare_track_audio(&meeting, "track", 0, 4400000)
         .is_ok());
@@ -141,9 +146,14 @@ fn corrected_sealed_input_rejects_changed_piecewise_clock_even_with_same_frame_c
         .unwrap();
     }
     storage.acquire_next_job().unwrap().unwrap();
-    let error = process(&storage, &job.id, &|| false, &|_| {})
-        .err()
-        .unwrap();
+    let error = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .err()
+    .unwrap();
     assert!(error.contains("固定した録音入力"), "{error}");
     assert_eq!(storage.fixed_job_input(&job.id).unwrap(), fixed);
     assert_eq!(
@@ -163,12 +173,21 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
     let original_script = std::fs::read_to_string(&config.executable.path).unwrap();
     let body = original_script.strip_prefix("#!/bin/sh\n").unwrap();
     std::fs::write(&config.executable.path, format!("#!/bin/sh\nprintf x >> '{}'\ncase \"$PWD\" in */unit-1-*) if test -f '{}'; then exit 42; fi;; esac\n{body}", calls.display(), gate.display())).unwrap();
-    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    config.executable = Fingerprint::capture(
+        &config.executable.path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let baseline = enqueue(&storage, &meeting, "baseline", config.clone(), "standard").unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    let current = process(&storage, &baseline.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let current = process(
+        &storage,
+        &baseline.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let lock = storage.get_meeting(&meeting).unwrap().unwrap().lock_version;
     storage
         .commit_analysis_candidate(&meeting, &current, lock, false)
@@ -193,7 +212,13 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
         .unwrap();
     let failed = enqueue(&storage, &meeting, "first-attempt", config, "high_accuracy").unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &failed.id, &|| false, &|_| {}).is_err());
+    assert!(process(
+        &storage,
+        &failed.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     assert_eq!(storage.get_job(&failed.id).unwrap().completed_units, 1);
     let failed = storage
         .finish_job(&failed.id, 1, "failed", Some("engine_failed"))
@@ -225,9 +250,14 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
 
     let storage = Storage::open(root.path().to_owned()).unwrap();
     assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, next.id);
-    let candidate = process(&storage, &next.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &next.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(std::fs::read(&calls).unwrap().len(), calls_before + 1);
     assert_eq!(storage.get_job(&next.id).unwrap().state, "succeeded");
     let inherited = storage.fixed_job_input(&next.id).unwrap().1.unwrap();
@@ -303,7 +333,13 @@ fn vocabulary_start_rpc_rejects_stale_stamp_and_broken_snapshot_blocks_worker_an
             params![job.id],
         )
         .unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|_| {}).is_err());
+    assert!(process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     let failed = storage
         .finish_job(&job.id, 0, "failed", Some("snapshot_missing"))
         .unwrap();
@@ -329,7 +365,11 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
     // This fake engine deliberately misrecognizes the registered term.
     let script = format!("#!/usr/bin/env python3\nimport json,sys\nwith open({:?},'a') as f: f.write(json.dumps(sys.argv[1:],ensure_ascii=False)+'\\n')\nwith open('result.json','w') as f: f.write({json:?})\n", calls.to_str().unwrap());
     std::fs::write(&config.executable.path, script).unwrap();
-    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    config.executable = Fingerprint::capture(
+        &config.executable.path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut e = vocabulary_entry("点検日");
     e.reading = Some("てんけんび".into());
     e.note = Some("天気ビーではない; $(false)".into());
@@ -341,13 +381,23 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .unwrap()
         .to_string();
     assert_eq!(spec.parameters["schemaVersion"], 2);
+    assert_eq!(spec.parameters["recognitionPolicy"], "suppressNonSpeechV1");
+    assert_eq!(
+        spec.parameters.get("accelerationPolicy"),
+        cfg!(target_os = "macos").then_some(&serde_json::json!("autoMetalV1"))
+    );
     assert_eq!(spec.parameters["vocabulary"]["actualPrompt"], prompt);
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|snapshot| {
-        if snapshot.completed_units == 1 && snapshot.state == "running" {
-            storage.request_job_pause(&job.id, "user").unwrap();
+    assert!(process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.completed_units == 1 && snapshot.state == "running" {
+                storage.request_job_pause(&job.id, "user").unwrap();
+            }
         }
-    })
+    )
     .unwrap()
     .is_none());
     let checkpoint = storage.fixed_job_input(&job.id).unwrap().1;
@@ -359,9 +409,14 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
     let storage = Storage::open(root.path().into()).unwrap();
     storage.resume_job(&job.id).unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let argv: Vec<Vec<String>> = std::fs::read_to_string(calls)
         .unwrap()
         .lines()
@@ -369,6 +424,11 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .collect();
     assert_eq!(argv.len(), 2);
     for args in argv {
+        assert!(args.iter().any(|a| a == "--suppress-nst"));
+        assert_eq!(
+            args.iter().any(|a| a == "--no-gpu"),
+            !cfg!(target_os = "macos")
+        );
         let at = args.iter().position(|a| a == "--prompt").unwrap();
         assert_eq!(args[at + 1], prompt);
     }
@@ -404,11 +464,16 @@ fn retry_preflight_rejects_changed_files_and_checkpoint_without_new_job() {
         let (storage, meeting, config) = fixture(root.path(), 124);
         let job = enqueue(&storage, &meeting, "source", config, "standard").unwrap();
         storage.acquire_next_job().unwrap().unwrap();
-        process(&storage, &job.id, &|| false, &|snapshot| {
-            if snapshot.completed_units == 1 && snapshot.state == "running" {
-                storage.request_job_pause(&job.id, "user").unwrap();
-            }
-        })
+        process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|snapshot| {
+                if snapshot.completed_units == 1 && snapshot.state == "running" {
+                    storage.request_job_pause(&job.id, "user").unwrap();
+                }
+            },
+        )
         .unwrap();
         let source = storage
             .finish_job(&job.id, 1, "failed", Some("engine_failed"))
@@ -484,11 +549,16 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
         .unwrap();
-    let paused = process(&storage, &job.id, &|| false, &|snapshot| {
-        if snapshot.completed_units == 1 && snapshot.state == "running" {
-            storage.request_pause_for_recording().unwrap();
-        }
-    })
+    let paused = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.completed_units == 1 && snapshot.state == "running" {
+                storage.request_pause_for_recording().unwrap();
+            }
+        },
+    )
     .unwrap();
     assert!(paused.is_none());
     assert_eq!(storage.get_job(&job.id).unwrap().state, "paused");
@@ -501,9 +571,14 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
         .unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
     assert_eq!(
         storage
@@ -537,9 +612,14 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
         .unwrap();
-    process(&storage, &second.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    process(
+        &storage,
+        &second.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         storage.load_current_analysis(&meeting).unwrap().unwrap(),
         view
@@ -560,11 +640,16 @@ fn changed_source_model_and_checkpointed_output_are_rejected() {
             .acquire_job_kind(Some(JobKind::Transcription))
             .unwrap()
             .unwrap();
-        process(&storage, &job.id, &|| false, &|snapshot| {
-            if snapshot.completed_units == 1 && snapshot.state == "running" {
-                storage.request_job_pause(&job.id, "user").unwrap();
-            }
-        })
+        process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|snapshot| {
+                if snapshot.completed_units == 1 && snapshot.state == "running" {
+                    storage.request_job_pause(&job.id, "user").unwrap();
+                }
+            },
+        )
         .unwrap();
         let path = match change {
             "source" => directory
@@ -603,7 +688,13 @@ fn changed_source_model_and_checkpointed_output_are_rejected() {
             .unwrap()
             .unwrap();
         assert!(
-            process(&storage, &job.id, &|| false, &|_| {}).is_err(),
+            process(
+                &storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
+            .is_err(),
             "{change}"
         );
         assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 1);
@@ -679,7 +770,7 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     let directory = tempfile::tempdir().unwrap();
     let (storage, meeting, mut config) = fixture(directory.path(), 4);
     let input = PathBuf::from(std::env::var("MON_WHISPER_INPUT_CAF").unwrap());
-    let proof = Fingerprint::capture(&input, &|| false).unwrap();
+    let proof = Fingerprint::capture(&input, &crate::test_support::never_cancelled).unwrap();
     let audio = VerifiedAudio::open(
         std::fs::File::open(&input).unwrap(),
         proof.size,
@@ -705,12 +796,12 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     drop(db);
     config.executable = Fingerprint::capture(
         Path::new(&std::env::var("MON_WHISPER_CLI").unwrap()),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     config.model = Fingerprint::capture(
         Path::new(&std::env::var("MON_WHISPER_MODEL").unwrap()),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     config.threads = 4;
@@ -726,9 +817,14 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
         .unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let snapshot = storage.get_job(&job.id).unwrap();
     assert_eq!(snapshot.state, "succeeded");
     assert_eq!(snapshot.completed_units, 1);
@@ -773,11 +869,16 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     )
     .unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &source.id, &|| false, &|snapshot| {
-        if snapshot.state == "running" && snapshot.completed_units == 1 {
-            storage.request_job_pause(&source.id, "user").unwrap();
+    assert!(process(
+        &storage,
+        &source.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.state == "running" && snapshot.completed_units == 1 {
+                storage.request_job_pause(&source.id, "user").unwrap();
+            }
         }
-    })
+    )
     .unwrap()
     .is_none());
     let source = storage
@@ -805,9 +906,14 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     .unwrap();
     assert_eq!(retry.completed_units, 1);
     assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, retry.id);
-    let retry_candidate = process(&storage, &retry.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let retry_candidate = process(
+        &storage,
+        &retry.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(asset_count(), before); // No new unit WAV/JSON: all completed results are reused.
     assert_eq!(storage.fixed_job_input(&retry.id).unwrap().1, fixed.1);
     assert_eq!(storage.fixed_job_input(&source.id).unwrap(), fixed);

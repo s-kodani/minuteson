@@ -592,7 +592,7 @@ fn invalid_name_payload_formats_fail_read_and_backup_integrity_checks() {
             params![text, drafts::draft_hash(&text)],
         )
         .unwrap();
-        assert!(verify_all(&db, &|| false).is_err());
+        assert!(verify_all(&db, &crate::test_support::never_cancelled).is_err());
         drop(db);
         assert!(storage
             .transcript_edit_recovery(&draft.meeting_id, &draft.id, &draft.base_analysis_id)

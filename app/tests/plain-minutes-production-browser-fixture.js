@@ -28,16 +28,20 @@ bridge.invoke=async(cmd,args={})=>{
     data.intervalCalls.push({cmd,args:copy(args)});
     if(data.intervalSummaryFailure)throw Error("合成音声情報の読込み失敗");return copy(data.audioSummary);
   }
-  if(cmd==="prepare_markdown_interval_playback"){
+  if(cmd==="prepare_meeting_playback"||cmd==="prepare_markdown_interval_playback"){
     data.intervalCalls.push({cmd,args:copy(args)});
+    // Assign identity before awaiting: late replies must not reuse a newer token.
+    const intervalSequence=data.intervalCalls.filter(c=>c.cmd===cmd).length;
     if(data.intervalMode==="held")await new Promise(resolve=>data.intervalRelease=resolve);
     if(data.intervalMode==="failure")throw Error("合成の音声検証失敗");
-    const r=args.request,first=Math.ceil(r.startUs*48000/1000000),last=Math.ceil(r.endUs*48000/1000000);
-    const token=`interval-${data.intervalCalls.filter(c=>c.cmd===cmd).length}`;
+    const r=args.request;
+    const start=cmd==="prepare_meeting_playback"?0:r.startUs,end=cmd==="prepare_meeting_playback"?data.audioSummary.durationUs:r.endUs;
+    const first=Math.ceil(start*48000/1000000),last=Math.ceil(end*48000/1000000);
+    const token=`interval-${intervalSequence}`;
     data.playbacks[token]={totalFrames:last-first,sampleRate:48000};
-    return {token,sampleRate:48000,channels:1,totalFrames:last-first,startUs:r.startUs,endUs:r.endUs,trackKind:r.mode,alignment:"unverified",
-      ...(data.intervalMode==="gap"?{missingRanges:[{trackKind:"mic",startUs:r.startUs,endUs:2000000,startFrame:0,endFrame:96000-first,reasonCode:"capture_timestamp_gap"}]}:{}),
-      ...(data.intervalMode==="wrong"?{endUs:r.endUs+1}:{})};
+    return {token,sampleRate:48000,channels:1,totalFrames:last-first,startUs:start,endUs:end,trackKind:r.mode,alignment:"unverified",
+      ...(data.intervalMode==="gap"?{missingRanges:[{trackKind:"mic",startUs:start,endUs:2000000,startFrame:0,endFrame:96000-first,reasonCode:"capture_timestamp_gap"}]}:{}),
+      ...(data.intervalMode==="wrong"?{endUs:end+1}:{})};
   }
   if(cmd==="read_playback_chunk"||cmd==="close_playback"||cmd==="cancel_playback_preparation")data.intervalCalls.push({cmd,args:copy(args)});
   if(cmd==="get_minutes_preferences"&&data.minutesPrefReadFailure)throw Error("合成の全体設定読込み失敗");

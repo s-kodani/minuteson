@@ -113,6 +113,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
         use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
         let audio = storage
             .prepare_meeting_audio(&MeetingPlaybackRequest {
+                start_reference: None,
                 meeting_id: meeting.into(),
                 mode: MeetingPlaybackMode::Both,
             })
@@ -128,18 +129,20 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
     verify(&storage, &meeting.id);
     let archives = tempfile::tempdir().unwrap();
     let archive = archives.path().join("dense.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let restored_root = tempfile::tempdir().unwrap();
     let restored = Storage::open(restored_root.path().into()).unwrap();
     let existing = restored.create_meeting("保持").unwrap();
     let selection = restored
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let receipt = selection
         .publish(
             &restored,
             &selection.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();

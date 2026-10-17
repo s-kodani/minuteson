@@ -17,6 +17,7 @@ mod generation;
 mod import_controller;
 mod input_levels;
 mod input_status;
+mod internal_logs;
 mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -51,6 +52,10 @@ mod session;
 mod startup_attention;
 mod storage;
 mod transcription;
+mod voice;
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod test_profile_guards {
@@ -139,6 +144,7 @@ async fn preview_model_profile_application(
     package_id: String,
     expected_review_hash: String,
     check_operation_id: String,
+    diarization_threads: Option<u32>,
 ) -> Result<storage::model_profiles::ApplyPreview, String> {
     if window.label() != "main" {
         return Err("Only the main window can review model application".into());
@@ -151,17 +157,23 @@ async fn preview_model_profile_application(
         .map_err(|e| e.to_string())?
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_application::preview(
-                &app.state::<Storage>(),
-                &models_root,
-                profile,
-                &package_id,
-                &expected_review_hash,
-                &check_operation_id,
-                &|| guard.cancelled() || lease.cancelled(),
-            )
-        })
+        AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| {
+                model_application::preview_with_threads(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    profile,
+                    &package_id,
+                    &expected_review_hash,
+                    &check_operation_id,
+                    diarization_threads,
+                    &|| guard.cancelled() || lease.cancelled(),
+                )
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -183,15 +195,20 @@ async fn apply_model_profile_application(
         .map_err(|e| e.to_string())?
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_application::apply(
-                &app.state::<Storage>(),
-                &models_root,
-                &token,
-                &preview,
-                &|| guard.cancelled() || lease.cancelled(),
-            )
-        })
+        AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| {
+                model_application::apply(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &token,
+                    &preview,
+                    &|| guard.cancelled() || lease.cancelled(),
+                )
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -219,19 +236,24 @@ async fn preview_job_model_rebinding(
         .map_err(|e| e.to_string())?
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_rebinding::preview(
-                &app.state::<Storage>(),
-                &models_root,
-                &meeting_id,
-                &job_id,
-                &expected_spec_hash,
-                &package_id,
-                &expected_review_hash,
-                &check_operation_id,
-                &|| guard.cancelled() || lease.cancelled(),
-            )
-        })
+        AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| {
+                model_rebinding::preview(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &meeting_id,
+                    &job_id,
+                    &expected_spec_hash,
+                    &package_id,
+                    &expected_review_hash,
+                    &check_operation_id,
+                    &|| guard.cancelled() || lease.cancelled(),
+                )
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -257,8 +279,11 @@ async fn apply_job_model_rebinding(
         if let Some(job) = model_rebinding::result(&app.state::<Storage>(), &token, &preview)? {
             return Ok(job);
         }
-        let job =
-            AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+        let job = AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| {
                 model_rebinding::apply(
                     &app.state::<Storage>(),
                     &models_root,
@@ -266,7 +291,8 @@ async fn apply_job_model_rebinding(
                     &preview,
                     &|| guard.cancelled() || lease.cancelled(),
                 )
-            })?;
+            },
+        )?;
         AnalysisController::kick(&app)?;
         Ok(job)
     })
@@ -316,16 +342,21 @@ async fn check_model_compatibility(
         .map_err(|e| e.to_string())?
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_compatibility::check(
-                &app.state::<Storage>(),
-                &models_root,
-                &token,
-                &package_id,
-                &expected_review_hash,
-                &|| guard.cancelled() || lease.cancelled(),
-            )
-        })
+        AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| {
+                model_compatibility::check(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &token,
+                    &package_id,
+                    &expected_review_hash,
+                    &|| guard.cancelled() || lease.cancelled(),
+                )
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -673,14 +704,20 @@ fn save_analysis_preferences(
 }
 
 #[tauri::command]
-fn get_analysis_versions(
+async fn get_analysis_versions(
     window: WebviewWindow,
     meeting_id: String,
 ) -> Result<storage::VersionState, String> {
     if window.label() != "main" {
         return Err("Only the main window can read analysis versions".into());
     }
-    window.state::<Storage>().analysis_versions(&meeting_id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().analysis_versions(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -779,12 +816,13 @@ async fn get_plain_minutes_export_status(
 }
 
 #[tauri::command]
-fn get_minutes_preferences(
+async fn get_minutes_preferences(
     window: WebviewWindow,
 ) -> Result<storage::MinutesPreferencesSnapshot, String> {
-    minutes_app(&window)?
-        .state::<Storage>()
-        .minutes_preferences()
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().minutes_preferences())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -796,6 +834,33 @@ fn save_minutes_preferences(
     minutes_app(&window)?
         .state::<Storage>()
         .save_minutes_preferences(expected_lock_version, payload)
+}
+
+#[tauri::command]
+async fn get_minutes_prompt_preferences(
+    window: WebviewWindow,
+) -> Result<storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().minutes_prompt_preferences()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_minutes_prompt_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::minutes_prompt_preferences::MinutesPromptPreferences,
+) -> Result<storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .save_minutes_prompt_preferences(expected_lock_version, payload)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -828,15 +893,18 @@ async fn save_minutes_markdown(
 }
 
 #[tauri::command]
-fn get_analysis_flow(
+async fn get_analysis_flow(
     window: WebviewWindow,
-    storage: State<'_, Storage>,
     meeting_id: String,
 ) -> Result<Option<storage::analysis_flows::AnalysisFlow>, String> {
     if window.label() != "main" {
         return Err("Only the main window can read analysis flow".into());
     }
-    storage.analysis_flow(&meeting_id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().analysis_flow(&meeting_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -867,7 +935,7 @@ async fn regenerate_transcription(
         if let Some(flow) = app.state::<Storage>().regeneration_replay(&request)? {
             return Ok(flow);
         }
-        let flow = AnalysisController::with_model_preparation(&app, &|| false, |lease| {
+        let flow = AnalysisController::with_model_preparation(&app, None, &|| false, |lease| {
             app.state::<capture_test::CaptureTests>().require_empty()?;
             app.state::<Storage>()
                 .regenerate_analysis(&request, &|| lease.cancelled())
@@ -896,7 +964,8 @@ async fn publish_regenerated_transcription(
     meeting_id: String,
     flow_id: String,
     expected_lock_version: i64,
-) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    confirmed_target: Option<storage::analysis_flows::regeneration::Target>,
+) -> Result<storage::analysis_flows::regeneration::Publication, String> {
     if window.label() != "main" {
         return Err("文字起こしの保存はメイン画面から操作してください".into());
     }
@@ -906,9 +975,19 @@ async fn publish_regenerated_transcription(
             &meeting_id,
             &flow_id,
             expected_lock_version,
+            confirmed_target.as_ref(),
         );
         if let Ok(Some(flow)) = app.state::<Storage>().analysis_flow(&meeting_id) {
             let _ = app.emit("analysis-flow-changed", flow);
+        }
+        if matches!(
+            &result,
+            Ok(storage::analysis_flows::regeneration::Publication::Published { .. })
+        ) {
+            if let Err(error) = voice::enqueue_automatic(&app.state::<Storage>(), &meeting_id) {
+                internal_logs::report_error("voice_matching", &error);
+            }
+            let _ = AnalysisController::kick(&app);
         }
         result
     })
@@ -976,27 +1055,154 @@ async fn get_diarization_tracks(
 }
 
 #[tauri::command]
-fn get_analysis_jobs(
+async fn get_voice_people(window: WebviewWindow) -> Result<Vec<storage::voice::Person>, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().voice_people())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn prepare_voice_sample_playback(
+    window: WebviewWindow,
+    sample_id: String,
+    preparation_id: String,
+) -> Result<PlaybackInfo, String> {
+    let app = minutes_app(&window)?;
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        guard.check()?;
+        let audio = app
+            .state::<Storage>()
+            .prepare_voice_sample_audio_cancellable(&sample_id, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_voice_context(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::voice::Context, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().voice_context(&meeting_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[derive(serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum VoiceStartReply {
+    Accepted { job: storage::JobSnapshot },
+    Rejected { message: String },
+}
+#[tauri::command]
+async fn start_voice_job(
+    window: WebviewWindow,
+    request: storage::voice::Start,
+) -> Result<VoiceStartReply, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        match app.state::<Storage>().start_voice(request) {
+            Ok(job) => {
+                if let Err(error) = AnalysisController::kick(&app) {
+                    internal_logs::report_error("voice_matching", &error);
+                }
+                VoiceStartReply::Accepted { job }
+            }
+            Err(message) => VoiceStartReply::Rejected { message },
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn manage_voice_person(
+    window: WebviewWindow,
+    person_id: String,
+    expected_version: i64,
+    name: Option<String>,
+    sample_id: Option<String>,
+) -> Result<(), String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .manage_voice_person(&person_id, expected_version, name, sample_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn decide_voice_match(
+    window: WebviewWindow,
+    meeting_id: String,
+    analysis_id: String,
+    speaker_id: String,
+    person_id: Option<String>,
+    expected_working_hash: String,
+) -> Result<(), String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().decide_voice_match(
+            &meeting_id,
+            &analysis_id,
+            &speaker_id,
+            person_id,
+            &expected_working_hash,
+        )?;
+        let _ = app.emit("voice-identity-changed", &meeting_id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn retry_voice_job(
+    window: WebviewWindow,
+    job_id: String,
+    operation_id: String,
+) -> Result<storage::JobSnapshot, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = voice::retry(&app.state::<Storage>(), &job_id, &operation_id)?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_analysis_jobs(
     window: WebviewWindow,
     meeting_id: String,
 ) -> Result<Vec<storage::JobSnapshot>, String> {
     if window.label() != "main" {
         return Err("Only the main window can read analysis jobs".into());
     }
-    window.state::<Storage>().list_jobs(&meeting_id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().list_jobs(&meeting_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_analysis_notification_jobs(
+async fn get_analysis_notification_jobs(
     window: WebviewWindow,
     watched_job_ids: Vec<String>,
 ) -> Result<Vec<storage::NotificationJob>, String> {
     if window.label() != "main" {
         return Err("解析通知の状態はメイン画面から確認してください".into());
     }
-    window
-        .state::<Storage>()
-        .notification_jobs(&watched_job_ids)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().notification_jobs(&watched_job_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1124,11 +1330,22 @@ async fn prepare_meeting_playback(
     let app = window.app_handle().clone();
     let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app
-            .state::<Storage>()
-            .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
-        guard.publish(|| app.state::<PlaybackStore>().insert_meeting(audio))
+        crate::internal_logs::observe(
+            crate::internal_logs::Context {
+                category: "playback".into(),
+                meeting_id: Some(request.meeting_id.clone()),
+                operation_id: Some(preparation_id.clone()),
+                ..Default::default()
+            },
+            || {
+                guard.check()?;
+                let mut audio = app
+                    .state::<Storage>()
+                    .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
+                audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
+                guard.publish(|| app.state::<PlaybackStore>().insert_meeting(audio))
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1141,7 +1358,15 @@ async fn get_meeting_audio_summary(
 ) -> Result<storage::MeetingAudioSummary, String> {
     let app = minutes_app(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().meeting_audio_summary(&meeting_id)
+        let summary = app.state::<Storage>().meeting_audio_summary(&meeting_id)?;
+        if summary
+            .modes
+            .iter()
+            .any(|mode| matches!(mode, storage::MeetingPlaybackMode::Both))
+        {
+            playback::mix_cache::warm(&app, &meeting_id);
+        }
+        Ok(summary)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1156,11 +1381,22 @@ async fn prepare_markdown_interval_playback(
     let app = minutes_app(&window)?;
     let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app
-            .state::<Storage>()
-            .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
-        guard.publish(|| app.state::<PlaybackStore>().insert_interval(audio))
+        crate::internal_logs::observe(
+            crate::internal_logs::Context {
+                category: "playback".into(),
+                meeting_id: Some(request.meeting_id.clone()),
+                operation_id: Some(preparation_id.clone()),
+                ..Default::default()
+            },
+            || {
+                guard.check()?;
+                let mut audio = app
+                    .state::<Storage>()
+                    .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
+                audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
+                guard.publish(|| app.state::<PlaybackStore>().insert_interval(audio))
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1180,14 +1416,24 @@ async fn prepare_utterance_playback(
     let app = window.app_handle().clone();
     let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app.state::<Storage>().prepare_utterance_audio_cancellable(
-            &meeting_id,
-            &analysis_id,
-            &utterance_id,
-            &|| guard.cancelled(),
-        )?;
-        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+        crate::internal_logs::observe(
+            crate::internal_logs::Context {
+                category: "playback".into(),
+                meeting_id: Some(meeting_id.clone()),
+                operation_id: Some(preparation_id.clone()),
+                ..Default::default()
+            },
+            || {
+                guard.check()?;
+                let audio = app.state::<Storage>().prepare_utterance_audio_cancellable(
+                    &meeting_id,
+                    &analysis_id,
+                    &utterance_id,
+                    &|| guard.cancelled(),
+                )?;
+                guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1205,11 +1451,21 @@ async fn prepare_draft_utterance_playback(
     let app = window.app_handle().clone();
     let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app
-            .state::<Storage>()
-            .prepare_draft_utterance_audio_cancellable(&request, &|| guard.cancelled())?;
-        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+        crate::internal_logs::observe(
+            crate::internal_logs::Context {
+                category: "playback".into(),
+                meeting_id: Some(request.meeting_id.clone()),
+                operation_id: Some(preparation_id.clone()),
+                ..Default::default()
+            },
+            || {
+                guard.check()?;
+                let audio = app
+                    .state::<Storage>()
+                    .prepare_draft_utterance_audio_cancellable(&request, &|| guard.cancelled())?;
+                guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1815,26 +2071,27 @@ fn open_main_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_meetings(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-) -> Result<Vec<Meeting>, String> {
+async fn list_meetings(window: WebviewWindow) -> Result<Vec<Meeting>, String> {
     if window.label() != "main" {
         return Err("Only the main window can list meetings".into());
     }
-    storage.list_meetings()
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().list_meetings())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_meeting(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    id: String,
-) -> Result<Option<Meeting>, String> {
+async fn get_meeting(window: WebviewWindow, id: String) -> Result<Option<Meeting>, String> {
     if window.label() != "main" {
         return Err("Only the main window can read meetings".into());
     }
-    storage.get_meeting(&id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().get_meeting(&id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1852,27 +2109,50 @@ fn rename_meeting(
 }
 
 #[tauri::command]
-fn get_current_analysis(
+async fn get_current_analysis(
     window: WebviewWindow,
-    storage: State<'_, Storage>,
     meeting_id: String,
 ) -> Result<Option<AnalysisView>, String> {
     if window.label() != "main" {
         return Err("Only the main window can read analysis".into());
     }
-    storage.load_current_analysis(&meeting_id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().load_current_analysis(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_transcript_draft(
+async fn consolidate_transcript(
     window: WebviewWindow,
-    storage: State<'_, Storage>,
+    request: storage::transcript_consolidation::Request,
+) -> Result<storage::transcript_consolidation::Reply, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().consolidate_transcript(&request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_transcript_draft(
+    window: WebviewWindow,
     meeting_id: String,
 ) -> Result<Option<TranscriptDraft>, String> {
     if window.label() != "main" {
         return Err("Only the main window can read drafts".into());
     }
-    storage.load_transcript_draft(&meeting_id)
+
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().load_transcript_draft(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1920,12 +2200,21 @@ pub fn run() {
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(PlaybackPreparations::default())
+        .manage(playback::mix_cache::MixCache::default())
         .manage(AnalysisController::default())
         .manage(ImportController::default())
         .manage(DataController::default())
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
+            let logs = internal_logs::initialize(
+                app.path()
+                    .app_log_dir()
+                    .map(|root| root.join("internal"))
+                    .map_err(|e| e.to_string()),
+            );
+            app.manage(logs);
+            internal_logs::phase("application", None, None, "starting", None);
             #[cfg(target_os = "macos")]
             macos_menu::install(app)?;
             #[cfg(target_os = "macos")]
@@ -1976,12 +2265,14 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             app.manage(Storage::open(root)?);
             app.state::<startup_attention::Startup>().ready()?;
+            internal_logs::phase("application", None, None, "ready", None);
             ImportController::recover(app.handle())?;
             capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 #[cfg(unix)]
                 if let Err(error) = data_controller::finish_interrupted_deletions(&handle) {
+                    internal_logs::report_error("recovery", &error);
                     eprintln!("中断処理の自動整理に失敗しました: {error}");
                 }
                 // Recovery can hash hours of audio, so never hold up window startup.
@@ -1991,7 +2282,10 @@ pub fn run() {
                         let _ = AnalysisController::kick(&handle);
                     }
                     Ok(_) => {}
-                    Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
+                    Err(error) => {
+                        internal_logs::report_error("recovery", &error);
+                        eprintln!("録音回復の確認に失敗しました: {error}");
+                    }
                 }
             });
             AnalysisController::kick(app.handle())?;
@@ -2007,6 +2301,7 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                internal_logs::get_internal_logs,
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
                 model_download_ipc::review_model_download,
@@ -2098,6 +2393,7 @@ pub fn run() {
                 get_meeting,
                 rename_meeting,
                 get_current_analysis,
+                consolidate_transcript,
                 get_transcript_draft,
                 begin_transcript_draft,
                 save_transcript_draft,
@@ -2126,8 +2422,17 @@ pub fn run() {
                 export_plain_minutes_markdown,
                 get_plain_minutes_export_status,
                 get_minutes_preferences,
+                get_minutes_prompt_preferences,
+                save_minutes_prompt_preferences,
                 save_minutes_preferences,
                 get_analysis_jobs,
+                get_voice_people,
+                prepare_voice_sample_playback,
+                get_voice_context,
+                start_voice_job,
+                manage_voice_person,
+                decide_voice_match,
+                retry_voice_job,
                 get_analysis_notification_jobs,
                 get_analysis_notification_output,
                 pause_analysis_job,
@@ -2196,6 +2501,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start mon desktop")
         .run(|app, event| {
+            if let RunEvent::Exit = event {
+                internal_logs::phase("application", None, None, "stopped", None);
+                if let Some(logs) = app.try_state::<internal_logs::LogService>() {
+                    logs.flush();
+                }
+            }
             if let RunEvent::ExitRequested { api, .. } = event {
                 if app.state::<startup_attention::Startup>().blocked() {
                     return;

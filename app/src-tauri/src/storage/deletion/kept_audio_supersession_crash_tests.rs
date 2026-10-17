@@ -9,29 +9,34 @@ fn kept_audio_supersession_checkpoint_child() {
     let phase = std::env::var("MON_KEPT_AUDIO_CRASH_PHASE").unwrap();
     let f = Kept::at(tempfile::tempdir_in(&base).unwrap(), true);
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let mut receipt = f.begin();
     let full = receipt.confirmed().operation().to_owned();
-    completion::run_observed(&f.storage, &mut receipt, &|| false, &|point| {
-        if point == phase {
-            lease.validate_active().unwrap();
-            let data = serde_json::to_vec(&(
-                f.storage.root(),
-                &full,
-                &f.meeting,
-                &f.other,
-                &f.operation,
-                &f.originals,
-            ))
-            .unwrap();
-            std::fs::write(base.join("ready.tmp"), data).unwrap();
-            std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
-            loop {
-                std::thread::park();
+    completion::run_observed(
+        &f.storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+        &|point| {
+            if point == phase {
+                lease.validate_active().unwrap();
+                let data = serde_json::to_vec(&(
+                    f.storage.root(),
+                    &full,
+                    &f.meeting,
+                    &f.other,
+                    &f.operation,
+                    &f.originals,
+                ))
+                .unwrap();
+                std::fs::write(base.join("ready.tmp"), data).unwrap();
+                std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
+                loop {
+                    std::thread::park();
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("kept-audio checkpoint not reached");
 }
@@ -98,9 +103,17 @@ fn kept_audio_supersession_sigkill_on_both_sides_of_rows_commit_preserves_consen
             assert_eq!(startup::reason(&db, &kept).unwrap(), None);
         }
         let lease = AnalysisController::default()
-            .begin_deletion_maintenance(&storage, &full, false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &full,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        let mut pending = operations::Prepared::pending(&storage, &full, &|| false).unwrap();
+        let mut pending =
+            operations::Prepared::pending(&storage, &full, &crate::test_support::never_cancelled)
+                .unwrap();
         assert!(
             pending
                 .execute(
@@ -108,7 +121,7 @@ fn kept_audio_supersession_sigkill_on_both_sides_of_rows_commit_preserves_consen
                     &lease,
                     &pending.preview().confirmation_id,
                     false,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .unwrap()
@@ -125,7 +138,13 @@ fn kept_audio_supersession_sigkill_on_both_sides_of_rows_commit_preserves_consen
             assert_eq!(original(&db, id), *row);
             assert_eq!(path_records(&db, id), *paths);
         }
-        inspect_kept(&db, &storage.managed_anchor, &kept, &|| false).unwrap();
-        assert!(audio::intent::read(&db, &kept, &|| false).is_err());
+        inspect_kept(
+            &db,
+            &storage.managed_anchor,
+            &kept,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        assert!(audio::intent::read(&db, &kept, &crate::test_support::never_cancelled).is_err());
     }
 }

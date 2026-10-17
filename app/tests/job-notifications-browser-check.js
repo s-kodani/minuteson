@@ -77,6 +77,18 @@ async page => {
     results.push(kind+" verifies its own meeting and output format");
   }
 
+  await boot();await start({kind:"minutes_generation"});await dismiss();
+  await page.evaluate(()=>{const f=window.monBrowserFixture;f.notificationPublication="markdown";f.notificationWarnings=[];});
+  await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:null,outputMinutesId:null});
+  const success=host().locator(".toast-success").filter({hasText:"議事録を保存しました"});await success.waitFor();
+  check(await host().locator(".toast-warning").filter({hasText:"書式や根拠リンク"}).count()===0,"format check warning survived");
+  check(await host().locator(".toast-error").count()===0,"free format appears as an error");
+  const noticeId=await success.getAttribute("data-toast-id");
+  await page.evaluate(()=>window.monBrowserFixture.emitNotification());
+  check(await success.getAttribute("data-toast-id")===noticeId,"success duplicated on refresh");
+  await noWork();
+  results.push("free format minutes save successfully without format checks or warnings");
+
   await boot();await page.getByRole("button",{name:"会議A",exact:true}).click();
   await page.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
   const field=page.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("通知で失われない本文");

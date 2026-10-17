@@ -6,7 +6,13 @@ use crate::storage::backup::{
 };
 
 fn historical_ids<'a>(a: &'a VerifiedArchive, output: &Path) -> RestoreIds<'a> {
-    RestoreIds::prepare_historical(a, output, &Uuid::new_v4().to_string(), &|| false).unwrap()
+    RestoreIds::prepare_historical(
+        a,
+        output,
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 fn assert_missing_sources(a: &VerifiedArchive, ids: &RestoreIds<'_>, sealed: &SealedWorkspace) {
@@ -77,7 +83,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
     crate::storage::markdown_generation_tests::process(
         &storage,
         &generation.id,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap()
@@ -89,12 +95,19 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
     let diarization_engine = crate::diarization::sherpa::SherpaConfig {
         executable: crate::local_engine::Fingerprint::capture(
             &root.path().join("llama-completion"),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap(),
-        segmentation_model: crate::local_engine::Fingerprint::capture(&segmentation, &|| false)
-            .unwrap(),
-        embedding_model: crate::local_engine::Fingerprint::capture(&embedding, &|| false).unwrap(),
+        segmentation_model: crate::local_engine::Fingerprint::capture(
+            &segmentation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
+        embedding_model: crate::local_engine::Fingerprint::capture(
+            &embedding,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
         runtime_libraries: vec![],
         threads: 1,
         cluster_threshold_milli: 500,
@@ -140,9 +153,13 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    sealed.verify(&|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_missing_sources(&source, &ids, &sealed);
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     assert!(
@@ -187,11 +204,15 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
     drop(db);
     let target = Storage::open(root.path().join("target")).unwrap();
     assert!(matches!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         crate::storage::backup::publication::Publication::Published { .. }
     ));
     assert!(matches!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         crate::storage::backup::publication::Publication::AlreadyPublished
     ));
     assert_eq!(target.list_meetings().unwrap().len(), 2);
@@ -239,8 +260,16 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
     .unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
     let engine = crate::transcription::whisper::WhisperConfig {
-        executable: crate::local_engine::Fingerprint::capture(&cli, &|| false).unwrap(),
-        model: crate::local_engine::Fingerprint::capture(&model, &|| false).unwrap(),
+        executable: crate::local_engine::Fingerprint::capture(
+            &cli,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
+        model: crate::local_engine::Fingerprint::capture(
+            &model,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
         vad_model: None,
         threads: 1,
         use_gpu: false,
@@ -255,9 +284,14 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
     )
     .unwrap();
     storage.acquire_local_inference_job().unwrap().unwrap();
-    crate::transcription::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    crate::transcription::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
     let old_result = checkpoint["outputs"][0]["jsonAssetId"].as_str().unwrap();
     deleted(&storage, &meeting);
@@ -273,9 +307,13 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
     std::fs::remove_file(&model).unwrap();
     let before = std::fs::read(&calls).unwrap();
     let ids = historical_ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    sealed.verify(&|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_missing_sources(&source, &ids, &sealed);
     let new_result = ids.get("file_assets", &meeting, old_result).unwrap();
     let path: String = sealed
@@ -293,7 +331,9 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
         serde_json::from_slice(&std::fs::read(&source.assets[old_result]).unwrap()).unwrap();
     assert_eq!(restored["transcription"], original["transcription"]);
     let target = Storage::open(storage.root.parent().unwrap().join("target-whisper")).unwrap();
-    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     assert!(target.recorded_audio_plan(&new_meeting).is_err());
     assert!(target.acquire_local_inference_job().unwrap().is_none());
@@ -308,7 +348,7 @@ fn deleted_audio_workspace_cannot_register_missing_source_as_body_or_rebind_othe
     let output = tempfile::tempdir().unwrap();
     let (source, _) = write(&storage, output.path());
     let ids = historical_ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let omitted = source
         .manifest
         .omitted_assets
@@ -355,7 +395,7 @@ fn deleted_audio_workspace_historical_identity_requires_unchanged_checked_databa
         &source,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(storage.get_meeting(&meeting).unwrap().is_some());
@@ -397,7 +437,7 @@ fn deleted_audio_workspace_rejects_mutated_omission_reason_count_owner_and_ident
                 &source,
                 output.path(),
                 &Uuid::new_v4().to_string(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err(),
             "{attack}"

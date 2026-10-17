@@ -1,6 +1,7 @@
 use super::{PlaybackMissingRange, PreparedAudio};
 use crate::audio::PREVIEW_FRAMES;
 use crate::resampling::Filter;
+use std::sync::Arc;
 
 pub(crate) const MEETING_RATE: u32 = 48_000;
 const MICROS: u128 = 1_000_000;
@@ -16,7 +17,7 @@ struct Source {
 }
 
 // A bounded PCM reader, not a decoded recording in memory. Sources have already
-// passed the storage membership/hash/gap checks. Padding is only outside their
+// passed storage membership/format/gap checks. Padding is only outside their
 // known extents; holes within a source must never be represented as silence.
 pub(crate) struct MeetingAudio {
     sources: Vec<Source>,
@@ -24,6 +25,8 @@ pub(crate) struct MeetingAudio {
     pub(crate) total_frames: u64,
     pub(crate) track_kind: String,
     pub(crate) missing_ranges: Vec<PlaybackMissingRange>,
+    pub(crate) cache_key: String,
+    cached: Option<Arc<super::mix_cache::CachedMix>>,
 }
 
 // A view over validated whole-meeting sources. Keep absolute resampling phase
@@ -38,6 +41,9 @@ pub(crate) struct MeetingIntervalAudio {
     pub(crate) missing_ranges: Vec<PlaybackMissingRange>,
 }
 impl MeetingIntervalAudio {
+    pub(crate) fn use_cache(&mut self, cache: &super::mix_cache::MixCache) {
+        self.audio.use_cache(cache);
+    }
     pub(crate) fn new(audio: MeetingAudio, start_us: i64, end_us: i64) -> Result<Self, String> {
         if start_us < 0
             || end_us <= start_us
@@ -107,6 +113,24 @@ impl MeetingIntervalAudio {
 }
 
 impl MeetingAudio {
+    pub(crate) fn set_cache_key(&mut self, census: &str) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"MON-mix-f32-48000-v1");
+        hash.update(census.as_bytes());
+        for source in &self.sources {
+            for span in &source.audio.spans {
+                hash.update(span.audio.cache_stamp()?.as_bytes());
+            }
+        }
+        self.cache_key = format!("{:x}", hash.finalize());
+        Ok(())
+    }
+
+    pub(crate) fn use_cache(&mut self, cache: &super::mix_cache::MixCache) {
+        self.cached = cache.get(&self.cache_key);
+    }
+
     #[cfg(test)]
     pub(crate) fn new(sources: Vec<PreparedAudio>, end_us: i64) -> Result<Self, String> {
         Self::with_missing_ranges(sources, end_us, vec![])
@@ -228,6 +252,8 @@ impl MeetingAudio {
             total_frames,
             track_kind,
             missing_ranges,
+            cache_key: String::new(),
+            cached: None,
         })
     }
 
@@ -242,6 +268,14 @@ impl MeetingAudio {
         }
         if self.readable_frames(offset, frames)? != frames {
             return Err("会議音声の読出しが欠損区間を横断しています".into());
+        }
+        if let Some(cache) = &self.cached {
+            for source in &self.sources {
+                for span in &source.audio.spans {
+                    span.audio.check_unchanged()?;
+                }
+            }
+            return cache.read(offset, frames);
         }
         let mut mixed = vec![0_f64; frames as usize];
         // Constant headroom for both: no gain jump when one track starts/ends.

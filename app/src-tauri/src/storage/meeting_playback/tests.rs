@@ -30,6 +30,7 @@ fn fixture() -> (tempfile::TempDir, Storage, String) {
 
 fn request(meeting: &str, mode: MeetingPlaybackMode) -> MeetingPlaybackRequest {
     MeetingPlaybackRequest {
+        start_reference: None,
         meeting_id: meeting.into(),
         mode,
     }
@@ -447,24 +448,42 @@ fn native_cancel_interrupts_whole_meeting_hashing_for_each_capture_mode() {
 
 #[test]
 fn imported_meeting_uses_its_managed_source_and_never_claims_capture_sync() {
+    use crate::audio::{flac::write_segment, VerifiedAudio};
+    use sha2::{Digest, Sha256};
+    use std::fs::File;
+
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().to_owned()).unwrap();
     let meeting = storage.create_meeting("取り込み再生").unwrap();
     let relative = PathBuf::from("meetings")
         .join(&meeting.id)
-        .join("import.caf");
+        .join("import.flac");
     std::fs::create_dir_all(storage.managed_path(relative.parent().unwrap()).unwrap()).unwrap();
     let pcm: Vec<u8> = vec![0.5_f32; 4410]
         .iter()
         .flat_map(|sample| sample.to_le_bytes())
         .collect();
-    std::fs::write(
-        storage.managed_path(&relative).unwrap(),
-        caf_fixture(44_100, 1, 3, 32, 4, &pcm),
+    let source = directory.path().join("source.caf");
+    let bytes = caf_fixture(44_100, 1, 3, 32, 4, &pcm);
+    std::fs::write(&source, &bytes).unwrap();
+    let mut input = VerifiedAudio::open(
+        File::open(source).unwrap(),
+        bytes.len() as u64,
+        &format!("{:x}", Sha256::digest(&bytes)),
+    )
+    .unwrap();
+    let path = storage.managed_path(&relative).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        4410,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
     )
     .unwrap();
     let asset = storage
-        .register_ready_meeting_asset(&meeting.id, &relative, "audio/x-caf")
+        .register_ready_meeting_asset(&meeting.id, &relative, "audio/flac")
         .unwrap();
     let db = storage.connection.lock().unwrap();
     db.execute(
@@ -472,8 +491,8 @@ fn imported_meeting_uses_its_managed_source_and_never_claims_capture_sync() {
         params![meeting.id],
     )
     .unwrap();
-    db.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,duration_us,created_at,updated_at) VALUES ('import',?1,'ready','example.caf',100000,0,0)", params![meeting.id]).unwrap();
-    db.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES ('track',?1,'import','imported','caf',44100,1,'ready','{\"timeline_alignment\":\"source\"}',0,0)", params![meeting.id]).unwrap();
+    db.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,duration_us,created_at,updated_at) VALUES ('import',?1,'ready','example.flac',100000,0,0)", params![meeting.id]).unwrap();
+    db.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES ('track',?1,'import','imported','flac',44100,1,'ready','{\"timeline_alignment\":\"source\"}',0,0)", params![meeting.id]).unwrap();
     db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES ('chunk',?1,'track',?2,0,0,100000,4410,44100,1,'ready',0)", params![meeting.id,asset.id]).unwrap();
     drop(db);
     let store = PlaybackStore::default();
@@ -488,6 +507,35 @@ fn imported_meeting_uses_its_managed_source_and_never_claims_capture_sync() {
     assert_eq!(info.track_kind, "imported");
     assert_eq!(info.alignment, "unverified");
     assert!((sample(&store.read(&info.token, 0).unwrap(), 1000) - 0.5).abs() < 1e-6);
+    let range = MeetingIntervalRequest {
+        meeting_id: meeting.id.clone(),
+        mode: MeetingPlaybackMode::Imported,
+        start_us: 12345,
+        end_us: 87654,
+        expected_duration_us: 100000,
+    };
+    let sliced = store
+        .insert_interval(
+            storage
+                .prepare_meeting_interval_cancellable(&range, &crate::test_support::never_cancelled)
+                .unwrap(),
+        )
+        .unwrap();
+    let first = crate::audio_clock::frame_at(range.start_us, 48000).unwrap();
+    let full = store.read(&info.token, first).unwrap();
+    let interval = store.read(&sliced.token, 0).unwrap();
+    assert_eq!(
+        &interval[12..],
+        &full[12..12 + sliced.total_frames as usize * 4]
+    );
+    // On-demand playback checks corrupted packets when they are read.
+    let mut bytes = std::fs::read(&path).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&path, bytes).unwrap();
+    let mut broken = storage
+        .prepare_meeting_audio(&request(&meeting.id, MeetingPlaybackMode::Imported))
+        .unwrap();
+    assert!(broken.read_pcm(4700, 100).is_err());
 }
 
 #[test]
@@ -506,3 +554,5 @@ fn request_never_accepts_paths_unknown_fields_or_unknown_modes() {
 
 mod markdown_interval;
 mod missing_tests;
+
+mod start_reference;

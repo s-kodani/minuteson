@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ChunkPlayer, decodeAudioPacket, missingAtFrame, nextSavedFrame, playbackPacketFrames, validateMissingRanges, type PlaybackMissingRange, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "../src/playback.ts";
+import { ChunkPlayer, decodeAudioPacket, missingAtFrame, nextSavedFrame, playbackStartFrame, playbackPacketFrames, validateMissingRanges, type PlaybackMissingRange, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "../src/playback.ts";
 
 function packet(frames: number, channels = 1, rate = 48000) {
   const buffer = new ArrayBuffer(12 + frames * channels * 4);
@@ -34,6 +34,26 @@ class FakeClock implements PlaybackClock {
 }
 
 async function tick() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
+
+test("starting at a reference continues beyond its end until manual pause or recording EOF", async () => {
+  const clock = new FakeClock(), reads:number[] = [];
+  const full = {...info,totalFrames:240000,endUs:5000000};
+  const player = new ChunkPlayer(clock, async (_,offset) => { reads.push(offset);return packet(Math.min(65536,full.totalFrames-offset)); }, () => {});
+  player.load(full);player.setRate(1.5);player.seek(playbackStartFrame(full,1000000));
+  await player.play();
+  assert.equal(reads[0],48000);
+  // The clicked reference was 1s–1.25s. Its end is not the playback boundary.
+  clock.time=clock.parts[0].at+0.5;
+  assert.ok(player.snapshot().frame>60000);
+  assert.equal(player.snapshot().playing,true);
+  player.pause();const paused=player.snapshot().frame;
+  assert.equal(player.snapshot().playing,false);await player.play();
+  assert.equal(reads[3],paused);
+  for(let i=3;i<clock.parts.length;i++) { clock.end(i);await tick(); }
+  assert.equal(player.snapshot().frame,full.totalFrames);
+  assert.equal(player.snapshot().playing,false);
+  assert.equal(player.snapshot().rate,1.5);
+});
 
 test("binary PCM is deinterleaved and malformed packets are rejected", () => {
   const decoded = decodeAudioPacket(packet(3, 2));

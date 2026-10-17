@@ -24,7 +24,15 @@ fn swapped_run_local_numbers_follow_embeddings_not_numeric_identity() {
         feature(1, 0, &[0.0, 1.0]),
         feature(1, 1, &[1.0, 0.0]),
     ];
-    let result = cluster(&groups, &features, &[], Some(2), 500, &|| false).unwrap();
+    let result = cluster(
+        &groups,
+        &features,
+        &[],
+        Some(2),
+        500,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(labels(&result), vec![Some(0), Some(1), Some(1), Some(0)]);
     assert_eq!(result.observed_speakers, 2);
     assert_eq!(result.unresolved_groups, 0);
@@ -38,7 +46,7 @@ fn equal_local_numbers_with_different_voices_remain_distinct() {
         &[],
         None,
         500,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(labels(&result), vec![Some(0), Some(1)]);
@@ -52,7 +60,7 @@ fn scaling_vectors_does_not_change_cosine_identity() {
         &[],
         None,
         0,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(labels(&result), vec![Some(0), Some(0)]);
@@ -72,7 +80,7 @@ fn complete_linkage_does_not_chain_distant_voices_through_an_intermediate() {
         &[],
         None,
         200,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(result.observed_speakers, 2);
@@ -88,9 +96,25 @@ fn overlap_constraints_survive_cross_run_merges() {
         feature(1, 0, &[1.0, 0.0]),
     ];
     let overlap = [(key(0, 0), key(0, 1))];
-    let result = cluster(&groups, &features, &overlap, None, 2000, &|| false).unwrap();
+    let result = cluster(
+        &groups,
+        &features,
+        &overlap,
+        None,
+        2000,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(labels(&result), vec![Some(0), Some(1), Some(0)]);
-    assert!(cluster(&groups, &features, &overlap, Some(1), 2000, &|| false).is_err());
+    assert!(cluster(
+        &groups,
+        &features,
+        &overlap,
+        Some(1),
+        2000,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -103,10 +127,26 @@ fn requested_count_cuts_one_global_track_clustering_not_each_run() {
         feature(1, 1, &[0.0, 1.0]),
     ];
     for count in 1..=4 {
-        let result = cluster(&groups, &features, &[], Some(count), 0, &|| false).unwrap();
+        let result = cluster(
+            &groups,
+            &features,
+            &[],
+            Some(count),
+            0,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(result.observed_speakers, count);
     }
-    let result = cluster(&groups, &features, &[], Some(10), 500, &|| false).unwrap();
+    let result = cluster(
+        &groups,
+        &features,
+        &[],
+        Some(10),
+        500,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(result.observed_speakers, 4); // Never fabricate six people.
 }
 
@@ -118,20 +158,42 @@ fn unavailable_features_and_cancelling_centroids_remain_unresolved() {
         feature(2, 0, &[1.0, 0.0]),
         feature(2, 0, &[-1.0, 0.0]),
     ];
-    let result = cluster(&groups, &features, &[], Some(3), 500, &|| false).unwrap();
+    let result = cluster(
+        &groups,
+        &features,
+        &[],
+        Some(3),
+        500,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(labels(&result), vec![Some(0), None, None]);
     assert_eq!(result.unresolved_groups, 2);
     assert_eq!(result.observed_speakers, 1);
     assert_eq!(
-        cluster(&[], &[], &[], None, 500, &|| false)
-            .unwrap()
-            .observed_speakers,
+        cluster(
+            &[],
+            &[],
+            &[],
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .observed_speakers,
         0
     );
     assert_eq!(
-        cluster(&groups, &[], &[], None, 500, &|| false)
-            .unwrap()
-            .unresolved_groups,
+        cluster(
+            &groups,
+            &[],
+            &[],
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .unresolved_groups,
         3
     );
 }
@@ -147,9 +209,16 @@ fn selected_real_sample_counts_weight_each_group_centroid() {
         feature(1, 0, &[1.0, 0.0]),
     ];
     assert_eq!(
-        cluster(&groups, &features, &[], None, 1, &|| false)
-            .unwrap()
-            .observed_speakers,
+        cluster(
+            &groups,
+            &features,
+            &[],
+            None,
+            1,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .observed_speakers,
         1
     );
 }
@@ -164,7 +233,17 @@ fn canonical_ties_are_repeatable_without_guessing_probability() {
     ];
     for _ in 0..20 {
         assert_eq!(
-            labels(&cluster(&groups, &features, &[], Some(2), 500, &|| false).unwrap()),
+            labels(
+                &cluster(
+                    &groups,
+                    &features,
+                    &[],
+                    Some(2),
+                    500,
+                    &crate::test_support::never_cancelled
+                )
+                .unwrap()
+            ),
             vec![Some(0), Some(0), Some(1)]
         );
     }
@@ -179,7 +258,15 @@ fn malformed_groups_features_constraints_and_counts_are_rejected() {
         vec![key(4098, 0)],
         vec![key(0, 100)],
     ] {
-        assert!(cluster(&groups, &[], &[], None, 500, &|| false).is_err());
+        assert!(cluster(
+            &groups,
+            &[],
+            &[],
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     for feature in [
         feature(1, 0, &[1.0, 0.0]),
@@ -189,7 +276,15 @@ fn malformed_groups_features_constraints_and_counts_are_rejected() {
         feature(0, 0, &[f32::INFINITY, 1.0]),
         feature(0, 0, &[f32::NEG_INFINITY, 1.0]),
     ] {
-        assert!(cluster(&[key(0, 0)], &[feature], &[], None, 500, &|| false).is_err());
+        assert!(cluster(
+            &[key(0, 0)],
+            &[feature],
+            &[],
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     assert!(cluster(
         &[key(0, 0)],
@@ -197,13 +292,29 @@ fn malformed_groups_features_constraints_and_counts_are_rejected() {
         &[],
         None,
         500,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     for count in [0, 101, u32::MAX] {
-        assert!(cluster(&[], &[], &[], Some(count), 500, &|| false).is_err());
+        assert!(cluster(
+            &[],
+            &[],
+            &[],
+            Some(count),
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
-    assert!(cluster(&[], &[], &[], None, 2001, &|| false).is_err());
+    assert!(cluster(
+        &[],
+        &[],
+        &[],
+        None,
+        2001,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let groups = [key(0, 0), key(0, 1), key(1, 0)];
     for overlap in [
         vec![(key(0, 0), key(0, 0))],
@@ -212,27 +323,75 @@ fn malformed_groups_features_constraints_and_counts_are_rejected() {
         vec![(key(0, 0), key(0, 2))],
         vec![(key(0, 0), key(0, 1)), (key(0, 0), key(0, 1))],
     ] {
-        assert!(cluster(&groups, &[], &overlap, None, 500, &|| false).is_err());
+        assert!(cluster(
+            &groups,
+            &[],
+            &overlap,
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
 }
 
 #[test]
 fn oversized_dimensions_counts_and_sample_times_fail_before_pair_allocation() {
     let groups: Vec<_> = (0..MAX_GROUPS + 1).map(|run| key(run, 0)).collect();
-    assert!(cluster(&groups, &[], &[], None, 500, &|| false).is_err());
+    assert!(cluster(
+        &groups,
+        &[],
+        &[],
+        None,
+        500,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let too_large = feature(0, 0, &vec![1.0; MAX_DIMENSION + 1]);
-    assert!(cluster(&[key(0, 0)], &[too_large], &[], None, 500, &|| false).is_err());
+    assert!(cluster(
+        &[key(0, 0)],
+        &[too_large],
+        &[],
+        None,
+        500,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     for samples in [0, MAX_SAMPLES + 1, u64::MAX] {
         let mut input = feature(0, 0, &[1.0]);
         input.samples = samples;
-        assert!(cluster(&[key(0, 0)], &[input], &[], None, 500, &|| false).is_err());
+        assert!(cluster(
+            &[key(0, 0)],
+            &[input],
+            &[],
+            None,
+            500,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     let features: Vec<_> = (0..MAX_FEATURES + 1)
         .map(|_| feature(0, 0, &[1.0]))
         .collect();
-    assert!(cluster(&[key(0, 0)], &features, &[], None, 500, &|| false).is_err());
+    assert!(cluster(
+        &[key(0, 0)],
+        &features,
+        &[],
+        None,
+        500,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let features: Vec<_> = (0..2049).map(|_| feature(0, 0, &vec![1.0; 4096])).collect();
-    assert!(cluster(&[key(0, 0)], &features, &[], None, 500, &|| false).is_err());
+    assert!(cluster(
+        &[key(0, 0)],
+        &features,
+        &[],
+        None,
+        500,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -395,7 +554,15 @@ fn stale_edges_cannot_bypass_complete_linkage_or_overlap_guards() {
             feature(run, 0, &[angle.cos(), angle.sin()])
         })
         .collect();
-    let result = cluster(&groups, &features, &[], None, 200, &|| false).unwrap();
+    let result = cluster(
+        &groups,
+        &features,
+        &[],
+        None,
+        200,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(result.observed_speakers, 2);
     for (index, (_, label)) in result.groups.iter().enumerate() {
         assert_eq!(*label, Some((index % 2) as u32));
@@ -435,7 +602,12 @@ fn support_excludes_other_voices_and_keeps_only_actual_overlap_constraints() {
         turn(0, 400, 600, 1),
         turn(1, 0, 1000, 0),
     ];
-    let result = support(&[(0, 1000), (1, 1000)], &turns, &|| false).unwrap();
+    let result = support(
+        &[(0, 1000), (1, 1000)],
+        &turns,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(result.groups, vec![key(0, 0), key(0, 1), key(1, 0)]);
     assert_eq!(result.overlaps, vec![(key(0, 0), key(0, 1))]);
     assert_eq!(
@@ -475,7 +647,7 @@ fn touching_and_nested_same_voice_intervals_do_not_invent_overlap() {
             turn(0, 100, 300, 0),
             turn(0, 500, 1000, 1),
         ],
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert!(result.overlaps.is_empty());
@@ -506,7 +678,7 @@ fn support_never_joins_gap_separated_runs_or_disjoint_speech_into_one_window() {
             turn(0, 600, 1000, 0),
             turn(3, 0, 1000, 0),
         ],
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(
@@ -541,7 +713,7 @@ fn longest_ties_use_original_time_and_long_windows_are_centered_and_bounded() {
             turn(0, 400, 500, 0),
             turn(0, 600_000, 2_000_000, 1),
         ],
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(
@@ -568,10 +740,12 @@ fn longest_ties_use_original_time_and_long_windows_are_centered_and_bounded() {
 
 #[test]
 fn empty_support_cancellation_and_out_of_run_frames_fail_closed() {
-    assert!(support(&[(0, 1000)], &[], &|| false)
-        .unwrap()
-        .groups
-        .is_empty());
+    assert!(
+        support(&[(0, 1000)], &[], &crate::test_support::never_cancelled)
+            .unwrap()
+            .groups
+            .is_empty()
+    );
     for runs in [
         vec![(0, 0)],
         vec![(0, u64::MAX)],
@@ -579,7 +753,7 @@ fn empty_support_cancellation_and_out_of_run_frames_fail_closed() {
         vec![(1, 1000), (0, 1000)],
         vec![(4098, 1)],
     ] {
-        assert!(support(&runs, &[], &|| false).is_err());
+        assert!(support(&runs, &[], &crate::test_support::never_cancelled).is_err());
     }
     for turns in [
         vec![turn(0, 0, 1001, 0)],
@@ -589,7 +763,7 @@ fn empty_support_cancellation_and_out_of_run_frames_fail_closed() {
         vec![turn(0, 0, 100, 0), turn(0, 0, 100, 0)],
         vec![turn(0, 100, 200, 0), turn(0, 0, 100, 0)],
     ] {
-        assert!(support(&[(0, 1000)], &turns, &|| false).is_err());
+        assert!(support(&[(0, 1000)], &turns, &crate::test_support::never_cancelled).is_err());
     }
     let turns = [turn(0, 0, 1000, 0), turn(0, 400, 600, 1)];
     let count = Cell::new(0);

@@ -152,7 +152,9 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
   }, []);
   useEffect(() => {
     const fit = () => {
-      const top = Math.ceil(host.current?.closest('.topbar')?.getBoundingClientRect().bottom ?? 64) + 12;
+      const headerBottom = host.current?.closest('.topbar')?.getBoundingClientRect().bottom ?? 64;
+      const progressBottom = host.current?.closest('.main-column')?.querySelector('.common-operation-progress')?.getBoundingClientRect().bottom ?? 0;
+      const top = Math.ceil(Math.max(headerBottom, progressBottom)) + 12;
       setTop(top);
       const player = document.querySelector<HTMLElement>('.meeting-playback-dock:not([hidden]), .toast-fixture-player');
       const bottom = Math.min(innerHeight - 12, player?.getBoundingClientRect().top ? player.getBoundingClientRect().top - 12 : innerHeight - 12);

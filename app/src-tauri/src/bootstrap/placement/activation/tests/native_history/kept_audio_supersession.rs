@@ -14,19 +14,41 @@ fn policy() -> intent::Policy {
 }
 fn keep_new(storage: &Storage, original: &str) -> String {
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(storage, original, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            storage,
+            original,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let review = reconfirmation::Review::capture(storage, original, &lease, &|| false).unwrap();
+    let review = reconfirmation::Review::capture(
+        storage,
+        original,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let id = Uuid::new_v4().to_string();
-    reconfirmation::accept(storage, &id, &review, policy(), &lease, &|| false).unwrap();
-    intent::keep_unstarted(storage, &id, &lease, &|| false).unwrap();
+    reconfirmation::accept(
+        storage,
+        &id,
+        &review,
+        policy(),
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::keep_unstarted(storage, &id, &lease, &crate::test_support::never_cancelled).unwrap();
     id
 }
 fn purge(storage: &Storage, meeting: &str) -> String {
-    let mut prepared = operations::Prepared::fresh(storage, meeting, &|| false).unwrap();
+    let mut prepared =
+        operations::Prepared::fresh(storage, meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     let id = prepared.preview().operation_id.clone();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(
         prepared
@@ -35,7 +57,7 @@ fn purge(storage: &Storage, meeting: &str) -> String {
                 &lease,
                 &prepared.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -58,13 +80,28 @@ fn verify_kept(storage: &Storage, kept: &str, expected: &str) {
     assert_eq!(row[3], "recovered");
     assert_eq!(row[8], r#"{"version":1,"phase":"audioKeptUnstarted"}"#);
     assert!(AnalysisController::default()
-        .begin_audio_deletion_maintenance(storage, kept, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            storage,
+            kept,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(intent::removal::start(storage, kept, &lease, &|| false).is_err());
-    assert!(reconfirmation::Review::capture(storage, kept, &lease, &|| false).is_err());
+    assert!(
+        intent::removal::start(storage, kept, &lease, &crate::test_support::never_cancelled)
+            .is_err()
+    );
+    assert!(reconfirmation::Review::capture(
+        storage,
+        kept,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -93,7 +130,7 @@ fn kept_audio_owned_purge_after_move_preserves_old_root_and_survives_two_further
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,
@@ -156,7 +193,7 @@ fn kept_audio_owned_v2_child_after_move_purges_without_adopting_old_ancestor_as_
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,
@@ -172,15 +209,17 @@ fn kept_audio_owned_restored_baseline_and_kept_child_survive_purge_cold_start_an
     let mut f = NativeFixture::new(false, false);
     let storage = f.storage.as_ref().unwrap();
     let archive = f._base.path().join("kept-restored-source.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let selected = storage
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let meeting = selected
         .publish(
             storage,
             &selected.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap()
@@ -228,7 +267,7 @@ fn kept_audio_owned_restored_baseline_and_kept_child_survive_purge_cold_start_an
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,

@@ -498,6 +498,17 @@ impl DataController {
     }
 
     fn emit(app: &AppHandle, snapshot: Snapshot) {
+        let category = snapshot
+            .kind
+            .map(|kind| format!("{kind:?}").to_lowercase())
+            .unwrap_or_else(|| "data".into());
+        crate::internal_logs::phase(
+            &category,
+            snapshot.token.clone(),
+            None,
+            &snapshot.phase,
+            snapshot.error_message.as_deref(),
+        );
         let _ = app.emit("data-operation-changed", snapshot);
     }
 

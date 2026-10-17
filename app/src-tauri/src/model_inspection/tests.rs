@@ -7,7 +7,8 @@ fn guided_model_preflight_needs_no_manifest_and_preserves_existing_manifest() {
         let (dir, mut manifest) = fixture(engine);
         manifest.target = Target::current().unwrap();
         std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
-        let report = inspect_declared(dir.path(), &manifest, &|| false).unwrap();
+        let report =
+            inspect_declared(dir.path(), &manifest, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(report.manifest, manifest);
         assert_eq!(
             report.manifest_hash,
@@ -22,7 +23,7 @@ fn guided_model_preflight_needs_no_manifest_and_preserves_existing_manifest() {
         let original = b"unrelated existing manifest; must not be changed or adopted";
         std::fs::write(dir.path().join(MANIFEST), original).unwrap();
         assert_eq!(
-            inspect_declared(dir.path(), &manifest, &|| false)
+            inspect_declared(dir.path(), &manifest, &crate::test_support::never_cancelled)
                 .unwrap()
                 .review_hash,
             report.review_hash
@@ -38,7 +39,9 @@ fn guided_model_preflight_rejects_invalid_declaration_and_cancellation_without_w
     std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
     assert!(inspect_declared(dir.path(), &manifest, &|| true).is_err());
     manifest.files[1].relative_path = "../outside.bin".into();
-    assert!(inspect_declared(dir.path(), &manifest, &|| false).is_err());
+    assert!(
+        inspect_declared(dir.path(), &manifest, &crate::test_support::never_cancelled).is_err()
+    );
     assert!(!dir.path().join(MANIFEST).exists());
 }
 
@@ -51,7 +54,9 @@ fn guided_model_preflight_rejects_symlink_files_without_following_them() {
     let model = dir.path().join(&manifest.files[1].relative_path);
     std::fs::rename(&model, dir.path().join("real-model")).unwrap();
     std::os::unix::fs::symlink(dir.path().join("real-model"), &model).unwrap();
-    assert!(inspect_declared(dir.path(), &manifest, &|| false).is_err());
+    assert!(
+        inspect_declared(dir.path(), &manifest, &crate::test_support::never_cancelled).is_err()
+    );
     assert!(!dir.path().join(MANIFEST).exists());
 }
 
@@ -104,7 +109,11 @@ fn write_manifest(dir: &tempfile::TempDir, manifest: &PackageManifest) {
     .unwrap();
 }
 fn inspect_fixture(dir: &tempfile::TempDir) -> Result<Report, String> {
-    inspect_for_target(dir.path(), Target::MacosAarch64, &|| false)
+    inspect_for_target(
+        dir.path(),
+        Target::MacosAarch64,
+        &crate::test_support::never_cancelled,
+    )
 }
 
 #[test]
@@ -274,7 +283,12 @@ fn unknown_duplicate_and_oversized_manifest_are_rejected() {
     assert!(inspect_fixture(&dir).is_err());
     std::fs::write(dir.path().join(MANIFEST), vec![b' '; MAX_MANIFEST + 1]).unwrap();
     assert!(inspect_fixture(&dir).unwrap_err().contains("64KiB"));
-    assert!(inspect_for_target(Path::new("relative"), Target::MacosAarch64, &|| false).is_err());
+    assert!(inspect_for_target(
+        Path::new("relative"),
+        Target::MacosAarch64,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 #[cfg(unix)]
 #[test]
@@ -295,7 +309,12 @@ fn symlink_leaf_parent_root_and_manifest_are_rejected() {
     assert!(inspect_fixture(&dir).is_err());
     let link = outside.path().join("package");
     symlink(dir.path(), &link).unwrap();
-    assert!(inspect_for_target(&link, Target::MacosAarch64, &|| false).is_err());
+    assert!(inspect_for_target(
+        &link,
+        Target::MacosAarch64,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 #[test]
 fn replacement_and_modification_during_hashing_are_detected() {

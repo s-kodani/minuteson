@@ -6,9 +6,11 @@ use crate::storage::deletion::relocation::receiver::{
 };
 
 fn purge(storage: &Storage, meeting: &str) {
-    let mut p = operations::Prepared::fresh(storage, meeting, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::fresh(storage, meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(
         p.execute(
@@ -16,7 +18,7 @@ fn purge(storage: &Storage, meeting: &str) {
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -41,7 +43,10 @@ fn verify_kept(storage: &Storage, kept: &str, expected: &str) {
     assert_eq!(row[2], "delete_meeting");
     assert_eq!(row[3], "recovered");
     assert_eq!(row[8], r#"{"filePhase":"notStarted","kept":true}"#);
-    assert!(operations::Prepared::pending(storage, kept, &|| false).is_err());
+    assert!(
+        operations::Prepared::pending(storage, kept, &crate::test_support::never_cancelled)
+            .is_err()
+    );
     assert!(storage
         .create_meeting("UNRELATED MEETING STILL WRITABLE")
         .is_ok());
@@ -75,7 +80,7 @@ fn kept_meeting_owned_history_after_move_full_purge_and_two_further_moves_never_
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,
@@ -136,15 +141,17 @@ fn kept_meeting_owned_restored_audio_baseline_and_kept_meeting_survive_purge_and
     let mut f = NativeFixture::new(false, false);
     let storage = f.storage.as_ref().unwrap();
     let archive = f._base.path().join("kept-meeting-restore.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let prepared = storage
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let meeting = prepared
         .publish(
             storage,
             &prepared.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap()
@@ -187,7 +194,7 @@ fn kept_meeting_owned_restored_audio_baseline_and_kept_meeting_survive_purge_and
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,

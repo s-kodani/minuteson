@@ -43,7 +43,9 @@ fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -
         .mode(0o700)
         .create(target)
         .unwrap();
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let revision = bootstrap.view().unwrap().revision;
     let operation = Uuid::new_v4().to_string();
     let confirmation = Uuid::new_v4().to_string();
@@ -57,16 +59,27 @@ fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -
         )
         .unwrap();
     let mut placement = bootstrap.pending_placement(&operation, &snapshot).unwrap();
-    placement.copy(&snapshot, &|| false).unwrap();
-    let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
+    placement
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
+    let handoff = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let envelope: Value = serde_json::from_slice(handoff.bytes()).unwrap();
     assert_eq!(envelope["version"], 5);
     assert!(envelope["flac_history"]["workspaces"]
         .as_array()
         .is_some_and(|w| !w.is_empty()));
-    placement.install_history(&handoff, &|| false).unwrap();
     placement
-        .activate_for_restart(&handoff, &confirmation, revision + 1, &|| false)
+        .install_history(&handoff, &crate::test_support::never_cancelled)
+        .unwrap();
+    placement
+        .activate_for_restart(
+            &handoff,
+            &confirmation,
+            revision + 1,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(storage.restart_required());
     assert!(storage.create_meeting("旧Storageを変更しない").is_err());
@@ -100,7 +113,7 @@ fn first(f: &Fixture) -> (Directory, String, Checkpoint) {
     (directory, name, checkpoint)
 }
 fn preview(storage: &Storage, meeting: &str) -> crate::storage::deletion::audio::Preview {
-    Census::capture(storage, meeting, &|| false)
+    Census::capture(storage, meeting, &crate::test_support::never_cancelled)
         .unwrap()
         .preview(&Uuid::new_v4().to_string())
         .unwrap()
@@ -749,7 +762,10 @@ fn flac_relocation_rehashed_binding_still_requires_the_independently_placed_inod
 fn flac_relocation_source_capture_cancel_and_busy_converter_never_mint_ownership() {
     let f = failed();
     let original = tree(f.base.parent().unwrap());
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(super::super::relocation::Source::capture(&f.storage, &snapshot, &|| true).is_err());
     let directory = Directory::open(&f.base).unwrap();
     let lock = directory.required(LOCK, false).unwrap();
@@ -757,17 +773,23 @@ fn flac_relocation_source_capture_cancel_and_busy_converter_never_mint_ownership
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0
     );
-    let error = match super::super::relocation::Source::capture(&f.storage, &snapshot, &|| false) {
+    let error = match super::super::relocation::Source::capture(
+        &f.storage,
+        &snapshot,
+        &crate::test_support::never_cancelled,
+    ) {
         Ok(_) => panic!("busy converter granted FLAC handoff"),
         Err(error) => error,
     };
     assert!(error.contains("FLAC変換中"), "{error}");
     drop(lock);
-    assert!(
-        super::super::relocation::Source::capture(&f.storage, &snapshot, &|| false)
-            .unwrap()
-            .is_some()
-    );
+    assert!(super::super::relocation::Source::capture(
+        &f.storage,
+        &snapshot,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .is_some());
     assert_eq!(tree(f.base.parent().unwrap()), original);
 }
 

@@ -3,7 +3,11 @@ use crate::storage::model_profiles::portable::{export, Catalog};
 use serde_json::{json, Value};
 
 fn catalog(f: &Fixture) -> Catalog {
-    export(&f.storage.connection.lock().unwrap(), &|| false).unwrap()
+    export(
+        &f.storage.connection.lock().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn decode(value: Value) -> Result<Catalog, String> {
     let catalog: Catalog = serde_json::from_value(value).map_err(|e| e.to_string())?;
@@ -188,7 +192,11 @@ fn portable_model_catalog_preserves_unused_packages_all_versions_and_both_numeri
     // artifact is gone. Exporting it must not re-run a compatibility check.
     drop(f.app_data);
     assert_eq!(
-        export(&f.storage.connection.lock().unwrap(), &|| false).unwrap(),
+        export(
+            &f.storage.connection.lock().unwrap(),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         original
     );
 }
@@ -301,11 +309,11 @@ fn portable_model_catalog_rejects_corrupt_unused_package_and_backup_releases_mai
             params![f.packages[index].id],
         )
         .unwrap();
-        assert!(export(&db, &|| false).is_err());
+        assert!(export(&db, &crate::test_support::never_cancelled).is_err());
     }
     let failure = f
         .storage
-        .create_backup_archive(&target, &|| false)
+        .create_backup_archive(&target, &crate::test_support::never_cancelled)
         .err()
         .unwrap();
     assert!(!failure.published);
@@ -336,7 +344,7 @@ fn portable_model_catalog_checks_superseded_profile_and_never_repairs_it_or_chan
         true,
     )
     .unwrap();
-    assert!(export(&db, &|| false).is_err());
+    assert!(export(&db, &crate::test_support::never_cancelled).is_err());
     let (heads, _) = heads(&db).unwrap();
     assert_eq!(heads.standard.unwrap().id, latest);
     let threads: i64 = db.query_row("SELECT json_extract(settings_json,'$.binding.settings.settings.threads') FROM profile_components WHERE profile_id=?1", params![old], |r| r.get(0)).unwrap();

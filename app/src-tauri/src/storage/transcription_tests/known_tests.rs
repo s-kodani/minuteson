@@ -30,11 +30,16 @@ pub(crate) fn split_fixture(root: &Path) -> (Storage, String, WhisperConfig) {
 
 fn pause_first(storage: &Storage, job: &JobSnapshot) {
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(storage, &job.id, &|| false, &|snapshot| {
-        if snapshot.completed_units == 1 && snapshot.state == "running" {
-            storage.request_job_pause(&job.id, "user").unwrap();
+    assert!(process(
+        storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.completed_units == 1 && snapshot.state == "running" {
+                storage.request_job_pause(&job.id, "user").unwrap();
+            }
         }
-    })
+    )
     .unwrap()
     .is_none());
 }
@@ -77,9 +82,14 @@ fn known_runs_publish_original_meeting_times_and_exact_nonzero_pcm_without_gap_p
         240000
     );
     storage.acquire_next_job().unwrap().unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let view = storage
         .load_visible_analysis(&meeting, &candidate)
         .unwrap()
@@ -133,7 +143,11 @@ fn known_runs_pause_reopen_and_retry_reuse_exact_durable_units() {
         ),
     )
     .unwrap();
-    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    config.executable = Fingerprint::capture(
+        &config.executable.path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let job = enqueue(&storage, &meeting, "known-retry", config, "standard").unwrap();
     pause_first(&storage, &job);
     let saved = storage.fixed_job_input(&job.id).unwrap();
@@ -152,9 +166,14 @@ fn known_runs_pause_reopen_and_retry_reuse_exact_durable_units() {
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
     assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, retry.id);
-    let candidate = process(&storage, &retry.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &retry.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(std::fs::read(calls).unwrap(), b"xx");
     assert_eq!(storage.fixed_job_input(&job.id).unwrap(), saved);
     assert_eq!(
@@ -247,7 +266,13 @@ fn known_runs_refuse_corrupt_source_even_outside_current_unit_and_observe_cancel
     bytes[last] ^= 1;
     std::fs::write(path, bytes).unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|_| {}).is_err());
+    assert!(process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 0);
     assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
 }
@@ -262,7 +287,12 @@ fn continuous_map_labels_constrain_analysis_filter_halo_and_do_not_leak_other_ru
     for (index, value) in [(0, 0.25_f32), (1, -0.5_f32)] {
         let run = &known.runs[index];
         let mut audio = storage
-            .prepare_analysis_run(&meeting, &source.tracks[0], run, &|| false)
+            .prepare_analysis_run(
+                &meeting,
+                &source.tracks[0],
+                run,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         for first in [0, audio.total_frames() - 64] {
             assert!(audio
@@ -290,7 +320,12 @@ fn fractional_gap_frames_remain_on_meeting_lattice_and_are_not_synthesized() {
     assert_eq!(known.runs[1].start_us, 5000002);
     for run in &known.runs {
         let audio = storage
-            .prepare_analysis_run(&meeting, &source.tracks[0], run, &|| false)
+            .prepare_analysis_run(
+                &meeting,
+                &source.tracks[0],
+                run,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         assert_eq!(audio.total_frames(), run.end_frame - run.first_frame);
     }
@@ -319,7 +354,7 @@ fn known_run_snapshot_cannot_reorder_change_track_or_derived_frame_bounds() {
                 &job,
                 &bad,
                 checkpoint.as_ref(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err(),
             "case {case}"
@@ -389,27 +424,43 @@ fn known_runs_additive_restore_keeps_times_and_fixed_ranges_without_running_engi
             ),
         )
         .unwrap();
-        config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+        config.executable = Fingerprint::capture(
+            &config.executable.path,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let job = enqueue(&storage, &meeting, "known-restore", config, "standard").unwrap();
         if partial {
             pause_first(&storage, &job);
         } else {
             storage.acquire_next_job().unwrap().unwrap();
-            process(&storage, &job.id, &|| false, &|_| {})
-                .unwrap()
-                .unwrap();
+            process(
+                &storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
+            .unwrap()
+            .unwrap();
         }
         let before = std::fs::read(&calls).unwrap();
         let saved = storage.fixed_job_input(&job.id).unwrap();
         let archive = destination.path().join("known.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let target = Storage::open(target_root.path().into()).unwrap();
         let prepared = target
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let confirmation = prepared.preview().confirmation_id;
         let receipt = prepared
-            .publish(&target, &confirmation, &|| false, &|_| {})
+            .publish(
+                &target,
+                &confirmation,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         let new_meeting = &receipt.meeting_ids[0];
         assert_ne!(new_meeting, &meeting);
@@ -516,9 +567,14 @@ fn paired_inputs_keep_independent_runs_formats_and_original_timestamps() {
     let job = enqueue(&storage, &meeting, "paired-known", config, "standard").unwrap();
     assert_eq!(job.total_units, Some(3));
     storage.acquire_next_job().unwrap().unwrap();
-    let candidate = process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let view = storage
         .load_visible_analysis(&meeting, &candidate)
         .unwrap()
@@ -555,16 +611,21 @@ fn publication_transaction_rechecks_gap_snapshot_and_rejects_cross_gap_utterance
     let job = enqueue(&storage, &meeting, "publication-known", config, "standard").unwrap();
     let spec = storage.fixed_job_input(&job.id).unwrap().0;
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|snapshot| {
-        if snapshot.completed_units == 2 && snapshot.state == "running" {
-            storage
-                .connection
-                .lock()
-                .unwrap()
-                .execute("UPDATE audio_gaps SET reason_code='changed'", [])
-                .unwrap();
+    assert!(process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|snapshot| {
+            if snapshot.completed_units == 2 && snapshot.state == "running" {
+                storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .execute("UPDATE audio_gaps SET reason_code='changed'", [])
+                    .unwrap();
+            }
         }
-    })
+    )
     .is_err());
     assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 2);
     let input = AnalysisInput {

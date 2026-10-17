@@ -15,13 +15,13 @@ const MAX_DIMENSION: usize = 4096;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct ExtractorConfig {
+pub(crate) struct ExtractorConfig {
     pub helper: Fingerprint,
     pub library: Fingerprint,
 }
 
 impl ExtractorConfig {
-    pub(super) fn capture(helper: &Path, engine: &SherpaConfig) -> Result<Self, String> {
+    pub(crate) fn capture(helper: &Path, engine: &SherpaConfig) -> Result<Self, String> {
         let matches: Vec<_> = engine
             .runtime_libraries
             .iter()
@@ -32,6 +32,9 @@ impl ExtractorConfig {
                     .is_some_and(|name| name == "libsherpa-onnx-c-api.dylib")
             })
             .collect();
+        if matches.is_empty() {
+            return Err("この話者分離モデルは声の登録に必要な部品を含まない旧構成です。「設定」の「ローカルAI」で話者分離モデルの「ダウンロードして使用」を実行してから、声を登録してください".into());
+        }
         if matches.len() != 1 {
             return Err("固定した話者エンジンに一意のC APIランタイムが必要です".into());
         }
@@ -79,7 +82,7 @@ impl ExtractorConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum UnavailableReason {
+pub(crate) enum UnavailableReason {
     InsufficientAudio,
     NonFiniteEmbedding,
     ZeroEmbedding,
@@ -94,7 +97,7 @@ enum Status {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct Output {
+pub(crate) struct Output {
     schema_version: u32,
     engine: String,
     engine_version: String,
@@ -118,7 +121,7 @@ fn required_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 impl Output {
     // Also used when loading a previously fingerprinted result. Absence of
     // evidence remains unavailable, not a zero/synthetic identity vector.
-    pub(super) fn vector(&self, first: u64, end: u64) -> Result<Option<Vec<f32>>, String> {
+    pub(crate) fn vector(&self, first: u64, end: u64) -> Result<Option<Vec<f32>>, String> {
         if self.schema_version != 1
             || self.engine != "sherpa-onnx"
             || self.engine_version != "1.13.8"
@@ -168,7 +171,7 @@ impl Output {
     }
 }
 
-pub(super) fn parse(bytes: &[u8], first: u64, end: u64) -> Result<Output, String> {
+pub(crate) fn parse(bytes: &[u8], first: u64, end: u64) -> Result<Output, String> {
     if bytes.len() as u64 > MAX_OUTPUT {
         return Err("特徴量出力が上限を超えました".into());
     }
@@ -236,7 +239,7 @@ impl Log {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn run(
+pub(crate) fn run(
     config: &ExtractorConfig,
     engine: &SherpaConfig,
     wave: &Fingerprint,
@@ -308,6 +311,8 @@ fn run_inner(
     if cancelled() {
         return Ok(None);
     }
+    let _log_capture =
+        crate::internal_logs::watch_engine(&directory, &["embedding.stderr.log"], "diarization");
     let mut launch = OwnedCommand::new(&config.helper.path)?;
     launch
         .command

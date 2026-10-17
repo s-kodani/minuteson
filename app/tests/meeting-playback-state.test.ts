@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { meetingPlaybackModes, meetingPlaybackLabel, preferredMeetingPlaybackMode, validateMeetingPlayback } from "../src/meeting-playback-state.ts";
+import { meetingPlaybackModes, meetingPlaybackLabel, meetingPlaybackStart, preferredMeetingPlaybackMode, validateMeetingPlayback, type MeetingPlaybackStartReference } from "../src/meeting-playback-state.ts";
 import type { PlaybackInfo } from "../src/playback.ts";
 
 const info: PlaybackInfo = { token:"meeting", sampleRate:48000, channels:1, totalFrames:172800000, startUs:0, endUs:3600000000, trackKind:"both", alignment:"unverified" };
@@ -44,4 +44,21 @@ test("mode switch can preserve a position within a declared gap but not foreign 
   validateMeetingPlayback({...info,trackKind:"mic"},"mic",{frame:6000,rate:1.5,playing:false,endUs:info.endUs});
   assert.throws(()=>validateMeetingPlayback({...info,trackKind:"mic",missingRanges:[range]},"mic",{frame:6000,rate:1,playing:true}));
   assert.throws(()=>validateMeetingPlayback({...info,missingRanges:[{...range,endFrame:9601}]},"both",{frame:6000,rate:1,playing:true}));
+});
+
+test("all playback entry points resolve an absolute start within the full recording", () => {
+  const references: MeetingPlaybackStartReference[] = [
+    { kind:"utterance", analysisId:"a", utteranceId:"u", expectedContentHash:"hash", startUs:123456, endUs:765432 },
+    { kind:"draftUtterance", request:{ meetingId:"m", analysisId:"a", utteranceId:"child", expectedContentHash:"hash", expectedDraft:{id:"d",lockVersion:2}, expectedStartUs:123456, expectedEndUs:765432 } },
+    { kind:"interval", startUs:123456, endUs:765432, expectedDurationUs:1000000 },
+  ];
+  for (const reference of references) {
+    assert.equal(meetingPlaybackStart(reference, 1000000), 123456);
+    assert.throws(() => meetingPlaybackStart(reference, 500000));
+    assert.throws(() => meetingPlaybackStart(reference, NaN));
+  }
+  assert.throws(() => meetingPlaybackStart({kind:"interval",startUs:0,endUs:1,expectedDurationUs:1000001},1000000));
+  for (const range of [{startUs:-1,endUs:2}, {startUs:1,endUs:1}, {startUs:0.5,endUs:2}, {startUs:1,endUs:NaN}]) {
+    assert.throws(() => meetingPlaybackStart({kind:"interval",...range,expectedDurationUs:1000000},1000000));
+  }
 });

@@ -12,6 +12,7 @@ const MAX_MANIFEST: usize = 65_536;
 // Every selector is repository-owned SQL. No request may choose tables or SQL.
 // Order is dependency order, except the three self-referential trees below.
 const TARGETS: &[(&str, &str)] = &[
+    ("voice_matches", "meeting_id=?1"),
     ("analysis_flows", "meeting_id=?1"),
     (
         "transcript_edit_recovery",

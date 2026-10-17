@@ -46,9 +46,9 @@ class RuntimeTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return path
 
-    def test_options_are_fixed_static_cpu_portable_and_no_dependency_fetch(self):
+    def test_options_are_fixed_static_metal_embedded_portable_and_no_dependency_fetch(self):
         for option in ["-DBUILD_SHARED_LIBS=OFF", "-DGGML_NATIVE=OFF", "-DGGML_CPU_ARM_ARCH=armv8-a",
-                       "-DGGML_METAL=OFF", "-DGGML_OPENMP=OFF", "-DGGML_CPU_KLEIDIAI=OFF",
+                       "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON", "-DGGML_OPENMP=OFF", "-DGGML_CPU_KLEIDIAI=OFF",
                        "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0", "-DCMAKE_OSX_ARCHITECTURES=arm64",
                        "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"]:
             self.assertIn(option, runtime.OPTIONS)
@@ -158,7 +158,7 @@ class RuntimeTests(unittest.TestCase):
         path = self.package / "runtime-index.json"
         original = json.loads(path.read_text())
         for key, value in [("sourceCommit", "0" * 40), ("target", "windows_x64"),
-                           ("buildOptions", []), ("cpuOnly", False), ("distributionReady", True),
+                           ("buildOptions", []), ("cpuOnly", True), ("distributionReady", True),
                            ("distributionReady", 0), ("cpuOnly", 1),
                            ("runtimeSigning", "publisher_verified")]:
             path.write_text(json.dumps({**original, key: value}))
@@ -245,8 +245,8 @@ class RuntimeTests(unittest.TestCase):
     def test_build_configuration_includes_only_sealed_package_and_no_model_weights(self):
         config = json.loads((runtime.REPOSITORY / "app/src-tauri/tauri.macos.conf.json").read_text())
         resources = config["bundle"]["resources"]
-        self.assertEqual(resources["../../.cache/whisper-runtime/package/whisper-runtime.tar"], "asr-runtime/whisper-runtime.tar")
-        self.assertEqual(resources["../../.cache/whisper-runtime/package/runtime-index.json"], "asr-runtime/runtime-index.json")
+        self.assertEqual(resources["../../.cache/whisper-metal-runtime/package/whisper-runtime.tar"], "asr-runtime/whisper-runtime.tar")
+        self.assertEqual(resources["../../.cache/whisper-metal-runtime/package/runtime-index.json"], "asr-runtime/runtime-index.json")
         self.assertFalse(any("ggml-tiny" in path or "compile-" in path for path in resources))
         self.assertIn("mon_whisper_runtime.py", (runtime.REPOSITORY / "app/build-macos.sh").read_text())
 

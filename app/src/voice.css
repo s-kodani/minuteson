@@ -1,0 +1,71 @@
+.voice-panel,.voice-settings {margin-block:12px;padding:12px;border:1px solid var(--border,#ccc);border-radius:10px;min-width:0}
+.voice-panel summary,.voice-settings summary {cursor:pointer;font-weight:600}
+.voice-panel p,.voice-settings p {font-size:.85rem;line-height:1.6}
+.voice-speaker,.voice-person {display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding-block:10px;border-bottom:1px solid var(--border,#ccc)}
+.voice-speaker strong,.voice-person strong {flex:1 0 100%;overflow-wrap:anywhere}
+.voice-speaker select,.voice-panel select,.voice-panel input {max-width:100%;min-width:0}
+.voice-speaker span,.voice-note,.voice-sample {font-size:.8rem}
+.voice-sample,.voice-job {display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;padding-block:6px}
+.voice-sample > span {flex:1;overflow-wrap:anywhere}
+.voice-panel [role=alert],.voice-settings [role=alert] {overflow-wrap:anywhere}
+
+.common-modal.voice-dialog > .common-modal-body:not([hidden]) {
+  display:grid;
+  gap:16px;
+  min-width:0;
+}
+.voice-dialog > .common-modal-body > :is(h2,p) { margin:0; }
+.voice-dialog > .common-modal-body > h2 { font-size:19px; line-height:1.5; }
+.voice-dialog > .common-modal-body > label {
+  display:grid;
+  gap:8px;
+  min-width:0;
+  margin:0;
+}
+.voice-dialog > .common-modal-body > label > :is(input,select) {
+  box-sizing:border-box;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+}
+.voice-dialog > .common-modal-body > p { line-height:1.7; overflow-wrap:anywhere; }
+.voice-enrollment-windows { display:grid; gap:12px; min-width:0; max-height:min(42vh,420px); overflow-y:auto; padding:2px; scrollbar-gutter:stable; }
+.voice-enrollment-window {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:8px;
+  min-width:0;
+  padding:12px;
+  border:1px solid var(--border);
+  border-radius:8px;
+}
+.voice-enrollment-window > label {display:flex;align-items:flex-start;gap:8px;overflow-wrap:anywhere;line-height:1.6;min-width:0;max-width:100%}
+.voice-enrollment-window > label > span {min-width:0;overflow-wrap:anywhere}
+.voice-enrollment-window input[type=checkbox] {flex:none;width:18px;height:18px;margin-top:3px}
+.voice-enrollment-window .voice-candidate-text {flex-basis:100%;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.voice-candidate-pages {display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.voice-registration-reason {flex-basis:100%;line-height:1.6}
+.voice-registration-reason:empty {display:none}
+.voice-enrollment-window > span { flex:0 0 128px; font-variant-numeric:tabular-nums; }
+.voice-enrollment-window > button { max-width:100%; white-space:normal; justify-self:start; }
+.voice-dialog > .common-modal-body > button { justify-self:start; max-width:100%; }
+@media (max-width:480px) {
+  .voice-enrollment-window { flex-direction:column; align-items:flex-start; }
+  .voice-enrollment-window > span { flex-basis:auto; }
+}
+
+.voice-library { min-width:0; max-width:1200px; }
+.voice-library > p { font-size:13px; line-height:1.7; }
+.voice-library-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:16px 0; }
+.voice-library-actions > span { color:var(--muted); font-size:13px; }
+.voice-library .voice-person { margin-block:16px; padding:20px; border:1px solid var(--border); border-radius:12px; background:var(--surface); gap:12px; }
+.voice-sample > span { flex:1 1 240px; }
+.voice-sample small { display:block; margin-top:6px; color:var(--muted); line-height:1.6; }
+.voice-sample-player { flex-basis:100%; min-width:0; }
+.voice-sample-player .audio-player { margin:8px 0 0; }
+.voice-sample-player .audio-controls { flex-wrap:wrap; }
+.voice-sample-player .audio-controls > input[type=range] { flex:1 1 120px; min-width:60px; max-width:100%; }
+.voice-sample-player .audio-controls > span { flex:none; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.voice-sample-player .audio-controls > label { flex:none; flex-wrap:nowrap; }
+.voice-library [role=alert] { overflow-wrap:anywhere; }
+@media(max-width:600px) { .voice-library .voice-person { padding:16px; } }

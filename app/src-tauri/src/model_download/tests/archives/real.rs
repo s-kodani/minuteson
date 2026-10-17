@@ -99,7 +99,9 @@ fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets(
         PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").expect("fixed ASR download payload"));
     let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
     let recipe = bundle.recipe().unwrap();
-    bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+    bundle
+        .prepare(&bundle_root, &recipe, &crate::test_support::never_cancelled)
+        .unwrap();
     trial_recipe(
         "whisper-194-small-multilingual",
         recipe,
@@ -131,13 +133,15 @@ fn real_all_whisper_variants_import_transcribe_publish_and_reopen_synthetic_voic
     let voice = PathBuf::from(std::env::var("MON_QA_SYNTHETIC_VOICE").expect("synthetic voice"));
     // Only the previously documented synthetic fixture is admitted. This is
     // not an opt-in to read arbitrary existing meetings or capture live audio.
-    let proof = crate::local_engine::Fingerprint::capture(&voice, &|| false).unwrap();
+    let proof =
+        crate::local_engine::Fingerprint::capture(&voice, &crate::test_support::never_cancelled)
+            .unwrap();
     assert_eq!(
         proof.sha256,
         "7eee2b4a3ba2057234d2e0a1367b0aaf66f5aa1b0895c9cf0aaa7807f5d706be"
     );
     all_whisper_trials(Some(&voice));
-    proof.verify(&|| false).unwrap();
+    proof.verify(&crate::test_support::never_cancelled).unwrap();
 }
 
 fn all_whisper_trials(voice: Option<&Path>) {
@@ -168,7 +172,9 @@ fn all_whisper_trials(voice: Option<&Path>) {
             _ => panic!("unexpected Whisper variant"),
         };
         let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
-        bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+        bundle
+            .prepare(&bundle_root, &recipe, &crate::test_support::never_cancelled)
+            .unwrap();
         trial_recipe(
             &format!("whisper-194-{name}-multilingual"),
             recipe,
@@ -246,7 +252,7 @@ fn trial_recipe_at(
                 &entry.package_id,
                 &entry.review_hash,
                 &check.operation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             println!("{choice_id}: existing fixture model and successful CPU evidence reverified; no new placement");
@@ -263,7 +269,7 @@ fn trial_recipe_at(
         &operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |_, _| {},
         &mut |url, expected_size, expected_hash, output, cancelled, report| {
             calls += 1;
@@ -336,7 +342,7 @@ fn trial_recipe_at(
         &recipe.hash().unwrap(),
         &package,
         &receipt.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     println!(
@@ -351,7 +357,7 @@ fn trial_recipe_at(
         &check_id,
         &package,
         &receipt.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     if result.state != crate::model_compatibility::CheckState::Succeeded {
@@ -404,11 +410,17 @@ fn trial_recipe_at(
         &package,
         &receipt.report.review_hash,
         &check_id,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let applied =
-        crate::model_application::apply(&storage, &models, &id(), &preview, &|| false).unwrap();
+    let applied = crate::model_application::apply(
+        &storage,
+        &models,
+        &id(),
+        &preview,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         applied.components.len(),
         if native.is_some() {
@@ -630,7 +642,9 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
         .unwrap();
     for (name, recipe) in recipes {
         let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
-        bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+        bundle
+            .prepare(&bundle_root, &recipe, &crate::test_support::never_cancelled)
+            .unwrap();
         trial_recipe_at(
             &format!("whisper-194-{name}-multilingual"),
             recipe,
@@ -746,7 +760,7 @@ fn real_voiced_transcription(
     use crate::{audio_import, local_engine::Fingerprint, transcription};
     let helper = Fingerprint::capture(
         &PathBuf::from(std::env::var("MON_QA_IMPORT_HELPER").expect("bundled import helper")),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(
@@ -754,9 +768,13 @@ fn real_voiced_transcription(
         "52841f2e260f9c010fdac5472b0b3849fc1b10eb27eb7f95fb6cc5c9612752c8"
     );
     let started = Instant::now();
-    let selected =
-        audio_import::inspect(voice, &helper, storage.import_scratch().unwrap(), &|| false)
-            .unwrap();
+    let selected = audio_import::inspect(
+        voice,
+        &helper,
+        storage.import_scratch().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         (selected.info.sample_rate, selected.info.channels),
         (16000, 1)
@@ -768,7 +786,7 @@ fn real_voiced_transcription(
         &helper,
         "合成発話の実モデル検証",
         &id(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_, _| {},
     )
     .unwrap();
@@ -803,9 +821,14 @@ fn real_voiced_transcription(
         storage.acquire_local_inference_job().unwrap().unwrap().id,
         job.id
     );
-    let candidate = transcription::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = transcription::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
     let view = storage
         .load_visible_analysis(&imported.meeting_id, &candidate)

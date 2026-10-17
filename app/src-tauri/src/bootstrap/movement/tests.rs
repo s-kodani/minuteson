@@ -22,7 +22,12 @@ impl Fixture {
     }
     fn prepared(&self) -> Prepared {
         self.bootstrap
-            .prepare_move(&self.storage, self.base.path(), &|| false, &|_| {})
+            .prepare_move(
+                &self.storage,
+                self.base.path(),
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap()
     }
 }
@@ -43,7 +48,7 @@ fn move_confirmation_creates_no_target_and_preserves_same_meeting_and_original_o
             &f.bootstrap,
             &f.storage,
             &preview.confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -81,7 +86,7 @@ fn move_confirmation_requires_refresh_after_edits_and_never_uses_wrong_confirmat
             &f.bootstrap,
             &f.storage,
             &Uuid::new_v4().to_string(),
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -91,7 +96,7 @@ fn move_confirmation_requires_refresh_after_edits_and_never_uses_wrong_confirmat
             &f.bootstrap,
             &f.storage,
             &before.confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -99,7 +104,12 @@ fn move_confirmation_requires_refresh_after_edits_and_never_uses_wrong_confirmat
     assert!(f.bootstrap.view().unwrap().pending_operation_id.is_none());
     assert!(!f.storage.restart_required());
     prepared
-        .refresh(&f.bootstrap, &f.storage, &|| false, &|_| {})
+        .refresh(
+            &f.bootstrap,
+            &f.storage,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     let refreshed = prepared.preview();
     assert_ne!(refreshed.confirmation_id, before.confirmation_id);
@@ -110,7 +120,7 @@ fn move_confirmation_requires_refresh_after_edits_and_never_uses_wrong_confirmat
             &f.bootstrap,
             &f.storage,
             &refreshed.confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -124,7 +134,12 @@ fn move_parent_substitution_collision_and_excluded_roots_are_refused_without_ado
         std::fs::create_dir(&chosen).unwrap();
         let mut prepared = f
             .bootstrap
-            .prepare_move(&f.storage, &chosen, &|| false, &|_| {})
+            .prepare_move(
+                &f.storage,
+                &chosen,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         let preview = prepared.preview();
         match failure {
@@ -148,7 +163,7 @@ fn move_parent_substitution_collision_and_excluded_roots_are_refused_without_ado
                     &f.bootstrap,
                     &f.storage,
                     &preview.confirmation_id,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .is_err(),
@@ -167,13 +182,23 @@ fn move_parent_substitution_collision_and_excluded_roots_are_refused_without_ado
     for root in [f.storage.root().to_path_buf(), f.bootstrap.config.clone()] {
         assert!(f
             .bootstrap
-            .prepare_move(&f.storage, &root, &|| false, &|_| {})
+            .prepare_move(
+                &f.storage,
+                &root,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .is_err());
     }
     std::fs::create_dir_all(&f.bootstrap.models_root).unwrap();
     assert!(f
         .bootstrap
-        .prepare_move(&f.storage, &f.bootstrap.models_root, &|| false, &|_| {})
+        .prepare_move(
+            &f.storage,
+            &f.bootstrap.models_root,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
 }
 
@@ -218,7 +243,12 @@ fn move_cancel_before_intent_is_reversible_but_after_copy_intent_keeps_both_root
     f.storage.create_meeting("source remains selected").unwrap();
     assert!(f
         .bootstrap
-        .prepare_move(&f.storage, f.base.path(), &|| false, &|_| {})
+        .prepare_move(
+            &f.storage,
+            f.base.path(),
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
 }
 
@@ -232,7 +262,7 @@ fn move_panicked_copy_progress_keeps_intent_and_never_selects_partial_target() {
             &f.bootstrap,
             &f.storage,
             &preview.confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|phase| {
                 if phase == "handoff" {
                     panic!("synthetic interruption after copy");

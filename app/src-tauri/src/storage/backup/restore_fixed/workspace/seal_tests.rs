@@ -12,8 +12,15 @@ fn fixture() -> Fixture {
     let storage = Storage::open(root.path().into()).unwrap();
     archive::tests::meeting(&storage, "seal");
     let path = output.path().join("source.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     Fixture {
         _root: root,
         storage,
@@ -22,15 +29,15 @@ fn fixture() -> Fixture {
     }
 }
 fn work(fixed: &FixedData<'_, '_>, output: &Path) -> FixedWorkspace {
-    FixedWorkspace::prepare(fixed, output, &|| false)
+    FixedWorkspace::prepare(fixed, output, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_speech_artifacts(fixed, &|| false)
+        .with_speech_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_generation_artifacts(fixed, &|| false)
+        .with_generation_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_processing_history(fixed, &|| false)
+        .with_processing_history(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_provenance(fixed, &|| false)
+        .with_provenance(fixed, &crate::test_support::never_cancelled)
         .unwrap()
 }
 
@@ -41,11 +48,17 @@ fn restore_seal_completes_all_passes_restores_trusted_schema_and_reopens_read_on
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed = SealedWorkspace::prepare(
+        &fixed,
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let stage = sealed.stage.path().to_path_buf();
     assert_eq!(sealed.batch_id, ids.batch_id);
     assert_eq!(sealed.archive_id, ids.archive_id);
@@ -78,13 +91,17 @@ fn restore_seal_completes_all_passes_restores_trusted_schema_and_reopens_read_on
         .connection()
         .execute_batch("PRAGMA query_only=ON;")
         .unwrap();
-    sealed.verify(&|| false).unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     let external = Connection::open(stage.join("fixed.sqlite3")).unwrap();
     assert!(external
         .execute("UPDATE restore_provenance SET source_key='changed'", [])
         .is_err());
     drop(external);
-    sealed.verify(&|| false).unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(sealed);
     assert!(!stage.exists());
     assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
@@ -97,20 +114,33 @@ fn restore_seal_rejects_unfinished_passes_and_completed_database_changes() {
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
-    let partial = FixedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
+    let partial = FixedWorkspace::prepare(
+        &fixed,
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let stage = partial.stage.path().to_path_buf();
     assert!(partial
-        .seal(&fixed, &|| false)
+        .seal(&fixed, &crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("全構築"));
     assert!(!stage.exists());
-    let partial = FixedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap();
-    assert!(partial.with_provenance(&fixed, &|| false).is_err());
+    let partial = FixedWorkspace::prepare(
+        &fixed,
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(partial
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
+        .is_err());
     let complete = work(&fixed, f.output.path());
     let stage = complete.stage.path().to_path_buf();
     complete
@@ -118,7 +148,7 @@ fn restore_seal_rejects_unfinished_passes_and_completed_database_changes() {
         .execute("UPDATE meetings SET title='構築後の変更'", [])
         .unwrap();
     assert!(complete
-        .seal(&fixed, &|| false)
+        .seal(&fixed, &crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("構築完了後"));
@@ -132,10 +162,11 @@ fn restore_seal_checks_every_registered_file_and_rejects_unregistered_paths() {
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     for change in ["bytes", "extra", "directory"] {
         let complete = work(&fixed, f.output.path());
         let stage = complete.stage.path().to_path_buf();
@@ -159,7 +190,12 @@ fn restore_seal_checks_every_registered_file_and_rejects_unregistered_paths() {
             }
             _ => unreachable!(),
         }
-        assert!(complete.seal(&fixed, &|| false).is_err(), "{change}");
+        assert!(
+            complete
+                .seal(&fixed, &crate::test_support::never_cancelled)
+                .is_err(),
+            "{change}"
+        );
         assert!(!stage.exists());
     }
 }
@@ -171,12 +207,18 @@ fn restore_seal_reverification_detects_database_and_file_changes_and_cancellatio
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     for change in ["database", "file", "cancel"] {
-        let sealed = SealedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap();
+        let sealed = SealedWorkspace::prepare(
+            &fixed,
+            f.output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let stage = sealed.stage.path().to_path_buf();
         match change {
             "database" => {
@@ -212,10 +254,11 @@ fn restore_seal_cancellation_during_final_hashing_cleans_only_owned_stage() {
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     let complete = work(&fixed, f.output.path());
     let stage = complete.stage.path().to_path_buf();
     let marker = f.output.path().join("keep.txt");
@@ -238,10 +281,11 @@ fn restore_seal_rejects_incomplete_or_injected_trigger_definitions() {
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     for change in ["missing", "injected"] {
         let mut complete = work(&fixed, f.output.path());
         let stage = complete.stage.path().to_path_buf();
@@ -251,7 +295,7 @@ fn restore_seal_rejects_incomplete_or_injected_trigger_definitions() {
             complete.triggers.push("CREATE TRIGGER fixture_injected BEFORE UPDATE ON meetings BEGIN SELECT RAISE(ABORT,'injected'); END".into());
         }
         assert!(complete
-            .seal(&fixed, &|| false)
+            .seal(&fixed, &crate::test_support::never_cancelled)
             .err()
             .unwrap()
             .contains("信頼済み"));
@@ -267,10 +311,11 @@ fn restore_seal_rejects_leaf_and_parent_symlinks_without_removing_external_data(
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     let outside = tempfile::tempdir().unwrap();
     let keep = outside.path().join("keep.txt");
     std::fs::write(&keep, b"keep").unwrap();
@@ -302,7 +347,9 @@ fn restore_seal_rejects_leaf_and_parent_symlinks_without_removing_external_data(
             }
             _ => unreachable!(),
         }
-        assert!(complete.seal(&fixed, &|| false).is_err());
+        assert!(complete
+            .seal(&fixed, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(!stage.exists());
         assert_eq!(std::fs::read(&keep).unwrap(), b"keep");
     }
@@ -322,9 +369,15 @@ fn restore_sealed_global_merge_keeps_duplicate_origin_as_history_without_reusing
         .save_vocabulary_book(None, 0, vec![term.clone()])
         .unwrap();
     let backup = f.output.path().join("terms.monbackup");
-    f.storage.create_backup_archive(&backup, &|| false).unwrap();
-    let source =
-        archive::read(&mut File::open(backup).unwrap(), f.output.path(), &|| false).unwrap();
+    f.storage
+        .create_backup_archive(&backup, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(backup).unwrap(),
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     let mut existing = term.clone();
@@ -336,18 +389,28 @@ fn restore_sealed_global_merge_keeps_duplicate_origin_as_history_without_reusing
         &source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let restored = ids.get("vocabulary_entries", "", &term.id).unwrap();
     assert_ne!(restored, existing.id);
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed = SealedWorkspace::prepare(
+        &fixed,
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut db = target.connection.lock().unwrap();
-    let merge = sealed.global_merge(&db, &|| false).unwrap();
+    let merge = sealed
+        .global_merge(&db, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(merge.receipt().deduplicated, 1);
     let mut tx = db.transaction().unwrap();
-    merge.apply(&mut tx, &|| false).unwrap();
+    merge
+        .apply(&mut tx, &crate::test_support::never_cancelled)
+        .unwrap();
     tx.commit().unwrap();
     assert_eq!(
         db.query_row(
@@ -359,7 +422,9 @@ fn restore_sealed_global_merge_keeps_duplicate_origin_as_history_without_reusing
         0
     );
     assert_eq!(sealed.database.query_row("SELECT entity_key FROM restore_provenance WHERE domain='vocabulary_entries' AND source_key=?1",params![term.id],|r|r.get::<_,String>(0)).unwrap(),restored);
-    sealed.verify(&|| false).unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(db);
     assert_eq!(
         target.vocabulary_book(None).unwrap().payload,
@@ -376,10 +441,11 @@ fn restore_seal_rejects_hardlinks_and_relaxed_permissions_on_owned_database_file
         &f.source,
         f.output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, f.output.path(), &|| false).unwrap();
+    let fixed =
+        FixedData::new(&ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
     let outside = tempfile::tempdir().unwrap();
     for change in [
         "asset-link",
@@ -414,7 +480,10 @@ fn restore_seal_rejects_hardlinks_and_relaxed_permissions_on_owned_database_file
             }
             _ => unreachable!(),
         }
-        let error = complete.seal(&fixed, &|| false).err().unwrap();
+        let error = complete
+            .seal(&fixed, &crate::test_support::never_cancelled)
+            .err()
+            .unwrap();
         assert!(
             error.contains("ハードリンク") || error.contains("非公開権限"),
             "{change}: {error}"

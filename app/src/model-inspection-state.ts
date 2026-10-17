@@ -30,6 +30,8 @@ export interface ModelPlacementEntry {
   packageId: string;
   modelName: string;
   modelVersion: string;
+  quantization?: string | null;
+  modelFiles?: { role: string; size: number; sha256: string }[];
   engine: string;
   engineVersion: string;
   totalBytes: number;

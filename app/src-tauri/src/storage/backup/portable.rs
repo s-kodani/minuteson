@@ -1,6 +1,7 @@
 //! A logical dump carries source IDs/hashes, never executable SQL or a raw DB.
 //! Redaction changes the hash basis; restore must remap IDs and rehash fixed data.
 use super::*;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -42,6 +43,10 @@ pub(super) const TABLES: &[&str] = &[
     "audio_import_commits",
     "audio_import_options",
     "restore_provenance",
+    "voice_people",
+    "voice_samples",
+    "voice_matches",
+    "voice_policies",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +78,7 @@ enum Cell {
     Integer(i64),
     Real(f64),
     Text(String),
+    Blob(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -475,6 +481,7 @@ pub(super) fn dump(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<Table>, String> {
     let db = read_only(&snapshot.database)?;
+    crate::storage::voice::validate_registry(&db)?;
     let known = crate::storage::model_metadata::historical(&db)?;
     let trusted = schema(MIGRATIONS.len())?;
     let mut descriptions = tables(&db)?;
@@ -492,6 +499,9 @@ pub(super) fn dump(
             let mut cells: Vec<Cell> = (0..table.columns.len())
                 .map(
                     |index| match row.get_ref(index).map_err(|e| e.to_string())? {
+                        ValueRef::Blob(bytes) if bytes.len() <= 16 * 1024 => {
+                            Ok(Cell::Blob(BASE64.encode(bytes)))
+                        }
                         ValueRef::Null => Ok(Cell::Null),
                         ValueRef::Integer(n) => Ok(Cell::Integer(n)),
                         ValueRef::Real(n) if n.is_finite() => Ok(Cell::Real(n)),
@@ -689,6 +699,10 @@ pub(super) fn load(
                 .into_iter()
                 .zip(&trusted.columns)
                 .map(|(cell, col)| match (cell, col.data_type.as_str()) {
+                    (Cell::Blob(s), "BLOB") if s.len() <= 21848 => BASE64
+                        .decode(s)
+                        .map(SqlValue::Blob)
+                        .map_err(|_| "バックアップのバイナリ列が不正です".to_owned()),
                     (Cell::Null, _) => Ok(SqlValue::Null),
                     (Cell::Integer(n), "INTEGER") => Ok(SqlValue::Integer(n)),
                     (Cell::Real(n), "REAL") if n.is_finite() => Ok(SqlValue::Real(n)),
@@ -737,6 +751,7 @@ fn bounded_line(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
 }
 
 pub(super) fn validate_scopes(db: &Connection) -> Result<(), String> {
+    crate::storage::voice::validate_registry(db)?;
     crate::storage::minutes_markdown::verify_all(db)?;
     super::input_snapshots::validate_database(db, &|| false)?;
     for (table, head) in [

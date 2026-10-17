@@ -69,12 +69,19 @@ pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) ->
 
 fn write(storage: &Storage, dir: &Path) -> (PathBuf, BackupReceipt) {
     let path = dir.join("meeting.monbackup");
-    let receipt = storage.create_backup_archive(&path, &|| false).unwrap();
+    let receipt = storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     (path, receipt)
 }
 
 fn verified(path: &Path, dir: &Path) -> VerifiedArchive {
-    read(&mut File::open(path).unwrap(), dir, &|| false).unwrap()
+    read(
+        &mut File::open(path).unwrap(),
+        dir,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 pub(in crate::storage::backup) fn pack(path: &Path, manifest: &Manifest, payloads: &[Vec<u8>]) {
@@ -127,13 +134,17 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
         let invalid = output.path().join("unsupported.monbackup");
         pack(&invalid, &manifest, &payloads);
         let count = std::fs::read_dir(output.path()).unwrap().count();
-        let error = read(&mut File::open(&invalid).unwrap(), output.path(), &|| false)
-            .err()
-            .unwrap();
+        let error = read(
+            &mut File::open(&invalid).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .err()
+        .unwrap();
         assert_eq!(error, "現在の形式ではないバックアップは復元できません");
         assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), count);
         assert!(target
-            .prepare_additive_restore(&invalid, &|| false, &|_| {})
+            .prepare_additive_restore(&invalid, &crate::test_support::never_cancelled, &|_| {})
             .is_err());
         assert_eq!(
             super::super::publication::tests::all_rows(&target.connection.lock().unwrap()),
@@ -175,9 +186,14 @@ fn archive_preserves_audio_options_text_markdown_and_model_metadata_without_host
         storage.acquire_local_inference_job().unwrap().unwrap().id,
         generated.id
     );
-    crate::storage::markdown_generation_tests::process(&storage, &generated.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    crate::storage::markdown_generation_tests::process(
+        &storage,
+        &generated.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let markdown = storage.get_minutes_markdown(&id).unwrap().unwrap();
     storage
         .save_analysis_preferences(
@@ -196,7 +212,12 @@ fn archive_preserves_audio_options_text_markdown_and_model_metadata_without_host
     assert_eq!(receipt.meeting_count, 1);
     assert!(receipt.asset_count >= 3);
     assert_eq!(receipt.asset_count, archive.manifest.entries.len() - 1);
-    assert_eq!(receipt.sha256, digest_file(&path, &|| false).unwrap().1);
+    assert_eq!(
+        receipt.sha256,
+        digest_file(&path, &crate::test_support::never_cancelled)
+            .unwrap()
+            .1
+    );
     assert_eq!(archive.manifest.encryption, Encryption::None);
     assert_eq!(archive.manifest.hash_basis, HashBasis::SourceIdentity);
     // The committed transcript carries two model references and the current
@@ -401,12 +422,14 @@ fn native_logs_are_omitted_without_dropping_prompts_or_reusing_the_pcm_reason() 
     archive.manifest.omitted_assets[0].reason = OmittedReason::RecreatablePcm;
     let forged = output.path().join("wrong-log-kind.monbackup");
     pack(&forged, &archive.manifest, &payloads(&archive));
-    assert!(
-        read(&mut File::open(forged).unwrap(), output.path(), &|| false)
-            .err()
-            .unwrap()
-            .contains("除外ファイル")
-    );
+    assert!(read(
+        &mut File::open(forged).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled
+    )
+    .err()
+    .unwrap()
+    .contains("除外ファイル"));
     assert!(storage.verify_asset(&prompt.id).is_ok());
 }
 
@@ -584,24 +607,30 @@ fn capture_journal_diagnostics_survive_verified_backup_additive_restore_and_reba
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let new_owner = ids.get("recording_sessions", &meeting, &owner).unwrap();
     let new_asset = ids.get("file_assets", &meeting, source_asset).unwrap();
     assert_ne!(new_owner, owner);
-    let fixed =
-        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = super::super::restore_fixed::FixedData::new(
+        &ids,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
         &fixed,
         output.path(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     let existing = target.create_meeting("既存会議は保持").unwrap();
-    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(target.get_meeting(&existing.id).unwrap().is_some());
     let restored = target
         .root
@@ -612,7 +641,9 @@ fn capture_journal_diagnostics_survive_verified_backup_additive_restore_and_reba
     // it is not permission to receive notices for the newly mapped session.
     assert_eq!(portable["recordingOwnerId"], owner);
     let next_path = output.path().join("rebackup.monbackup");
-    target.create_backup_archive(&next_path, &|| false).unwrap();
+    target
+        .create_backup_archive(&next_path, &crate::test_support::never_cancelled)
+        .unwrap();
     let next = verified(&next_path, output.path());
     assert_eq!(std::fs::read(&next.assets[&new_asset]).unwrap(), encoded);
     assert_eq!(std::fs::read(&manifest_path).unwrap(), original);
@@ -635,7 +666,7 @@ fn capture_journal_invalid_final_diagnostic_refuses_backup_publication_without_c
     storage.finalize_recording(&owner).unwrap();
     let destination = output.path().join("invalid.monbackup");
     let failure = storage
-        .create_backup_archive(&destination, &|| false)
+        .create_backup_archive(&destination, &crate::test_support::never_cancelled)
         .unwrap_err();
     assert!(!failure.published);
     assert!(!destination.exists());
@@ -669,7 +700,12 @@ fn reader_rejects_truncated_appended_tampered_and_oversized_headers_before_extra
         }
         std::fs::write(&path, bytes).unwrap();
         assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{kind}"
         );
         assert_eq!(
@@ -699,7 +735,12 @@ fn reader_rejects_rehashed_manifest_path_version_duplicate_type_size_and_unknown
         m.entries[1].path = path_attack.into();
         pack(&path, &m, &data);
         assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{path_attack}"
         );
     }
@@ -716,7 +757,12 @@ fn reader_rejects_rehashed_manifest_path_version_duplicate_type_size_and_unknown
         }
         pack(&path, &m, &data);
         assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{kind}"
         );
     }
@@ -732,7 +778,12 @@ fn reader_rejects_rehashed_manifest_path_version_duplicate_type_size_and_unknown
         file.write_all(&bytes).unwrap();
     }
     drop(file);
-    assert!(read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err());
+    assert!(read(
+        &mut File::open(&path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(storage.list_meetings().unwrap().len(), 1);
 }
 
@@ -789,7 +840,12 @@ fn reader_rejects_rehashed_cross_meeting_heads_and_dangling_foreign_keys_without
                 row["cells"][head] = json!({"type":"text","value":target});
             }
         });
-        assert!(read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err());
+        assert!(read(
+            &mut File::open(&path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     assert_eq!(storage.list_meetings().unwrap().len(), 2);
     assert!(storage.create_meeting("元データは書き込み可能").is_ok());
@@ -825,22 +881,32 @@ fn successful_replace_is_verified_and_managed_paths_and_symlinks_are_rejected() 
     storage.create_meeting("保存").unwrap();
     let path = output.path().join("meeting.monbackup");
     std::fs::write(&path, b"old file").unwrap();
-    let receipt = storage.create_backup_archive(&path, &|| false).unwrap();
+    let receipt = storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         verified(&path, output.path()).manifest.archive_id,
         receipt.archive_id
     );
     assert!(storage
-        .create_backup_archive(&storage.root.join("forbidden.monbackup"), &|| false)
+        .create_backup_archive(
+            &storage.root.join("forbidden.monbackup"),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(storage
-        .create_backup_archive(&output.path().join("wrong.md"), &|| false)
+        .create_backup_archive(
+            &output.path().join("wrong.md"),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     #[cfg(unix)]
     {
         let alias = output.path().join("alias.monbackup");
         std::os::unix::fs::symlink(&path, &alias).unwrap();
-        assert!(storage.create_backup_archive(&alias, &|| false).is_err());
+        assert!(storage
+            .create_backup_archive(&alias, &crate::test_support::never_cancelled)
+            .is_err());
     }
 }
 
@@ -875,22 +941,26 @@ fn reader_rejects_rehashed_machine_paths_availability_and_missing_model_metadata
                 row["cells"][profile]["value"] = json!(config.to_string());
             }
         });
-        assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false)
-                .err()
-                .unwrap()
-                .contains("端末固有")
-        );
+        assert!(read(
+            &mut File::open(&path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled
+        )
+        .err()
+        .unwrap()
+        .contains("端末固有"));
     }
     let mut m = archive.manifest.clone();
     m.file_references.clear();
     pack(&path, &m, &payloads(&archive));
-    assert!(
-        read(&mut File::open(&path).unwrap(), output.path(), &|| false)
-            .err()
-            .unwrap()
-            .contains("メタデータ")
-    );
+    assert!(read(
+        &mut File::open(&path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled
+    )
+    .err()
+    .unwrap()
+    .contains("メタデータ"));
 }
 
 #[test]
@@ -919,7 +989,12 @@ fn reader_rejects_column_value_types_null_required_cells_and_unknown_row_fields(
             }
         });
         assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{kind}"
         );
     }
@@ -938,12 +1013,14 @@ fn payload_corruption_and_read_cancellation_clean_only_owned_staging() {
     let last = changed.len() - 1;
     changed[last] ^= 1;
     std::fs::write(&path, &changed).unwrap();
-    assert!(
-        read(&mut File::open(&path).unwrap(), output.path(), &|| false)
-            .err()
-            .unwrap()
-            .contains("ハッシュ")
-    );
+    assert!(read(
+        &mut File::open(&path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled
+    )
+    .err()
+    .unwrap()
+    .contains("ハッシュ"));
     std::fs::write(&path, &original).unwrap();
     let keep = output.path().join("unrelated");
     std::fs::write(&keep, b"keep").unwrap();
@@ -972,7 +1049,9 @@ fn replacing_large_backup_is_streamed_without_markdown_size_limit() {
         .unwrap()
         .set_len(65 * 1024 * 1024)
         .unwrap();
-    let receipt = storage.create_backup_archive(&path, &|| false).unwrap();
+    let receipt = storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(receipt.size < 65 * 1024 * 1024);
     assert_eq!(
         verified(&path, output.path()).manifest.archive_id,

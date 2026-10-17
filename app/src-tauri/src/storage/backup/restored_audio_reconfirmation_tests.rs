@@ -11,27 +11,61 @@ fn policy() -> intent::Policy {
 }
 fn owner(storage: &Storage, operation: &str) -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_audio_deletion_maintenance(storage, operation, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn fixed(storage: &Storage, op: &str) -> String {
     storage.connection.lock().unwrap().query_row("SELECT json_array(rowid,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1)) FROM maintenance_operations WHERE id=?1", [op], |r| r.get(0)).unwrap()
 }
 fn consent(storage: &Storage, source: &str, lease: &DataMaintenanceLease) -> String {
-    let review = Review::capture(storage, source, lease, &|| false).unwrap();
+    let review = Review::capture(
+        storage,
+        source,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let operation = Uuid::new_v4().to_string();
-    intent::reconfirmation::accept(storage, &operation, &review, policy(), lease, &|| false)
-        .unwrap();
+    intent::reconfirmation::accept(
+        storage,
+        &operation,
+        &review,
+        policy(),
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     operation
 }
 fn execute(storage: &Storage, operation: &str, lease: &DataMaintenanceLease) {
-    intent::removal::start(storage, operation, lease, &|| false).unwrap();
-    intent::removal::run(storage, operation, lease, &|| false).unwrap();
-    assert!(
-        intent::removal::completion::finish(storage, operation, lease, &|| false)
-            .unwrap()
-            .completed()
-    );
+    intent::removal::start(
+        storage,
+        operation,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::run(
+        storage,
+        operation,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(intent::removal::completion::finish(
+        storage,
+        operation,
+        lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 fn attention(storage: &Storage, op: &str) -> bool {
     storage.connection.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM temp.mon_deletion_startup_attention WHERE operation_id=?1)", [op], |r|r.get(0)).unwrap()
@@ -49,8 +83,20 @@ fn restored_audio_reconfirmation_new_consent_preserves_no_consent_baseline_and_t
     let analysis = target.load_current_analysis(&meeting).unwrap();
     let lease = owner(&target, &original);
     // The baseline is never a permit even with real shared admission.
-    assert!(intent::removal::start(&target, &original, &lease, &|| false).is_err());
-    let review = Review::capture(&target, &original, &lease, &|| false).unwrap();
+    assert!(intent::removal::start(
+        &target,
+        &original,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = Review::capture(
+        &target,
+        &original,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = review.preview(&Uuid::new_v4().to_string()).unwrap();
     assert!(!preview.execute_allowed && preview.changed_audio_files > 0);
     assert!(preview.unclassified_files > 0 && preview.retained.analysis_revisions > 0);
@@ -77,7 +123,7 @@ fn restored_audio_reconfirmation_new_consent_preserves_no_consent_baseline_and_t
     let db = target.connection.lock().unwrap();
     assert!(restored::deleted(&db, &original, &meeting).is_ok());
     assert_eq!(
-        audio::backup_deleted(&target, &db, &|| false).unwrap(),
+        audio::backup_deleted(&target, &db, &crate::test_support::never_cancelled).unwrap(),
         std::collections::BTreeSet::from([meeting])
     );
     assert!(!target.data_write_blocked());
@@ -127,7 +173,13 @@ fn restored_audio_reconfirmation_native_descendants_derive_only_exact_reserved_n
     std::fs::write(&reserved, b"NATIVE RESERVED RETURN").unwrap();
     std::fs::write(&unknown, b"NEVER ISSUED BY RESTORE").unwrap();
     let lease = owner(&target, &operation);
-    let review = Review::capture(&target, &operation, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &target,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = review.preview(&Uuid::new_v4().to_string()).unwrap();
     assert_eq!(preview.unregistered_audio_files, 1);
     assert!(preview.entries.iter().any(|e| e.relative_path
@@ -147,10 +199,18 @@ fn restored_audio_reconfirmation_native_descendants_derive_only_exact_reserved_n
             retain_unclassified: true
         },
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
-    intent::reconfirmation::accept(&target, &next, &review, policy(), &lease, &|| false).unwrap();
+    intent::reconfirmation::accept(
+        &target,
+        &next,
+        &review,
+        policy(),
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     execute(&target, &next, &lease);
     assert!(!reserved.exists() && unknown.exists());
     assert_eq!(fixed(&target, &original), before);
@@ -167,20 +227,52 @@ fn restored_audio_reconfirmation_ancestral_renewal_full_purge_preserves_metadata
     execute(&target, &parent, &lease);
     std::fs::write(&path, b"NEXT NATIVE RETURN").unwrap();
     let child = consent(&target, &parent, &lease);
-    intent::removal::start(&target, &child, &lease, &|| false).unwrap();
+    intent::removal::start(
+        &target,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let returned = path.with_file_name(format!(".mon-delete-audio-{parent}-0"));
     std::fs::write(&returned, b"ANCESTRAL RESERVED RETURNED LATE").unwrap();
-    let review =
-        intent::removal::renewal::Review::capture(&target, &child, &lease, &|| false).unwrap();
-    intent::removal::renewal::accept(&target, &review, true, &lease, &|| false).unwrap();
-    intent::removal::run(&target, &child, &lease, &|| false).unwrap();
-    intent::removal::completion::finish(&target, &child, &lease, &|| false).unwrap();
+    let review = intent::removal::renewal::Review::capture(
+        &target,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::renewal::accept(
+        &target,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::run(
+        &target,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::completion::finish(
+        &target,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!returned.exists());
     let record = |id: &str| {
         target.connection.lock().unwrap().query_row("SELECT json_array(rowid,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [id], |r|r.get::<_,String>(0)).unwrap()
     };
     let before: Vec<_> = [&original, &parent, &child].map(|id| record(id)).into();
-    let mut prepared = operations::Prepared::fresh(&target, &meeting, &|| false).unwrap();
+    let mut prepared =
+        operations::Prepared::fresh(&target, &meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     let preview = prepared.preview();
     assert!(
         prepared
@@ -189,7 +281,7 @@ fn restored_audio_reconfirmation_ancestral_renewal_full_purge_preserves_metadata
                 &lease,
                 &preview.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -198,9 +290,11 @@ fn restored_audio_reconfirmation_ancestral_renewal_full_purge_preserves_metadata
     for (id, expected) in [&original, &parent, &child].iter().zip(&before) {
         assert_eq!(&record(id), expected);
         let db = target.connection.lock().unwrap();
-        assert!(audio::backup_deleted(&target, &db, &|| false)
-            .unwrap()
-            .is_empty());
+        assert!(
+            audio::backup_deleted(&target, &db, &crate::test_support::never_cancelled)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             db.query_row(
                 "SELECT consent_at FROM maintenance_operations WHERE id=?1",
@@ -211,8 +305,13 @@ fn restored_audio_reconfirmation_ancestral_renewal_full_purge_preserves_metadata
             None
         );
         drop(db);
-        assert!(intent::removal::start(&target, id, &lease, &|| false).is_err());
-        assert!(Review::capture(&target, id, &lease, &|| false).is_err());
+        assert!(
+            intent::removal::start(&target, id, &lease, &crate::test_support::never_cancelled)
+                .is_err()
+        );
+        assert!(
+            Review::capture(&target, id, &lease, &crate::test_support::never_cancelled).is_err()
+        );
     }
     drop(lease);
     let storage_root = target.root.clone();
@@ -233,9 +332,21 @@ fn restored_audio_reconfirmation_kept_new_consent_never_resolves_old_reappearanc
     let before = fixed(&target, &original);
     let lease = owner(&target, &original);
     let operation = consent(&target, &original, &lease);
-    intent::keep_unstarted(&target, &operation, &lease, &|| false).unwrap();
+    intent::keep_unstarted(
+        &target,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(path.exists() && attention(&target, &original));
-    assert!(intent::removal::start(&target, &operation, &lease, &|| false).is_err());
+    assert!(intent::removal::start(
+        &target,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let next = consent(&target, &original, &lease);
     execute(&target, &next, &lease);
     assert_eq!(fixed(&target, &original), before);
@@ -250,9 +361,21 @@ fn restored_audio_reconfirmation_changed_inventory_cancel_dead_lease_do_not_publ
         std::fs::write(&path, b"RETURNED").unwrap();
         let controller = AnalysisController::default();
         let lease = controller
-            .begin_audio_deletion_maintenance(&target, &original, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &target,
+                &original,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        let review = Review::capture(&target, &original, &lease, &|| false).unwrap();
+        let review = Review::capture(
+            &target,
+            &original,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         if variant == 0 {
             std::fs::write(&path, b"CHANGED AFTER REVIEW").unwrap();
         }
@@ -291,7 +414,13 @@ fn restored_audio_reconfirmation_corrupt_ledger_or_receipt_never_grants_admissio
     let path = audio_path(&target, &meeting);
     std::fs::write(&path, b"RETURNED").unwrap();
     let lease = owner(&target, &original);
-    let review = Review::capture(&target, &original, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &target,
+        &original,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for sql in [
         "UPDATE maintenance_operations SET consent_at=1 WHERE id=?1",
         "UPDATE maintenance_operations SET updated_at=updated_at+1 WHERE id=?1",
@@ -326,12 +455,18 @@ fn restored_audio_reconfirmation_corrupt_ledger_or_receipt_never_grants_admissio
         &review,
         policy(),
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     drop(lease);
     assert!(AnalysisController::default()
-        .begin_audio_deletion_maintenance(&target, &original, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &target,
+            &original,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(path.exists());
 }
@@ -344,7 +479,13 @@ fn restored_audio_reconfirmation_symlink_and_unowned_database_copy_remain_fenced
     std::fs::write(&outside, b"NEVER DELETE OUTSIDE").unwrap();
     std::os::unix::fs::symlink(&outside, &path).unwrap();
     let lease = owner(&target, &original);
-    assert!(Review::capture(&target, &original, &lease, &|| false).is_err());
+    assert!(Review::capture(
+        &target,
+        &original,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(outside).unwrap(), b"NEVER DELETE OUTSIDE");
     drop(lease);
     let copy = tempfile::tempdir().unwrap();
@@ -359,7 +500,13 @@ fn restored_audio_reconfirmation_symlink_and_unowned_database_copy_remain_fenced
         .unwrap();
     let copied = Storage::open(copy.path().to_owned()).unwrap();
     assert!(AnalysisController::default()
-        .begin_audio_deletion_maintenance(&copied, &original, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &copied,
+            &original,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
 }
 
@@ -387,7 +534,13 @@ fn restored_audio_reconfirmation_new_consent_cannot_predate_verified_publication
     let path = audio_path(&target, &meeting);
     std::fs::write(&path, b"RETURNED").unwrap();
     let lease = owner(&target, &original);
-    let review = Review::capture(&target, &original, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &target,
+        &original,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let operation = Uuid::new_v4().to_string();
     assert!(intent::reconfirmation::accept(
         &target,
@@ -395,7 +548,7 @@ fn restored_audio_reconfirmation_new_consent_cannot_predate_verified_publication
         &review,
         policy(),
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(path.exists());
@@ -421,14 +574,21 @@ fn restored_audio_reconfirmation_real_publication_sigkill_resume_and_full_deleti
     deleted(&source, &meeting);
     let output = tempfile::tempdir().unwrap();
     let archive = output.path().join("restore-reconfirmation.monbackup");
-    source.create_backup_archive(&archive, &|| false).unwrap();
+    source
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let target = Storage::open(base.path().join("crash-target")).unwrap();
     let selected = target
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let preview = selected.preview();
     let meeting = selected
-        .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap()
         .meeting_ids[0]
         .clone();
@@ -487,16 +647,26 @@ fn restored_audio_reconfirmation_real_publication_sigkill_resume_and_full_deleti
         storage.connection.lock().unwrap().query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [id], |r|r.get(0)).unwrap()
     };
     let originals = (record(&target, &original), record(&target, &operation));
-    let mut deletion =
-        crate::storage::deletion::operations::Prepared::fresh(&target, &meeting, &|| false)
-            .unwrap();
+    let mut deletion = crate::storage::deletion::operations::Prepared::fresh(
+        &target,
+        &meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let confirmation = deletion.preview().confirmation_id;
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(
         deletion
-            .execute(&target, &lease, &confirmation, true, &|| false, &|_| {})
+            .execute(
+                &target,
+                &lease,
+                &confirmation,
+                true,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .unwrap()
             .deleted
     );
@@ -539,9 +709,22 @@ fn restored_audio_reconfirmation_crash_child() {
     );
     let storage = Storage::open(root).unwrap();
     let lease = owner(&storage, &source);
-    let review = Review::capture(&storage, &source, &lease, &|| false).unwrap();
-    intent::reconfirmation::accept(&storage, &operation, &review, policy(), &lease, &|| false)
-        .unwrap();
+    let review = Review::capture(
+        &storage,
+        &source,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::reconfirmation::accept(
+        &storage,
+        &operation,
+        &review,
+        policy(),
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     unsafe {
         libc::kill(libc::getpid(), libc::SIGKILL);
     }

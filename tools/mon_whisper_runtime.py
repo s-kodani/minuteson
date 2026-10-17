@@ -1,4 +1,4 @@
-"""Build-time, version-pinned CPU runtime; never run this on an end user's Mac.
+"""Build-time, version-pinned CPU/Metal runtime; never run on an end user's Mac.
 
 Only a small sealed TAR and its index go into MON. Model weights remain a
 separate, explicitly confirmed acquisition. No app/user data or global tool
@@ -40,7 +40,8 @@ OPTIONS = (
     "-DCMAKE_C_COMPILER=/usr/bin/clang", "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
     "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
     "-DGGML_NATIVE=OFF", "-DGGML_CPU_ARM_ARCH=armv8-a",
-    "-DGGML_METAL=OFF", "-DGGML_OPENMP=OFF", "-DGGML_ACCELERATE=ON",
+    "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
+    "-DGGML_OPENMP=OFF", "-DGGML_ACCELERATE=ON",
     "-DGGML_BLAS=ON", "-DGGML_BLAS_VENDOR=Apple", "-DGGML_CPU_KLEIDIAI=OFF",
     "-DGGML_BACKEND_DL=OFF", "-DWHISPER_COREML=OFF", "-DWHISPER_OPENVINO=OFF",
     "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_EXAMPLES=ON",
@@ -251,9 +252,14 @@ def verify_binary(binary):
     dependencies, _ = command(["/usr/bin/otool", "-L", str(binary)], timeout=30)
     paths = [line.strip().split(" (", 1)[0] for line in dependencies.decode().splitlines()[1:]]
     allowed = {"/usr/lib/libc++.1.dylib", "/usr/lib/libSystem.B.dylib",
-               "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate"}
+               "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate",
+               "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+               "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+               "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+               "/System/Library/Frameworks/MetalKit.framework/Versions/A/MetalKit",
+               "/usr/lib/libobjc.A.dylib"}
     if not paths or not set(paths) <= allowed:
-        raise ValueError("runtime has non-system or unexpected dependencies")
+        raise ValueError(f"runtime has non-system or unexpected dependencies: {sorted(set(paths) - allowed)}")
     load_commands, _ = command(["/usr/bin/otool", "-l", str(binary)], timeout=30)
     import re
     versions = re.findall(r"\bminos\s+([0-9.]+)", load_commands.decode())
@@ -266,7 +272,7 @@ def build_info():
     return {"schemaVersion": 1, "engine": "whisper.cpp", "engineVersion": VERSION,
             "sourceCommit": COMMIT, "sourceUrl": SOURCE_URL, "sourceBytes": SOURCE_BYTES,
             "sourceSha256": SOURCE_SHA, "target": "macos_aarch64", "minimumMacOS": "15.0",
-            "buildOptions": list(OPTIONS), "cpuOnly": True,
+            "buildOptions": list(OPTIONS), "cpuOnly": False,
             "publisherAuthenticity": "not_verified", "licenseReview": "not_verified",
             "distributionReady": False}
 
@@ -338,7 +344,7 @@ def package_contents(directory):
     if (set(index) != set(expected) | {"archive", "files"} | set(signing)
             or any(json.dumps(index.get(key), sort_keys=True) != json.dumps(value, sort_keys=True) for key, value in expected.items())
             or any(index.get(key) != value for key, value in signing.items())):
-        raise ValueError("runtime index differs from the fixed CPU build definition")
+        raise ValueError("runtime index differs from the fixed CPU/Metal build definition")
     archive = private(directory / "whisper-runtime.tar")
     # Bind hashes and member checks to one bounded snapshot. Verification of a
     # path followed by a fresh unverified extract would allow replacement bytes.
@@ -467,7 +473,8 @@ def prepare(cache, supplied, cmake, jobs):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cache-dir", type=Path, default=REPOSITORY / ".cache/whisper-runtime")
+    # Keep earlier CPU packages intact; never silently rebuild a mismatched cache.
+    parser.add_argument("--cache-dir", type=Path, default=REPOSITORY / ".cache/whisper-metal-runtime")
     parser.add_argument("--source-archive", type=Path, default=os.environ.get("MON_WHISPER_SOURCE_ARCHIVE"))
     parser.add_argument("--cmake", type=Path, default=os.environ.get("MON_WHISPER_CMAKE"))
     parser.add_argument("--jobs", type=int, default=4)

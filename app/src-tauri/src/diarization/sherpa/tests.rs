@@ -11,7 +11,7 @@ fn config(directory: &Path) -> SherpaConfig {
         .map(|name| {
             let path = directory.join(name);
             std::fs::write(&path, b"fixture").unwrap();
-            Fingerprint::capture(&path, &|| false).unwrap()
+            Fingerprint::capture(&path, &crate::test_support::never_cancelled).unwrap()
         })
         .collect();
     SherpaConfig {
@@ -66,7 +66,9 @@ fn model_rebinding_log_normalization_keeps_overlaps_labels_and_timing_but_cannot
             .unwrap()
             .1
     );
-    assert!(logical.verify(&|| false).is_err());
+    assert!(logical
+        .verify(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(logical_output(&bytes, &logical, &runtime, Some(3), 1_000_000).is_err());
     let duplicates_after_clamping = output(
         &runtime,
@@ -101,8 +103,12 @@ fn wav(directory: &Path) {
             frames: 16_000,
         }],
     };
-    crate::transcription::wave::write_track(&mut source, &directory.join("input.wav"), &|| false)
-        .unwrap();
+    crate::transcription::wave::write_track(
+        &mut source,
+        &directory.join("input.wav"),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -283,7 +289,11 @@ fn executable(config: &mut SherpaConfig, body: &str) {
         std::fs::Permissions::from_mode(0o700),
     )
     .unwrap();
-    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    config.executable = Fingerprint::capture(
+        &config.executable.path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[cfg(unix)]
@@ -317,7 +327,7 @@ fn native_process_gets_literal_frozen_arguments_and_does_not_overwrite_outputs()
         &unit,
         1_000_000,
         Duration::from_secs(3),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     .unwrap();
@@ -343,7 +353,7 @@ fn native_process_gets_literal_frozen_arguments_and_does_not_overwrite_outputs()
         &unit,
         1_000_000,
         Duration::from_secs(3),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(std::fs::read(unit.join("stdout.log")).unwrap(), bytes);
@@ -364,7 +374,7 @@ fn empty_exit_wrong_input_and_changed_dependencies_cannot_be_checkpointed() {
         &unit,
         1_000_000,
         Duration::from_secs(3),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .unwrap_err()
     .contains("出力形式"));
@@ -380,7 +390,7 @@ fn empty_exit_wrong_input_and_changed_dependencies_cannot_be_checkpointed() {
         &unit,
         1_000_000,
         Duration::from_secs(3),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .unwrap_err()
     .contains("WAV"));
@@ -389,7 +399,7 @@ fn empty_exit_wrong_input_and_changed_dependencies_cannot_be_checkpointed() {
     std::fs::write(&library, b"fixture").unwrap();
     config
         .runtime_libraries
-        .push(Fingerprint::capture(&library, &|| false).unwrap());
+        .push(Fingerprint::capture(&library, &crate::test_support::never_cancelled).unwrap());
     for target in [
         config.segmentation_model.path.clone(),
         config.embedding_model.path.clone(),
@@ -414,7 +424,7 @@ fn empty_exit_wrong_input_and_changed_dependencies_cannot_be_checkpointed() {
             &unit,
             1_000_000,
             Duration::from_secs(3),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap_err()
         .contains("変更"));
@@ -448,7 +458,7 @@ fn nonzero_exit_and_excessive_logs_are_rejected() {
             &unit,
             1_000_000,
             Duration::from_secs(3),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap_err()
         .contains(message));
@@ -523,15 +533,23 @@ fn pause_and_timeout_reap_native_process_and_emit_no_result() {
 #[test]
 #[ignore = "requires MON_SHERPA_CLI, MON_SHERPA_SEGMENTATION, MON_SHERPA_EMBEDDING, MON_SHERPA_INPUT_CAF"]
 fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
-    let proof =
-        |name| Fingerprint::capture(Path::new(&std::env::var(name).unwrap()), &|| false).unwrap();
+    let proof = |name| {
+        Fingerprint::capture(
+            Path::new(&std::env::var(name).unwrap()),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
+    };
     let config = SherpaConfig {
         executable: proof("MON_SHERPA_CLI"),
         segmentation_model: proof("MON_SHERPA_SEGMENTATION"),
         embedding_model: proof("MON_SHERPA_EMBEDDING"),
         runtime_libraries: std::env::var("MON_SHERPA_RUNTIME_LIBRARY")
             .ok()
-            .map(|path| Fingerprint::capture(Path::new(&path), &|| false).unwrap())
+            .map(|path| {
+                Fingerprint::capture(Path::new(&path), &crate::test_support::never_cancelled)
+                    .unwrap()
+            })
             .into_iter()
             .collect(),
         threads: 2,
@@ -565,7 +583,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
         crate::transcription::wave::write_track(
             &mut audio,
             &directory.path().join("input.wav"),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         let started = Instant::now();
@@ -575,7 +593,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
             directory.path(),
             duration,
             Duration::from_secs(300),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         .unwrap();

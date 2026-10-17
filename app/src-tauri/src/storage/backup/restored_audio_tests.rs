@@ -29,12 +29,14 @@ fn append_receipt(
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    let seed = Seed::prepare(&sealed, &ids, &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    let seed = Seed::prepare(&sealed, &ids, &crate::test_support::never_cancelled).unwrap();
     let new = ids.get("meetings", "", meeting).unwrap();
     let op = seed
         .meetings()
@@ -64,23 +66,34 @@ fn append_receipt(
     let mut tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON;").unwrap();
-    publication::append(&tx, sealed.connection(), &|| false).unwrap();
+    publication::append(
+        &tx,
+        sealed.connection(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     sealed
-        .global_merge(&tx, &|| false)
+        .global_merge(&tx, &crate::test_support::never_cancelled)
         .unwrap()
-        .apply(&mut tx, &|| false)
+        .apply(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.execute(
         "UPDATE restore_batches SET state='published',published_at=?1 WHERE batch_id=?2",
         params![crate::storage::now_ms().unwrap(), ids.batch_id],
     )
     .unwrap();
-    restored::retain(&tx, &target.managed_anchor, &seed, &|| false).unwrap();
+    restored::retain(
+        &tx,
+        &target.managed_anchor,
+        &seed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(restored::deleted(&tx, &op, &new).is_ok());
     assert!(audio::require_source(&tx, &new).is_err());
     if commit {
@@ -117,12 +130,18 @@ fn inspect_mutation(target: &Storage, meeting: &str, op: &str, sql: &str, parame
         "{sql}"
     );
     assert!(
-        restored::backup_meeting(&tx, &target.managed_anchor, op, &|| false).is_err(),
+        restored::backup_meeting(
+            &tx,
+            &target.managed_anchor,
+            op,
+            &crate::test_support::never_cancelled
+        )
+        .is_err(),
         "{sql}"
     );
     assert!(audio::require_source(&tx, meeting).is_err(), "{sql}");
     assert!(
-        audio::backup_deleted(target, &tx, &|| false).is_err(),
+        audio::backup_deleted(target, &tx, &crate::test_support::never_cancelled).is_err(),
         "{sql}"
     );
     tx.rollback().unwrap();
@@ -149,9 +168,15 @@ fn restored_audio_native_receipt_blocks_source_keeps_documents_and_reexports_wit
             assert_eq!((consent, batch, paths), (None, None, 0));
         }
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
-        assert!(audio::intent::removal::start(&target, &op, &lease, &|| false).is_err());
+        assert!(audio::intent::removal::start(
+            &target,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         drop(lease);
         let path = target.root.clone();
         drop(target);
@@ -163,7 +188,7 @@ fn restored_audio_native_receipt_blocks_source_keeps_documents_and_reexports_wit
                 None
             );
             assert_eq!(
-                audio::backup_deleted(&target, &db, &|| false).unwrap(),
+                audio::backup_deleted(&target, &db, &crate::test_support::never_cancelled).unwrap(),
                 std::collections::BTreeSet::from([meeting.clone()])
             );
         }
@@ -229,7 +254,7 @@ fn restored_audio_native_record_coexists_with_local_deletion_and_available_neigh
     assert!(target.recorded_audio_plan(&new).is_err());
     let db = target.connection.lock().unwrap();
     assert_eq!(
-        audio::backup_deleted(&target, &db, &|| false).unwrap(),
+        audio::backup_deleted(&target, &db, &crate::test_support::never_cancelled).unwrap(),
         std::collections::BTreeSet::from([local.clone(), new.clone()])
     );
     assert_eq!(
@@ -294,7 +319,9 @@ fn restored_audio_native_startup_and_backup_reject_reappearance_and_parent_alias
                     "restored_audio_scope_reappeared"
                 })
             );
-            assert!(audio::backup_deleted(&target, &db, &|| false).is_err());
+            assert!(
+                audio::backup_deleted(&target, &db, &crate::test_support::never_cancelled).is_err()
+            );
         }
         let native = target.root.clone();
         drop(target);
@@ -316,7 +343,13 @@ fn restored_audio_native_startup_and_backup_reject_reappearance_and_parent_alias
         restored::inspect_one(&db, &target.managed_anchor, &op).unwrap(),
         Some("restored_audio_scope_uninspectable")
     );
-    assert!(restored::backup_meeting(&db, &target.managed_anchor, &op, &|| false).is_err());
+    assert!(restored::backup_meeting(
+        &db,
+        &target.managed_anchor,
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(retained.exists());
     assert!(outside.exists());
 }
@@ -331,16 +364,18 @@ fn restored_audio_seed_requires_intact_seal_omissions_and_historical_metadata() 
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    assert!(Seed::prepare(&sealed, &ids, &|| false).is_ok());
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    assert!(Seed::prepare(&sealed, &ids, &crate::test_support::never_cancelled).is_ok());
     assert!(Seed::prepare(&sealed, &ids, &|| true).is_err());
     let path = sealed.root_path().unwrap().join("unexpected");
     std::fs::write(&path, b"owned seal attack").unwrap();
-    assert!(Seed::prepare(&sealed, &ids, &|| false).is_err());
+    assert!(Seed::prepare(&sealed, &ids, &crate::test_support::never_cancelled).is_err());
     drop(sealed);
     drop(fixed);
     drop(ids);
@@ -349,7 +384,7 @@ fn restored_audio_seed_requires_intact_seal_omissions_and_historical_metadata() 
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
 }
@@ -361,22 +396,36 @@ fn restored_audio_native_operation_replays_from_prepared_ledger_after_restart() 
     let output = tempfile::tempdir().unwrap();
     let (archive, _) = write(&source, output.path());
     let batch = Uuid::new_v4().to_string();
-    let ids = RestoreIds::prepare_historical(&archive, output.path(), &batch, &|| false).unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    let seed = Seed::prepare(&sealed, &ids, &|| false).unwrap();
+    let ids = RestoreIds::prepare_historical(
+        &archive,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    let seed = Seed::prepare(&sealed, &ids, &crate::test_support::never_cancelled).unwrap();
     let op = seed.meetings()[0].operation.clone();
     let new = ids.get("meetings", "", &meeting).unwrap();
     let target = Storage::open(root.path().join("replay")).unwrap();
     {
         let mut db = target.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
-        BatchPlan::new(&ids, &|| false)
+        BatchPlan::new(&ids, &crate::test_support::never_cancelled)
             .unwrap()
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap();
         // A prepared ledger is not permission to persist a native marker.
-        assert!(restored::retain(&tx, &target.managed_anchor, &seed, &|| false).is_err());
+        assert!(restored::retain(
+            &tx,
+            &target.managed_anchor,
+            &seed,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(
             tx.query_row("SELECT count(*) FROM maintenance_operations", [], |r| r
                 .get::<_, i64>(0))
@@ -389,13 +438,28 @@ fn restored_audio_native_operation_replays_from_prepared_ledger_after_restart() 
     drop(target);
     let target = Storage::open(path).unwrap();
     let db = target.connection.lock().unwrap();
-    let replay =
-        RestoreIds::prepare_historical_for_batch(&archive, output.path(), &batch, &db, &|| false)
-            .unwrap();
+    let replay = RestoreIds::prepare_historical_for_batch(
+        &archive,
+        output.path(),
+        &batch,
+        &db,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(replay.get("meetings", "", &meeting).unwrap(), new);
-    let reconstructed = FixedData::new(&replay, output.path(), &|| false).unwrap();
-    let seal = SealedWorkspace::prepare(&reconstructed, output.path(), &|| false).unwrap();
-    let replay_seed = Seed::prepare(&seal, &replay, &|| false).unwrap();
+    let reconstructed = FixedData::new(
+        &replay,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let seal = SealedWorkspace::prepare(
+        &reconstructed,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let replay_seed = Seed::prepare(&seal, &replay, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(replay_seed.meetings()[0].operation, op);
     assert_eq!(
         db.query_row("SELECT count(*) FROM meetings", [], |r| r.get::<_, i64>(0))
@@ -521,7 +585,13 @@ fn restored_audio_native_rehashed_headers_cannot_change_type_origin_or_fingerpri
         assert!(restored::deleted(&tx, &op, &meeting).is_err(), "{attack}");
         assert!(audio::require_source(&tx, &meeting).is_err(), "{attack}");
         assert!(
-            restored::backup_meeting(&tx, &target.managed_anchor, &op, &|| false).is_err(),
+            restored::backup_meeting(
+                &tx,
+                &target.managed_anchor,
+                &op,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{attack}"
         );
         assert_eq!(

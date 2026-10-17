@@ -25,6 +25,8 @@ pub(crate) fn restore_saved_results(
     let after = decode(new)?;
     if old.profile_snapshot != new.profile_snapshot
         || before.schema_version != after.schema_version
+        || before.recognition_policy != after.recognition_policy
+        || before.acceleration_policy != after.acceleration_policy
         || before.units != after.units
         || before.known_input != after.known_input
         || serde_json::to_value(&before.engine).map_err(|e| e.to_string())?

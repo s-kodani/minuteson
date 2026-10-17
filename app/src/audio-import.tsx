@@ -12,6 +12,8 @@ import { useEffect,useRef,useState } from "react";
 import { acceptImport,bytesLabel,canStartImport,droppedAudio,importLabel,type ImportSnapshot } from "./import-state";
 import { effectiveVocabulary,validVocabulary,type VocabularyEntry } from "./vocabulary-state";
 import { formatElapsed } from "./session";
+import { OperationProgressBar, usePublishProgress } from "./operation-progress";
+import { importProgress } from "./operation-progress-state";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
 export function AudioImportPanel({locked,recordingActive,visible,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
@@ -31,6 +33,8 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   const snapshotRef=useRef(snapshot),selectRef=useRef<(path:string|null)=>Promise<void>>(async()=>{});
   const delivered=useRef<string|null>(null),mounted=useRef(true), selecting=useRef(false);
   const [openFailed,setOpenFailed]=useState(false);
+  const progress = importProgress(snapshot);
+  usePublishProgress("audio-import", [progress]);
   const accept=(next:ImportSnapshot)=>setSnapshot(current=>acceptImport(current,next));
   snapshotRef.current=snapshot;
   const inputRef = useRef({ title, terms });
@@ -125,23 +129,22 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
     <button type="button" className="small-secondary" disabled={terms.length>=500} onClick={()=>{setTerms(items=>[...items,{id:crypto.randomUUID(),term:"",reading:null,note:null,enabled:true}]);setPage(Math.floor(terms.length/50));}}>会議の用語を追加</button>
     {terms.slice(index*50,(index+1)*50).map((entry,i)=><article key={entry.id} className="import-term" aria-label={`取り込み用語 ${index*50+i+1}`}><label>用語<input value={entry.term} maxLength={200} onChange={e=>update(entry.id,{term:e.target.value})}/></label><label>読み<input value={entry.reading??""} maxLength={200} onChange={e=>update(entry.id,{reading:e.target.value||null})}/></label><label>補足<textarea value={entry.note??""} maxLength={1000} onChange={e=>update(entry.id,{note:e.target.value||null})}/></label><label><input type="checkbox" checked={entry.enabled} onChange={e=>update(entry.id,{enabled:e.target.checked})}/>有効</label><button type="button" className="small-secondary" onClick={event=>removeTerm(entry,event.currentTarget)}>用語を削除</button></article>)}
     {!validVocabulary(terms)&&<p role="status">空欄・重複・文字数を修正してから取り込んでください。入力は保持しています。</p>}
-    {terms.length>50&&<nav aria-label="取り込み用語のページ"><IconButton label="前へ" icon="previous" type="button" disabled={index===0} onClick={()=>setPage(index-1)} /><span>{index+1} / {Math.ceil(terms.length/50)}</span><IconButton label="次へ" icon="next" type="button" disabled={(index+1)*50>=terms.length} onClick={()=>setPage(index+1)} /></nav>}
+    {terms.length>50&&<nav aria-label="取り込み用語のページ" className="transcript-pages"><IconButton label="前へ" icon="previous" type="button" disabled={index===0} onClick={()=>setPage(index-1)} /><span>{index+1} / {Math.ceil(terms.length/50)}</span><IconButton label="次へ" icon="next" type="button" disabled={(index+1)*50>=terms.length} onClick={()=>setPage(index+1)} /></nav>}
   </fieldset></>;
   return <>
     <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
     <ToastNotice scope="audio-import" type="saved" eventId={snapshot?.saved?.id} message={snapshot?.phase === "saved" && snapshot.saved ? "音声を保存しました。文字起こしを進めます。" : ""} action={snapshot?.saved ? { kind: "open", label: "保存した会議を開く", disabled, run: async () => { const saved = snapshotRef.current?.saved; if (!disabled && saved) await openSaved(saved.meetingId); } } : undefined} />
     {visible&&<div className={`import-entry ${hover?"drag-over":""}`}>{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
     {!open&&<IssueNotice scope="audio-import" type="operation" label="音声の取り込み" message={error||snapshot?.errorMessage} />}
-    {!open&&snapshot?.busy&&<p role="status">{importLabel(snapshot.phase)} <button type="button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button></p>}
+    {!open&&snapshot?.busy&&<button type="button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}
     {!open&&openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
     <ScopedModal title="音声を取り込む" id="audio-import-dialog" ref={dialog} open={open} blocked={busy || !!snapshot?.busy} onDismiss={close} restoreReady={!busy && !snapshot?.busy} restoreTarget={() => opener.current} className="import-dialog" aria-labelledby="import-title"
       persistentReplacement={vocabularyContent} replacement={vocabularyOpen ? {key:"import-vocabulary",labelledBy:"import-vocabulary-title",content:null,className:"import-vocabulary-view",blocked:busy || !!snapshot?.busy,dismissLabel:"閉じる",onDismiss:()=>setVocabularyOpen(false),restoreTarget:()=>vocabularyTrigger.current} : null}>
       <h2 id="import-title">音声を取り込む</h2><p>原本を変更せず管理領域へコピーし、解析用音声を作成します。動画の音声抽出は対応しません。参加者の同意を得た音声を使ってください。</p>
-      <p role="status">{snapshot?importLabel(snapshot.phase):"音声を選択しています"}</p>
+      {progress ? <OperationProgressBar progress={progress} /> : <p role="status">{snapshot?importLabel(snapshot.phase):"音声を選択しています"}</p>}
       {snapshot?.info&&<dl className="import-info"><dt>ファイル名</dt><dd>{snapshot.fileName}</dd><dt>長さ</dt><dd>{formatElapsed(snapshot.info.durationUs/1000)}</dd><dt>形式</dt><dd>{snapshot.info.detectedFormat.toUpperCase()} · {snapshot.info.codec.toUpperCase()} · {snapshot.info.sampleRate.toLocaleString()} Hz · {snapshot.info.channels} ch</dd><dt>原本</dt><dd>{bytesLabel(snapshot.sourceBytes)}</dd><dt>保存に必要な容量</dt><dd>{bytesLabel(snapshot.requiredBytes)}（中間音声と余裕を含む）</dd><dt>保存先の空き容量</dt><dd>{bytesLabel(snapshot.availableBytes)}</dd></dl>}
       {(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
       {openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
-      {snapshot?.busy&&snapshot.completed>0&&<p>{snapshot.phase==="copying"?`コピー済み ${bytesLabel(snapshot.completed)} / ${bytesLabel(snapshot.sourceBytes)}`:`処理済み ${snapshot.completed.toLocaleString()} フレーム`}</p>}
       <fieldset disabled={disabled||!!snapshot?.saved}><label><span className="import-field-label">会議名</span><input value={title} maxLength={200} onChange={e=>setTitle(e.target.value)}/></label>
         <p>音声の保存後、全体設定で選んだモデルで文字起こしと話者分離を進めます。モデルが未導入でも音声は保持します。</p>
         <div className="import-vocabulary-entry"><button ref={vocabularyTrigger} type="button" className="small-secondary" aria-haspopup="dialog" aria-controls={scope?.id??"audio-import-dialog"} aria-expanded={vocabularyOpen} onClick={event=>{event.currentTarget.focus({preventScroll:true});setVocabularyOpen(true);}}>会議の用語（任意）</button><InfoPopover label="取り込みの用語" details={<p>開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。登録は認識ヒントであり、自動置換・精度向上の保証ではありません。実際の解析開始時の用語をジョブに固定し、後からの編集は過去の結果を変更しません。</p>}>登録した用語を会議別の認識ヒントとして保存します。自動置換・精度向上の保証ではありません。後からの編集は過去の結果を変更しません。</InfoPopover></div>

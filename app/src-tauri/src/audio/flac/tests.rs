@@ -2,6 +2,8 @@ use super::*;
 use crate::audio::{tests::caf_fixture, PREVIEW_FRAMES};
 use std::cell::Cell;
 
+mod saved_playback;
+
 fn source(root: &Path, rate: u32, channels: u32, frames: usize) -> (VerifiedAudio, Vec<f32>) {
     // Exactly representable signed 24-bit values, including opposite channels.
     let samples: Vec<f32> = (0..frames)
@@ -53,10 +55,17 @@ fn flac_round_trip_preserves_all_stereo_samples_and_random_access_across_blocks(
     let original = std::fs::read(root.path().join("source.caf")).unwrap();
     let path = root.path().join("result.flac");
     let progress = Cell::new(0);
-    let saved = write_segment(&mut input, 0, 20013, &path, &|| false, &|n| {
-        assert!(n > progress.get());
-        progress.set(n);
-    })
+    let saved = write_segment(
+        &mut input,
+        0,
+        20013,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|n| {
+            assert!(n > progress.get());
+            progress.set(n);
+        },
+    )
     .unwrap();
     assert_eq!(
         (
@@ -96,7 +105,15 @@ fn flac_subrange_short_final_frame_and_24_bit_quantization_are_explicit() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, samples) = source(root.path(), 8000, 1, 4100);
     let path = root.path().join("partial.flac");
-    let saved = write_segment(&mut input, 23, 4077, &path, &|| false, &|_| {}).unwrap();
+    let saved = write_segment(
+        &mut input,
+        23,
+        4077,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     assert_eq!(saved.frames, 4077);
     let mut output = read(&path).unwrap();
     assert_samples(&mut output, 0, 4077, &samples[23..]);
@@ -117,7 +134,15 @@ fn flac_subrange_short_final_frame_and_24_bit_quantization_are_explicit() {
     std::fs::write(&p, &bytes).unwrap();
     let mut input = read(&p).unwrap();
     let path = root.path().join("float.flac");
-    write_segment(&mut input, 0, 3, &path, &|| false, &|_| {}).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        3,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let mut result = read(&path).unwrap();
     let pcm = result.read_frames(0, 3).unwrap();
     let values: Vec<f32> = pcm
@@ -143,7 +168,15 @@ fn cancelled_or_failed_flac_write_before_publish_never_overwrites() {
     assert!(!path.exists());
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     std::fs::write(&path, b"existing user data").unwrap();
-    assert!(write_segment(&mut input, 0, 5000, &path, &|| false, &|_| {}).is_err());
+    assert!(write_segment(
+        &mut input,
+        0,
+        5000,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"existing user data");
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
     assert!(write_segment(
@@ -151,7 +184,7 @@ fn cancelled_or_failed_flac_write_before_publish_never_overwrites() {
         4999,
         2,
         &root.path().join("invalid.flac"),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {}
     )
     .is_err());
@@ -162,16 +195,30 @@ fn directory_sync_failure_reports_published_audio_for_recovery() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, samples) = source(root.path(), 8000, 1, 5000);
     let path = root.path().join("published.flac");
-    let error = write_segment_with_sync(&mut input, 0, 5000, &path, &|| false, &|_| {}, &|_| {
-        Err("injected directory sync failure".into())
-    })
+    let error = write_segment_with_sync(
+        &mut input,
+        0,
+        5000,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+        &|_| Err("injected directory sync failure".into()),
+    )
     .unwrap_err();
     assert!(error.published);
     assert_eq!(error.message, "injected directory sync failure");
     assert_samples(&mut read(&path).unwrap(), 0, 5000, &samples);
     // A retry never replaces the already published file.
     let original = std::fs::read(&path).unwrap();
-    let error = write_segment(&mut input, 0, 5000, &path, &|| false, &|_| {}).unwrap_err();
+    let error = write_segment(
+        &mut input,
+        0,
+        5000,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap_err();
     assert!(!error.published);
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
@@ -203,7 +250,15 @@ fn flac_playback_and_both_ai_wav_paths_match_verified_caf() {
     let frames = 48000 * 2 + 127;
     let (mut input, _) = source(root.path(), 48000, 2, frames);
     let path = root.path().join("managed.flac");
-    write_segment(&mut input, 0, frames as u64, &path, &|| false, &|_| {}).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        frames as u64,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let mut caf = prepared(input);
     let mut flac = prepared(read(&path).unwrap());
     for (start, count) in [(65530, 23), (0, 65536), (96000, 127)] {
@@ -215,8 +270,22 @@ fn flac_playback_and_both_ai_wav_paths_match_verified_caf() {
     let caf_window = root.path().join("caf-window.wav");
     let flac_window = root.path().join("flac-window.wav");
     assert_eq!(
-        write_window(&mut caf, 4090, 48000, &caf_window, &|| false).unwrap(),
-        write_window(&mut flac, 4090, 48000, &flac_window, &|| false).unwrap(),
+        write_window(
+            &mut caf,
+            4090,
+            48000,
+            &caf_window,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
+        write_window(
+            &mut flac,
+            4090,
+            48000,
+            &flac_window,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
     );
     assert_eq!(
         std::fs::read(caf_window).unwrap(),
@@ -225,8 +294,13 @@ fn flac_playback_and_both_ai_wav_paths_match_verified_caf() {
     let caf_track = root.path().join("caf-track.wav");
     let flac_track = root.path().join("flac-track.wav");
     assert_eq!(
-        write_track(&mut caf, &caf_track, &|| false).unwrap(),
-        write_track(&mut flac, &flac_track, &|| false).unwrap()
+        write_track(&mut caf, &caf_track, &crate::test_support::never_cancelled).unwrap(),
+        write_track(
+            &mut flac,
+            &flac_track,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
     );
     assert_eq!(
         std::fs::read(caf_track).unwrap(),
@@ -250,7 +324,15 @@ fn flac_validates_sha256_crc_md5_sample_count_and_metadata_bounds() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, _) = source(root.path(), 16000, 2, 9000);
     let path = root.path().join("valid.flac");
-    let saved = write_segment(&mut input, 0, 9000, &path, &|| false, &|_| {}).unwrap();
+    let saved = write_segment(
+        &mut input,
+        0,
+        9000,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     assert!(VerifiedAudio::open(File::open(&path).unwrap(), saved.size, &"0".repeat(64)).is_err());
     let bytes = std::fs::read(&path).unwrap();
     let mutate = |name: &str, alter: fn(&mut Vec<u8>)| {
@@ -286,7 +368,15 @@ fn flac_without_declared_total_is_counted_and_changes_after_verification_are_rej
     let root = tempfile::tempdir().unwrap();
     let (mut input, samples) = source(root.path(), 44100, 1, 8201);
     let path = root.path().join("stream.flac");
-    write_segment(&mut input, 0, 8201, &path, &|| false, &|_| {}).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        8201,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[21] &= 0xf0;
     bytes[22..26].fill(0);
@@ -307,7 +397,15 @@ fn cancellable_flac_open_does_not_ignore_cancel_during_decoding() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, _) = source(root.path(), 8000, 1, 18000);
     let path = root.path().join("open.flac");
-    let saved = write_segment(&mut input, 0, 18000, &path, &|| false, &|_| {}).unwrap();
+    let saved = write_segment(
+        &mut input,
+        0,
+        18000,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let calls = Cell::new(0);
     let result = VerifiedAudio::open_cancellable(
         File::open(&path).unwrap(),
@@ -327,7 +425,15 @@ fn unused_metadata_nested_lengths_are_never_given_to_the_decoder() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, samples) = source(root.path(), 8000, 1, 8201);
     let path = root.path().join("metadata.flac");
-    write_segment(&mut input, 0, 8201, &path, &|| false, &|_| {}).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        8201,
+        &path,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let original = std::fs::read(&path).unwrap();
     for (kind, payload) in [
         // Picture MIME length declares ~4 GiB inside an 8-byte block.
@@ -389,7 +495,15 @@ fn independent_ffmpeg_flac_round_trip() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, samples) = source(root.path(), 48000, 2, 20013);
     let encoded = root.path().join("native.flac");
-    write_segment(&mut input, 0, 20013, &encoded, &|| false, &|_| {}).unwrap();
+    write_segment(
+        &mut input,
+        0,
+        20013,
+        &encoded,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let decoded = Command::new(&executable)
         .args(["-nostdin", "-v", "error", "-i"])
         .arg(&encoded)

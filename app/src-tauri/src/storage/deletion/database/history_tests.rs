@@ -43,23 +43,35 @@ fn history_schema_checks_do_not_admit_old_database_initialization() {
         let before = schema(&db).unwrap();
         let current = version == MIGRATIONS.len();
         assert_eq!(scope.validate_format(&db).is_ok(), current);
-        assert_eq!(verify_rows_absent(&db, &scope, &|| false).is_ok(), current);
+        assert_eq!(
+            verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).is_ok(),
+            current
+        );
         assert_eq!(trusted_history_schema(&db).is_ok(), current);
         assert_eq!(trusted_schema(&db).is_ok(), current);
-        assert_eq!(initialize_database(&mut db).is_ok(), current);
+        // Only the immediately preceding format can migrate. Its historical
+        // deletion scope must still be rejected before initialization.
+        let upgradeable = version + 1 == MIGRATIONS.len();
+        assert_eq!(initialize_database(&mut db).is_ok(), current || upgradeable);
+        if upgradeable {
+            assert_ne!(schema(&db).unwrap(), before);
+            assert!(trusted_schema(&db).is_ok());
+            assert!(scope.validate_format(&db).is_ok());
+            continue;
+        }
         assert_eq!(schema(&db).unwrap(), before);
         if !current {
             continue;
         }
         scope.validate_format(&db).unwrap();
-        verify_rows_absent(&db, &scope, &|| false).unwrap();
+        verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(scope.encode().unwrap(), original);
         assert_eq!(
             scope.validate_current(&db).is_ok(),
             version == MIGRATIONS.len()
         );
         let tx = db.transaction().unwrap();
-        assert!(erase_rows(&tx, &scope, &|| false).is_err());
+        assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
         // A current empty synthetic scope also refuses the claimed meeting row
         // count; no older scope can reach the first UPDATE/DELETE at all.
     }
@@ -133,11 +145,13 @@ fn history_scope_absence_checks_new_rows_without_authorizing_their_deletion() {
     scope.schema_hash = "a".repeat(64);
     scope.meeting_id = meeting.clone();
     let mut db = storage.connection.lock().unwrap();
-    assert!(verify_rows_absent(&db, &scope, &|| false).is_err());
+    assert!(verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).is_err());
     let tx = db.transaction().unwrap();
-    assert!(erase_rows(&tx, &scope, &|| false)
-        .unwrap_err()
-        .contains("現行形式"));
+    assert!(
+        erase_rows(&tx, &scope, &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("現行形式")
+    );
     tx.rollback().unwrap();
     assert_eq!(
         db.query_row(

@@ -279,6 +279,8 @@ pub(crate) struct ApplyPreview {
     pub expected_preferences_version: i64,
     pub before: Settings,
     pub after: Settings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diarization_threads: Option<u32>,
     pub review_digest: String,
 }
 fn heads(db: &Connection) -> Result<(Heads, i64), String> {
@@ -502,17 +504,26 @@ fn preview(
     record: &PlacementRecord,
     models_root: &Path,
     check: &str,
+    diarization_threads: Option<u32>,
 ) -> Result<ApplyPreview, String> {
-    let binding = Binding {
+    let (before, version) = settings(db, name, record.manifest.engine)?;
+    let mut binding = Binding {
         schema_version: 1,
         package_id: record.package_id.clone(),
         review_hash: record.review_hash.clone(),
         check_operation_id: check.into(),
         models_root: models_root.into(),
-        settings: settings(db, name, record.manifest.engine)?
-            .0
-            .configured(record, models_root)?,
+        settings: before.configured(record, models_root)?,
     };
+    if let Some(threads) = diarization_threads {
+        if !(1..=64).contains(&threads) || before != binding.settings {
+            return Err("使用中の話者モデルのCPU使用量だけを変更できます".into());
+        }
+        match &mut binding.settings {
+            Settings::Sherpa(settings) => settings.threads = threads,
+            _ => return Err("CPU使用量の変更対象は話者分離モデルだけです".into()),
+        }
+    }
     if binding.validate(db)? != *record {
         return Err("適用する配置記録が変わっています".into());
     }
@@ -524,7 +535,17 @@ fn preview(
     let (heads, _) = heads(db)?;
     let head = heads.get(name);
     let stored = head.map(|h| load_profile(db, name, h)).transpose()?;
-    let (before, version) = settings(db, name, record.manifest.engine)?;
+    if diarization_threads.is_some()
+        && !stored.as_ref().is_some_and(|profile| {
+            profile.bindings.iter().any(|b| {
+                b.package_id == record.package_id
+                    && b.check_operation_id == check
+                    && b.settings == before
+            })
+        })
+    {
+        return Err("使用中の話者モデル構成を再確認してください".into());
+    }
     let mut preview = ApplyPreview {
         schema_version: 1,
         profile: name,
@@ -537,6 +558,7 @@ fn preview(
         expected_preferences_version: version,
         before,
         after: binding.settings,
+        diarization_threads,
         review_digest: String::new(),
     };
     preview.review_digest = digest(&preview)?;
@@ -617,12 +639,13 @@ impl Storage {
             })
             .collect()
     }
-    pub(crate) fn preview_model_profile(
+    pub(crate) fn preview_model_profile_with_threads(
         &self,
         name: ProfileName,
         record: &PlacementRecord,
         directory: &Path,
         check: &str,
+        diarization_threads: Option<u32>,
     ) -> Result<ApplyPreview, String> {
         let root = directory.parent().ok_or("モデル管理領域がありません")?;
         if directory.file_name().and_then(|p| p.to_str()) != Some(&record.package_id) {
@@ -632,7 +655,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        preview(&db, name, record, root, check)
+        preview(&db, name, record, root, check, diarization_threads)
     }
     pub(crate) fn apply_model_profile(
         &self,
@@ -706,6 +729,7 @@ impl Storage {
                 record,
                 root,
                 &expected.check_operation_id,
+                expected.diarization_threads,
             )? != *expected
         {
             return Err("確認後にモデル構成・解析設定が変わりました。再確認してください".into());

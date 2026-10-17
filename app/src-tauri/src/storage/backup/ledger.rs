@@ -226,7 +226,11 @@ pub(super) fn validate_provenance(
                 .any(|s| s.is_empty() || s.len() > 256 || s.contains('\0'))
             || (!source_scope.is_empty() && !uuid(&source_scope))
             || meeting.as_deref().is_some_and(|m| !uuid(m))
-            || (meeting.is_none() && domain != "vocabulary_entries")
+            || (meeting.is_none()
+                && !matches!(
+                    domain.as_str(),
+                    "vocabulary_entries" | "voice_people" | "voice_samples" | "voice_policies"
+                ))
             || (domain == "meetings" && meeting.as_deref() != Some(&entity))
         {
             return Err("復元由来の領域・識別子・会議所属が不正です".into());

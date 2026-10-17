@@ -1,5 +1,5 @@
 //! Deterministic UTF-8 partitioning without utterance/evidence IDs in prompts.
-use super::markdown;
+use super::markdown::{self, PromptVersion};
 use crate::storage::MinutesInput;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -40,12 +40,72 @@ fn timestamp(value: i64) -> Result<String, String> {
         value % 1_000_000
     ))
 }
+fn interval(start: i64, end: i64, version: PromptVersion) -> Result<(String, String), String> {
+    if start < 0 || end <= start {
+        return Err("議事録入力の再生区間が不正です".into());
+    }
+    if version.is_compact() {
+        let seconds = |value: i64| {
+            format!(
+                "{:02}:{:02}:{:02}",
+                value / 3600,
+                value / 60 % 60,
+                value % 60
+            )
+        };
+        // Divide before adding: even i64::MAX has a representable ceiling.
+        Ok((
+            seconds(start / 1_000_000),
+            seconds(end / 1_000_000 + i64::from(end % 1_000_000 != 0)),
+        ))
+    } else {
+        Ok((timestamp(start)?, timestamp(end)?))
+    }
+}
+// Validate against the fixed prompt revision, never against generated drafts.
+pub(super) fn audio_links_with_version(
+    input: &MinutesInput,
+    version: PromptVersion,
+) -> Result<Vec<String>, String> {
+    input
+        .analysis
+        .utterances
+        .iter()
+        .filter(|u| !u.effective_text.trim().is_empty())
+        .map(|u| {
+            let (start, end) = interval(u.start_us, u.end_us, version)?;
+            Ok(format!("[{start}–{end}](audio:{start}-{end})"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
 pub(super) fn extract_prompt(input: &MinutesInput, slices: &[Slice]) -> Result<String, String> {
+    extract_prompt_with_version(input, slices, PromptVersion::Legacy)
+}
+pub(super) fn extract_prompt_with_version(
+    input: &MinutesInput,
+    slices: &[Slice],
+    version: PromptVersion,
+) -> Result<String, String> {
     let utterances=slices.iter().map(|s| {
         let utterance=input.analysis.utterances.get(s.utterance_index).ok_or("生成区間の発言がありません")?;
         let text=utterance.effective_text.get(s.first_byte..s.end_byte).filter(|s|!s.is_empty()).ok_or("生成区間のUTF-8境界が不正です")?;
         let names:Vec<_>=utterance.speaker_ids.iter().map(|id|input.analysis.speakers.iter().find(|s|&s.id==id).map(|s|s.display_name.as_deref().unwrap_or(&s.label)).unwrap_or("話者不明")).collect();
-        Ok(json!({"start":timestamp(utterance.start_us)?,"end":timestamp(utterance.end_us)?,"speakers":names,"text":text,"partial":s.first_byte!=0||s.end_byte!=utterance.effective_text.len()}))
+        let (start,end)=if version.is_legacy() { (timestamp(utterance.start_us)?,timestamp(utterance.end_us)?) } else { interval(utterance.start_us,utterance.end_us,version)? };
+        let mut value=json!({"start":start,"end":end,"speakers":names,"text":text,"partial":s.first_byte!=0||s.end_byte!=utterance.effective_text.len()});
+        if !version.is_legacy() {
+            if utterance.end_us <= utterance.start_us {
+                return Err("議事録入力の再生区間が不正です".into());
+            }
+            value["audioLink"]=json!(format!("[{start}–{end}](audio:{start}-{end})"));
+        }
+        if version.is_compact() {
+            let object=value.as_object_mut().unwrap();
+            object.remove("start"); object.remove("end");
+            if object.get("partial").and_then(serde_json::Value::as_bool)==Some(false) { object.remove("partial"); }
+        }
+        Ok(value)
     }).collect::<Result<Vec<_>,String>>()?;
     serde_json::to_string(&json!({"meetingTitle":input.meeting_title,"startedAtUtcMs":input.meeting_started_at_utc_ms,"utterances":utterances})).map_err(|e|e.to_string())
 }
@@ -76,12 +136,28 @@ fn prefix(
     }
     if boundaries[low] == 0 {
         return Err(
-            "一文字も入力上限に収まりません。会議名とコンテキスト設定を確認してください".into(),
+            "一文字も入力上限に収まりません。会議名・プロンプト・コンテキスト設定を確認してください".into(),
         );
     }
     Ok(boundaries[low])
 }
+#[cfg(test)]
 pub(super) fn build(input: &MinutesInput, limit: usize) -> Result<Plan, String> {
+    build_with_version(input, limit, PromptVersion::Legacy)
+}
+pub(super) fn build_with_version(
+    input: &MinutesInput,
+    limit: usize,
+    version: PromptVersion,
+) -> Result<Plan, String> {
+    build_with_system(input, limit, version, version.extract_system())
+}
+pub(super) fn build_with_system(
+    input: &MinutesInput,
+    limit: usize,
+    version: PromptVersion,
+    system: &str,
+) -> Result<Plan, String> {
     if !(2048..=60000).contains(&limit) {
         return Err("議事録の入力上限が不正です".into());
     }
@@ -100,7 +176,11 @@ pub(super) fn build(input: &MinutesInput, limit: usize) -> Result<Plan, String> 
             };
             current.push(slice.clone());
             if current.len() <= 100
-                && fits(markdown::system(), &extract_prompt(input, &current)?, limit)
+                && fits(
+                    system,
+                    &extract_prompt_with_version(input, &current, version)?,
+                    limit,
+                )
             {
                 first = slice.end_byte;
                 continue;
@@ -115,13 +195,14 @@ pub(super) fn build(input: &MinutesInput, limit: usize) -> Result<Plan, String> 
             }
             let count = prefix(&utterance.effective_text[first..], |text| {
                 Ok(fits(
-                    markdown::system(),
-                    &extract_prompt(
+                    system,
+                    &extract_prompt_with_version(
                         input,
                         &[Slice {
                             end_byte: first + text.len(),
                             ..slice.clone()
                         }],
+                        version,
                     )?,
                     limit,
                 ))
@@ -175,19 +256,71 @@ pub(super) fn merge_prompt(parts: &[String]) -> Result<String, String> {
     serde_json::to_string(&json!({"drafts":parts})).map_err(|e| e.to_string())
 }
 
+#[derive(Clone, Default)]
+struct Batch {
+    parts: Vec<String>,
+    source_links: Vec<String>,
+}
+impl Batch {
+    fn with_fragment(
+        &self,
+        text: &str,
+        first: usize,
+        end: usize,
+        version: PromptVersion,
+    ) -> Result<Self, String> {
+        let mut next = self.clone();
+        next.parts.push(text[first..end].to_owned());
+        if !version.is_legacy() {
+            for link in markdown::format::fragment_links(text, first, end)? {
+                if !next.source_links.contains(&link) {
+                    next.source_links.push(link);
+                }
+            }
+        }
+        Ok(next)
+    }
+    fn prompt(&self) -> Result<String, String> {
+        if self.source_links.is_empty() {
+            merge_prompt(&self.parts)
+        } else {
+            serde_json::to_string(&json!({"drafts":self.parts,"sourceLinks":self.source_links}))
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
 // A bounded, replayable compression pass handles output larger than one
 // context without cutting it off. Each source byte enters a model prompt.
 pub(super) struct Cursor {
-    batches: Vec<Vec<String>>,
+    batches: Vec<Batch>,
     next: usize,
     results: Vec<String>,
     round: usize,
     limit: usize,
     done: Option<String>,
+    version: PromptVersion,
+    system: String,
 }
 impl Cursor {
+    #[cfg(test)]
     pub(super) fn new(parts: Vec<String>, limit: usize) -> Result<Self, String> {
-        let batches = Self::partition(parts, limit)?;
+        Self::with_version(parts, limit, PromptVersion::Legacy)
+    }
+    pub(super) fn with_version(
+        parts: Vec<String>,
+        limit: usize,
+        version: PromptVersion,
+    ) -> Result<Self, String> {
+        Self::with_system(parts, limit, version, version.merge_system())
+    }
+    pub(super) fn with_system(
+        parts: Vec<String>,
+        limit: usize,
+        version: PromptVersion,
+        system: &str,
+    ) -> Result<Self, String> {
+        let batches = Self::partition(parts, limit, version, system)?;
         Ok(Self {
             batches,
             next: 0,
@@ -195,43 +328,45 @@ impl Cursor {
             round: 0,
             limit,
             done: None,
+            version,
+            system: system.to_owned(),
         })
     }
-    fn partition(parts: Vec<String>, limit: usize) -> Result<Vec<Vec<String>>, String> {
+    fn partition(
+        parts: Vec<String>,
+        limit: usize,
+        version: PromptVersion,
+        system: &str,
+    ) -> Result<Vec<Batch>, String> {
         let mut batches = vec![];
-        let mut current = vec![];
+        let mut current = Batch::default();
         for part in parts {
             markdown::text(json!({"markdown":part}))?;
             let mut first = 0;
             while first < part.len() {
-                current.push(part[first..].to_string());
-                if fits(MERGE_SYSTEM, &merge_prompt(&current)?, limit) {
+                let candidate = current.with_fragment(&part, first, part.len(), version)?;
+                if fits(system, &candidate.prompt()?, limit) {
+                    current = candidate;
                     first = part.len();
                     continue;
                 }
-                current.pop();
-                if !current.is_empty() {
+                if !current.parts.is_empty() {
                     batches.push(std::mem::take(&mut current));
-                    if batches.len() > MAX_BATCHES {
-                        return Err("議事録の統合単位数が上限を超えています".into());
-                    }
-                    continue;
+                } else {
+                    let count = prefix(&part[first..], |text| {
+                        let candidate =
+                            current.with_fragment(&part, first, first + text.len(), version)?;
+                        Ok(fits(system, &candidate.prompt()?, limit))
+                    })?;
+                    batches.push(current.with_fragment(&part, first, first + count, version)?);
+                    first += count;
                 }
-                let count = prefix(&part[first..], |text| {
-                    Ok(fits(
-                        MERGE_SYSTEM,
-                        &merge_prompt(&[text.to_string()])?,
-                        limit,
-                    ))
-                })?;
-                batches.push(vec![part[first..first + count].to_string()]);
-                first += count;
                 if batches.len() > MAX_BATCHES {
                     return Err("議事録の統合単位数が上限を超えています".into());
                 }
             }
         }
-        if !current.is_empty() {
+        if !current.parts.is_empty() {
             batches.push(current);
         }
         if batches.is_empty() || batches.len() > MAX_BATCHES {
@@ -239,8 +374,17 @@ impl Cursor {
         }
         Ok(batches)
     }
+    pub(super) fn version(&self) -> PromptVersion {
+        self.version
+    }
+    pub(super) fn system(&self) -> &str {
+        &self.system
+    }
     pub(super) fn task(&self) -> Result<String, String> {
-        merge_prompt(self.batches.get(self.next).ok_or("統合は完了しています")?)
+        self.batches
+            .get(self.next)
+            .ok_or("統合は完了しています")?
+            .prompt()
     }
     pub(super) fn accept(&mut self, text: String) -> Result<(), String> {
         markdown::text(json!({"markdown":text}))?;
@@ -258,7 +402,12 @@ impl Cursor {
             if self.round >= MAX_ROUNDS {
                 return Err("議事録の統合が入力上限に収束しません。入力を省略せず停止しました。コンテキストを増やして再生成してください".into());
             }
-            self.batches = Self::partition(std::mem::take(&mut self.results), self.limit)?;
+            self.batches = Self::partition(
+                std::mem::take(&mut self.results),
+                self.limit,
+                self.version,
+                &self.system,
+            )?;
             self.next = 0;
         }
         Ok(())

@@ -35,10 +35,21 @@ impl Fixture {
         }
     }
     fn census(&self) -> Census {
-        Census::capture(&self.storage, &self.meeting, &|| false).unwrap()
+        Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn prepare(&self) -> Prepared {
-        prepare(&self.storage, &self.operation, &self.census(), &|| false).unwrap()
+        prepare(
+            &self.storage,
+            &self.operation,
+            &self.census(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn counts(&self) -> (i64, i64) {
         let db = self.storage.connection.lock().unwrap();
@@ -56,9 +67,20 @@ impl Fixture {
         assert_eq!(self.storage.list_meetings().unwrap().len(), 2);
     }
     fn tamper(&self, sql: &str) {
-        let saved = read(&self.storage, &self.operation, &|| false).unwrap();
+        let saved = read(
+            &self.storage,
+            &self.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let db = self.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(&self.storage, &db, &saved, &|| false).unwrap();
+        let _writer = super::fence::write_prepared(
+            &self.storage,
+            &db,
+            &saved,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         db.execute(sql, params![self.operation]).unwrap();
@@ -87,12 +109,24 @@ fn deletion_intent_roundtrips_observations_without_payload_or_other_meeting_targ
     let external = f.base.path().join("external.md");
     std::fs::write(&external, b"KEEP EXTERNAL EXPORT").unwrap();
     let census = f.census();
-    let p = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
+    let p = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(p.manifest(), census.manifest());
     assert_eq!(p.scope(), census.scope());
     assert_eq!(p.operation(), f.operation);
-    p.verify_live(&f.storage, &|| false).unwrap();
-    let loaded = read(&f.storage, &f.operation, &|| false).unwrap();
+    p.verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
+    let loaded = read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(loaded.manifest(), census.manifest());
     assert_eq!(loaded.consent_at(), p.consent_at());
     let db = f.storage.connection.lock().unwrap();
@@ -143,13 +177,23 @@ fn deletion_intent_uses_separate_paths_for_census_larger_than_small_intent_limit
     }
     let census = f.census();
     assert!(census.encode().unwrap().len() > 65536);
-    let p = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
+    let p = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(p.manifest().entries.len(), 154);
     assert_eq!(f.counts(), (1, 154));
-    read(&f.storage, &f.operation, &|| false)
-        .unwrap()
-        .verify_live(&f.storage, &|| false)
-        .unwrap();
+    read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .verify_live(&f.storage, &crate::test_support::never_cancelled)
+    .unwrap();
     f.untouched();
 }
 
@@ -187,11 +231,24 @@ fn deletion_intent_keeps_missing_changed_unknown_and_producer_hints_distinct() {
         ),
         (1, 1, 1, 1)
     );
-    let p = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
-    let loaded = read(&f.storage, &f.operation, &|| false).unwrap();
+    let p = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let loaded = read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(loaded.manifest(), p.manifest());
     assert_eq!(loaded.manifest(), census.manifest());
-    loaded.verify_live(&f.storage, &|| false).unwrap();
+    loaded
+        .verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(loaded
         .manifest()
         .entries
@@ -215,21 +272,51 @@ fn deletion_intent_keeps_missing_changed_unknown_and_producer_hints_distinct() {
 fn deletion_intent_same_operation_retries_keep_timestamp_and_reject_other_census_or_id() {
     let f = Fixture::new();
     let census = f.census();
-    let first = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
-    let again = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
+    let first = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let again = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(again.consent_at(), first.consent_at());
     assert_eq!(f.counts(), (1, 3));
-    let other = Census::capture(&f.storage, &f.other, &|| false).unwrap();
-    assert!(prepare(&f.storage, &f.operation, &other, &|| false).is_err());
+    let other =
+        Census::capture(&f.storage, &f.other, &crate::test_support::never_cancelled).unwrap();
+    assert!(prepare(
+        &f.storage,
+        &f.operation,
+        &other,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(prepare(
         &f.storage,
         &uuid::Uuid::new_v4().to_string(),
         &other,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
-    assert!(prepare(&f.storage, "not-an-operation", &census, &|| false).is_err());
-    assert!(read(&f.storage, "not-an-operation", &|| false).is_err());
+    assert!(prepare(
+        &f.storage,
+        "not-an-operation",
+        &census,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(read(
+        &f.storage,
+        "not-an-operation",
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.counts(), (1, 3));
     f.untouched();
 }
@@ -247,7 +334,13 @@ fn deletion_intent_stale_file_or_database_confirmation_writes_no_intent() {
         } else {
             std::fs::write(f.file.parent().unwrap().join("new.bin"), b"NEW").unwrap();
         }
-        assert!(prepare(&f.storage, &f.operation, &census, &|| false).is_err());
+        assert!(prepare(
+            &f.storage,
+            &f.operation,
+            &census,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(f.counts(), (0, 0));
         f.untouched();
     }
@@ -276,18 +369,26 @@ fn deletion_intent_cancellation_and_unwind_before_commit_roll_back_every_path() 
         );
         assert_eq!(f.counts(), (0, 0));
         f.untouched();
-        f.prepare().verify_live(&f.storage, &|| false).unwrap();
+        f.prepare()
+            .verify_live(&f.storage, &crate::test_support::never_cancelled)
+            .unwrap();
     }
     // Panic only at the last boundary, after insertion; the transaction must
     // roll back even though the connection mutex becomes poisoned.
     let f = Fixture::new();
     let census = f.census();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prepare_observed(&f.storage, &f.operation, &census, &|| false, &|point| {
-            if point == "beforeCommit" {
-                panic!("injected unwind")
-            }
-        })
+        prepare_observed(
+            &f.storage,
+            &f.operation,
+            &census,
+            &crate::test_support::never_cancelled,
+            &|point| {
+                if point == "beforeCommit" {
+                    panic!("injected unwind")
+                }
+            },
+        )
     }))
     .is_err());
     let db = f.storage.connection.lock().unwrap_err().into_inner();
@@ -312,14 +413,18 @@ fn deletion_intent_file_change_during_path_persistence_rolls_back_not_adopts() {
     let f = Fixture::new();
     let census = f.census();
     let changed = Cell::new(false);
-    assert!(
-        prepare_observed(&f.storage, &f.operation, &census, &|| false, &|phase| {
+    assert!(prepare_observed(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+        &|phase| {
             if phase == "pathStored" && !changed.replace(true) {
                 std::fs::write(f.file.parent().unwrap().join("late.bin"), b"LATE UNKNOWN").unwrap();
             }
-        })
-        .is_err()
-    );
+        }
+    )
+    .is_err());
     assert_eq!(f.counts(), (0, 0));
     f.untouched();
     assert_eq!(
@@ -339,16 +444,20 @@ fn deletion_intent_cold_read_preserves_original_census_and_requires_live_reverif
     let file = f.file.clone();
     drop(f.storage);
     let storage = Storage::open(root).unwrap();
-    let loaded = read(&storage, &operation, &|| false).unwrap();
+    let loaded = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(loaded.consent_at(), time);
     assert_eq!(loaded.manifest(), census.manifest());
-    loaded.verify_live(&storage, &|| false).unwrap();
+    loaded
+        .verify_live(&storage, &crate::test_support::never_cancelled)
+        .unwrap();
     // A cold read is useful for review even when the live file changed. It
     // must not silently replace the originally consented SHA or identity.
     std::fs::write(&file, b"CHANGED AFTER REOPEN").unwrap();
-    let stale = read(&storage, &operation, &|| false).unwrap();
+    let stale = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(stale.manifest(), census.manifest());
-    assert!(stale.verify_live(&storage, &|| false).is_err());
+    assert!(stale
+        .verify_live(&storage, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(file).unwrap(), b"CHANGED AFTER REOPEN");
 }
 
@@ -391,10 +500,14 @@ fn deletion_intent_existing_sql_guards_keep_confirmation_and_paths_immutable() {
         "DELETE FROM maintenance_paths WHERE operation_id=?1",
     ] { assert!(db.execute(sql,params![f.operation]).is_err(),"{sql}"); }
     drop(db);
-    read(&f.storage, &f.operation, &|| false)
-        .unwrap()
-        .verify_live(&f.storage, &|| false)
-        .unwrap();
+    read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .verify_live(&f.storage, &crate::test_support::never_cancelled)
+    .unwrap();
     f.untouched();
 }
 
@@ -410,7 +523,13 @@ fn deletion_intent_root_replacement_or_active_work_never_persists_a_new_confirma
         } else {
             f.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active-other',?1,'transcription','running','active-other',?2,'{}','{}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
         }
-        assert!(prepare(&f.storage, &f.operation, &census, &|| false).is_err());
+        assert!(prepare(
+            &f.storage,
+            &f.operation,
+            &census,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(f.counts(), (0, 0));
     }
 }
@@ -418,15 +537,26 @@ fn deletion_intent_root_replacement_or_active_work_never_persists_a_new_confirma
 #[test]
 fn deletion_intent_draft_without_files_keeps_zero_path_manifest_durable() {
     let f = Fixture::new();
-    let census = Census::capture(&f.storage, &f.other, &|| false).unwrap();
+    let census =
+        Census::capture(&f.storage, &f.other, &crate::test_support::never_cancelled).unwrap();
     assert!(census.manifest().entries.is_empty());
-    let p = prepare(&f.storage, &f.operation, &census, &|| false).unwrap();
+    let p = prepare(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(p.manifest().entries.is_empty());
     assert_eq!(f.counts(), (1, 0));
-    read(&f.storage, &f.operation, &|| false)
-        .unwrap()
-        .verify_live(&f.storage, &|| false)
-        .unwrap();
+    read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .verify_live(&f.storage, &crate::test_support::never_cancelled)
+    .unwrap();
     f.untouched();
 }
 
@@ -436,27 +566,51 @@ fn deletion_intent_read_rejects_unknown_schema_disabled_guards_and_other_pending
     let p = f.prepare();
     {
         let db = f.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        let _writer = super::fence::write_prepared(
+            &f.storage,
+            &db,
+            &p,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         db.execute_batch("CREATE TEMP TABLE untrusted(id TEXT)")
             .unwrap();
-        assert!(p.verify_saved(&db, &|| false).is_err());
+        assert!(p
+            .verify_saved(&db, &crate::test_support::never_cancelled)
+            .is_err());
         db.execute_batch("DROP TABLE temp.untrusted").unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
-        assert!(p.verify_saved(&db, &|| false).is_err());
+        assert!(p
+            .verify_saved(&db, &crate::test_support::never_cancelled)
+            .is_err());
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .unwrap();
     }
-    p.verify_live(&f.storage, &|| false).unwrap();
+    p.verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     {
         let db = f.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        let _writer = super::fence::write_prepared(
+            &f.storage,
+            &db,
+            &p,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES('other-pending',?1,'delete_assets','attention','{}',?2,NULL,'{}',1,1)", params![f.other, "a".repeat(64)]).unwrap();
     }
     // Reading an unchanged receipt remains possible, but it cannot be admitted
     // while a different meeting's maintenance operation remains unresolved.
-    read(&f.storage, &f.operation, &|| false).unwrap();
-    assert!(p.verify_live(&f.storage, &|| false).is_err());
+    read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(p
+        .verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .is_err());
     f.untouched();
 }
 
@@ -472,7 +626,13 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
         let f = Fixture::new();
         let p = f.prepare();
         let db = f.storage.connection.lock().unwrap();
-        let writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        let writer = super::fence::write_prepared(
+            &f.storage,
+            &db,
+            &p,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let json: String = db
             .query_row(
                 "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
@@ -500,7 +660,12 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
         drop(writer);
         drop(db);
         assert!(
-            read(&f.storage, &f.operation, &|| false).is_err(),
+            read(
+                &f.storage,
+                &f.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{field}"
         );
         f.untouched();
@@ -514,23 +679,29 @@ fn deletion_intent_checkpoint_child_fixture() {
     let phase = std::env::var("MON_DELETE_INTENT_TEST_PHASE").unwrap();
     let f = Fixture::at(tempfile::tempdir_in(&base).unwrap());
     let census = f.census();
-    prepare_observed(&f.storage, &f.operation, &census, &|| false, &|point| {
-        if point == phase {
-            let receipt = serde_json::to_vec(&(
-                f.storage.root(),
-                &f.operation,
-                &f.meeting,
-                &f.other,
-                census.manifest(),
-            ))
-            .unwrap();
-            std::fs::write(base.join("ready.tmp"), receipt).unwrap();
-            std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+    prepare_observed(
+        &f.storage,
+        &f.operation,
+        &census,
+        &crate::test_support::never_cancelled,
+        &|point| {
+            if point == phase {
+                let receipt = serde_json::to_vec(&(
+                    f.storage.root(),
+                    &f.operation,
+                    &f.meeting,
+                    &f.other,
+                    census.manifest(),
+                ))
+                .unwrap();
+                std::fs::write(base.join("ready.tmp"), receipt).unwrap();
+                std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("checkpoint not reached");
 }
@@ -584,17 +755,17 @@ fn deletion_intent_sigkill_during_paths_before_commit_and_after_commit_is_atomic
             &storage.connection.lock().unwrap(),
             &meeting,
             &operation,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(census.manifest(), &manifest);
         if phase == "committed" {
-            read(&storage, &operation, &|| false)
+            read(&storage, &operation, &crate::test_support::never_cancelled)
                 .unwrap()
-                .verify_live(&storage, &|| false)
+                .verify_live(&storage, &crate::test_support::never_cancelled)
                 .unwrap();
         } else {
-            assert!(read(&storage, &operation, &|| false).is_err());
+            assert!(read(&storage, &operation, &crate::test_support::never_cancelled).is_err());
             let db = storage.connection.lock().unwrap();
             assert_eq!(
                 db.query_row("SELECT count(*) FROM maintenance_operations", [], |r| r
@@ -609,10 +780,15 @@ fn deletion_intent_sigkill_during_paths_before_commit_and_after_commit_is_atomic
                 0
             );
             drop(db);
-            prepare(&storage, &operation, &census, &|| false)
-                .unwrap()
-                .verify_live(&storage, &|| false)
-                .unwrap();
+            prepare(
+                &storage,
+                &operation,
+                &census,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap()
+            .verify_live(&storage, &crate::test_support::never_cancelled)
+            .unwrap();
         }
         assert!(storage.get_meeting(&other).unwrap().is_some());
         assert_eq!(

@@ -35,7 +35,7 @@ impl Kept {
             )
             .unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let parent = uuid::Uuid::new_v4().to_string();
         let policy = audio::intent::Policy {
@@ -45,17 +45,35 @@ impl Kept {
         audio::intent::prepare(
             &storage,
             &parent,
-            &audio::Census::capture(&storage, &meeting, &|| false).unwrap(),
+            &audio::Census::capture(&storage, &meeting, &crate::test_support::never_cancelled)
+                .unwrap(),
             policy.clone(),
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         let operation = if ancestor {
-            audio::intent::removal::start(&storage, &parent, &lease, &|| false).unwrap();
-            audio::intent::removal::run(&storage, &parent, &lease, &|| false).unwrap();
-            audio::intent::removal::completion::finish(&storage, &parent, &lease, &|| false)
-                .unwrap();
+            audio::intent::removal::start(
+                &storage,
+                &parent,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::run(
+                &storage,
+                &parent,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::completion::finish(
+                &storage,
+                &parent,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             std::fs::write(&file, b"RETURNED AUDIO KEPT WITHOUT STARTING").unwrap();
             let review =
                 audio::intent::reconfirmation::Review::capture(&storage, &parent, &lease, &|| {
@@ -69,14 +87,20 @@ impl Kept {
                 &review,
                 policy,
                 &lease,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             child
         } else {
             parent.clone()
         };
-        audio::intent::keep_unstarted(&storage, &operation, &lease, &|| false).unwrap();
+        audio::intent::keep_unstarted(
+            &storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         let db = storage.connection.lock().unwrap();
         let ids = if ancestor {
@@ -99,24 +123,49 @@ impl Kept {
         }
     }
     fn begin(&self) -> completion::Receipt {
-        let census = files::Census::capture(&self.storage, &self.meeting, &|| false).unwrap();
+        let census = files::Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let review = removal::Reviewed::confirm(&census, true).unwrap();
         let prepared = intent::prepare(
             &self.storage,
             &uuid::Uuid::new_v4().to_string(),
             &census,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let mut removed = removal::start(&self.storage, &prepared, &review, &|| false).unwrap();
-        removal::run(&self.storage, &mut removed, &|| false).unwrap();
-        completion::start(&self.storage, &removed, &|| false).unwrap()
+        let mut removed = removal::start(
+            &self.storage,
+            &prepared,
+            &review,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        removal::run(
+            &self.storage,
+            &mut removed,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        completion::start(
+            &self.storage,
+            &removed,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn finish(&self) -> String {
-        let mut prepared =
-            operations::Prepared::fresh(&self.storage, &self.meeting, &|| false).unwrap();
+        let mut prepared = operations::Prepared::fresh(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         assert!(
             prepared
@@ -125,7 +174,7 @@ impl Kept {
                     &lease,
                     &prepared.preview().confirmation_id,
                     true,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .unwrap()
@@ -159,10 +208,18 @@ impl Kept {
             );
         }
         if detached {
-            assert!(audio::intent::read(&db, &self.operation, &|| false).is_err());
-            assert!(
-                audio::intent::removal::Receipt::load(&db, &self.operation, &|| false).is_err()
-            );
+            assert!(audio::intent::read(
+                &db,
+                &self.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
+            assert!(audio::intent::removal::Receipt::load(
+                &db,
+                &self.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         }
     }
     fn reopen(&mut self) {
@@ -212,20 +269,44 @@ fn kept_audio_supersession_kept_only_is_v2_and_never_becomes_completed_or_execut
     assert_eq!(h.version, 2);
     assert!(h.audio_operations.is_empty());
     assert_eq!(h.kept_audio_operations, vec![f.operation.clone()]);
-    inspect(&db, &f.storage.managed_anchor, &marker, &|| false).unwrap();
-    inspect_kept(&db, &f.storage.managed_anchor, &f.operation, &|| false).unwrap();
-    assert!(!superseded(&db, &f.storage.managed_anchor, &f.operation, &|| false).unwrap());
+    inspect(
+        &db,
+        &f.storage.managed_anchor,
+        &marker,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    inspect_kept(
+        &db,
+        &f.storage.managed_anchor,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(!superseded(
+        &db,
+        &f.storage.managed_anchor,
+        &f.operation,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap());
     drop(db);
     assert!(audio::intent::authorize_review(&f.storage, &f.operation).is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::intent::removal::start(&f.storage, &f.operation, &lease, &|| false).is_err());
+    assert!(audio::intent::removal::start(
+        &f.storage,
+        &f.operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(audio::intent::reconfirmation::Review::capture(
         &f.storage,
         &f.operation,
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     drop(lease);
@@ -238,7 +319,10 @@ fn kept_audio_supersession_kept_only_is_v2_and_never_becomes_completed_or_execut
         .unwrap();
     let backup = f
         .storage
-        .create_backup_archive(&f.base.path().join("kept.monbackup"), &|| false)
+        .create_backup_archive(
+            &f.base.path().join("kept.monbackup"),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert_eq!(backup.deleted_audio_meeting_count, 0);
 }
@@ -259,14 +343,23 @@ fn kept_audio_supersession_kept_v2_child_preserves_completed_ancestor_and_all_ev
     let h: Header = serde_json::from_str(&json).unwrap();
     assert_eq!(h.audio_operations, vec![f.originals[0].0.clone()]);
     assert_eq!(h.kept_audio_operations, vec![f.operation.clone()]);
-    inspect(&db, &f.storage.managed_anchor, &marker, &|| false).unwrap();
+    inspect(
+        &db,
+        &f.storage.managed_anchor,
+        &marker,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(db);
     f.reopen();
     assert!(!f.storage.data_write_blocked());
     f.unchanged(true);
     assert!(f
         .storage
-        .create_backup_archive(&f.base.path().join("child.monbackup"), &|| false)
+        .create_backup_archive(
+            &f.base.path().join("child.monbackup"),
+            &crate::test_support::never_cancelled
+        )
         .is_ok());
 }
 
@@ -305,12 +398,26 @@ fn kept_audio_supersession_cancel_rolls_back_marker_and_fks_then_cold_purge_resu
     let db = f.storage.connection.lock().unwrap();
     assert_eq!(startup::reason(&db, &marker).unwrap(), None);
     assert_eq!(startup::reason(&db, &f.operation).unwrap(), None);
-    inspect_kept(&db, &f.storage.managed_anchor, &f.operation, &|| false).unwrap();
+    inspect_kept(
+        &db,
+        &f.storage.managed_anchor,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(db);
     let lease = AnalysisController::default()
-        .begin_deletion_maintenance(&f.storage, &full, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &f.storage,
+            &full,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut pending = operations::Prepared::pending(&f.storage, &full, &|| false).unwrap();
+    let mut pending =
+        operations::Prepared::pending(&f.storage, &full, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(
         pending
             .execute(
@@ -318,7 +425,7 @@ fn kept_audio_supersession_cancel_rolls_back_marker_and_fks_then_cold_purge_resu
                 &lease,
                 &pending.preview().confirmation_id,
                 false,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -349,11 +456,17 @@ fn kept_audio_supersession_rehashed_version_membership_overlap_and_boundaries_fa
         });
         let db = f.storage.connection.lock().unwrap();
         assert!(
-            inspect_kept(&db, &f.storage.managed_anchor, &f.operation, &|| false).is_err(),
+            inspect_kept(
+                &db,
+                &f.storage.managed_anchor,
+                &f.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{case}"
         );
         assert!(
-            audio::backup_deleted(&f.storage, &db, &|| false).is_err(),
+            audio::backup_deleted(&f.storage, &db, &crate::test_support::never_cancelled).is_err(),
             "{case}"
         );
         drop(db);
@@ -384,11 +497,17 @@ fn kept_audio_supersession_missing_duplicate_or_mutated_history_blocks_startup_w
         let before = original(&f.storage.connection.lock().unwrap(), &f.operation);
         let db = f.storage.connection.lock().unwrap();
         assert!(
-            inspect_kept(&db, &f.storage.managed_anchor, &f.operation, &|| false).is_err(),
+            inspect_kept(
+                &db,
+                &f.storage.managed_anchor,
+                &f.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{case}"
         );
         assert!(
-            audio::backup_deleted(&f.storage, &db, &|| false).is_err(),
+            audio::backup_deleted(&f.storage, &db, &crate::test_support::never_cancelled).is_err(),
             "{case}"
         );
         drop(db);
@@ -404,6 +523,8 @@ fn kept_audio_supersession_missing_duplicate_or_mutated_history_blocks_startup_w
             )
             .is_err());
         assert_eq!(original(&db, &f.operation), before);
-        assert!(audio::intent::read(&db, &f.operation, &|| false).is_err());
+        assert!(
+            audio::intent::read(&db, &f.operation, &crate::test_support::never_cancelled).is_err()
+        );
     }
 }

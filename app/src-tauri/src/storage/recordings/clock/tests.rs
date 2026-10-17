@@ -499,6 +499,7 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
     let store = crate::playback::PlaybackStore::default();
     let audio = storage
         .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
+            start_reference: None,
             meeting_id: meeting.clone(),
             mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both,
         })
@@ -623,15 +624,22 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
     storage.finalize_recording(&session).unwrap();
     let original = storage.recorded_audio_plan(&meeting).unwrap();
     let archive = output.path().join("clock.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     let neighbor = target.create_meeting("既存会議を保持").unwrap();
     let prepared = target
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let confirmation = prepared.preview().confirmation_id;
     let receipt = prepared
-        .publish(&target, &confirmation, &|| false, &|_| {})
+        .publish(
+            &target,
+            &confirmation,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert_eq!(receipt.meeting_ids.len(), 1);
     assert_eq!(target.get_meeting(&neighbor.id).unwrap(), Some(neighbor));

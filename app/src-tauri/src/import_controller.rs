@@ -119,6 +119,13 @@ impl ImportController {
         Ok(state.snapshot.clone())
     }
     fn emit(app: &AppHandle, snapshot: Snapshot) {
+        crate::internal_logs::phase(
+            "import",
+            snapshot.token.clone(),
+            snapshot.saved.as_ref().map(|s| s.meeting_id.clone()),
+            &snapshot.phase,
+            snapshot.error_message.as_deref(),
+        );
         let _ = app.emit("audio-import-changed", snapshot);
     }
     fn update(app: &AppHandle, change: impl FnOnce(&mut State)) {

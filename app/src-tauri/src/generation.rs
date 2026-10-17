@@ -1,10 +1,13 @@
 //! Markdown-only generation dispatch and read-only saved-result validation.
+mod acceleration;
 pub(crate) mod llama;
+mod llama_metrics;
 pub(crate) mod markdown;
 pub(crate) mod markdown_job;
 mod markdown_plan;
 pub(crate) mod model_budget;
 pub(crate) mod restore;
+pub(crate) mod runtime;
 use crate::storage::{JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -31,23 +34,15 @@ impl StartRequest {
         storage: &Storage,
         expected: Option<crate::storage::minutes_markdown::MarkdownStamp>,
     ) -> Result<JobSnapshot, String> {
-        use crate::local_engine::Fingerprint;
-        let engine = llama::LlamaConfig {
-            executable: Fingerprint::capture(&self.executable_path, &|| false)?,
-            model: Fingerprint::capture(&self.model_path, &|| false)?,
-            threads: self.threads,
-            context_tokens: self.context_tokens,
-            prediction_tokens: self.prediction_tokens,
-            gpu_layers: self.gpu_layers,
-            seed: self.seed,
-        };
-        markdown_job::enqueue(
+        let (engine, selection) = storage.prepare_minutes_admission(&self)?;
+        markdown_job::enqueue_prepared(
             storage,
             self.input,
             engine,
             &self.profile,
             self.prompt_budget,
             expected,
+            selection,
         )
     }
 }
@@ -77,7 +72,13 @@ impl RetryRequest {
             return Err("議事録再試行の試行数上限に達しています。新たに生成してください".into());
         }
         let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
-        retry_preflight(storage, &original, &spec, checkpoint.as_ref(), &|| false)?;
+        retry_preflight(
+            storage,
+            &original,
+            &spec,
+            checkpoint.as_ref(),
+            &crate::test_support::never_cancelled,
+        )?;
         storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
     }
 }
@@ -190,6 +191,19 @@ fn verify_task_bytes(
         return Err("議事録のローカル確定処理が変更されています".into());
     }
     Ok(raw)
+}
+pub(crate) fn process_observed(
+    storage: &Storage,
+    job_id: &str,
+    stopping: &impl Fn() -> bool,
+    progress: &impl Fn(JobSnapshot),
+    observe: &impl Fn(runtime::Progress),
+) -> Result<Option<String>, String> {
+    let (spec, _) = storage.fixed_job_input(job_id)?;
+    if markdown_job::is_markdown(&spec) {
+        return markdown_job::process_observed(storage, job_id, stopping, progress, observe);
+    }
+    Err(REMOVED_GENERATION.into())
 }
 pub(crate) fn process(
     storage: &Storage,

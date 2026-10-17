@@ -23,7 +23,9 @@ impl Fixture {
             .unwrap();
         let operation = Uuid::new_v4().to_string();
         {
-            let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+            let snapshot = storage
+                .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+                .unwrap();
             b.begin_move(
                 &operation,
                 &Uuid::new_v4().to_string(),
@@ -50,7 +52,11 @@ impl Fixture {
     }
     fn review(&self) -> Review {
         self.bootstrap
-            .prepare_pending_move(&self.storage, &|| false, &|_| {})
+            .prepare_pending_move(
+                &self.storage,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap()
     }
 }
@@ -71,7 +77,7 @@ fn pending_review_resumes_claimed_db_without_replacing_inode_and_retires_old_wri
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -96,7 +102,7 @@ fn pending_review_missing_owner_can_resume_only_exact_empty_target() {
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -115,7 +121,7 @@ fn pending_review_source_edits_block_resume_but_keep_preserves_both_roots_and_re
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -124,7 +130,7 @@ fn pending_review_source_edits_block_resume_but_keep_preserves_both_roots_and_re
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert!(receipt.retained && !receipt.restart_required);
@@ -151,7 +157,12 @@ fn pending_review_source_edits_block_resume_but_keep_preserves_both_roots_and_re
     assert_eq!(view.meeting_root, f.storage.root());
     assert!(f
         .bootstrap
-        .prepare_move(&f.storage, f._base.path(), &|| false, &|_| {})
+        .prepare_move(
+            &f.storage,
+            f._base.path(),
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_ok());
 }
 
@@ -185,7 +196,7 @@ fn pending_review_unknown_objects_and_missing_target_are_retained_never_adopted(
                 &f.bootstrap,
                 &f.storage,
                 &review.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
         assert!(f.bootstrap.view().unwrap().pending_operation_id.is_none());
@@ -211,7 +222,7 @@ fn pending_keep_wrong_confirmation_cancel_and_changed_target_cannot_publish_deci
             &f.bootstrap,
             &f.storage,
             &Uuid::new_v4().to_string(),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     assert!(review
@@ -228,7 +239,7 @@ fn pending_keep_wrong_confirmation_cancel_and_changed_target_cannot_publish_deci
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     assert!(f.bootstrap.read_kept(&f.operation).unwrap().is_none());
@@ -253,7 +264,7 @@ fn pending_saved_keep_requires_explicit_resolution_and_cannot_resume_or_overwrit
             &f.bootstrap,
             &f.storage,
             &fresh.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert!(!f.bootstrap.view().unwrap().kept_moves[0].decision_pending);
@@ -271,7 +282,9 @@ fn pending_review_cold_restart_uses_durable_owner_and_same_original_intent() {
     let b = Bootstrap::open(&config, &data).unwrap();
     let s = Storage::open(b.root().into()).unwrap();
     b.initialize(&s).unwrap();
-    let review = b.prepare_pending_move(&s, &|| false, &|_| {}).unwrap();
+    let review = b
+        .prepare_pending_move(&s, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     assert_eq!(review.preview().operation_id, op);
     assert!(
         review.preview().resume_allowed,
@@ -283,7 +296,7 @@ fn pending_review_cold_restart_uses_durable_owner_and_same_original_intent() {
             &b,
             &s,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -294,14 +307,21 @@ fn pending_review_cold_restart_uses_durable_owner_and_same_original_intent() {
 fn pending_review_full_copy_installed_history_is_rechecked_and_resumable() {
     let f = Fixture::new(true);
     {
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         let mut p = f
             .bootstrap
             .pending_placement(&f.operation, &snapshot)
             .unwrap();
-        p.copy(&snapshot, &|| false).unwrap();
-        let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&handoff, &|| false).unwrap();
+        p.copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap();
+        let handoff = snapshot
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&handoff, &crate::test_support::never_cancelled)
+            .unwrap();
     }
     let review = f.review();
     assert!(
@@ -318,7 +338,7 @@ fn pending_review_full_copy_installed_history_is_rechecked_and_resumable() {
             &f.bootstrap,
             &f.storage,
             &review.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -330,14 +350,21 @@ fn pending_review_changed_copied_bytes_and_control_file_are_never_overwritten() 
     for failure in ["payload", "history"] {
         let f = Fixture::new(true);
         {
-            let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+            let snapshot = f
+                .storage
+                .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+                .unwrap();
             let mut p = f
                 .bootstrap
                 .pending_placement(&f.operation, &snapshot)
                 .unwrap();
-            p.copy(&snapshot, &|| false).unwrap();
-            let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
-            p.install_history(&handoff, &|| false).unwrap();
+            p.copy(&snapshot, &crate::test_support::never_cancelled)
+                .unwrap();
+            let handoff = snapshot
+                .prepare_control_handoff(&crate::test_support::never_cancelled)
+                .unwrap();
+            p.install_history(&handoff, &crate::test_support::never_cancelled)
+                .unwrap();
         }
         let altered = f.target.join(if failure == "payload" {
             "meetings.sqlite3"
@@ -352,7 +379,7 @@ fn pending_review_changed_copied_bytes_and_control_file_are_never_overwritten() 
                 &f.bootstrap,
                 &f.storage,
                 &review.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
         assert_eq!(std::fs::read(altered).unwrap(), b"external modification");
@@ -367,9 +394,16 @@ fn pending_keep_checkpoint_fixture() {
     let b = Bootstrap::open(&parent.join("config"), &parent.join("app-data")).unwrap();
     let s = Storage::open(b.root().into()).unwrap();
     b.initialize(&s).unwrap();
-    let review = b.prepare_pending_move(&s, &|| false, &|_| {}).unwrap();
+    let review = b
+        .prepare_pending_move(&s, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     review
-        .keep(&b, &s, &review.preview().confirmation_id, &|| false)
+        .keep(
+            &b,
+            &s,
+            &review.preview().confirmation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     panic!("keep checkpoint not reached");
 }
@@ -421,10 +455,17 @@ fn pending_keep_sigkill_after_durable_decision_retains_files_and_needs_explicit_
     );
     assert!(view.kept_moves[0].decision_pending);
     assert_eq!(view.meeting_root, s.root());
-    let review = b.prepare_pending_move(&s, &|| false, &|_| {}).unwrap();
+    let review = b
+        .prepare_pending_move(&s, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     assert!(!review.preview().resume_allowed);
     review
-        .keep(&b, &s, &review.preview().confirmation_id, &|| false)
+        .keep(
+            &b,
+            &s,
+            &review.preview().confirmation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(b.view().unwrap().pending_operation_id.is_none());
     assert_eq!(

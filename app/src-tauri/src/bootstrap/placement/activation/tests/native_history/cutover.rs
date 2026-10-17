@@ -10,15 +10,17 @@ fn mixed(completed_model: bool) -> (NativeFixture, PathBuf) {
     let f = NativeFixture::new(false, false);
     let storage = f.storage.as_ref().unwrap();
     let archive = f._base.path().join("cutover.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let restore = storage
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let restored = restore
         .publish(
             storage,
             &restore.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap()
@@ -26,9 +28,11 @@ fn mixed(completed_model: bool) -> (NativeFixture, PathBuf) {
         .clone();
     drop(restore);
     keep(storage, &restored);
-    let mut full = operations::Prepared::fresh(storage, &restored, &|| false).unwrap();
+    let mut full =
+        operations::Prepared::fresh(storage, &restored, &crate::test_support::never_cancelled)
+            .unwrap();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(
         full.execute(
@@ -36,7 +40,7 @@ fn mixed(completed_model: bool) -> (NativeFixture, PathBuf) {
             &lease,
             &full.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -57,12 +61,23 @@ fn deletion_cutover_public_folder_mixed_history_stale_command_refusal_and_repeat
         let original = evidence(storage);
         let old = storage.root().to_owned();
         let mut prepared = b
-            .prepare_move(storage, f._base.path(), &|| false, &|_| {})
+            .prepare_move(
+                storage,
+                f._base.path(),
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         let view = prepared.preview();
         assert!(!view.destination.exists());
         let result = prepared
-            .publish(b, storage, &view.confirmation_id, &|| false, &|_| {})
+            .publish(
+                b,
+                storage,
+                &view.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         assert!(result.restart_required && storage.restart_required());
         assert_eq!(result.destination, view.destination);
@@ -75,7 +90,13 @@ fn deletion_cutover_public_folder_mixed_history_stale_command_refusal_and_repeat
         // folder command must never create another copy or publish again.
         let config = std::fs::read(f.config.join(NAME)).unwrap();
         assert!(prepared
-            .publish(b, storage, &view.confirmation_id, &|| false, &|_| {})
+            .publish(
+                b,
+                storage,
+                &view.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .is_err());
         assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), config);
         drop(prepared);
@@ -92,13 +113,20 @@ fn deletion_cutover_public_folder_mixed_history_stale_command_refusal_and_repeat
             .unwrap();
         let next = f._base.path().join("next-public");
         std::fs::create_dir(&next).unwrap();
-        let mut again = b.prepare_move(&storage, &next, &|| false, &|_| {}).unwrap();
+        let mut again = b
+            .prepare_move(
+                &storage,
+                &next,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
+            .unwrap();
         let second = again
             .publish(
                 &b,
                 &storage,
                 &again.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap();
@@ -127,16 +155,27 @@ fn deletion_cutover_publication_errors_before_selection_and_after_rename_keep_ol
         let old = storage.root().to_owned();
         let original = evidence(storage);
         let mut p = b
-            .prepare_move(storage, f._base.path(), &|| false, &|_| {})
+            .prepare_move(
+                storage,
+                f._base.path(),
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
             .unwrap();
         let view = p.preview();
         // Arm only after pending selection/copy/history publication. Otherwise
         // after_rename would fault the initial begin_move, before retirement.
-        let result = p.publish(b, storage, &view.confirmation_id, &|| false, &|phase| {
-            if phase == "switching" {
-                FAULT.with(|fault| fault.set(Some(boundary)));
-            }
-        });
+        let result = p.publish(
+            b,
+            storage,
+            &view.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|phase| {
+                if phase == "switching" {
+                    FAULT.with(|fault| fault.set(Some(boundary)));
+                }
+            },
+        );
         FAULT.with(|fault| fault.set(None));
         assert!(result.unwrap_err().contains("injected activation failure"));
         assert!(storage.restart_required());
@@ -161,7 +200,7 @@ fn deletion_cutover_publication_errors_before_selection_and_after_rename_keep_ol
         assert!(model.exists());
         if boundary == "before_selection" {
             let review = b
-                .prepare_pending_move(&storage, &|| false, &|_| {})
+                .prepare_pending_move(&storage, &crate::test_support::never_cancelled, &|_| {})
                 .unwrap();
             assert!(review.preview().resume_allowed);
             assert!(
@@ -170,7 +209,7 @@ fn deletion_cutover_publication_errors_before_selection_and_after_rename_keep_ol
                         &b,
                         &storage,
                         &review.preview().confirmation_id,
-                        &|| false,
+                        &crate::test_support::never_cancelled,
                         &|_| {}
                     )
                     .unwrap()
@@ -196,14 +235,19 @@ fn deletion_cutover_checkpoint_child() {
     let b = Bootstrap::open(&config, &legacy).unwrap();
     let storage = b.open_storage().unwrap();
     let mut p = b
-        .prepare_move(&storage, &parent, &|| false, &|_| {})
+        .prepare_move(
+            &storage,
+            &parent,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     std::fs::write(ready, serde_json::to_vec(&p.preview().destination).unwrap()).unwrap();
     p.publish(
         &b,
         &storage,
         &p.preview().confirmation_id,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap();
@@ -325,7 +369,7 @@ fn deletion_cutover_sigkill_selection_admission_and_tamper_use_only_durable_owne
         assert!(model.exists());
         if phase == "before_selection" {
             let review = b
-                .prepare_pending_move(&storage, &|| false, &|_| {})
+                .prepare_pending_move(&storage, &crate::test_support::never_cancelled, &|_| {})
                 .unwrap();
             assert!(review.preview().resume_allowed);
             assert!(
@@ -334,7 +378,7 @@ fn deletion_cutover_sigkill_selection_admission_and_tamper_use_only_durable_owne
                         &b,
                         &storage,
                         &review.preview().confirmation_id,
-                        &|| false,
+                        &crate::test_support::never_cancelled,
                         &|_| {}
                     )
                     .unwrap()

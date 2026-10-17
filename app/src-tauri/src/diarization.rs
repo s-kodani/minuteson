@@ -5,7 +5,7 @@ mod restore;
 mod clustering;
 // Separate helper identity, without changing legacy managed SherpaConfig files.
 // The saved-run worker persists these additional immutable conditions.
-mod embedding;
+pub(crate) mod embedding;
 pub(crate) mod known;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 pub(crate) mod sherpa;
@@ -97,7 +97,13 @@ impl RetryRequest {
             return Err("確認した失敗・取消済みの話者分離と固定条件が一致しません".into());
         }
         let (spec, raw) = storage.fixed_job_input(&job.id)?;
-        retry_preflight(storage, &job, &spec, raw.as_ref(), &|| false)?;
+        retry_preflight(
+            storage,
+            &job,
+            &spec,
+            raw.as_ref(),
+            &crate::test_support::never_cancelled,
+        )?;
         storage.enqueue_retry_job(&job, &spec, raw.as_ref(), &self.operation_id)
     }
 }

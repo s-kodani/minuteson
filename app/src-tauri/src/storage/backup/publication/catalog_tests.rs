@@ -224,7 +224,12 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
         std::fs::write(&path, bytes).unwrap();
         let count = std::fs::read_dir(output.path()).unwrap().count();
         assert!(
-            archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).is_err(),
+            archive::read(
+                &mut File::open(path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "reject {condition}"
         );
         assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), count);
@@ -234,19 +239,33 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
 }
 fn archive(storage: &Storage, output: &Path, name: &str) -> archive::VerifiedArchive {
     let path = output.join(name);
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    archive::read(
+        &mut File::open(path).unwrap(),
+        output,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn restore(source: &archive::VerifiedArchive, target: &Storage, output: &Path, batch: &str) {
-    let ids = RestoreIds::prepare(source, output, batch, &|| false).unwrap();
-    let fixed = restore_fixed::FixedData::new(&ids, output, &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output, &|| false).unwrap();
+    let ids =
+        RestoreIds::prepare(source, output, batch, &crate::test_support::never_cancelled).unwrap();
+    let fixed =
+        restore_fixed::FixedData::new(&ids, output, &crate::test_support::never_cancelled).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output, &crate::test_support::never_cancelled).unwrap();
     assert!(matches!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
     assert_eq!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::AlreadyPublished
     );
 }
@@ -378,7 +397,10 @@ fn catalog_history_failure_during_atomic_publication_rolls_back_all_meetings_met
     let sealed = tests::sealed(&f, &ids);
     let before = tests::all_rows(&f.target.connection.lock().unwrap());
     f.target.connection.lock().unwrap().execute_batch("CREATE TEMP TRIGGER reject_catalog BEFORE INSERT ON model_catalog_history BEGIN SELECT RAISE(ABORT,'fixture catalog commit failure'); END;").unwrap();
-    assert!(f.target.publish_restore(&sealed, &ids, &|| false).is_err());
+    assert!(f
+        .target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .is_err());
     f.target
         .connection
         .lock()
@@ -394,7 +416,9 @@ fn catalog_history_failure_during_atomic_publication_rolls_back_all_meetings_met
     }
     assert!(!f.target.maintenance.load(Ordering::Acquire));
     assert!(matches!(
-        f.target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        f.target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
 }
@@ -403,7 +427,11 @@ fn catalog_history_failure_during_atomic_publication_rolls_back_all_meetings_met
 fn catalog_history_requires_transaction_preserves_distinct_catalogs_with_shared_origin_ids_and_late_cancel_rolls_back(
 ) {
     let (_root, _models, storage, _) = source();
-    let original = Bundle::export(&storage.connection.lock().unwrap(), &|| false).unwrap();
+    let original = Bundle::export(
+        &storage.connection.lock().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut value = serde_json::to_value(&original).unwrap();
     let mut different = value["catalogs"][0].clone();
     different["preferences"][0]["configurations"][0]["threads"] = json!(19);
@@ -413,7 +441,9 @@ fn catalog_history_requires_transaction_preserves_distinct_catalogs_with_shared_
     let root = tempfile::tempdir().unwrap();
     let target = Storage::open(root.path().into()).unwrap();
     let mut db = target.connection.lock().unwrap();
-    assert!(bundle.retain(&db, &|| false, &|_| Ok(true)).is_err());
+    assert!(bundle
+        .retain(&db, &crate::test_support::never_cancelled, &|_| Ok(true))
+        .is_err());
     {
         let tx = db.transaction().unwrap();
         assert!(bundle
@@ -438,8 +468,12 @@ fn catalog_history_requires_transaction_preserves_distinct_catalogs_with_shared_
         0
     );
     let tx = db.transaction().unwrap();
-    bundle.retain(&tx, &|| false, &|_| Ok(true)).unwrap();
-    bundle.retain(&tx, &|| false, &|_| Ok(true)).unwrap();
+    bundle
+        .retain(&tx, &crate::test_support::never_cancelled, &|_| Ok(true))
+        .unwrap();
+    bundle
+        .retain(&tx, &crate::test_support::never_cancelled, &|_| Ok(true))
+        .unwrap();
     tx.commit().unwrap();
     drop(db);
     let entries = target.model_catalog_history().unwrap();
@@ -459,7 +493,7 @@ fn catalog_history_requires_transaction_preserves_distinct_catalogs_with_shared_
     let mut db = target.connection.lock().unwrap();
     let tx = db.transaction().unwrap();
     assert!(collision
-        .retain(&tx, &|| false, &|_| Ok(true))
+        .retain(&tx, &crate::test_support::never_cancelled, &|_| Ok(true))
         .err()
         .unwrap()
         .contains("衝突"));
@@ -477,7 +511,11 @@ fn catalog_history_current_reopen_preserves_rows_settings_and_immutable_unavaila
     let mut settings = storage.analysis_preferences().unwrap().payload;
     settings.standard.threads = 12;
     storage.save_analysis_preferences(0, settings).unwrap();
-    let bundle = Bundle::export(&storage.connection.lock().unwrap(), &|| false).unwrap();
+    let bundle = Bundle::export(
+        &storage.connection.lock().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preferences =
         serde_json::to_value(storage.analysis_preferences().unwrap().payload).unwrap();
     drop(storage);
@@ -491,7 +529,9 @@ fn catalog_history_current_reopen_preserves_rows_settings_and_immutable_unavaila
     {
         let mut db = target.connection.lock().unwrap();
         let tx = db.transaction().unwrap();
-        bundle.retain(&tx, &|| false, &|_| Ok(true)).unwrap();
+        bundle
+            .retain(&tx, &crate::test_support::never_cancelled, &|_| Ok(true))
+            .unwrap();
         tx.commit().unwrap();
         for sql in [
             "UPDATE model_catalog_history SET state='ready'",
@@ -507,7 +547,9 @@ fn catalog_history_current_reopen_preserves_rows_settings_and_immutable_unavaila
             .unwrap();
     }
     assert!(target.model_catalog_history().is_err());
-    assert!(target.prepare_backup_snapshot(&|| false).is_err());
+    assert!(target
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(target.create_meeting("破損履歴を自動修復しない").is_ok());
 }
 
@@ -516,7 +558,11 @@ fn catalog_history_rejects_bundle_and_local_record_count_limits_without_repairin
 ) {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let bundle = Bundle::export(&storage.connection.lock().unwrap(), &|| false).unwrap();
+    let bundle = Bundle::export(
+        &storage.connection.lock().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut value = serde_json::to_value(bundle).unwrap();
     let empty = value["catalogs"][0].clone();
     value["catalogs"] = serde_json::Value::Array(vec![empty; 4097]);

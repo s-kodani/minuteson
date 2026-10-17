@@ -9,29 +9,34 @@ fn kept_meeting_supersession_checkpoint_child() {
     let phase = std::env::var("MON_KEPT_MEETING_CRASH_PHASE").unwrap();
     let f = KeptMeeting::at(tempfile::tempdir_in(&base).unwrap(), Some(true));
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let mut receipt = f.begin();
     let full = receipt.confirmed().operation().to_owned();
-    completion::run_observed(&f.storage, &mut receipt, &|| false, &|event| {
-        if event == phase {
-            lease.validate_active().unwrap();
-            let data = serde_json::to_vec(&(
-                f.storage.root(),
-                &full,
-                &f.meeting,
-                &f.other,
-                &f.kept,
-                &f.originals,
-            ))
-            .unwrap();
-            std::fs::write(base.join("ready.tmp"), data).unwrap();
-            std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
-            loop {
-                std::thread::park();
+    completion::run_observed(
+        &f.storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+        &|event| {
+            if event == phase {
+                lease.validate_active().unwrap();
+                let data = serde_json::to_vec(&(
+                    f.storage.root(),
+                    &full,
+                    &f.meeting,
+                    &f.other,
+                    &f.kept,
+                    &f.originals,
+                ))
+                .unwrap();
+                std::fs::write(base.join("ready.tmp"), data).unwrap();
+                std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
+                loop {
+                    std::thread::park();
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("kept-meeting checkpoint not reached");
 }
@@ -96,16 +101,24 @@ fn kept_meeting_supersession_sigkill_before_and_after_rows_commit_preserves_orig
             assert_eq!(startup::reason(&db, &kept).unwrap(), None);
         }
         let lease = AnalysisController::default()
-            .begin_deletion_maintenance(&storage, &full, false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &full,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        let mut p = operations::Prepared::pending(&storage, &full, &|| false).unwrap();
+        let mut p =
+            operations::Prepared::pending(&storage, &full, &crate::test_support::never_cancelled)
+                .unwrap();
         assert!(
             p.execute(
                 &storage,
                 &lease,
                 &p.preview().confirmation_id,
                 false,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -122,7 +135,15 @@ fn kept_meeting_supersession_sigkill_before_and_after_rows_commit_preserves_orig
             assert_eq!(row(&db, id), *original);
             assert_eq!(path_records(&db, id), *paths);
         }
-        inspect_kept_meeting(&db, &storage.managed_anchor, &kept, &|| false).unwrap();
-        assert!(intent::read_kept_database(&db, &kept, &|| false).is_err());
+        inspect_kept_meeting(
+            &db,
+            &storage.managed_anchor,
+            &kept,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        assert!(
+            intent::read_kept_database(&db, &kept, &crate::test_support::never_cancelled).is_err()
+        );
     }
 }

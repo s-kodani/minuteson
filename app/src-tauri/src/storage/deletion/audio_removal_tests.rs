@@ -7,7 +7,7 @@ use std::cell::Cell;
 
 fn owner() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn prepare_fixture(f: &Fixture, lease: &DataMaintenanceLease) -> String {
@@ -21,7 +21,7 @@ fn prepare_fixture(f: &Fixture, lease: &DataMaintenanceLease) -> String {
             retain_unclassified: true,
         },
         lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     op
@@ -38,7 +38,13 @@ fn reopen(f: &mut Fixture) {
 }
 fn resume(f: &Fixture, op: &str) -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 
@@ -65,7 +71,7 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
         let census = crate::storage::deletion::audio::Census::capture(
             &fixture.storage,
             &fixture.session.meeting_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(
@@ -86,10 +92,16 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
                 retain_unclassified: true,
             },
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-        start(&fixture.storage, &operation, &lease, &|| false).unwrap();
+        start(
+            &fixture.storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancel = Cell::new(false);
         assert!(run_inner(
             &fixture.storage,
@@ -114,14 +126,30 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
         drop(fixture.storage);
         let storage = Storage::open(root).unwrap();
         let lease = AnalysisController::default()
-            .begin_audio_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &storage,
+                &operation,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        assert!(run(&storage, &operation, &lease, &|| false)
-            .unwrap()
-            .files_removed());
-        assert!(completion::finish(&storage, &operation, &lease, &|| false)
-            .unwrap()
-            .completed());
+        assert!(run(
+            &storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .files_removed());
+        assert!(completion::finish(
+            &storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .completed());
         assert_eq!(
             std::fs::read(base.join("partial-flac.json")).unwrap(),
             original
@@ -133,11 +161,15 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
         drop(storage);
         let storage = Storage::open(restarted_root).unwrap();
         assert_eq!(
-            crate::storage::deletion::audio::Census::capture(&storage, &meeting, &|| false)
-                .unwrap()
-                .preview(&uuid::Uuid::new_v4().to_string())
-                .unwrap()
-                .audio_files,
+            crate::storage::deletion::audio::Census::capture(
+                &storage,
+                &meeting,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .preview(&uuid::Uuid::new_v4().to_string())
+            .unwrap()
+            .audio_files,
             0
         );
         drop(temp);
@@ -176,10 +208,27 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
     std::fs::write(&neighbor_file, b"NEIGHBOR").unwrap();
     let lease = owner();
     let op = prepare_fixture(&f, &lease);
-    let saved = super::super::read(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let saved = super::super::read(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let original = saved.snapshot.scope.clone();
-    start(&f.storage, &op, &lease, &|| false).unwrap();
-    let receipt = run(&f.storage, &op, &lease, &|| false).unwrap();
+    start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let receipt = run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(receipt.files_removed());
     assert_eq!(receipt.processed_files(), 4);
     for removed in [&f.path, &orphan, &leftover, &pcm] {
@@ -205,8 +254,13 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
     assert!(f.storage.data_write_blocked());
     let db = f.storage.connection.lock().unwrap();
     assert_eq!(
-        crate::storage::deletion::database::Scope::capture(&db, &f.meeting, &op, &|| false)
-            .unwrap(),
+        crate::storage::deletion::database::Scope::capture(
+            &db,
+            &f.meeting,
+            &op,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         original
     );
     let (state,assets):(String,i64)=db.query_row("SELECT state,(SELECT count(*) FROM file_assets WHERE meeting_id=?2 AND state='ready') FROM maintenance_operations WHERE id=?1",params![op,f.meeting],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
@@ -221,10 +275,21 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
         .get_minutes_markdown(&f.meeting)
         .unwrap()
         .is_some());
-    assert!(keep_unstarted(&f.storage, &op, &lease, &|| false).is_err());
-    assert!(run(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .files_removed());
+    assert!(keep_unstarted(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .files_removed());
 }
 #[test]
 fn audio_removal_start_requires_unchanged_consent_real_lease_and_is_never_reconsent() {
@@ -234,11 +299,29 @@ fn audio_removal_start_requires_unchanged_consent_real_lease_and_is_never_recons
         let op = prepare_fixture(&f, &lease);
         if change {
             std::fs::write(&f.path, b"NEW").unwrap();
-            assert!(start(&f.storage, &op, &lease, &|| false).is_err());
+            assert!(start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         } else {
             assert!(start(&f.storage, &op, &lease, &|| true).is_err());
-            start(&f.storage, &op, &lease, &|| false).unwrap();
-            assert!(start(&f.storage, &op, &lease, &|| false).is_err());
+            start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            assert!(start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         }
         assert!(f.path.is_file());
         assert!(f.storage.data_write_blocked());
@@ -246,12 +329,18 @@ fn audio_removal_start_requires_unchanged_consent_real_lease_and_is_never_recons
     let f = Fixture::new();
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = prepare_fixture(&f, &lease);
     controller.begin_exit().unwrap();
     controller.abort_shutdown();
-    assert!(start(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 #[test]
 fn audio_removal_missing_registered_audio_is_not_recreated_or_double_counted() {
@@ -259,8 +348,20 @@ fn audio_removal_missing_registered_audio_is_not_recreated_or_double_counted() {
     std::fs::remove_file(&f.path).unwrap();
     let lease = owner();
     let op = prepare_fixture(&f, &lease);
-    start(&f.storage, &op, &lease, &|| false).unwrap();
-    let r = run(&f.storage, &op, &lease, &|| false).unwrap();
+    start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let r = run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(r.files_removed());
     assert_eq!(r.processed_files(), 1);
     assert!(!f.path.exists());
@@ -283,7 +384,13 @@ fn audio_removal_cancel_at_each_boundary_resumes_same_receipt_without_deleting_r
         let doc = f.file("retained.txt", Some("text/plain"));
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancel = Cell::new(false);
         assert!(
             run_inner(
@@ -305,9 +412,14 @@ fn audio_removal_cancel_at_each_boundary_resumes_same_receipt_without_deleting_r
         reopen(&mut f);
         let lease = resume(&f, &op);
         assert!(
-            run(&f.storage, &op, &lease, &|| false)
-                .unwrap()
-                .files_removed(),
+            run(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .files_removed(),
             "{boundary}"
         );
         assert!(!f.path.exists());
@@ -322,19 +434,30 @@ fn audio_removal_rejects_changes_to_retained_files_at_both_irreversible_boundari
         let doc = f.file("retained.txt", Some("text/plain"));
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(run_inner(
             &f.storage,
             &op,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|event| if event == boundary {
                 std::fs::write(&doc, b"NEW RETAINED TEXT").unwrap()
             }
         )
         .is_err());
         assert_eq!(std::fs::read(&doc).unwrap(), b"NEW RETAINED TEXT");
-        let r = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let r = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!r.files_removed());
         assert_eq!(r.processed_files(), 0);
         assert!(f.storage.data_write_blocked());
@@ -353,7 +476,13 @@ fn audio_removal_rejects_new_unknown_file_and_missing_retained_file_after_partia
         let doc = f.file("retained.txt", Some("text/plain"));
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancel = Cell::new(false);
         assert!(run_inner(
             &f.storage,
@@ -370,8 +499,19 @@ fn audio_removal_rejects_new_unknown_file_and_missing_retained_file_after_partia
         } else {
             std::fs::remove_file(&doc).unwrap();
         }
-        assert!(run(&f.storage, &op, &lease, &|| false).is_err());
-        let r = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        assert!(run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
+        let r = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(f.path.parent().unwrap().join(r.reserved(0)).is_file());
     }
 }
@@ -381,7 +521,13 @@ fn audio_removal_staged_change_original_reappearance_and_missing_unstaged_audio_
         let f = Fixture::new();
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancel = Cell::new(false);
         let boundary = if mode == "missing" {
             "audioArmed"
@@ -398,16 +544,32 @@ fn audio_removal_staged_change_original_reappearance_and_missing_unstaged_audio_
             }
         )
         .is_err());
-        let r = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let r = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let reserved = f.path.parent().unwrap().join(r.reserved(0));
         match mode {
             "staged" => std::fs::write(&reserved, b"REPLACED").unwrap(),
             "original" => std::fs::write(&f.path, b"NEW ORIGINAL").unwrap(),
             _ => std::fs::remove_file(&f.path).unwrap(),
         }
-        assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(
-            Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap(),
+            Receipt::load(
+                &f.storage.connection.lock().unwrap(),
+                &op,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap(),
             r
         );
     }
@@ -421,10 +583,28 @@ fn audio_removal_does_not_adopt_reappeared_missing_or_processed_audio_after_file
         }
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
-        run(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         std::fs::write(&f.path, b"REAPPEARED").unwrap();
-        assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&f.path).unwrap(), b"REAPPEARED");
     }
 }
@@ -435,11 +615,29 @@ fn audio_removal_corrupt_progress_cursor_subtype_and_held_record_never_grant_a_w
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
         if mode == "kept" {
-            keep_unstarted(&f.storage, &op, &lease, &|| false).unwrap();
-            assert!(start(&f.storage, &op, &lease, &|| false).is_err());
+            keep_unstarted(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            assert!(start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
             continue;
         }
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         let root = f.storage.root().to_path_buf();
         let placeholder = tempfile::tempdir().unwrap();
@@ -484,7 +682,13 @@ fn audio_removal_corrupt_progress_cursor_subtype_and_held_record_never_grant_a_w
         drop(db);
         f.storage = Storage::open(root).unwrap();
         assert!(resume_attempt(&f, &op).is_err());
-        assert!(run(&f.storage, &op, &owner(), &|| false).is_err());
+        assert!(run(
+            &f.storage,
+            &op,
+            &owner(),
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(f.path.is_file() && f.storage.data_write_blocked());
     }
 }
@@ -494,7 +698,7 @@ fn resume_attempt(f: &Fixture, op: &str) -> Result<DataMaintenanceLease, String>
         op,
         false,
         false,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
 }
 
@@ -518,15 +722,33 @@ fn audio_removal_reservation_collision_is_never_adopted_even_if_included_in_orig
                 retain_unclassified: true,
             },
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         if before_consent {
-            assert!(start(&f.storage, &op, &lease, &|| false).is_err());
+            assert!(start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         } else {
-            start(&f.storage, &op, &lease, &|| false).unwrap();
+            start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             alien = Some(f.file(&reserved, None));
-            assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+            assert!(run(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         }
         assert_eq!(
             std::fs::read(alien.unwrap()).unwrap(),
@@ -541,7 +763,13 @@ fn audio_removal_changed_database_text_and_independent_pending_receipt_stop_befo
         let mut f = Fixture::new();
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         // Storage holds an exclusive SQLite lock. Mutate only this closed,
         // parent-owned fixture, then test typed cold admission and execution.
@@ -570,10 +798,21 @@ fn audio_removal_changed_database_text_and_independent_pending_receipt_stop_befo
         } else {
             resume(&f, &op)
         };
-        assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&f.path).unwrap(), b"PRIVATE AUDIO BODY");
         assert!(f.storage.data_write_blocked());
-        let r = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let r = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(r.processed_files(), 0);
         assert!(r.progress.pending.is_none());
     }
@@ -583,10 +822,22 @@ fn audio_removal_new_hardlink_is_not_unlinked_or_followed() {
     let f = Fixture::new();
     let lease = owner();
     let op = prepare_fixture(&f, &lease);
-    start(&f.storage, &op, &lease, &|| false).unwrap();
+    start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let outside = f.base.path().join("shared-audio");
     std::fs::hard_link(&f.path, &outside).unwrap();
-    assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(&outside).unwrap(), b"PRIVATE AUDIO BODY");
     assert!(f.path.is_file());
 }
@@ -594,12 +845,26 @@ fn audio_removal_new_hardlink_is_not_unlinked_or_followed() {
 fn audio_removal_cancelled_shared_owner_cannot_run_even_if_callback_never_cancels() {
     let f = Fixture::new();
     let c = AnalysisController::default();
-    let lease = c.begin_data_maintenance(false, false, &|| false).unwrap();
+    let lease = c
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .unwrap();
     let op = prepare_fixture(&f, &lease);
-    start(&f.storage, &op, &lease, &|| false).unwrap();
+    start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     c.begin_exit().unwrap();
     c.abort_shutdown();
-    assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.is_file());
 }
 #[test]
@@ -608,7 +873,13 @@ fn audio_removal_leaf_links_parent_substitution_and_root_substitution_keep_exter
         let f = Fixture::new();
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let external = f.base.path().join("external");
         std::fs::create_dir(&external).unwrap();
         let outside = external.join("microphone.caf");
@@ -628,7 +899,13 @@ fn audio_removal_leaf_links_parent_substitution_and_root_substitution_keep_exter
                 std::fs::create_dir(f.storage.root()).unwrap();
             }
         }
-        assert!(run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&outside).unwrap(), b"OUTSIDE");
     }
 }
@@ -644,8 +921,20 @@ fn audio_removal_same_parent_many_registered_files_has_exact_progress_and_keeps_
     let unknown = f.file(&format!("audio/{}/unknown.flac", f.session), None);
     let lease = owner();
     let op = prepare_fixture(&f, &lease);
-    start(&f.storage, &op, &lease, &|| false).unwrap();
-    let r = run(&f.storage, &op, &lease, &|| false).unwrap();
+    start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let r = run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(r.processed_files(), 33);
     assert!(r.files_removed());
     assert!(unknown.is_file());
@@ -666,7 +955,13 @@ fn audio_removal_sigkill_preserves_exact_reserved_audio_and_resumes_every_persis
         let doc = f.file("keep.json", Some("application/json"));
         let lease = owner();
         let op = prepare_fixture(&f, &lease);
-        start(&f.storage, &op, &lease, &|| false).unwrap();
+        start(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         let root = f.storage.root().to_path_buf();
         let meeting = f.meeting.clone();
@@ -697,9 +992,15 @@ fn audio_removal_sigkill_preserves_exact_reserved_audio_and_resumes_every_persis
         assert!(storage.data_write_blocked());
         let c = AnalysisController::default();
         let lease = c
-            .begin_audio_deletion_maintenance(&storage, &op, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        let r = run(&storage, &op, &lease, &|| false).unwrap();
+        let r = run(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
         assert!(r.files_removed());
         assert!(!path.exists() && doc.is_file());
         assert!(storage.data_write_blocked());
@@ -735,16 +1036,28 @@ fn audio_removal_crash_child() {
     let storage = Storage::open(root).unwrap();
     let c = AnalysisController::default();
     let lease = c
-        .begin_audio_deletion_maintenance(&storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    run_inner(&storage, &op, &lease, &|| false, &|event| {
-        if event == boundary {
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
+    run_inner(
+        &storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+        &|event| {
+            if event == boundary {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                panic!("SIGKILL failed")
             }
-            panic!("SIGKILL failed")
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("crash boundary not reached");
 }

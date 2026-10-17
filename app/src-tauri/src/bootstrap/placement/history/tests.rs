@@ -7,24 +7,47 @@ use std::os::unix::fs::{symlink, DirBuilderExt};
 fn delete_audio(f: &Fixture) {
     use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let operation = Uuid::new_v4().to_string();
     audio::intent::prepare(
         &f.storage,
         &operation,
-        &audio::Census::capture(&f.storage, &f.meeting, &|| false).unwrap(),
+        &audio::Census::capture(
+            &f.storage,
+            &f.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
         audio::intent::Policy {
             include_unregistered_audio: true,
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    audio::intent::removal::start(&f.storage, &operation, &lease, &|| false).unwrap();
-    audio::intent::removal::run(&f.storage, &operation, &lease, &|| false).unwrap();
-    audio::intent::removal::completion::finish(&f.storage, &operation, &lease, &|| false).unwrap();
+    audio::intent::removal::start(
+        &f.storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    audio::intent::removal::run(
+        &f.storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    audio::intent::removal::completion::finish(
+        &f.storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -35,11 +58,15 @@ fn deletion_relocation_history_install_binds_only_owned_destination_without_rewr
         delete_audio(&f);
         if full {
             use crate::{analysis_worker::AnalysisController, storage::deletion::operations};
-            let mut prepared =
-                operations::Prepared::fresh(&f.storage, &f.meeting, &|| false).unwrap();
+            let mut prepared = operations::Prepared::fresh(
+                &f.storage,
+                &f.meeting,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let preview = prepared.preview();
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(
                 prepared
@@ -48,24 +75,37 @@ fn deletion_relocation_history_install_binds_only_owned_destination_without_rewr
                         &lease,
                         &preview.confirmation_id,
                         true,
-                        &|| false,
+                        &crate::test_support::never_cancelled,
                         &|_| {}
                     )
                     .unwrap()
                     .deleted
             );
         }
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let envelope: serde_json::Value = serde_json::from_slice(h.bytes()).unwrap();
         let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
-        let first = p.install_history(&h, &|| false).unwrap();
-        assert_eq!(p.install_history(&h, &|| false).unwrap(), first);
+        let first = p
+            .install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
+        assert_eq!(
+            p.install_history(&h, &crate::test_support::never_cancelled)
+                .unwrap(),
+            first
+        );
         let registry_before = std::fs::read(f.target.join(REGISTRY)).unwrap();
-        let report = p.inspect_deletion_handoff(&h, &|| false).unwrap();
+        let report = p
+            .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+            .unwrap();
         assert_eq!(report.checked_records, if full { 3 } else { 1 });
         assert_eq!(report.completed_records, report.checked_records);
         assert_eq!(report.kept_records, 0);
@@ -117,7 +157,7 @@ fn deletion_relocation_history_install_binds_only_owned_destination_without_rewr
         }
         assert!(local.get("origins").is_none());
         assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
-        p.verify(&s, &|| false).unwrap();
+        p.verify(&s, &crate::test_support::never_cancelled).unwrap();
     }
 }
 
@@ -126,31 +166,50 @@ fn deletion_relocation_receiver_kept_audio_is_read_only_history() {
     use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
     let f = Fixture::new();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let operation = Uuid::new_v4().to_string();
     audio::intent::prepare(
         &f.storage,
         &operation,
-        &audio::Census::capture(&f.storage, &f.meeting, &|| false).unwrap(),
+        &audio::Census::capture(
+            &f.storage,
+            &f.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
         audio::intent::Policy {
             include_unregistered_audio: true,
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    audio::intent::keep_unstarted(&f.storage, &operation, &lease, &|| false).unwrap();
+    audio::intent::keep_unstarted(
+        &f.storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(lease);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
-    let report = p.inspect_deletion_handoff(&h, &|| false).unwrap();
+    let report = p
+        .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(report.kept_records, 1);
     assert_eq!(report.completed_records, 0);
     report.require_clean().unwrap();
@@ -167,22 +226,34 @@ fn deletion_relocation_receiver_kept_audio_is_read_only_history() {
     drop(h);
     drop(s);
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::intent::removal::start(&f.storage, &operation, &lease, &|| false).is_err());
+    assert!(audio::intent::removal::start(
+        &f.storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
 fn deletion_relocation_receiver_does_not_admit_old_consent_to_normal_storage_startup() {
     let f = Fixture::new();
     delete_audio(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.inspect_deletion_handoff(&h, &|| false)
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
         .unwrap()
         .require_clean()
         .unwrap();
@@ -206,13 +277,13 @@ fn deletion_relocation_receiver_does_not_admit_old_consent_to_normal_storage_sta
     assert!(copied.data_write_blocked());
     assert!(copied.create_meeting("NO AUTOMATIC ADMISSION").is_err());
     let lease = crate::analysis_worker::AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(crate::storage::deletion::audio::intent::removal::start(
         &copied,
         &operation,
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(!f.storage.data_write_blocked());
@@ -224,14 +295,22 @@ fn deletion_relocation_receiver_does_not_admit_old_consent_to_normal_storage_sta
 fn deletion_relocation_receiver_requires_installed_history_and_preserves_cancelled_copy() {
     let f = Fixture::new();
     delete_audio(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(p
+        .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+        .is_err());
     assert!(!f.target.join(REGISTRY).exists());
-    p.install_history(&h, &|| false).unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
     assert!(p.inspect_deletion_handoff(&h, &|| true).is_err());
     let n = Cell::new(0);
@@ -244,7 +323,7 @@ fn deletion_relocation_receiver_requires_installed_history_and_preserves_cancell
         })
         .is_err());
     assert!(n.get() > 24);
-    p.inspect_deletion_handoff(&h, &|| false)
+    p.inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
         .unwrap()
         .require_clean()
         .unwrap();
@@ -271,12 +350,18 @@ fn deletion_relocation_receiver_rejects_native_row_or_proof_change_without_repai
     for kind in ["row", "path", "extra"] {
         let f = Fixture::new();
         delete_audio(&f);
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&h, &|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
         let db = Connection::open(f.target.join("meetings.sqlite3")).unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
@@ -293,7 +378,9 @@ fn deletion_relocation_receiver_rejects_native_row_or_proof_change_without_repai
         }
         drop(db);
         let altered = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
-        assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+        assert!(p
+            .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(
             std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
             altered
@@ -308,12 +395,18 @@ fn deletion_relocation_receiver_rejects_forged_origin_even_with_recomputed_json_
     use rusqlite::config::DbConfig;
     let f = Fixture::new();
     delete_audio(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let db = Connection::open(f.target.join(REGISTRY)).unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
@@ -334,7 +427,9 @@ fn deletion_relocation_receiver_rejects_forged_origin_even_with_recomputed_json_
     .unwrap();
     drop(db);
     let altered = std::fs::read(f.target.join(REGISTRY)).unwrap();
-    assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+    assert!(p
+        .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(f.target.join(REGISTRY)).unwrap(), altered);
     assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
 }
@@ -344,12 +439,18 @@ fn deletion_relocation_receiver_rejects_replaced_owned_parent_after_installation
     for link in [false, true] {
         let f = Fixture::new();
         delete_audio(&f);
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&h, &|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
         let directory = f.target.join("meetings").join(&f.meeting).join("audio");
         let original = directory.with_extension("retained");
         std::fs::rename(&directory, &original).unwrap();
@@ -358,7 +459,9 @@ fn deletion_relocation_receiver_rejects_replaced_owned_parent_after_installation
         } else {
             std::fs::create_dir(&directory).unwrap();
         }
-        assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+        assert!(p
+            .inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(original.exists());
         assert!(directory.exists());
         assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
@@ -369,16 +472,23 @@ fn deletion_relocation_receiver_rejects_replaced_owned_parent_after_installation
 fn deletion_relocation_history_install_rejects_replaced_destination_parent_and_keeps_both_roots() {
     let f = Fixture::new();
     delete_audio(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let directory = f.target.join("meetings");
     let original = f.target.join("retained-meetings");
     std::fs::rename(&directory, &original).unwrap();
     symlink(&original, &directory).unwrap();
-    assert!(p.install_history(&h, &|| false).is_err());
+    assert!(p
+        .install_history(&h, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
     assert!(original.exists());
@@ -389,18 +499,24 @@ fn deletion_relocation_history_install_rejects_replaced_destination_parent_and_k
 fn deletion_relocation_cutover_rejects_changed_owned_image_before_retirement_or_selection() {
     let f = Fixture::new();
     delete_audio(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     // A deletion history is no longer a blanket refusal. A real unowned change
     // must still fail before either old-source retirement or config publication.
     std::fs::write(f.target.join("unowned.txt"), b"KEEP UNOWNED IMAGE").unwrap();
     let before = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
     let confirmation = p.pending.confirmation_id.clone();
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap_err();
     assert_eq!(
         std::fs::read(f.bootstrap.config.join(NAME)).unwrap(),
@@ -409,7 +525,7 @@ fn deletion_relocation_cutover_rejects_changed_owned_image_before_retirement_or_
     assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
     assert!(!f.bootstrap.view().unwrap().restart_required);
     assert!(!f.storage.restart_required());
-    assert!(p.verify(&s, &|| false).is_err());
+    assert!(p.verify(&s, &crate::test_support::never_cancelled).is_err());
     drop(p);
     drop(h);
     drop(s);
@@ -420,12 +536,18 @@ fn deletion_relocation_cutover_rejects_changed_owned_image_before_retirement_or_
 #[test]
 fn restore_rebinding_current_reopen_preserves_installed_history_and_meeting_data() {
     let f = Fixture::new();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     drop(p);
     drop(h);
     drop(s);
@@ -460,17 +582,33 @@ fn restore_rebinding_current_reopen_preserves_installed_history_and_meeting_data
 #[test]
 fn history_install_preserves_rows_and_old_root_and_is_idempotent() {
     let f = Fixture::new();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
-    let receipt = p.install_history(&h, &|| false).unwrap();
+    let receipt = p
+        .install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(receipt.state, "installed");
-    assert_eq!(p.install_history(&h, &|| false).unwrap(), receipt);
-    p.verify(&s, &|| false).unwrap();
-    assert_eq!(p.copy(&s, &|| false).unwrap().state, "ready");
+    assert_eq!(
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap(),
+        receipt
+    );
+    p.verify(&s, &crate::test_support::never_cancelled).unwrap();
+    assert_eq!(
+        p.copy(&s, &crate::test_support::never_cancelled)
+            .unwrap()
+            .state,
+        "ready"
+    );
     assert_eq!(
         std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
         before
@@ -500,7 +638,10 @@ fn history_install_preserves_rows_and_old_root_and_is_idempotent() {
 }
 
 fn kept_scratch(f: &Fixture) -> (String, PathBuf) {
-    let stage = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let stage = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let path = stage.image().parent().unwrap().to_owned();
     std::fs::write(path.join("unknown"), b"kept old-root body").unwrap();
     drop(stage);
@@ -516,7 +657,7 @@ fn kept_scratch(f: &Fixture) -> (String, PathBuf) {
         .clone();
     let mut confirm = f
         .storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(
         confirm
@@ -524,7 +665,7 @@ fn kept_scratch(f: &Fixture) -> (String, PathBuf) {
                 &f.storage,
                 &confirm.preview().confirmation_id,
                 true,
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .unwrap()
             .outcome,
@@ -538,12 +679,18 @@ fn history_install_keeps_old_scratch_scope_on_target_startup_and_next_move_witho
 ) {
     let f = Fixture::new();
     let (_id, path) = kept_scratch(&f);
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     drop(p);
     drop(h);
     drop(s);
@@ -592,7 +739,9 @@ fn history_install_keeps_old_scratch_scope_on_target_startup_and_next_move_witho
         .create(&next)
         .unwrap();
     let op = Uuid::new_v4().to_string();
-    let native = target.prepare_relocation_snapshot(&|| false).unwrap();
+    let native = target
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     b.begin_move(
         &op,
         &Uuid::new_v4().to_string(),
@@ -602,9 +751,15 @@ fn history_install_keeps_old_scratch_scope_on_target_startup_and_next_move_witho
     )
     .unwrap();
     let mut second = b.pending_placement(&op, &native).unwrap();
-    second.copy(&native, &|| false).unwrap();
-    let control = native.prepare_control_handoff(&|| false).unwrap();
-    second.install_history(&control, &|| false).unwrap();
+    second
+        .copy(&native, &crate::test_support::never_cancelled)
+        .unwrap();
+    let control = native
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    second
+        .install_history(&control, &crate::test_support::never_cancelled)
+        .unwrap();
     let third = Storage::open(next.clone()).unwrap();
     assert_eq!(third.previous_storage_history().unwrap().len(), 2);
     let db = Connection::open(next.join(REGISTRY)).unwrap();
@@ -639,11 +794,16 @@ fn history_install_keeps_old_scratch_scope_on_target_startup_and_next_move_witho
 #[test]
 fn history_install_cancel_after_owned_record_reopens_and_resumes_same_inode() {
     let f = Fixture::new();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let hit = Cell::new(false);
     let cancel = || {
         let exists = f.target.join(REGISTRY).exists();
@@ -658,26 +818,37 @@ fn history_install_cancel_after_owned_record_reopens_and_resumes_same_inode() {
         Identity::read(&std::fs::symlink_metadata(f.target.join(REGISTRY)).unwrap()).unwrap();
     drop(p);
     let p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    assert_eq!(p.install_history(&h, &|| false).unwrap().state, "installed");
+    assert_eq!(
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap()
+            .state,
+        "installed"
+    );
     assert_eq!(
         Identity::read(&std::fs::symlink_metadata(f.target.join(REGISTRY)).unwrap()).unwrap(),
         identity
     );
-    p.verify(&s, &|| false).unwrap();
+    p.verify(&s, &crate::test_support::never_cancelled).unwrap();
 }
 
 #[test]
 fn history_install_refuses_copied_registry_changes_or_owned_file_replacement_and_links() {
     for mode in 0..4 {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let file = f.target.join(REGISTRY);
         if mode == 0 {
-            p.install_history(&h, &|| false).unwrap();
+            p.install_history(&h, &crate::test_support::never_cancelled)
+                .unwrap();
             std::fs::write(&file, b"edited registry").unwrap();
         } else {
             assert!(p.install_history(&h, &|| file.exists()).is_err());
@@ -699,7 +870,9 @@ fn history_install_refuses_copied_registry_changes_or_owned_file_replacement_and
             }
             _ => {}
         }
-        assert!(p.install_history(&h, &|| false).is_err());
+        assert!(p
+            .install_history(&h, &crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign registry");
         if mode == 0 {
             assert_eq!(std::fs::read(&file).unwrap(), b"edited registry");
@@ -713,13 +886,19 @@ fn history_install_cold_restart_continues_owned_or_resends_installed_without_rew
 {
     for finished in [false, true] {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         if finished {
-            p.install_history(&h, &|| false).unwrap();
+            p.install_history(&h, &crate::test_support::never_cancelled)
+                .unwrap();
         } else {
             assert!(p
                 .install_history(&h, &|| f.target.join(REGISTRY).exists())
@@ -736,14 +915,21 @@ fn history_install_cold_restart_continues_owned_or_resends_installed_without_rew
         drop(f.bootstrap);
         let b = Bootstrap::open(&config, &app_data).unwrap();
         let source = Storage::open(b.root().into()).unwrap();
-        let native = source.prepare_relocation_snapshot(&|| false).unwrap();
-        let control = native.prepare_control_handoff(&|| false).unwrap();
+        let native = source
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let control = native
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let p = b.pending_placement(&f.operation, &native).unwrap();
         assert_eq!(
-            p.install_history(&control, &|| false).unwrap().state,
+            p.install_history(&control, &crate::test_support::never_cancelled)
+                .unwrap()
+                .state,
             "installed"
         );
-        p.verify(&native, &|| false).unwrap();
+        p.verify(&native, &crate::test_support::never_cancelled)
+            .unwrap();
         if finished {
             assert_eq!(std::fs::read(f.target.join(REGISTRY)).unwrap(), original);
         }
@@ -759,11 +945,16 @@ fn history_install_cold_restart_continues_owned_or_resends_installed_without_rew
 fn history_install_refuses_unproven_journal_registry_creation_gap_and_control_metadata_tampering() {
     for mode in 0..4 {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let journal = f.target.join(JOURNAL);
         match mode {
             0 => std::fs::write(&journal, b"").unwrap(),
@@ -772,7 +963,8 @@ fn history_install_refuses_unproven_journal_registry_creation_gap_and_control_me
                 std::fs::write(f.target.join(REGISTRY), b"creation gap, unclaimed").unwrap();
             }
             2 | 3 => {
-                p.install_history(&h, &|| false).unwrap();
+                p.install_history(&h, &crate::test_support::never_cancelled)
+                    .unwrap();
                 let db = Connection::open(&journal).unwrap();
                 if mode == 2 {
                     db.execute_batch("CREATE TABLE unexpected(value TEXT)")
@@ -794,7 +986,9 @@ fn history_install_refuses_unproven_journal_registry_creation_gap_and_control_me
             _ => unreachable!(),
         }
         let before = std::fs::read(&journal).unwrap();
-        assert!(p.install_history(&h, &|| false).is_err());
+        assert!(p
+            .install_history(&h, &crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(std::fs::read(&journal).unwrap(), before);
         if mode == 1 {
             assert_eq!(
@@ -821,7 +1015,9 @@ fn history_install_current_shared_app_parent_keeps_models_and_control_at_source(
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let s = source.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = source
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let op = Uuid::new_v4().to_string();
     b.begin_move(
         &op,
@@ -832,10 +1028,13 @@ fn history_install_current_shared_app_parent_keeps_models_and_control_at_source(
     )
     .unwrap();
     let mut p = b.pending_placement(&op, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.verify(&s, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.verify(&s, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(
         std::fs::read(shared.join("models/model.gguf")).unwrap(),
         b"old model"
@@ -857,10 +1056,15 @@ fn history_install_crash_child() {
     let mode = std::env::var("MON_HISTORY_INSTALL_MODE").unwrap();
     let b = Bootstrap::open(Path::new(&config), Path::new(&app_data)).unwrap();
     let source = Storage::open(b.root().into()).unwrap();
-    let native = source.prepare_relocation_snapshot(&|| false).unwrap();
+    let native = source
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let mut p = b.pending_placement(&op, &native).unwrap();
-    p.copy(&native, &|| false).unwrap();
-    let h = native.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&native, &crate::test_support::never_cancelled)
+        .unwrap();
+    let h = native
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let signal = || -> ! {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -882,7 +1086,8 @@ fn history_install_crash_child() {
         });
         unreachable!();
     }
-    p.install_history(&h, &|| false).unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     signal();
 }
 
@@ -899,7 +1104,10 @@ fn history_install_sigkill_preserves_old_root_and_resumes_owned_or_resends_insta
     }
     for mode in ["partial", "installed"] {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         drop(s);
         let config = f.bootstrap.config.clone();
@@ -938,11 +1146,17 @@ fn history_install_sigkill_preserves_old_root_and_resumes_owned_or_resends_insta
         let before = std::fs::read(f.target.join(REGISTRY)).unwrap();
         let b = Bootstrap::open(&config, &app_data).unwrap();
         let source = Storage::open(b.root().into()).unwrap();
-        let native = source.prepare_relocation_snapshot(&|| false).unwrap();
-        let h = native.prepare_control_handoff(&|| false).unwrap();
+        let native = source
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let h = native
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let p = b.pending_placement(&f.operation, &native).unwrap();
-        p.install_history(&h, &|| false).unwrap();
-        p.verify(&native, &|| false).unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
+        p.verify(&native, &crate::test_support::never_cancelled)
+            .unwrap();
         if mode == "installed" {
             assert_eq!(std::fs::read(f.target.join(REGISTRY)).unwrap(), before);
         }

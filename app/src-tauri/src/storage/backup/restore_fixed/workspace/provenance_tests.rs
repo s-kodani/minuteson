@@ -46,13 +46,13 @@ fn fixture(storage: &Storage, operation: &str) -> String {
 }
 
 fn prepare<'p, 's>(fixed: &FixedData<'p, 's>, output: &Path) -> FixedWorkspace {
-    FixedWorkspace::prepare(fixed, output, &|| false)
+    FixedWorkspace::prepare(fixed, output, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_speech_artifacts(fixed, &|| false)
+        .with_speech_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_generation_artifacts(fixed, &|| false)
+        .with_generation_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_processing_history(fixed, &|| false)
+        .with_processing_history(fixed, &crate::test_support::never_cancelled)
         .unwrap()
 }
 
@@ -69,9 +69,9 @@ fn restore_provenance_records_every_scoped_mapping_and_keeps_old_keys_out_of_pri
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut work = prepare(&fixed, output.path())
-        .with_provenance(&fixed, &|| false)
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let mut count = 0;
     ids.visit_mappings(&||false,|map| {
@@ -104,7 +104,11 @@ fn restore_provenance_records_every_scoped_mapping_and_keeps_old_keys_out_of_pri
         );
     }
     assert!(work.database.query_row("SELECT EXISTS(SELECT 1 FROM restore_provenance WHERE meeting_id IS NULL AND domain='vocabulary_entries')",[],|r|r.get::<_,bool>(0)).unwrap());
-    super::super::super::super::validate_database(&mut work.database, &|| false).unwrap();
+    super::super::super::super::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(storage.load_transcript_draft(&a).unwrap(), original);
     assert_eq!(storage.list_meetings().unwrap().len(), 2);
     let stage = work.stage.path().to_path_buf();
@@ -123,9 +127,9 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepare(&fixed, output.path())
-        .with_provenance(&fixed, &|| false)
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let first = ids.get("meetings", "", &old).unwrap();
     // Test-only access to the owned image: this is not a publication path.
@@ -149,11 +153,16 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
     };
-    let plan = super::super::super::super::ledger::BatchPlan::new(&ids, &|| false).unwrap();
+    let plan = super::super::super::super::ledger::BatchPlan::new(
+        &ids,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     {
         let mut db = owned.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
-        plan.reserve(&mut tx, &|| false).unwrap();
+        plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+            .unwrap();
         tx.commit().unwrap();
     }
     let next = read(&owned, output.path());
@@ -176,11 +185,21 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         .tables
         .iter()
         .any(|t| t.name == "restore_provenance" && t.row_count > 0));
-    let next_ids =
-        RestoreIds::prepare(&next, output.path(), &Uuid::new_v4().to_string(), &|| false).unwrap();
-    let next_fixed = FixedData::new(&next_ids, output.path(), &|| false).unwrap();
+    let next_ids = RestoreIds::prepare(
+        &next,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let next_fixed = FixedData::new(
+        &next_ids,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut next_work = prepare(&next_fixed, output.path())
-        .with_provenance(&next_fixed, &|| false)
+        .with_provenance(&next_fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let second = next_ids.get("meetings", "", &first).unwrap();
     assert_ne!(first, second);
@@ -189,8 +208,14 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
     assert!(origins.contains(&(second.clone(), ids.archive_id.clone(), old)));
     assert!(origins.contains(&(second.clone(), next_ids.archive_id.clone(), first)));
     assert_eq!(origins.len(), 2);
-    super::super::super::super::validate_database(&mut next_work.database, &|| false).unwrap();
-    assert!(next_work.with_provenance(&next_fixed, &|| false).is_err());
+    super::super::super::super::validate_database(
+        &mut next_work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(next_work
+        .with_provenance(&next_fixed, &crate::test_support::never_cancelled)
+        .is_err());
 }
 
 #[test]
@@ -204,7 +229,7 @@ fn restore_provenance_cancellation_after_private_insert_discards_only_owned_stag
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepare(&fixed, output.path());
     let stage = work.stage.path().to_path_buf();
     let keep = output.path().join("keep.txt");
@@ -266,9 +291,9 @@ fn restore_provenance_keeps_duplicate_historical_origins_for_separate_meetings_a
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut work = prepare(&fixed, output.path())
-        .with_provenance(&fixed, &|| false)
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let new_a = ids.get("meetings", "", &a.id).unwrap();
     let new_b = ids.get("meetings", "", &b.id).unwrap();
@@ -287,7 +312,11 @@ fn restore_provenance_keeps_duplicate_historical_origins_for_separate_meetings_a
         0
     );
     assert_eq!(work.database.query_row("SELECT count(*) FROM restore_provenance WHERE restore_batch=?1 AND entity_key=?2 AND source_key=?3",params![batch,new_deleted,deleted],|r|r.get::<_,i64>(0)).unwrap(),1);
-    super::super::super::super::validate_database(&mut work.database, &|| false).unwrap();
+    super::super::super::super::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -315,13 +344,15 @@ fn restore_provenance_rejects_unknown_domains_cross_meeting_and_changed_prior_hi
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepare(&fixed, output.path());
     let stage = work.stage.path().to_path_buf();
     work.database
         .execute("UPDATE restore_provenance SET source_key='changed'", [])
         .unwrap();
-    assert!(work.with_provenance(&fixed, &|| false).is_err());
+    assert!(work
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
+        .is_err());
     assert!(!stage.exists());
     let filename: String = source
         .database
@@ -362,6 +393,9 @@ fn restore_provenance_rejects_unknown_domains_cross_meeting_and_changed_prior_hi
         1
     );
     assert!(storage
-        .create_backup_archive(&output.path().join("original.monbackup"), &|| false)
+        .create_backup_archive(
+            &output.path().join("original.monbackup"),
+            &crate::test_support::never_cancelled
+        )
         .is_ok());
 }

@@ -91,3 +91,18 @@ test("stale completion replies cannot regress proven outputs; deleted jobs drop 
   assert.throws(() => tracker.ingest([job({ state: "cancelled", updatedAt: 111 })]));
   tracker.ingest([]); assert.deepEqual(tracker.watchedIds(), []);
 });
+
+
+test("saved minutes have a success notice without a format warning", () => {
+  const tracker = new JobNotificationTracker(50);
+  tracker.ingest([job({ kind: "minutes_generation" })]);
+  const done = job({ kind: "minutes_generation", state: "succeeded", completedUnits: 2, updatedAt: 102 });
+  assert.equal(tracker.ingest([done]).issues.length, 0);
+  const proof = { job: done, contentHash: "c".repeat(64), publicationState: "markdown", warnings: [] };
+  const event = tracker.confirmOutput(done, verifiedJobOutput(done, proof))!;
+  assert.equal(event.level, "success");
+  assert.equal(event.important, false);
+  assert.equal(event.message, "「会議A」の議事録を保存しました");
+  assert.equal(tracker.confirmOutput(done, "markdown"), null);
+  assert.throws(() => verifiedJobOutput(done, { ...proof, job: { ...done, meetingId: "foreign" } }));
+});

@@ -16,7 +16,7 @@ fn retry_preview(
         &p.id,
         &p.record.review_hash,
         &p.check,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
 }
 fn calls_in(path: &Path) -> usize {
@@ -77,8 +77,14 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
             crate::model_rebinding::receipt(&f.storage, &inspector, &cancelled_op, &preview)
                 .unwrap();
         assert!(!ended.active && ended.cancelled && ended.job.is_none());
-        let next = crate::model_rebinding::apply(&f.storage, &f.models(), &op, &preview, &|| false)
-            .unwrap();
+        let next = crate::model_rebinding::apply(
+            &f.storage,
+            &f.models(),
+            &op,
+            &preview,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let (spec, cp) = f.storage.fixed_job_input(&next.id).unwrap();
         assert_eq!(spec.parameters, original.0.parameters);
         assert_eq!(
@@ -94,11 +100,24 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
             next.id
         );
         let candidate = match engine {
-            Engine::Whisper => {
-                crate::transcription::process(&f.storage, &next.id, &|| false, &|_| {})
-            }
-            Engine::Sherpa => crate::diarization::process(&f.storage, &next.id, &|| false, &|_| {}),
-            Engine::Llama => crate::generation::process(&f.storage, &next.id, &|| false, &|_| {}),
+            Engine::Whisper => crate::transcription::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
+            Engine::Sherpa => crate::diarization::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
+            Engine::Llama => crate::generation::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
         }
         .unwrap();
         assert!(candidate.is_some());
@@ -138,7 +157,7 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
             &f.models(),
             &Uuid::new_v4().to_string(),
             &preview,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     }
@@ -188,7 +207,7 @@ fn model_rebinding_rejects_changed_review_state_cancelled_or_stale_trial_without
                     &Uuid::new_v4().to_string(),
                     &f.packages[target].id,
                     &f.packages[target].record.review_hash,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                 )
                 .unwrap();
             }
@@ -324,13 +343,24 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
             }
         };
         let candidate = match engine {
-            Engine::Whisper => {
-                crate::transcription::process(&f.storage, &job.id, &|| false, &progress)
-            }
-            Engine::Sherpa => {
-                crate::diarization::process(&f.storage, &job.id, &|| false, &progress)
-            }
-            Engine::Llama => crate::generation::process(&f.storage, &job.id, &|| false, &progress),
+            Engine::Whisper => crate::transcription::process(
+                &f.storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &progress,
+            ),
+            Engine::Sherpa => crate::diarization::process(
+                &f.storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &progress,
+            ),
+            Engine::Llama => crate::generation::process(
+                &f.storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &progress,
+            ),
         }
         .unwrap();
         assert!(candidate.is_none());
@@ -477,7 +507,7 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
             &f.models(),
             &Uuid::new_v4().to_string(),
             &preview,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(next.completed_units, 1);
@@ -492,11 +522,24 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
             next.id
         );
         let candidate = match engine {
-            Engine::Whisper => {
-                crate::transcription::process(&f.storage, &next.id, &|| false, &|_| {})
-            }
-            Engine::Sherpa => crate::diarization::process(&f.storage, &next.id, &|| false, &|_| {}),
-            Engine::Llama => crate::generation::process(&f.storage, &next.id, &|| false, &|_| {}),
+            Engine::Whisper => crate::transcription::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
+            Engine::Sherpa => crate::diarization::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
+            Engine::Llama => crate::generation::process(
+                &f.storage,
+                &next.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
         }
         .unwrap();
         assert!(candidate.is_some());
@@ -561,11 +604,12 @@ fn prepare(f: &Fixture, spec: &JobSpec, target: usize) -> Result<Binding, String
         &p.id,
         &p.record.review_hash,
         &p.check,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
 }
 fn check_execution<T>(spec: &JobSpec, run: impl FnOnce(Execution<'_>) -> T) -> T {
     match spec.kind {
+        JobKind::VoiceRegistration | JobKind::VoiceMatching => panic!("not a rebinding fixture"),
         JobKind::Transcription => {
             let e: WhisperConfig =
                 serde_json::from_value(spec.parameters["engine"].clone()).unwrap();
@@ -639,7 +683,12 @@ fn model_rebinding_three_engines_resolve_new_identical_packages_without_mutating
         // Keep its non-owning proof, not a dependency on its physical files.
         std::fs::remove_dir_all(f.models().join(&f.packages[target - 3].id)).unwrap();
         check_execution(spec, |e| {
-            assert!(managed::verify(&spec.profile_snapshot, e, &|| false).is_err());
+            assert!(managed::verify(
+                &spec.profile_snapshot,
+                e,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         });
         let binding = prepare(&f, spec, target).unwrap();
         let profile = binding.attach(spec).unwrap();
@@ -653,7 +702,9 @@ fn model_rebinding_three_engines_resolve_new_identical_packages_without_mutating
         );
         check_execution(spec, |execution| {
             let resolved = binding.resolve(&profile, execution).unwrap();
-            binding.verify(&profile, execution, &|| false).unwrap();
+            binding
+                .verify(&profile, execution, &crate::test_support::never_cancelled)
+                .unwrap();
             let native = resolved.execution();
             // Configuration and every byte proof stay identical, while every
             // role resolves under the reviewed destination package, even two
@@ -671,7 +722,7 @@ fn model_rebinding_three_engines_resolve_new_identical_packages_without_mutating
                 assert!(new
                     .path
                     .starts_with(f.models().join(&f.packages[target].id)));
-                new.verify(&|| false).unwrap();
+                new.verify(&crate::test_support::never_cancelled).unwrap();
             }
         });
         let restored = portable_spec(spec);
@@ -778,7 +829,9 @@ fn model_rebinding_portable_roundtrip_redacts_all_roles_and_unavailable_binding_
             unavailable.validate(&profile, e).unwrap();
             managed::validate(&profile, e).unwrap();
             assert!(unavailable.resolve(&profile, e).is_err());
-            assert!(unavailable.verify(&profile, e, &|| false).is_err());
+            assert!(unavailable
+                .verify(&profile, e, &crate::test_support::never_cancelled)
+                .is_err());
         });
         assert!(refs
             .iter()
@@ -860,7 +913,11 @@ fn model_rebinding_missing_failed_stale_trials_changed_bytes_artifacts_and_cance
     // creating a new one always requires the latest explicit success.
     check_execution(&spec, |e| {
         binding
-            .verify(&spec.profile_snapshot, e, &|| false)
+            .verify(
+                &spec.profile_snapshot,
+                e,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap()
     });
     assert_eq!(f.executed(target), calls);

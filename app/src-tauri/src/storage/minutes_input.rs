@@ -1,4 +1,4 @@
-use super::analysis::{read_analysis_content, AnalysisSpeaker, AnalysisView};
+use super::analysis::{read_analysis_content, AnalysisSpeaker, AnalysisUtterance, AnalysisView};
 use super::drafts::{load_draft, merged_assignments, validate_payload, TranscriptDraftPayload};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
@@ -53,7 +53,9 @@ impl Storage {
         profile: Value,
         make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
     ) -> Result<JobSnapshot, String> {
-        self.enqueue_minutes_job_with_target(request, profile, None, make_generation)
+        self.enqueue_minutes_job_with_target(request, profile, None, |input, _, _| {
+            make_generation(input)
+        })
     }
 
     pub(crate) fn enqueue_markdown_minutes_job_configured(
@@ -63,6 +65,22 @@ impl Storage {
         target: super::minutes_markdown::GenerationTarget,
         make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_minutes_job_with_target(request, profile, Some(target), |input, _, _| {
+            make_generation(input)
+        })
+    }
+
+    pub(crate) fn enqueue_markdown_minutes_job_with_prompts(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        target: super::minutes_markdown::GenerationTarget,
+        make_generation: impl FnOnce(
+            &MinutesInput,
+            &Connection,
+            Option<&Value>,
+        ) -> Result<(Value, Option<i64>), String>,
+    ) -> Result<JobSnapshot, String> {
         self.enqueue_minutes_job_with_target(request, profile, Some(target), make_generation)
     }
 
@@ -71,7 +89,11 @@ impl Storage {
         request: MinutesJobRequest,
         profile: Value,
         target: Option<super::minutes_markdown::GenerationTarget>,
-        make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
+        make_generation: impl FnOnce(
+            &MinutesInput,
+            &Connection,
+            Option<&Value>,
+        ) -> Result<(Value, Option<i64>), String>,
     ) -> Result<JobSnapshot, String> {
         self.require_data_writable()?;
         if target.is_some() && !super::minutes_markdown::uuid(&request.operation_id) {
@@ -118,7 +140,8 @@ impl Storage {
         if let Some(id) = existing {
             let (spec, _) = super::jobs::read_fixed_input(&tx, &id)?;
             let input = read_input(&tx, &spec)?;
-            let (generation_parameters, total_units) = make_generation(&input)?;
+            let (generation_parameters, total_units) =
+                make_generation(&input, &tx, Some(&spec.parameters["generation"]))?;
             let generation_parameters = bind_target(generation_parameters)?;
             let parameters =
                 json!({"schemaVersion":1, "request":request, "generation":generation_parameters});
@@ -185,7 +208,7 @@ impl Storage {
             )
             .map_err(|e| e.to_string())?;
         let fixed = read_snapshot(&tx, &request.meeting_id, &id, &hash)?;
-        let (generation_parameters, total_units) = make_generation(&fixed)?;
+        let (generation_parameters, total_units) = make_generation(&fixed, &tx, None)?;
         let generation_parameters = bind_target(generation_parameters)?;
         if !generation_parameters.is_object() {
             return Err("議事録生成の設定が不正です".into());
@@ -205,6 +228,7 @@ impl Storage {
         let job = super::jobs::enqueue_in_transaction(&tx, &spec)?;
         read_input(&tx, &spec)?;
         tx.commit().map_err(|e| e.to_string())?;
+        crate::internal_logs::job(&job);
         Ok(job)
     }
 
@@ -461,6 +485,33 @@ pub(super) fn copy_snapshot(
     working_hash: &str,
     draft: Option<Value>,
 ) -> Result<String, String> {
+    copy_snapshot_with_consolidation(
+        tx,
+        source,
+        payload,
+        title,
+        created_at,
+        started_at,
+        working_hash,
+        draft,
+        None,
+    )
+}
+
+pub(super) fn copy_snapshot_with_consolidation(
+    tx: &Transaction<'_>,
+    source: &AnalysisView,
+    payload: &TranscriptDraftPayload,
+    title: &str,
+    created_at: i64,
+    started_at: Option<i64>,
+    working_hash: &str,
+    draft: Option<Value>,
+    consolidation: Option<(
+        &super::transcript_consolidation::Request,
+        &[Vec<AnalysisUtterance>],
+    )>,
+) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
     let now = now_ms()?;
     let (audio_hash, profile, config): (String,String,String) = tx.query_row("SELECT audio_manifest_hash, profile_snapshot_json, config_json FROM analysis_revisions WHERE id = ?1", params![source.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e| e.to_string())?;
@@ -587,9 +638,21 @@ pub(super) fn copy_snapshot(
             .transpose()?;
         tx.execute("INSERT INTO speaker_segments (id,meeting_id,analysis_revision_id,track_id,speaker_id,start_us,end_us,overlap_group_id,confidence) SELECT ?1,meeting_id,?2,track_id,?3,start_us,end_us,overlap_group_id,confidence FROM speaker_segments WHERE id = ?4 AND analysis_revision_id = ?5", params![Uuid::new_v4().to_string(),id,mapped,segment,source.id]).map_err(|e| e.to_string())?;
     }
+    if let Some((request, groups)) = consolidation {
+        super::transcript_consolidation::consolidate_copied_rows(
+            tx, source, payload, &id, request, groups,
+        )?;
+    }
     let hash = super::revisions::analysis_content_hash(tx, &id)?;
-    tx.execute("UPDATE analysis_revisions SET content_hash = ?1, publication_state = 'internal_snapshot' WHERE id = ?2 AND publication_state = 'building'", params![hash,id]).map_err(|e| e.to_string())?;
-    tx.execute("INSERT INTO analysis_input_snapshots (analysis_id,meeting_id,source_analysis_id,source_content_hash,source_draft_json,working_content_hash,meeting_title,meeting_created_at,meeting_started_at_utc_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id,source.meeting_id,source.id,source.content_hash,draft.map(|d| d.to_string()),working_hash,title,created_at,started_at]).map_err(|e| e.to_string())?;
+    let state = if consolidation.is_some() {
+        "committed"
+    } else {
+        "internal_snapshot"
+    };
+    tx.execute("UPDATE analysis_revisions SET content_hash = ?1, publication_state = ?3 WHERE id = ?2 AND publication_state = 'building'", params![hash,id,state]).map_err(|e| e.to_string())?;
+    if consolidation.is_none() {
+        tx.execute("INSERT INTO analysis_input_snapshots (analysis_id,meeting_id,source_analysis_id,source_content_hash,source_draft_json,working_content_hash,meeting_title,meeting_created_at,meeting_started_at_utc_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id,source.meeting_id,source.id,source.content_hash,draft.map(|d| d.to_string()),working_hash,title,created_at,started_at]).map_err(|e| e.to_string())?;
+    }
     Ok(id)
 }
 

@@ -12,10 +12,11 @@ mod workspace;
 
 fn deleted(storage: &Storage, meeting: &str) -> String {
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = Uuid::new_v4().to_string();
-    let census = audio::Census::capture(storage, meeting, &|| false).unwrap();
+    let census =
+        audio::Census::capture(storage, meeting, &crate::test_support::never_cancelled).unwrap();
     audio::intent::prepare(
         storage,
         &op,
@@ -25,12 +26,20 @@ fn deleted(storage: &Storage, meeting: &str) -> String {
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    audio::intent::removal::start(storage, &op, &lease, &|| false).unwrap();
-    audio::intent::removal::run(storage, &op, &lease, &|| false).unwrap();
-    audio::intent::removal::completion::finish(storage, &op, &lease, &|| false).unwrap();
+    audio::intent::removal::start(storage, &op, &lease, &crate::test_support::never_cancelled)
+        .unwrap();
+    audio::intent::removal::run(storage, &op, &lease, &crate::test_support::never_cancelled)
+        .unwrap();
+    audio::intent::removal::completion::finish(
+        storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     op
 }
 fn fixture() -> (tempfile::TempDir, Storage, String) {
@@ -41,8 +50,15 @@ fn fixture() -> (tempfile::TempDir, Storage, String) {
 }
 fn write(storage: &Storage, output: &Path) -> (VerifiedArchive, BackupReceipt) {
     let path = output.join(format!("{}.monbackup", Uuid::new_v4()));
-    let receipt = storage.create_backup_archive(&path, &|| false).unwrap();
-    let archive = read(&mut File::open(path).unwrap(), output, &|| false).unwrap();
+    let receipt = storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let archive = read(
+        &mut File::open(path).unwrap(),
+        output,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     (archive, receipt)
 }
 fn pack(path: &Path, manifest: &Manifest, payloads: &[Vec<u8>]) {
@@ -365,7 +381,7 @@ fn deleted_audio_unjournaled_missing_source_is_not_adopted_as_intentional_deleti
         let output = tempfile::tempdir().unwrap();
         let destination = output.path().join("blocked.monbackup");
         assert!(storage
-            .create_backup_archive(&destination, &|| false)
+            .create_backup_archive(&destination, &crate::test_support::never_cancelled)
             .is_err());
         assert!(!destination.exists());
         assert!(storage.get_meeting(&meeting).unwrap().is_some());
@@ -387,7 +403,10 @@ fn deleted_audio_native_state_revival_stops_export_without_reclassifying_missing
         .unwrap();
     let output = tempfile::tempdir().unwrap();
     assert!(storage
-        .create_backup_archive(&output.path().join("blocked.monbackup"), &|| false)
+        .create_backup_archive(
+            &output.path().join("blocked.monbackup"),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
 }
 
@@ -413,7 +432,10 @@ fn deleted_audio_reappeared_body_link_or_parent_is_never_silently_omitted() {
         }
         assert!(
             storage
-                .create_backup_archive(&output.path().join("blocked.monbackup"), &|| false)
+                .create_backup_archive(
+                    &output.path().join("blocked.monbackup"),
+                    &crate::test_support::never_cancelled
+                )
                 .is_err(),
             "{attack}"
         );
@@ -426,12 +448,18 @@ fn deleted_audio_snapshot_rechecks_absence_before_archive_bytes_are_written() {
     let (_root, storage, meeting) = fixture();
     let path = audio_path(&storage, &meeting);
     deleted(&storage, &meeting);
-    let snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     std::fs::write(&path, b"returned source").unwrap();
     let output = tempfile::tempdir().unwrap();
     let mut file = File::create(output.path().join("not-published.monbackup")).unwrap();
     assert!(snapshot
-        .write_archive(&mut file, output.path(), &|| false)
+        .write_archive(
+            &mut file,
+            output.path(),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert_eq!(file.metadata().unwrap().len(), 0);
     assert_eq!(std::fs::read(path).unwrap(), b"returned source");
@@ -515,7 +543,12 @@ fn deleted_audio_rehashed_manifest_cannot_change_reason_scope_version_or_fingerp
             Ok(manifest) => {
                 pack(&path, &manifest, &data);
                 assert!(
-                    read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+                    read(
+                        &mut File::open(&path).unwrap(),
+                        output.path(),
+                        &crate::test_support::never_cancelled
+                    )
+                    .is_err(),
                     "{attack}"
                 );
             }
@@ -587,7 +620,12 @@ fn deleted_audio_rehashed_logical_rows_cannot_revive_or_rewrite_audio_history() 
         manifest.entries[0].sha256 = format!("{:x}", Sha256::digest(&data[0]));
         pack(&path, &manifest, &data);
         assert!(
-            read(&mut File::open(&path).unwrap(), output.path(), &|| false).is_err(),
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{table}.{column}"
         );
     }
@@ -606,18 +644,27 @@ fn deleted_audio_restore_raw_manifest_edits_cannot_erase_checked_unavailable_his
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed =
-        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = super::super::restore_fixed::FixedData::new(
+        &ids,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
         &fixed,
         output.path(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let seed = super::super::restored_audio::Seed::prepare(&sealed, &ids, &|| false).unwrap();
+    let seed = super::super::restored_audio::Seed::prepare(
+        &sealed,
+        &ids,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(seed.meetings().len(), 1);
     let missing = archive
         .manifest

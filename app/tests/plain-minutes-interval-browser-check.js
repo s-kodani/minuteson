@@ -5,14 +5,14 @@ async page=>{
   try {
   const count=cmd=>page.evaluate(cmd=>window.__mon.intervalCalls.filter(c=>c.cmd===cmd).length,cmd);
   const panel=()=>page.getByRole("region",{name:"議事録",exact:true});
-  const link=()=>panel().getByRole("button",{name:"この区間を再生: 00:00:01.000001–00:00:03.999999",exact:true});
-  const player=()=>page.getByRole("group",{name:"議事録の区間再生",exact:true});
+  const link=()=>panel().getByRole("button",{name:"この区間の開始時刻から再生: 00:00:01.000001–00:00:03.999999",exact:true});
+  const player=()=>page.getByRole("group",{name:"会議全体の音声再生",exact:true});
   const close=async()=>{
     await page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true}).click();await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();await player().waitFor({state:"hidden"});
     await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await link().waitFor();
   };
   await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await link().waitFor();
-  check(await count("prepare_markdown_interval_playback")===0&&await count("read_playback_chunk")===0,"mount prepared or played audio");
+  check(await count("prepare_meeting_playback")===0&&await count("read_playback_chunk")===0,"mount prepared or played audio");
   check(await panel().locator(".markdown-audio-link").count()===1&&await panel().locator("a[href],img").count()===0,"invalid/remote links became active");
   const dockHeight=await page.locator('.meeting-playback-dock').evaluate(el=>el.getBoundingClientRect().height);
   results.push("saved Markdown previews one valid interval without auto-play or executable/remote links");
@@ -20,25 +20,25 @@ async page=>{
   await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
   check(await page.locator('.meeting-playback-dock .audio-player').count()===1,"interval created duplicate/outside dock player");
   check(Math.abs(await page.locator('.meeting-playback-dock').evaluate(el=>el.getBoundingClientRect().height)-dockHeight)<=1,"interval notification changed dock height");
-  check(await page.evaluate(()=>{const r=window.__mon.intervalCalls.find(c=>c.cmd==="prepare_markdown_interval_playback").args.request;return r.meetingId==="m1"&&r.startUs===1000001&&r.endUs===3999999&&r.expectedDurationUs===60000000&&r.mode==="mic";}),"native request rounded or changed interval/mode");
+  check(await page.evaluate(()=>{const r=window.__mon.intervalCalls.find(c=>c.cmd==="prepare_meeting_playback").args.request;return r.meetingId==="m1"&&r.startReference.startUs===1000001&&r.startReference.endUs===3999999&&r.startReference.expectedDurationUs===60000000&&r.mode==="mic";}),"native request rounded or changed interval/mode");
   await player().getByRole("button",{name:"一時停止",exact:true}).click();
   await page.screenshot({path:"plain-minutes-interval.png"});await close();
-  results.push("click plays the exact fractional interval in the one shared dock; pause and navigation release work");
-  for(const [modes,expected] of [[['mic','system','both'],'both'],[['imported'],'imported'],[['system'],'system']]){
+  results.push("click starts at the exact fractional time on the whole timeline in the one shared dock; pause and navigation release work");
+  for(const [modes,expected] of [[['mic','system','both'],'both'],[['system'],'system']]){
     stage=`audio-mode-${expected}`;
     await page.evaluate(modes=>{window.__mon.audioSummary.modes=modes;window.__mon.emitPlain("minutes-version-changed");},modes);
     await page.waitForFunction(modes=>JSON.stringify(window.__mon.audioSummary.modes)===JSON.stringify(modes),modes);
-    // Metadata refresh is awaited through a new read, not a second native play.
-    await page.getByRole("tab",{name:"文字起こし",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();
+    // Re-enter to reload the shared track settings from the new saved source.
+    await close();
     await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-    check(await page.evaluate(expected=>window.__mon.intervalCalls.filter(c=>c.cmd==="prepare_markdown_interval_playback").at(-1).args.request.mode===expected,expected),"available audio mode ignored");
+    check(await page.evaluate(expected=>window.__mon.intervalCalls.filter(c=>c.cmd==="prepare_meeting_playback").at(-1).args.request.mode===expected,expected),"available audio mode ignored");
     await close();
   }
-  results.push("both, imported and PC-only saved sources use the corresponding native mode without a model");
+  results.push("both and PC-only saved sources use the corresponding native mode without a model");
   stage="no-audio-edit";
-  const played=await count("prepare_markdown_interval_playback");
+  const played=await count("prepare_meeting_playback");
   await page.evaluate(()=>{window.__mon.audioSummary.modes=[];window.__mon.emitPlain("minutes-version-changed");});await link().waitFor({state:"hidden"});
-  check(await panel().getByText("点検区間",{exact:true}).isVisible()&&await count("prepare_markdown_interval_playback")===played,"no-audio text disappeared or played");
+  check(await panel().getByText("点検区間",{exact:true}).isVisible()&&await count("prepare_meeting_playback")===played,"no-audio text disappeared or played");
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();
   const input=()=>panel().getByRole("textbox",{name:"議事録のMarkdown本文",exact:true});await input().fill("# 音声なしでも人間が編集\n");
   check(await input().inputValue()==="# 音声なしでも人間が編集\n"&&await page.evaluate(()=>!window.__mon.plainCalls.some(c=>c.cmd==="save_minutes_markdown")),"audio availability affected human input or autosaved");
@@ -50,7 +50,7 @@ async page=>{
   results.push("no audio leaves interval text visible and never blocks or autosaves human Markdown editing");
   stage="wrong-interval";
   await page.evaluate(()=>window.__mon.intervalMode="wrong");const readBefore=await count("read_playback_chunk");await link().click();
-  await page.getByRole("alert").filter({hasText:"確認したMarkdown区間"}).waitFor();
+  await page.getByRole("alert").filter({hasText:"会議全体の再生情報"}).waitFor();
   check(await count("read_playback_chunk")===readBefore,"mismatched interval played PCM");await player().getByRole("button",{name:"再生",exact:true}).waitFor();
   await page.evaluate(()=>window.__mon.intervalMode="success");await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();await close();
   results.push("wrong native interval is rejected and closed before reading PCM; explicit retry succeeds");
@@ -62,9 +62,9 @@ async page=>{
   results.push("interval playback automatically skips missing time and reads saved PCM without a gap dialog or fabricated padding");
   stage="cancel-held-interval";
   await page.evaluate(()=>window.__mon.intervalMode="held");const closedBefore=await count("close_playback");await link().click();await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).waitFor();
-  const countBefore=await count("read_playback_chunk");await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).click();await player().waitFor({state:"hidden"});
+  const countBefore=await count("read_playback_chunk");await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).click();await player().getByRole("slider",{name:"会議全体の再生位置",exact:true}).waitFor();
   await page.evaluate(()=>window.__mon.intervalRelease());await page.waitForFunction(before=>window.__mon.intervalCalls.filter(c=>c.cmd==="close_playback").length>before,closedBefore);
-  check(await count("read_playback_chunk")===countBefore&&await player().count()===0,"late cancelled result played or revived controls");
+  check(await count("read_playback_chunk")===countBefore&&await player().getByRole("slider",{name:"会議全体の再生位置",exact:true}).isDisabled(),"late cancelled result played or revived controls");
   results.push("cancelling a pending verification releases its late native token without reviving playback");
   await page.evaluate(()=>window.__mon.intervalMode="success");await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
   await page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true}).click();await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();

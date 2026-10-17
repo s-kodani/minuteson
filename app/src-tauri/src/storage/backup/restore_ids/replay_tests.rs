@@ -17,9 +17,15 @@ fn fixture_with_archive() -> Fixture {
     fixture(&storage, "replay-first");
     fixture(&storage, "replay-second");
     let archive = output.path().join("source.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
-    let source =
-        archive::read(&mut File::open(archive).unwrap(), output.path(), &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(archive).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     Fixture {
         _root: root,
         storage,
@@ -36,7 +42,7 @@ fn pending<'a>(result: Result<BatchPreparation<'a>, String>) -> RestoreIds<'a> {
 }
 fn mappings(ids: &RestoreIds<'_>) -> Vec<IdentityMap> {
     let mut all = vec![];
-    ids.visit_mappings(&|| false, |map| {
+    ids.visit_mappings(&crate::test_support::never_cancelled, |map| {
         all.push(map);
         Ok(())
     })
@@ -49,22 +55,28 @@ fn reserve(f: &Fixture, db: &mut Connection) -> Vec<IdentityMap> {
         f.output.path(),
         &f.batch,
         db,
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     assert!(!ids.reused());
     let maps = mappings(&ids);
     let mut tx = db.transaction().unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.commit().unwrap();
     maps
 }
 fn error(f: &Fixture, db: &Connection) -> String {
-    RestoreIds::prepare_for_batch(&f.source, f.output.path(), &f.batch, db, &|| false)
-        .err()
-        .expect("must reject, not mint replacement IDs")
+    RestoreIds::prepare_for_batch(
+        &f.source,
+        f.output.path(),
+        &f.batch,
+        db,
+        &crate::test_support::never_cancelled,
+    )
+    .err()
+    .expect("must reject, not mint replacement IDs")
 }
 fn rehash(db: &Connection, batch: &str) {
     let mut hash = Sha256::new();
@@ -110,7 +122,7 @@ fn persisted_ids_replay_after_closing_source_destination_and_private_registry() 
     let source = archive::read(
         &mut File::open(output.path().join("source.monbackup")).unwrap(),
         output.path(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
@@ -120,16 +132,16 @@ fn persisted_ids_replay_after_closing_source_destination_and_private_registry() 
         output.path(),
         &batch,
         &db,
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     assert!(ids.reused());
     assert_eq!(mappings(&ids), original);
     let stage = ids.stage.path().to_path_buf();
     let mut tx = db.transaction().unwrap();
     assert_eq!(
-        BatchPlan::new(&ids, &|| false)
+        BatchPlan::new(&ids, &crate::test_support::never_cancelled)
             .unwrap()
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap(),
         BatchState::Prepared
     );
@@ -172,8 +184,14 @@ fn published_batch_is_terminal_even_when_its_meetings_have_been_deleted() {
     )
     .unwrap();
     for _ in 0..2 {
-        match RestoreIds::prepare_for_batch(&f.source, f.output.path(), &f.batch, &db, &|| false)
-            .unwrap()
+        match RestoreIds::prepare_for_batch(
+            &f.source,
+            f.output.path(),
+            &f.batch,
+            &db,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
         {
             BatchPreparation::AlreadyPublished {
                 batch_id,
@@ -203,7 +221,7 @@ fn explicit_new_batch_uses_distinct_ids_and_reserves_other_pending_batches() {
         f.output.path(),
         &batch,
         &db,
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     assert!(!ids.reused());
     for map in mappings(&ids) {
@@ -220,9 +238,9 @@ fn explicit_new_batch_uses_distinct_ids_and_reserves_other_pending_batches() {
             .unwrap());
     }
     let mut tx = db.transaction().unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.commit().unwrap();
     assert_eq!(
@@ -392,7 +410,7 @@ fn replay_cancellation_preserves_reservation_and_cleans_only_owned_registry() {
         f.output.path(),
         &f.batch,
         &db,
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     assert_eq!(mappings(&ids), original);
 }

@@ -10,8 +10,8 @@
       "../../probes/speaker-embedding/.build/mon-speaker-embedding": "mon-speaker-embedding",
       "../../.cache/third-party-notices/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt",
       "../../.cache/third-party-notices/third-party-inventory.json": "third-party-inventory.json",
-      "../../.cache/whisper-runtime/package/whisper-runtime.tar": "asr-runtime/whisper-runtime.tar",
-      "../../.cache/whisper-runtime/package/runtime-index.json": "asr-runtime/runtime-index.json"
+      "../../.cache/whisper-metal-runtime/package/whisper-runtime.tar": "asr-runtime/whisper-runtime.tar",
+      "../../.cache/whisper-metal-runtime/package/runtime-index.json": "asr-runtime/runtime-index.json"
     },
     "macOS": {
       "minimumSystemVersion": "15.0",

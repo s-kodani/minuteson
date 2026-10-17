@@ -101,7 +101,7 @@ mod tests {
 
     fn lease() -> DataMaintenanceLease {
         crate::analysis_worker::AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap()
     }
 
@@ -114,7 +114,7 @@ mod tests {
                 &f.storage,
                 &f.meeting,
                 &lease,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             let preview = p.preview();
@@ -136,7 +136,13 @@ mod tests {
                     }
                 )
                 .is_err());
-            assert!(audio(&f.storage, &lease, &preview.operation_id, &|| false).unwrap());
+            assert!(audio(
+                &f.storage,
+                &lease,
+                &preview.operation_id,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap());
             assert_eq!(f.path.exists(), !started);
             assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
             assert!(super::super::audio::operations::listing(&f.storage)
@@ -157,7 +163,7 @@ mod tests {
                 &f.package,
                 &f.review,
                 &lease,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             let preview = p.preview();

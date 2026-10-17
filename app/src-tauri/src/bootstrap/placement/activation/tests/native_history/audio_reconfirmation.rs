@@ -14,7 +14,13 @@ fn lease(
     operation: &str,
 ) -> crate::analysis_worker::data_maintenance::DataMaintenanceLease {
     AnalysisController::default()
-        .begin_audio_deletion_maintenance(storage, operation, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn returned(f: &NativeFixture, current: &Path) -> PathBuf {
@@ -24,8 +30,20 @@ fn returned(f: &NativeFixture, current: &Path) -> PathBuf {
 }
 fn consent(storage: &Storage, original: &str) -> String {
     let owner = lease(storage, original);
-    assert!(intent::removal::run(storage, original, &owner, &|| false).is_err());
-    let review = reconfirmation::Review::capture(storage, original, &owner, &|| false).unwrap();
+    assert!(intent::removal::run(
+        storage,
+        original,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = reconfirmation::Review::capture(
+        storage,
+        original,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(
         !review
             .preview(&Uuid::new_v4().to_string())
@@ -33,14 +51,37 @@ fn consent(storage: &Storage, original: &str) -> String {
             .execute_allowed
     );
     let operation = Uuid::new_v4().to_string();
-    reconfirmation::accept(storage, &operation, &review, policy(), &owner, &|| false).unwrap();
-    intent::removal::start(storage, &operation, &owner, &|| false).unwrap();
-    intent::removal::run(storage, &operation, &owner, &|| false).unwrap();
-    assert!(
-        intent::removal::completion::finish(storage, &operation, &owner, &|| false)
-            .unwrap()
-            .completed()
-    );
+    reconfirmation::accept(
+        storage,
+        &operation,
+        &review,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::start(
+        storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::run(
+        storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(intent::removal::completion::finish(
+        storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     operation
 }
 
@@ -101,18 +142,50 @@ fn audio_reconfirmation_after_move_accepts_then_cold_resumes_same_current_plan()
     let (b, storage) = f.open();
     let original = f.live_record(&storage);
     let owner = lease(&storage, &f.deletion);
-    let review = reconfirmation::Review::capture(&storage, &f.deletion, &owner, &|| false).unwrap();
+    let review = reconfirmation::Review::capture(
+        &storage,
+        &f.deletion,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let operation = Uuid::new_v4().to_string();
-    reconfirmation::accept(&storage, &operation, &review, policy(), &owner, &|| false).unwrap();
+    reconfirmation::accept(
+        &storage,
+        &operation,
+        &review,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(file.exists());
     drop(owner);
     drop(storage);
     drop(b);
     let (b, storage) = f.open();
     let owner = lease(&storage, &operation);
-    intent::removal::start(&storage, &operation, &owner, &|| false).unwrap();
-    intent::removal::run(&storage, &operation, &owner, &|| false).unwrap();
-    intent::removal::completion::finish(&storage, &operation, &owner, &|| false).unwrap();
+    intent::removal::start(
+        &storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::run(
+        &storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::completion::finish(
+        &storage,
+        &operation,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!file.exists());
     assert_eq!(f.live_record(&storage), original);
     drop(owner);
@@ -169,7 +242,13 @@ fn audio_reconfirmation_survives_further_owned_moves_and_does_not_move_old_file_
     assert_eq!(f.live_record(&storage), original);
     assert!(!storage.data_write_blocked());
     let owner = lease(&storage, &previous);
-    assert!(intent::removal::run(&storage, &previous, &owner, &|| false).is_err());
+    assert!(intent::removal::run(
+        &storage,
+        &previous,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     // A completed plan's old identity does not become an executable alias.
     let metadata = std::fs::metadata(current.join("meetings.sqlite3")).unwrap();
     assert!(metadata.ino() > 0);
@@ -188,7 +267,13 @@ fn audio_reconfirmation_refuses_linked_body_without_touching_external_data() {
     symlink(&external, &file).unwrap();
     let (b, storage) = f.open();
     let owner = lease(&storage, &f.deletion);
-    assert!(reconfirmation::Review::capture(&storage, &f.deletion, &owner, &|| false).is_err());
+    assert!(reconfirmation::Review::capture(
+        &storage,
+        &f.deletion,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(&external).unwrap(), b"KEEP EXTERNAL");
     assert!(file.is_symlink());
     drop(owner);

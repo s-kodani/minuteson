@@ -20,9 +20,11 @@ struct Fixture {
 fn delete(storage: &Storage, meeting: &str) -> String {
     let analysis = AnalysisController::default();
     let admission = analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let mut p = operations::Prepared::fresh(storage, meeting, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::fresh(storage, meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     let preview = p.preview();
     let done = p
         .execute(
@@ -30,7 +32,7 @@ fn delete(storage: &Storage, meeting: &str) -> String {
             &admission,
             &preview.confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -120,25 +122,43 @@ fn deletion_startup_rejects_row_only_completion_without_rewriting_or_granting_re
     let operation = uuid::Uuid::new_v4().to_string();
     {
         let db = storage.connection.lock().unwrap();
-        let scope = database::Scope::capture(&db, &meeting.id, "", &|| false).unwrap();
+        let scope =
+            database::Scope::capture(&db, &meeting.id, "", &crate::test_support::never_cancelled)
+                .unwrap();
         db.execute("INSERT INTO maintenance_operations VALUES(?1,?2,'delete_meeting','cleanup',NULL,?3,?4,1,'{}',NULL,1,1)",
             params![operation, meeting.id, scope.encode().unwrap(), scope.hash().unwrap()]).unwrap();
         // Test-only SQL primitives create a canonical former row-only shape.
         // This is a rejection fixture, not a production conversion path.
-        database::erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
-        database::finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
-        database::verify_rows_absent(&db, &scope, &|| false).unwrap();
+        database::erase_confirmed_rows(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        database::finish_database_purge(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        database::verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(
             completed_attention(&db, &storage.managed_anchor, &storage.native_models_root).unwrap(),
             vec![(operation.clone(), INVALID)]
         );
     }
     let saved = evidence(&storage);
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
-    assert!(
-        crate::storage::deletion::relocation::Source::capture(&storage, &snapshot, &|| false)
-            .is_err()
-    );
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(crate::storage::deletion::relocation::Source::capture(
+        &storage,
+        &snapshot,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     drop(snapshot);
     assert_eq!(evidence(&storage), saved);
     let root = storage.root().to_owned();
@@ -185,6 +205,24 @@ fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_
     let mut f = Fixture::new();
     {
         let db = f.storage().connection.lock().unwrap();
+        // This fixture must have a contiguous v27 history, rather than a
+        // current voice-registry entry above the removed historical suffix.
+        for table in [
+            "voice_matches",
+            "voice_samples",
+            "voice_people",
+            "voice_policies",
+        ] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            db.execute_batch(&format!("DROP TABLE {table};")).unwrap();
+        }
+        db.execute("DELETE FROM schema_migrations WHERE version=32", [])
+            .unwrap();
         crate::storage::edit_recovery::remove_schema_for_test(&db);
     }
     let root = f.storage().root().to_owned();
@@ -216,12 +254,25 @@ fn finish_pending(f: &Fixture) {
 fn finish_operation(storage: &Storage, operation: &str) {
     let analysis = AnalysisController::default();
     let admission = analysis
-        .begin_deletion_maintenance(storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut p = operations::Prepared::pending(storage, operation, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::pending(storage, operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(p.preview().reconfirmation_allowed && !p.preview().execute_allowed);
-    p.review_remaining(storage, &admission, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        storage,
+        &admission,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = p.preview();
     assert!(preview.row_phase_committed && preview.unregistered_count > 0);
     let done = p
@@ -230,7 +281,7 @@ fn finish_operation(storage: &Storage, operation: &str) {
             &admission,
             &preview.confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -251,14 +302,41 @@ fn deletion_startup_canonical_file_completion_keeps_existing_pending_fence_witho
     f.cold();
     let controller = AnalysisController::default();
     let admission = controller
-        .begin_deletion_maintenance(f.storage(), &f.operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            f.storage(),
+            &f.operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let receipt = completion::read(f.storage(), &f.operation, &|| false).unwrap();
-    let review = renewal::Review::capture_database(f.storage(), &receipt, &|| false).unwrap();
-    let mut files =
-        renewal::accept_database(f.storage(), &receipt, &review, true, &admission, &|| false)
-            .unwrap();
-    removal::run(f.storage(), &mut files, &|| false).unwrap();
+    let receipt = completion::read(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let review = renewal::Review::capture_database(
+        f.storage(),
+        &receipt,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut files = renewal::accept_database(
+        f.storage(),
+        &receipt,
+        &review,
+        true,
+        &admission,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    removal::run(
+        f.storage(),
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(admission);
     let before = evidence(f.storage());
     f.cold();
@@ -274,11 +352,22 @@ fn deletion_startup_canonical_file_completion_keeps_existing_pending_fence_witho
     assert!(own.error_code.is_none());
     assert_eq!(evidence(f.storage()), before);
     assert!(!contains(&f.storage().connection.lock().unwrap(), &f.operation).unwrap());
-    let mut p = operations::Prepared::pending(f.storage(), &f.operation, &|| false).unwrap();
+    let mut p = operations::Prepared::pending(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = p.preview();
     assert!(preview.execute_allowed && !preview.reconfirmation_allowed);
     let admission = controller
-        .begin_deletion_maintenance(f.storage(), &f.operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            f.storage(),
+            &f.operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(
         p.execute(
@@ -286,7 +375,7 @@ fn deletion_startup_canonical_file_completion_keeps_existing_pending_fence_witho
             &admission,
             &preview.confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -491,7 +580,12 @@ fn deletion_startup_recreated_deleted_database_rows_are_retained_without_adoptin
         Some(INVALID)
     );
     assert!(f.storage().get_meeting(&f.meeting).unwrap().is_some());
-    let p = operations::Prepared::pending(f.storage(), &f.operation, &|| false).unwrap();
+    let p = operations::Prepared::pending(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!p.preview().execute_allowed && !p.preview().reconfirmation_allowed);
     assert_eq!(evidence(f.storage()), before);
 }
@@ -513,7 +607,12 @@ fn deletion_startup_exact_sibling_regular_files_links_and_neighbor_names_are_not
                 .as_deref(),
             Some(if link { UNINSPECTABLE } else { REAPPEARED })
         );
-        let p = operations::Prepared::pending(f.storage(), &f.operation, &|| false).unwrap();
+        let p = operations::Prepared::pending(
+            f.storage(),
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!p.preview().execute_allowed && !p.preview().reconfirmation_allowed);
         assert!(std::fs::symlink_metadata(&f.reserved).is_ok());
         f.kept();
@@ -533,15 +632,31 @@ fn deletion_startup_completed_audits_are_verified_against_the_active_source_not_
 {
     let mut f = Fixture::new();
     f.reappear(false);
-    let source = completion::read(f.storage(), &f.operation, &|| false).unwrap();
-    let review = renewal::Review::capture_database(f.storage(), &source, &|| false).unwrap();
+    let source = completion::read(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let review = renewal::Review::capture_database(
+        f.storage(),
+        &source,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let analysis = AnalysisController::default();
     let admission = analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let mut files =
-        renewal::accept_database(f.storage(), &source, &review, true, &admission, &|| false)
-            .unwrap();
+    let mut files = renewal::accept_database(
+        f.storage(),
+        &source,
+        &review,
+        true,
+        &admission,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let audit = files
         .progress
         .confirmation
@@ -549,9 +664,20 @@ fn deletion_startup_completed_audits_are_verified_against_the_active_source_not_
         .unwrap()
         .operation_id
         .clone();
-    removal::run(f.storage(), &mut files, &|| false).unwrap();
-    let mut complete = completion::start(f.storage(), &files, &|| false).unwrap();
-    completion::run(f.storage(), &mut complete, &|| false).unwrap();
+    removal::run(
+        f.storage(),
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut complete =
+        completion::start(f.storage(), &files, &crate::test_support::never_cancelled).unwrap();
+    completion::run(
+        f.storage(),
+        &mut complete,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     f.cold();
     assert!(operations::listing(f.storage()).unwrap().items.is_empty());
     assert!(!f.storage().data_write_blocked());
@@ -600,17 +726,25 @@ fn deletion_startup_final_ack_reappearance_keeps_attention_until_a_new_review() 
     // validated receipt, and checks again after the final checkpoint event.
     std::fs::remove_file(f.reserved.join("late")).unwrap();
     std::fs::remove_dir(&f.reserved).unwrap();
-    let mut receipt = completion::read(f.storage(), &f.operation, &|| false).unwrap();
+    let mut receipt = completion::read(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let hit = Cell::new(false);
-    assert!(
-        completion::run_observed(f.storage(), &mut receipt, &|| false, &|event| {
+    assert!(completion::run_observed(
+        f.storage(),
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+        &|event| {
             if event == "ackCheckpointed" {
                 hit.set(true);
                 f.reappear(true);
             }
-        })
-        .is_err()
-    );
+        }
+    )
+    .is_err());
     assert!(hit.get());
     assert_eq!(
         operations::listing(f.storage()).unwrap().items[0]
@@ -677,11 +811,23 @@ fn deletion_startup_current_v3_scope_switch_keeps_reserved_names_after_completio
             "audio/flac",
         )
         .unwrap();
-    let census = Census::capture(storage, &meeting, &|| false).unwrap();
+    let census = Census::capture(storage, &meeting, &crate::test_support::never_cancelled).unwrap();
     let operation = uuid::Uuid::new_v4().to_string();
-    let prepared = intent::prepare(storage, &operation, &census, &|| false).unwrap();
+    let prepared = intent::prepare(
+        storage,
+        &operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let reviewed = removal::Reviewed::confirm(&census, false).unwrap();
-    let mut files = removal::start(storage, &prepared, &reviewed, &|| false).unwrap();
+    let mut files = removal::start(
+        storage,
+        &prepared,
+        &reviewed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let reserved = storage
         .root()
         .join(format!("meetings/.mon-delete-{operation}-2"));
@@ -698,15 +844,30 @@ fn deletion_startup_current_v3_scope_switch_keeps_reserved_names_after_completio
     std::fs::remove_dir(&reserved).unwrap();
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, b"NEW CURRENT TREE").unwrap();
-    let review = renewal::Review::capture(storage, &files, &|| false).unwrap();
+    let review =
+        renewal::Review::capture(storage, &files, &crate::test_support::never_cancelled).unwrap();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    renewal::accept(storage, &mut files, &review, true, &lease, &|| false).unwrap();
+    renewal::accept(
+        storage,
+        &mut files,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(lease);
-    removal::run(storage, &mut files, &|| false).unwrap();
-    let mut complete = completion::start(storage, &files, &|| false).unwrap();
-    completion::run(storage, &mut complete, &|| false).unwrap();
+    removal::run(storage, &mut files, &crate::test_support::never_cancelled).unwrap();
+    let mut complete =
+        completion::start(storage, &files, &crate::test_support::never_cancelled).unwrap();
+    completion::run(
+        storage,
+        &mut complete,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     f.operation = operation;
     f.meeting = meeting;
     f.file = file;
@@ -736,7 +897,12 @@ fn deletion_startup_attention_schema_does_not_admit_shadow_tables_or_same_name_s
             .unwrap_err()
             .contains("一時オブジェクト"));
         drop(db);
-        assert!(operations::Prepared::fresh(f.storage(), &f.other, &|| false).is_err());
+        assert!(operations::Prepared::fresh(
+            f.storage(),
+            &f.other,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&f.keep).unwrap(), b"KEEP");
         // Read the real table explicitly; the hostile TEMP fixture shadows
         // ordinary unqualified reads by design and must remain unadopted.
@@ -783,7 +949,12 @@ fn deletion_startup_reappearance_defers_mutable_recovery_and_never_relabels_unre
         "running"
     );
     assert!(f.storage().create_meeting("DENIED").is_err());
-    let p = operations::Prepared::pending(f.storage(), &f.operation, &|| false).unwrap();
+    let p = operations::Prepared::pending(
+        f.storage(),
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!p.preview().execute_allowed && p.preview().reconfirmation_allowed);
     let before = evidence(f.storage());
     let controller = AnalysisController::default();
@@ -800,14 +971,26 @@ fn deletion_startup_reappearance_defers_mutable_recovery_and_never_relabels_unre
     }
     let export = controller.begin_export().unwrap();
     assert!(controller
-        .begin_deletion_maintenance(f.storage(), &f.operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            f.storage(),
+            &f.operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     drop(export);
     let other_work = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(controller
-        .begin_deletion_maintenance(f.storage(), &f.operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            f.storage(),
+            &f.operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     drop(other_work);
     assert_eq!(evidence(f.storage()), before);

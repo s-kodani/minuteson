@@ -34,7 +34,9 @@ fn reappear(f: &NativeFixture) -> (PathBuf, PathBuf) {
 }
 fn review(storage: &Storage, operation: &str) -> (AnalysisController, operations::Prepared) {
     let controller = AnalysisController::default();
-    let p = operations::Prepared::pending(storage, operation, &|| false).unwrap();
+    let p =
+        operations::Prepared::pending(storage, operation, &crate::test_support::never_cancelled)
+            .unwrap();
     let preview = p.preview();
     assert!(!preview.execute_allowed && preview.reconfirmation_allowed);
     assert!(preview.row_phase_committed && !preview.keep_allowed);
@@ -53,7 +55,13 @@ fn deletion_relocated_reconfirmation_uses_new_current_root_consent_and_preserves
     assert!(storage.data_write_blocked());
     let (controller, mut p) = review(&storage, operation);
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(p
         .execute(
@@ -61,14 +69,19 @@ fn deletion_relocated_reconfirmation_uses_new_current_root_consent_and_preserves
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
     assert!(target.exists());
     assert!(audits(&storage).is_empty());
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = p.preview();
     assert!(preview.execute_allowed && preview.row_phase_committed);
     assert_eq!(preview.unregistered_count, 1);
@@ -79,7 +92,7 @@ fn deletion_relocated_reconfirmation_uses_new_current_root_consent_and_preserves
             &lease,
             &preview.confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -87,15 +100,20 @@ fn deletion_relocated_reconfirmation_uses_new_current_root_consent_and_preserves
     assert_eq!(immutable(&storage, operation), old);
     assert!(target.exists());
     assert!(!p.preview().execute_allowed);
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let done = p
         .execute(
             &storage,
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -165,10 +183,21 @@ fn deletion_relocated_reconfirmation_saved_consent_survives_cold_stop_and_repeat
     let old = immutable(&storage, operation);
     let (controller, mut p) = review(&storage, operation);
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let stop = AtomicBool::new(false);
     assert!(p
         .execute(
@@ -194,9 +223,17 @@ fn deletion_relocated_reconfirmation_saved_consent_survives_cold_stop_and_repeat
     assert!(storage.data_write_blocked());
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut p = operations::Prepared::pending(&storage, operation, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::pending(&storage, operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(p.preview().execute_allowed);
     let done = p
         .execute(
@@ -204,7 +241,7 @@ fn deletion_relocated_reconfirmation_saved_consent_survives_cold_stop_and_repeat
             &lease,
             &p.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -219,16 +256,27 @@ fn deletion_relocated_reconfirmation_saved_consent_survives_cold_stop_and_repeat
     let (b, storage) = f.open();
     let (controller, mut p) = review(&storage, operation);
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     p.execute(
         &storage,
         &lease,
         &p.preview().confirmation_id,
         true,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap();
@@ -260,15 +308,26 @@ fn deletion_relocated_reconfirmation_cancel_and_inventory_change_never_publish_c
     let old = immutable(&storage, operation);
     let (controller, mut p) = review(&storage, operation);
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     let confirmation = p.preview().confirmation_id;
     assert!(p
         .review_remaining(&storage, &lease, &confirmation, &|| true)
         .is_err());
     assert_eq!(p.preview().confirmation_id, confirmation);
-    p.review_remaining(&storage, &lease, &confirmation, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &confirmation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(p
         .execute(
             &storage,
@@ -287,7 +346,7 @@ fn deletion_relocated_reconfirmation_cancel_and_inventory_change_never_publish_c
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -311,7 +370,13 @@ fn deletion_relocated_reconfirmation_all_precommit_boundaries_roll_back_audit_an
     let old = immutable(&storage, operation);
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     for event in [
         "reviewIntentStored",
@@ -354,10 +419,21 @@ fn deletion_relocated_reconfirmation_unowned_database_copy_has_no_review_or_dele
     let storage = Storage::open(root).unwrap();
     assert!(storage.data_write_blocked());
     let old = immutable(&storage, operation);
-    assert!(operations::Prepared::pending(&storage, operation, &|| false).is_err());
+    assert!(operations::Prepared::pending(
+        &storage,
+        operation,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let controller = AnalysisController::default();
     assert!(controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert_eq!(std::fs::read(file).unwrap(), b"UNOWNED COPY MUST REMAIN");
     assert_eq!(immutable(&storage, operation), old);
@@ -376,14 +452,27 @@ fn deletion_relocated_reconfirmation_external_link_is_never_censused_or_adopted(
     let (_b, storage) = f.open();
     let old = immutable(&storage, operation);
     assert!(storage.data_write_blocked());
-    let mut p = operations::Prepared::pending(&storage, operation, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::pending(&storage, operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(!p.preview().execute_allowed && !p.preview().reconfirmation_allowed);
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(p
-        .review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
+        .review_remaining(
+            &storage,
+            &lease,
+            &p.preview().confirmation_id,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(p
         .execute(
@@ -391,7 +480,7 @@ fn deletion_relocated_reconfirmation_external_link_is_never_censused_or_adopted(
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -417,16 +506,27 @@ fn deletion_relocated_reconfirmation_crash_child() {
     let storage = b.open_storage().unwrap();
     let (controller, mut p) = review(&storage, &operation);
     let lease = controller
-        .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            &operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let _ = p.execute(
         &storage,
         &lease,
         &p.preview().confirmation_id,
         true,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|phase| {
             if phase == "delete_scope_fixed" {
                 // No Drop/checkpoint, exactly after the durable new consent and
@@ -477,9 +577,17 @@ fn deletion_relocated_reconfirmation_crash_after_new_consent_restores_wal_and_re
     assert_eq!(recorded.len(), 1);
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_deletion_maintenance(&storage, operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut p = operations::Prepared::pending(&storage, operation, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::pending(&storage, operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(p.preview().execute_allowed);
     let done = p
         .execute(
@@ -487,7 +595,7 @@ fn deletion_relocated_reconfirmation_crash_after_new_consent_restores_wal_and_re
             &lease,
             &p.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();

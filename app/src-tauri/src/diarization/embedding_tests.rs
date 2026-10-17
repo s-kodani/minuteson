@@ -232,7 +232,9 @@ impl Fixture {
         std::fs::write(&model, mode).unwrap();
         let wave = root.join("run.wav");
         write_wave(&wave);
-        let proof = |path: &Path| Fingerprint::capture(path, &|| false).unwrap();
+        let proof = |path: &Path| {
+            Fingerprint::capture(path, &crate::test_support::never_cancelled).unwrap()
+        };
         let engine = SherpaConfig {
             executable: proof(Path::new(&std::env::var("MON_EMBEDDING_HELPER").unwrap())),
             segmentation_model: proof(&model),
@@ -295,7 +297,7 @@ fn feature_child_verifies_fixed_inputs_and_reaps_on_cancellation_timeout_overflo
             64000,
             &job,
             Duration::from_millis(if mode == "hang" { 200 } else { 5000 }),
-            &|| false,
+            &crate::test_support::never_cancelled,
         );
         match mode {
             "ready" => assert_eq!(
@@ -361,7 +363,8 @@ fn feature_child_verifies_fixed_inputs_and_reaps_on_cancellation_timeout_overflo
             // test runner or another verification task.
             let helper = fixture.root().join("helper");
             std::fs::copy(&fixture.config.helper.path, &helper).unwrap();
-            fixture.config.helper = Fingerprint::capture(&helper, &|| false).unwrap();
+            fixture.config.helper =
+                Fingerprint::capture(&helper, &crate::test_support::never_cancelled).unwrap();
         }
         let path = match role {
             "model" => &fixture.engine.embedding_model.path,
@@ -379,7 +382,7 @@ fn feature_child_verifies_fixed_inputs_and_reaps_on_cancellation_timeout_overflo
                 64000,
                 &job,
                 Duration::from_secs(5),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err(),
             "{role}"
@@ -404,7 +407,8 @@ fn real_feature_child_repeats_exact_synthetic_features_with_fixed_library_model_
         chunk.copy_from_slice(&value.to_le_bytes());
     }
     std::fs::write(&wave_path, &bytes).unwrap();
-    let proof = |path: &Path| Fingerprint::capture(path, &|| false).unwrap();
+    let proof =
+        |path: &Path| Fingerprint::capture(path, &crate::test_support::never_cancelled).unwrap();
     let helper = proof(Path::new(&std::env::var("MON_EMBEDDING_HELPER").unwrap()));
     let library = proof(Path::new(
         &std::env::var("MON_EMBEDDING_REAL_LIBRARY").unwrap(),
@@ -448,7 +452,7 @@ fn real_feature_child_repeats_exact_synthetic_features_with_fixed_library_model_
             64000,
             &job,
             Duration::from_secs(30),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         .unwrap();
@@ -460,7 +464,9 @@ fn real_feature_child_repeats_exact_synthetic_features_with_fixed_library_model_
         }
         previous = Some(output);
     }
-    wave.verify(&|| false).unwrap();
-    engine.verify(&|| false).unwrap();
+    wave.verify(&crate::test_support::never_cancelled).unwrap();
+    engine
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(std::fs::read(wave_path).unwrap(), bytes);
 }

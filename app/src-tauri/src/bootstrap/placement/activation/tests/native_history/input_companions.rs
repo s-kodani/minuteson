@@ -151,7 +151,7 @@ fn closed_input_companions_two_owned_moves_keep_loss_and_diagnostics_and_fence_o
         let source_ledger = std::fs::read(source.join("input-notices.json")).unwrap();
         drop(lease);
         let maintenance = admission
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         f.select();
         drop(maintenance);
@@ -238,7 +238,7 @@ fn closed_input_companions_two_owned_moves_keep_loss_and_diagnostics_and_fence_o
         let next_ledger = std::fs::read(moved.join("input-notices.json")).unwrap();
         drop(lease);
         let maintenance = admission
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let next = f
             ._base
@@ -423,15 +423,17 @@ fn restored_input_delivery_two_owned_moves_keep_display_progress_and_original_pr
             seed(f.storage.as_ref().unwrap());
         let storage = f.storage.as_ref().unwrap();
         let archive = f._base.path().join("restored-notice-input.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let selected = storage
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         selected
             .publish(
                 storage,
                 &selected.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap();
@@ -486,7 +488,7 @@ fn restored_input_delivery_two_owned_moves_keep_display_progress_and_original_pr
         }
         drop(lease);
         let maintenance = admission
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         f.select();
         drop(maintenance);
@@ -542,7 +544,7 @@ fn restored_input_delivery_two_owned_moves_keep_display_progress_and_original_pr
             .unwrap();
         drop(lease);
         let maintenance = admission
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let next = f
             ._base

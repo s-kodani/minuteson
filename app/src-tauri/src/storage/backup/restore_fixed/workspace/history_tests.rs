@@ -36,18 +36,33 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
                 num_speakers: Some(1),
             }],
         };
-        f.storage.regenerate_analysis(&request, &|| false).unwrap();
-        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
+        f.storage
+            .regenerate_analysis(&request, &crate::test_support::never_cancelled)
+            .unwrap();
+        crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap();
         let trans = f.storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::transcription::process(&f.storage, &trans.id, &|| false, &|_| {})
-            .unwrap()
+        crate::transcription::process(
+            &f.storage,
+            &trans.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
+        .unwrap()
+        .unwrap();
+        crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
-        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
         let diar = f.storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::diarization::process(&f.storage, &diar.id, &|| false, &|_| {})
-            .unwrap()
+        crate::diarization::process(
+            &f.storage,
+            &diar.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
+        .unwrap()
+        .unwrap();
+        crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
-        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
         if later_edit {
             let mut payload = draft.payload.clone();
             payload
@@ -66,9 +81,10 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
         let output = tempfile::tempdir().unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
         let mut work = prepared(&fixed, output.path())
-            .with_processing_history(&fixed, &|| false)
+            .with_processing_history(&fixed, &crate::test_support::never_cancelled)
             .unwrap();
         let meeting = ids.get("meetings", "", &f.meeting).unwrap();
         let flow = crate::storage::analysis_flows::read_flow(&work.database, &meeting)
@@ -121,15 +137,19 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
             )
             .unwrap();
         assert_eq!(head, target.analysis_id);
-        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+        crate::storage::backup::validate_database(
+            &mut work.database,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(work);
         crate::storage::backup::restore_fixed::workspace::seal::SealedWorkspace::prepare(
             &fixed,
             output.path(),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
-        .verify(&|| false)
+        .verify(&crate::test_support::never_cancelled)
         .unwrap();
         assert_eq!(
             f.storage
@@ -144,18 +164,31 @@ fn fixture(complete: bool) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting) = crate::storage::analysis_flows::tests::fixture(root.path());
     storage.ensure_analysis_flow(&meeting).unwrap();
-    crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
+    crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     if complete {
         let trans = storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::transcription::process(&storage, &trans.id, &|| false, &|_| {})
-            .unwrap()
+        crate::transcription::process(
+            &storage,
+            &trans.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
+        .unwrap()
+        .unwrap();
+        crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
-        crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
         let diar = storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::diarization::process(&storage, &diar.id, &|| false, &|_| {})
-            .unwrap()
+        crate::diarization::process(
+            &storage,
+            &diar.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
+        .unwrap()
+        .unwrap();
+        crate::analysis_flow::advance(&storage, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
-        crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
     }
     let flow = storage.analysis_flow(&meeting).unwrap().unwrap();
     Fixture {
@@ -169,14 +202,20 @@ fn read(f: &Fixture, output: &Path) -> archive::VerifiedArchive {
     crate::storage::backup::restore_fixed::tests::read(&f.storage, output)
 }
 fn ids<'a>(source: &'a archive::VerifiedArchive, output: &Path) -> RestoreIds<'a> {
-    RestoreIds::prepare(source, output, &Uuid::new_v4().to_string(), &|| false).unwrap()
+    RestoreIds::prepare(
+        source,
+        output,
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn prepared(fixed: &FixedData<'_, '_>, output: &Path) -> FixedWorkspace {
-    FixedWorkspace::prepare(fixed, output, &|| false)
+    FixedWorkspace::prepare(fixed, output, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_speech_artifacts(fixed, &|| false)
+        .with_speech_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_generation_artifacts(fixed, &|| false)
+        .with_generation_artifacts(fixed, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn root_operations(db: &Connection, flow: &AnalysisFlow) {
@@ -206,7 +245,7 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_published_
     let output = tempfile::tempdir().unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     for name in [
         "fake-cli",
         "model.bin",
@@ -217,7 +256,7 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_published_
         std::fs::remove_file(f.root.path().join(name)).unwrap();
     }
     let mut work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let stage = work.stage.path().to_path_buf();
     let meeting = ids.get("meetings", "", &f.meeting).unwrap();
@@ -255,7 +294,11 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_published_
     )
     .unwrap());
     tx.commit().unwrap();
-    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+    crate::storage::backup::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         f.storage
             .load_current_analysis(&f.meeting)
@@ -314,13 +357,17 @@ fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart
             .unwrap()
     }
     fn build(ids: &RestoreIds<'_>, output: &Path) -> FixedWorkspace {
-        let fixed = FixedData::new(ids, output, &|| false).unwrap();
+        let fixed = FixedData::new(ids, output, &crate::test_support::never_cancelled).unwrap();
         let mut work = prepared(&fixed, output)
-            .with_processing_history(&fixed, &|| false)
+            .with_processing_history(&fixed, &crate::test_support::never_cancelled)
             .unwrap()
-            .with_provenance(&fixed, &|| false)
+            .with_provenance(&fixed, &crate::test_support::never_cancelled)
             .unwrap();
-        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+        crate::storage::backup::validate_database(
+            &mut work.database,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         work
     }
     let (f, _outside, external) = exported_fixture();
@@ -335,14 +382,14 @@ fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart
         output.path(),
         &batch,
         &target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     {
         let mut db = target.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
-        BatchPlan::new(&ids, &|| false)
+        BatchPlan::new(&ids, &crate::test_support::never_cancelled)
             .unwrap()
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap();
         tx.commit().unwrap();
     }
@@ -388,7 +435,7 @@ fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart
     let source = archive::read(
         &mut File::open(output.path().join("fixed.monbackup")).unwrap(),
         output.path(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
@@ -397,7 +444,7 @@ fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart
         output.path(),
         &batch,
         &target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     ));
     let second = build(&ids, output.path());
     for (table, original) in expected {
@@ -429,16 +476,22 @@ fn persisted_ids_reject_wrong_derived_flow_operation_even_with_rehashed_ledger()
     let source = read(&f, output.path());
     let batch = Uuid::new_v4().to_string();
     let mut db = portable::schema(MIGRATIONS.len()).unwrap();
-    let ids = match RestoreIds::prepare_for_batch(&source, output.path(), &batch, &db, &|| false)
-        .unwrap()
+    let ids = match RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &batch,
+        &db,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
     {
         BatchPreparation::Pending(ids) => ids,
         _ => panic!("new batch expected"),
     };
     let mut tx = db.transaction().unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.commit().unwrap();
     drop(ids);
@@ -467,9 +520,15 @@ fn persisted_ids_reject_wrong_derived_flow_operation_even_with_rehashed_ledger()
         params![format!("{:x}", hash.finalize())],
     )
     .unwrap();
-    let error = RestoreIds::prepare_for_batch(&source, output.path(), &batch, &db, &|| false)
-        .err()
-        .unwrap();
+    let error = RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &batch,
+        &db,
+        &crate::test_support::never_cancelled,
+    )
+    .err()
+    .unwrap();
     assert!(error.contains("派生操作ID"), "{error}");
 }
 
@@ -480,7 +539,7 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
     let output = tempfile::tempdir().unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     for name in [
         "fake-cli",
         "model.bin",
@@ -493,7 +552,9 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
     for name in ["llama-completion", "model.gguf"] {
         std::fs::remove_file(f.root.path().join("markdown-worker").join(name)).unwrap();
     }
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let db = sealed.connection();
     let meeting = ids.get("meetings", "", &f.meeting).unwrap();
     let flow = crate::storage::analysis_flows::read_flow(db, &meeting)
@@ -525,7 +586,9 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
     )
     .unwrap());
     tx.commit().unwrap();
-    sealed.verify(&|| false).unwrap();
+    sealed
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(std::fs::read(&external).unwrap(), b"external edit");
     assert_eq!(
         f.storage.analysis_flow(&f.meeting).unwrap().unwrap().stage,
@@ -541,7 +604,11 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
     let path = sealed.root_path().unwrap().join(omitted);
     assert!(!path.exists());
     std::fs::write(&path, b"must remain omitted").unwrap();
-    assert!(sealed.verify(&|| false).err().unwrap().contains("除外"));
+    assert!(sealed
+        .verify(&crate::test_support::never_cancelled)
+        .err()
+        .unwrap()
+        .contains("除外"));
 }
 
 #[test]
@@ -558,14 +625,14 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
         output.path(),
         &batch,
         &existing.storage.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     {
         crate::storage::backup::restore_ids::BatchPreparation::Pending(ids) => ids,
         _ => panic!(),
     };
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     for name in [
         "fake-cli",
         "model.bin",
@@ -578,19 +645,22 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
     for name in ["llama-completion", "model.gguf"] {
         std::fs::remove_file(f.root.path().join("markdown-worker").join(name)).unwrap();
     }
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let before = all_rows(&existing.storage.connection.lock().unwrap());
     assert!(matches!(
         existing
             .storage
-            .publish_restore(&sealed, &ids, &|| false)
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
             .unwrap(),
         Publication::Published { meetings: 1, .. }
     ));
     let meeting = ids.get("meetings", "", &f.meeting).unwrap();
     {
         let mut db = existing.storage.connection.lock().unwrap();
-        crate::storage::backup::validate_database(&mut db, &|| false).unwrap();
+        crate::storage::backup::validate_database(&mut db, &crate::test_support::never_cancelled)
+            .unwrap();
         let after = all_rows(&db);
         for (index, table) in crate::storage::backup::portable::TABLES
             .iter()
@@ -627,7 +697,11 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
                 assert!(!path.exists());
             } else {
                 assert_eq!(
-                    crate::storage::backup::digest_file(&path, &|| false).unwrap(),
+                    crate::storage::backup::digest_file(
+                        &path,
+                        &crate::test_support::never_cancelled
+                    )
+                    .unwrap(),
                     (
                         row.get::<_, i64>(1).unwrap() as u64,
                         row.get::<_, String>(2).unwrap()
@@ -666,7 +740,7 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
             output.path(),
             &batch,
             &reopened.connection.lock().unwrap(),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap(),
         crate::storage::backup::restore_ids::BatchPreparation::AlreadyPublished { .. }
@@ -707,9 +781,9 @@ fn processing_history_interrupts_queued_retry_and_prepared_flow_without_losing_c
     let output = tempfile::tempdir().unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let meeting = ids.get("meetings", "", &f.meeting).unwrap();
     let flow = crate::storage::analysis_flows::read_flow(&work.database, &meeting)
@@ -729,7 +803,11 @@ fn processing_history_interrupts_queued_retry_and_prepared_flow_without_losing_c
         Some(ids.get("processing_jobs", &f.meeting, &parent.id).unwrap())
     );
     root_operations(&work.database, &flow);
-    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+    crate::storage::backup::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(f.storage.get_job(&child.id).unwrap(), child);
     assert_eq!(f.storage.get_job(&parent.id).unwrap(), parent);
 }
@@ -749,9 +827,9 @@ fn processing_history_blocks_pending_flow_with_no_models_or_jobs() {
     };
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let flow = crate::storage::analysis_flows::read_flow(
         &work.database,
@@ -830,9 +908,14 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    crate::storage::markdown_generation_tests::process(&f.storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    crate::storage::markdown_generation_tests::process(
+        &f.storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let body = f.storage.get_minutes_markdown(&f.meeting).unwrap().unwrap();
     let saved = f
         .storage
@@ -884,9 +967,9 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
     let draft = f.storage.get_minutes_markdown(&f.meeting).unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     for old in &original {
         let new = ids.get("export_records", &f.meeting, &old.id).unwrap();
@@ -919,7 +1002,11 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
         );
         assert_ne!(old.id, new);
     }
-    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+    crate::storage::backup::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
     assert_eq!(f.storage.get_minutes_markdown(&f.meeting).unwrap(), draft);
     assert_eq!(f.storage.exports(&f.meeting).unwrap().len(), 2);
@@ -944,13 +1031,17 @@ fn restore_provenance_native_completed_speech_generation_and_export_keep_normal_
     let output = tempfile::tempdir().unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap()
-        .with_provenance(&fixed, &|| false)
+        .with_provenance(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
-    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+    crate::storage::backup::validate_database(
+        &mut work.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for domain in [
         "processing_jobs",
         "job_checkpoints",
@@ -984,7 +1075,8 @@ fn processing_history_rejects_altered_target_plan_job_state_and_export_evidence(
     let source = read(&f, output.path());
     for change in ["plan", "state", "export"] {
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
         let work = prepared(&fixed, output.path());
         let stage = work.stage.path().to_path_buf();
         match change {
@@ -1004,7 +1096,9 @@ fn processing_history_rejects_altered_target_plan_job_state_and_export_evidence(
             }
             _ => unreachable!(),
         }
-        assert!(work.with_processing_history(&fixed, &|| false).is_err());
+        assert!(work
+            .with_processing_history(&fixed, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(!stage.exists());
         assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
     }
@@ -1039,15 +1133,18 @@ fn processing_history_rejects_unsupported_or_inconsistent_source_plan_and_root_o
                 &source,
                 output.path(),
                 &Uuid::new_v4().to_string(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err());
         } else {
             let ids = ids(&source, output.path());
-            let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+            let fixed =
+                FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
             let work = prepared(&fixed, output.path());
             let stage = work.stage.path().to_path_buf();
-            assert!(work.with_processing_history(&fixed, &|| false).is_err());
+            assert!(work
+                .with_processing_history(&fixed, &crate::test_support::never_cancelled)
+                .is_err());
             assert!(!stage.exists());
         }
         assert_eq!(
@@ -1072,7 +1169,7 @@ fn processing_history_cancellation_after_flow_update_cleans_only_the_owned_stage
     let marker = output.path().join("keep.txt");
     std::fs::write(&marker, b"keep").unwrap();
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepared(&fixed, output.path());
     let stage = work.stage.path().to_path_buf();
     let image = stage.join("fixed.sqlite3");
@@ -1107,9 +1204,9 @@ fn processing_history_preserves_unlinked_root_job_after_a_lost_handoff_without_a
         .execute("UPDATE analysis_flows SET transcription_job_id=NULL", [])
         .unwrap();
     let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
+        .with_processing_history(&fixed, &crate::test_support::never_cancelled)
         .unwrap();
     let flow = crate::storage::analysis_flows::read_flow(
         &work.database,
@@ -1177,11 +1274,11 @@ fn processing_history_rejects_bad_export_hash_path_draft_kind_or_unsettled_state
             _ => unreachable!(),
         }
         let ids = ids(&source, &dir);
-        let fixed = FixedData::new(&ids, &dir, &|| false).unwrap();
+        let fixed = FixedData::new(&ids, &dir, &crate::test_support::never_cancelled).unwrap();
         let work = prepared(&fixed, &dir);
         let stage = work.stage.path().to_path_buf();
         let error = work
-            .with_processing_history(&fixed, &|| false)
+            .with_processing_history(&fixed, &crate::test_support::never_cancelled)
             .err()
             .unwrap();
         assert!(error.contains("書き出し履歴"), "{change}: {error}");
@@ -1212,7 +1309,7 @@ fn processing_history_interrupts_each_runnable_or_interrupted_state_without_chan
             )
             .unwrap();
         let ids = ids(&source, &dir);
-        let fixed = FixedData::new(&ids, &dir, &|| false).unwrap();
+        let fixed = FixedData::new(&ids, &dir, &crate::test_support::never_cancelled).unwrap();
         let work = prepared(&fixed, &dir);
         let job = ids
             .get(
@@ -1222,7 +1319,9 @@ fn processing_history_interrupts_each_runnable_or_interrupted_state_without_chan
             )
             .unwrap();
         let before = crate::storage::jobs::read_fixed_input(&work.database, &job).unwrap();
-        let work = work.with_processing_history(&fixed, &|| false).unwrap();
+        let work = work
+            .with_processing_history(&fixed, &crate::test_support::never_cancelled)
+            .unwrap();
         let after = crate::storage::jobs::read_fixed_input(&work.database, &job).unwrap();
         assert_eq!(before, after);
         let restored = crate::storage::jobs::load_job(&work.database, &job)

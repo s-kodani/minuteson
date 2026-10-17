@@ -42,7 +42,9 @@ fn retired_source_keeps_reads_but_rejects_writes_and_new_stages_after_snapshot_d
     let f = Fixture::new();
     let saved = snapshot(&f);
     let stage = saved.stage.path().to_owned();
-    saved.retire_source_for_restart(&|| false).unwrap();
+    saved
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(saved);
     assert!(!stage.exists());
     assert!(f.storage.retired.load(Ordering::Acquire));
@@ -51,8 +53,14 @@ fn retired_source_keeps_reads_but_rejects_writes_and_new_stages_after_snapshot_d
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
     assert!(f.storage.create_meeting("旧保存先へは追加しない").is_err());
     assert!(f.storage.backup_stage().is_err());
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
-    assert!(f.storage.prepare_relocation_snapshot(&|| false).is_err());
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
+    assert!(f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     let db = f.storage.connection.lock().unwrap();
     for sql in [
         "UPDATE meetings SET title='変更しない'",
@@ -84,7 +92,9 @@ fn retired_source_exits_without_mutating_idle_or_queued_jobs() {
         .unwrap();
     let saved = snapshot(&f);
     let before = native_tables(&f.storage.connection.lock().unwrap());
-    saved.retire_source_for_restart(&|| false).unwrap();
+    saved
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .unwrap();
     f.storage.pause_for_exit().unwrap();
     drop(saved);
     f.storage.pause_for_exit().unwrap();
@@ -116,7 +126,9 @@ fn changed_source_files_prevent_retirement_without_authorizing_the_copy() {
     let f = Fixture::new();
     let saved = snapshot(&f);
     std::fs::write(f.path(), b"changed audio").unwrap();
-    assert!(saved.retire_source_for_restart(&|| false).is_err());
+    assert!(saved
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(!f.storage.retired.load(Ordering::Acquire));
     drop(saved);
     f.storage
@@ -160,8 +172,12 @@ fn retirement_is_idempotent_and_unwinding_does_not_release_the_read_only_fence()
     let f = Fixture::new();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let saved = snapshot(&f);
-        saved.retire_source_for_restart(&|| false).unwrap();
-        saved.retire_source_for_restart(&|| false).unwrap();
+        saved
+            .retire_source_for_restart(&crate::test_support::never_cancelled)
+            .unwrap();
+        saved
+            .retire_source_for_restart(&crate::test_support::never_cancelled)
+            .unwrap();
         panic!("publication attempt failed after source retirement");
     }));
     assert!(failure.is_err());
@@ -175,11 +191,15 @@ fn retirement_is_idempotent_and_unwinding_does_not_release_the_read_only_fence()
 fn uncertain_database_binding_overrides_retired_read_access() {
     let f = Fixture::new();
     let saved = snapshot(&f);
-    saved.retire_source_for_restart(&|| false).unwrap();
+    saved
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .unwrap();
     let db = f.storage.root.join("meetings.sqlite3");
     let held = f.storage.root.join("retained-database");
     std::fs::rename(&db, &held).unwrap();
-    assert!(saved.verify_source(&|| false).is_err());
+    assert!(saved
+        .verify_source(&crate::test_support::never_cancelled)
+        .is_err());
     drop(saved);
     assert!(f.storage.list_meetings().is_err());
     assert!(f.storage.create_meeting("不確定DBには書かない").is_err());

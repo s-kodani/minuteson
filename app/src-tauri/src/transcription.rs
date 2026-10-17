@@ -102,11 +102,19 @@ pub(crate) struct StartRequest {
 impl StartRequest {
     pub fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
         let engine = WhisperConfig {
-            executable: whisper::Fingerprint::capture(&self.executable_path, &|| false)?,
-            model: whisper::Fingerprint::capture(&self.model_path, &|| false)?,
+            executable: whisper::Fingerprint::capture(
+                &self.executable_path,
+                &crate::test_support::never_cancelled,
+            )?,
+            model: whisper::Fingerprint::capture(
+                &self.model_path,
+                &crate::test_support::never_cancelled,
+            )?,
             vad_model: self
                 .vad_model_path
-                .map(|path| whisper::Fingerprint::capture(&path, &|| false))
+                .map(|path| {
+                    whisper::Fingerprint::capture(&path, &crate::test_support::never_cancelled)
+                })
                 .transpose()?,
             threads: self.threads,
             use_gpu: self.use_gpu,
@@ -149,7 +157,13 @@ impl RetryRequest {
             return Err("再試行は1000回以内です。新しい解析として開始してください".into());
         }
         let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
-        retry_preflight(storage, &original, &spec, checkpoint.as_ref(), &|| false)?;
+        retry_preflight(
+            storage,
+            &original,
+            &spec,
+            checkpoint.as_ref(),
+            &crate::test_support::never_cancelled,
+        )?;
         storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
     }
 }
@@ -234,6 +248,29 @@ fn verify_saved_pcm(
     )
 }
 
+// Frozen per job so old checkpoints keep their original decoding settings.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum RecognitionPolicy {
+    SuppressNonSpeechV1,
+}
+
+// Frozen for new jobs only. `use_gpu` requests the engine's GPU backend; when
+// no device exists whisper.cpp selects CPU. It is not evidence of GPU use.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum AccelerationPolicy {
+    AutoMetalV1,
+}
+
+impl AccelerationPolicy {
+    fn configure(self, engine: &mut WhisperConfig) {
+        if cfg!(target_os = "macos") {
+            engine.use_gpu = true;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
@@ -245,6 +282,10 @@ struct Parameters {
     vocabulary: Option<crate::storage::VocabularySnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     known_input: Option<KnownInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recognition_policy: Option<RecognitionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acceleration_policy: Option<AccelerationPolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -456,7 +497,7 @@ pub(crate) fn enqueue_with_stamp(
     let extra = engine.prompt.clone();
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let parameters=Parameters{schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input};
+        let parameters=Parameters{schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::SuppressNonSpeechV1),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
         Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
@@ -480,7 +521,10 @@ pub(crate) fn process(
                 .map_or(true, |job| job.state != "running")
     };
     let attempt = (|| {
-        let runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+        let mut runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+        if let Some(policy) = parameters.acceleration_policy {
+            policy.configure(&mut runtime);
+        }
         runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
@@ -546,11 +590,12 @@ pub(crate) fn process(
                 Execution::Whisper(&parameters.engine),
                 &cancelled,
             )?;
-            if whisper::run_unit(
+            if whisper::run_unit_with_suppression(
                 &runtime,
                 &directory,
                 duration,
                 Duration::from_secs(1800),
+                parameters.recognition_policy.is_some(),
                 &cancelled,
             )?
             .is_none()
@@ -674,6 +719,14 @@ pub(crate) fn process(
         });
         check_source(storage, &spec, &parameters)?;
         let mut config = serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint","vocabulary":parameters.vocabulary});
+        if let Some(policy) = parameters.recognition_policy {
+            config["recognitionPolicy"] =
+                serde_json::to_value(policy).map_err(|e| e.to_string())?;
+        }
+        if let Some(policy) = parameters.acceleration_policy {
+            config["accelerationPolicy"] =
+                serde_json::to_value(policy).map_err(|e| e.to_string())?;
+        }
         if let Some(known) = &parameters.known_input {
             config["audioCoverage"] = serde_json::json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"});
         }
@@ -714,4 +767,62 @@ pub(crate) fn process(
         return Ok(None);
     }
     attempt
+}
+
+#[cfg(test)]
+mod recognition_policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn missing_policy_preserves_old_parameter_bytes_and_unknown_policies_are_rejected() {
+        let legacy = json!({"schemaVersion":1,"source":{"manifestAssetId":"manifest","manifestHash":"hash","tracks":[]},"engine":{"executable":{"path":"/cli","size":1,"sha256":"a".repeat(64)},"model":{"path":"/model","size":1,"sha256":"b".repeat(64)},"vadModel":null,"threads":1,"useGpu":false,"prompt":"用語"},"units":[]});
+        let old: Parameters = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(old.recognition_policy, None);
+        assert_eq!(old.acceleration_policy, None);
+        assert_eq!(serde_json::to_value(old).unwrap(), legacy);
+        let mut new = legacy;
+        new["recognitionPolicy"] = json!("suppressNonSpeechV1");
+        let decoded: Parameters = serde_json::from_value(new.clone()).unwrap();
+        assert_eq!(
+            decoded.recognition_policy,
+            Some(RecognitionPolicy::SuppressNonSpeechV1)
+        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), new);
+        new["recognitionPolicy"] = json!("unknownPolicy");
+        assert!(serde_json::from_value::<Parameters>(new).is_err());
+    }
+
+    #[test]
+    fn gpu_policy_is_optional_versioned_and_preserves_base_configuration() {
+        let base = WhisperConfig {
+            executable: whisper::Fingerprint {
+                path: "/cli".into(),
+                size: 1,
+                sha256: "a".repeat(64),
+            },
+            model: whisper::Fingerprint {
+                path: "/model".into(),
+                size: 1,
+                sha256: "b".repeat(64),
+            },
+            vad_model: None,
+            threads: 4,
+            use_gpu: false,
+            prompt: "登録用語".into(),
+        };
+        let mut configured = base.clone();
+        AccelerationPolicy::AutoMetalV1.configure(&mut configured);
+        assert_eq!(configured.use_gpu, cfg!(target_os = "macos"));
+        assert_eq!(configured.model, base.model);
+        assert_eq!(configured.executable, base.executable);
+        assert_eq!(configured.threads, base.threads);
+        assert_eq!(configured.prompt, base.prompt);
+        assert!(!base.use_gpu);
+        assert_eq!(
+            serde_json::to_value(AccelerationPolicy::AutoMetalV1).unwrap(),
+            json!("autoMetalV1")
+        );
+        assert!(serde_json::from_value::<AccelerationPolicy>(json!("unknownPolicy")).is_err());
+    }
 }

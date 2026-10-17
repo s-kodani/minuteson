@@ -55,7 +55,8 @@ impl Fixture {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        let report = model_inspection::inspect(&source_path, &|| false).unwrap();
+        let report =
+            model_inspection::inspect(&source_path, &crate::test_support::never_cancelled).unwrap();
         let storage = Storage::open(meetings.path().into()).unwrap();
         storage.create_meeting("KEEP").unwrap();
         let root = app_data.path().canonicalize().unwrap().join("models");
@@ -66,7 +67,7 @@ impl Fixture {
             &source_path,
             &package,
             &report.review_hash,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         Self {
@@ -87,7 +88,7 @@ impl Fixture {
             &uuid::Uuid::new_v4().to_string(),
             &self.package,
             &self.review,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
     }
     pub(crate) fn evidence(&self) -> String {
@@ -262,7 +263,15 @@ fn model_deletion_census_rejects_wrong_identity_root_review_or_noncanonical_oper
             id.as_str(),
         ),
     ] {
-        assert!(preview(&f.storage, root, token, pkg, review, &|| false).is_err());
+        assert!(preview(
+            &f.storage,
+            root,
+            token,
+            pkg,
+            review,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     assert_eq!(f.evidence(), before);
     assert!(!f.storage.root().join("models").exists());
@@ -468,14 +477,22 @@ fn model_deletion_census_supports_exact_legacy_app_data_child_without_scanning_m
     let legacy = Storage::open(f.root.parent().unwrap().to_path_buf()).unwrap();
     let meeting = legacy.create_meeting("LEGACY KEEP").unwrap();
     let package = uuid::Uuid::new_v4().to_string();
-    model_placement::place(&legacy, &f.root, &f.source, &package, &f.review, &|| false).unwrap();
+    model_placement::place(
+        &legacy,
+        &f.root,
+        &f.source,
+        &package,
+        &f.review,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let p = preview(
         &legacy,
         &f.root,
         &uuid::Uuid::new_v4().to_string(),
         &package,
         &f.review,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(p.entries.len(), 5);
@@ -495,7 +512,7 @@ fn model_deletion_census_supports_exact_legacy_app_data_child_without_scanning_m
         &uuid::Uuid::new_v4().to_string(),
         &package,
         &f.review,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(nested.is_dir());

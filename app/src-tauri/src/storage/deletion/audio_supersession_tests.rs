@@ -49,25 +49,43 @@ impl Fixture {
         )
         .unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let audio_operation = uuid::Uuid::new_v4().to_string();
         audio::intent::prepare(
             &storage,
             &audio_operation,
-            &audio::Census::capture(&storage, &meeting, &|| false).unwrap(),
+            &audio::Census::capture(&storage, &meeting, &crate::test_support::never_cancelled)
+                .unwrap(),
             audio::intent::Policy {
                 include_unregistered_audio: true,
                 retain_unclassified: true,
             },
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-        audio::intent::removal::start(&storage, &audio_operation, &lease, &|| false).unwrap();
-        audio::intent::removal::run(&storage, &audio_operation, &lease, &|| false).unwrap();
-        audio::intent::removal::completion::finish(&storage, &audio_operation, &lease, &|| false)
-            .unwrap();
+        audio::intent::removal::start(
+            &storage,
+            &audio_operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        audio::intent::removal::run(
+            &storage,
+            &audio_operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        audio::intent::removal::completion::finish(
+            &storage,
+            &audio_operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!path.exists());
         drop(lease);
         let db = storage.connection.lock().unwrap();
@@ -87,22 +105,43 @@ impl Fixture {
         }
     }
     fn begin(&self) -> completion::Receipt {
-        let c = files::Census::capture(&self.storage, &self.meeting, &|| false).unwrap();
+        let c = files::Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let reviewed = removal::Reviewed::confirm(&c, true).unwrap();
         let p = intent::prepare(
             &self.storage,
             &uuid::Uuid::new_v4().to_string(),
             &c,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let mut files = removal::start(&self.storage, &p, &reviewed, &|| false).unwrap();
-        removal::run(&self.storage, &mut files, &|| false).unwrap();
-        completion::start(&self.storage, &files, &|| false).unwrap()
+        let mut files = removal::start(
+            &self.storage,
+            &p,
+            &reviewed,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        removal::run(
+            &self.storage,
+            &mut files,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        completion::start(&self.storage, &files, &crate::test_support::never_cancelled).unwrap()
     }
     fn finish(&self) -> String {
         let mut receipt = self.begin();
-        completion::run(&self.storage, &mut receipt, &|| false).unwrap();
+        completion::run(
+            &self.storage,
+            &mut receipt,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         self.marker()
     }
     fn marker(&self) -> String {
@@ -132,9 +171,12 @@ impl Fixture {
             None
         );
         // Historical admission never broadens the ordinary native reader.
-        assert!(
-            audio::intent::removal::Receipt::load(&db, &self.audio_operation, &|| false).is_err()
-        );
+        assert!(audio::intent::removal::Receipt::load(
+            &db,
+            &self.audio_operation,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
     fn edit_marker(&self, marker: &str, edit: impl FnOnce(&mut Header)) {
         let db = self.storage.connection.lock().unwrap();
@@ -160,8 +202,17 @@ impl Fixture {
     }
     fn rejected(&mut self, marker: &str) {
         let db = self.storage.connection.lock().unwrap();
-        assert!(inspect(&db, &self.storage.managed_anchor, marker, &|| false).is_err());
-        assert!(audio::backup_deleted(&self.storage, &db, &|| false).is_err());
+        assert!(inspect(
+            &db,
+            &self.storage.managed_anchor,
+            marker,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
+        assert!(
+            audio::backup_deleted(&self.storage, &db, &crate::test_support::never_cancelled)
+                .is_err()
+        );
         drop(db);
         self.reopen();
         assert!(self.storage.data_write_blocked());
@@ -184,11 +235,16 @@ fn path_records(db: &Connection, op: &str) -> String {
 fn audio_supersession_actual_shared_controller_deletes_rows_without_rewriting_audio_consent_and_restart_is_writable(
 ) {
     let mut f = Fixture::new();
-    let mut prepared = operations::Prepared::fresh(&f.storage, &f.meeting, &|| false).unwrap();
+    let mut prepared = operations::Prepared::fresh(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = prepared.preview();
     assert!(preview.execute_allowed);
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let receipt = prepared
         .execute(
@@ -196,7 +252,7 @@ fn audio_supersession_actual_shared_controller_deletes_rows_without_rewriting_au
             &lease,
             &preview.confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -206,16 +262,24 @@ fn audio_supersession_actual_shared_controller_deletes_rows_without_rewriting_au
     f.unchanged_history();
     assert!(!f.directory.exists());
     let db = f.storage.connection.lock().unwrap();
-    inspect(&db, &f.storage.managed_anchor, &marker, &|| false).unwrap();
+    inspect(
+        &db,
+        &f.storage.managed_anchor,
+        &marker,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(
         superseded(&db, &f.storage.managed_anchor, &f.audio_operation, &|| {
             false
         })
         .unwrap()
     );
-    assert!(audio::backup_deleted(&f.storage, &db, &|| false)
-        .unwrap()
-        .is_empty());
+    assert!(
+        audio::backup_deleted(&f.storage, &db, &crate::test_support::never_cancelled)
+            .unwrap()
+            .is_empty()
+    );
     assert!(inspect(&db, &f.storage.managed_anchor, &marker, &|| true).is_err());
     drop(db);
     assert!(audio::intent::authorize_review(&f.storage, &f.audio_operation).is_err());
@@ -267,7 +331,12 @@ fn audio_supersession_cancel_before_row_commit_rolls_back_marker_rows_and_fk_tog
     assert!(f.storage.data_write_blocked());
     drop(db);
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
-    completion::run(&f.storage, &mut receipt, &|| false).unwrap();
+    completion::run(
+        &f.storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     f.unchanged_history();
 }
 
@@ -294,11 +363,19 @@ fn audio_supersession_committed_rows_survive_cold_restart_before_purge_without_s
     assert_eq!(startup::reason(&db, &marker).unwrap(), None);
     assert_eq!(startup::reason(&db, &f.audio_operation).unwrap(), None);
     drop(db);
-    let mut pending = operations::Prepared::pending(&f.storage, &op, &|| false).unwrap();
+    let mut pending =
+        operations::Prepared::pending(&f.storage, &op, &crate::test_support::never_cancelled)
+            .unwrap();
     let preview = pending.preview();
     assert!(preview.row_phase_committed && preview.execute_allowed);
     let lease = AnalysisController::default()
-        .begin_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(
         pending
@@ -307,7 +384,7 @@ fn audio_supersession_committed_rows_survive_cold_restart_before_purge_without_s
                 &lease,
                 &preview.confirmation_id,
                 false,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -450,10 +527,16 @@ fn audio_supersession_recreated_db_or_logical_or_reserved_root_is_retained_and_n
                 )
                 .unwrap()
                 .delete_operation,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
-            let roots = renewal::reconfirmation_roots(&db, &original, &files, &|| false).unwrap();
+            let roots = renewal::reconfirmation_roots(
+                &db,
+                &original,
+                &files,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let root = roots
                 .iter()
                 .find(|r| r.starts_with("meetings/.mon-delete-"))
@@ -464,8 +547,17 @@ fn audio_supersession_recreated_db_or_logical_or_reserved_root_is_retained_and_n
             f.rejected(&marker);
         } else {
             let db = f.storage.connection.lock().unwrap();
-            assert!(inspect(&db, &f.storage.managed_anchor, &marker, &|| false).is_err());
-            assert!(audio::backup_deleted(&f.storage, &db, &|| false).is_err());
+            assert!(inspect(
+                &db,
+                &f.storage.managed_anchor,
+                &marker,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
+            assert!(
+                audio::backup_deleted(&f.storage, &db, &crate::test_support::never_cancelled)
+                    .is_err()
+            );
             let parent = startup_parent(&db, &f.storage.managed_anchor, &marker)
                 .unwrap()
                 .unwrap();
@@ -504,17 +596,25 @@ fn audio_supersession_parent_reconfirmation_resolves_reappearance_without_new_au
     .unwrap();
     f.reopen();
     assert!(f.storage.data_write_blocked());
-    let mut prepared = operations::Prepared::pending(&f.storage, &parent, &|| false).unwrap();
+    let mut prepared =
+        operations::Prepared::pending(&f.storage, &parent, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(prepared.preview().reconfirmation_allowed);
     let lease = AnalysisController::default()
-        .begin_deletion_maintenance(&f.storage, &parent, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &f.storage,
+            &parent,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     prepared
         .review_remaining(
             &f.storage,
             &lease,
             &prepared.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     let preview = prepared.preview();
@@ -526,7 +626,7 @@ fn audio_supersession_parent_reconfirmation_resolves_reappearance_without_new_au
                 &lease,
                 &preview.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -539,7 +639,7 @@ fn audio_supersession_parent_reconfirmation_resolves_reappearance_without_new_au
         &f.storage.connection.lock().unwrap(),
         &f.storage.managed_anchor,
         &marker,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     f.reopen();

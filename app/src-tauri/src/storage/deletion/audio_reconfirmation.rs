@@ -653,8 +653,9 @@ pub(super) fn clear_resolved_attention(
 #[cfg(test)]
 pub(crate) fn synthetic_saved(storage: &Storage, operation: &str) -> (String, String) {
     let db = storage.connection.lock().unwrap();
-    let receipt = Receipt::load(&db, operation, &|| false).unwrap();
-    completion::verify_available_state(&db, &receipt, &|| false).unwrap();
+    let receipt = Receipt::load(&db, operation, &crate::test_support::never_cancelled).unwrap();
+    completion::verify_available_state(&db, &receipt, &crate::test_support::never_cancelled)
+        .unwrap();
     let saved = receipt.source_saved();
     (
         serde_json::to_string(&saved.header).unwrap(),

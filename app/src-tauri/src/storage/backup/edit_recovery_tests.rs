@@ -92,9 +92,15 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_sta
         }
         let output = tempfile::tempdir().unwrap();
         let path = output.path().join("recovery.monbackup");
-        source.create_backup_archive(&path, &|| false).unwrap();
-        let archive =
-            archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+        source
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
+        let archive = archive::read(
+            &mut File::open(path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let target_root = tempfile::tempdir().unwrap();
         let target = Storage::open(target_root.path().into()).unwrap();
         let keep = target.create_meeting("既存会議は変更しない").unwrap();
@@ -103,16 +109,21 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_sta
             output.path(),
             &Uuid::new_v4().to_string(),
             &target.connection.lock().unwrap(),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         {
             BatchPreparation::Pending(ids) => ids,
             _ => panic!("new batch"),
         };
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-        target.publish_restore(&sealed, &ids, &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let sealed =
+            SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap();
         let new_meeting = ids.get("meetings", "", &meeting).unwrap();
         let new_base = ids
             .get("analysis_revisions", &meeting, &draft.base_analysis_id)
@@ -165,9 +176,15 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_sta
         );
         assert_eq!(target.get_meeting(&keep.id).unwrap(), Some(keep));
         let again = output.path().join("restored.monbackup");
-        target.create_backup_archive(&again, &|| false).unwrap();
-        let checked =
-            archive::read(&mut File::open(again).unwrap(), output.path(), &|| false).unwrap();
+        target
+            .create_backup_archive(&again, &crate::test_support::never_cancelled)
+            .unwrap();
+        let checked = archive::read(
+            &mut File::open(again).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let payload: String = checked
             .database
             .query_row(
@@ -240,9 +257,15 @@ fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof()
     for _ in 0..2 {
         let output = tempfile::tempdir().unwrap();
         let path = output.path().join("discard.monbackup");
-        source.create_backup_archive(&path, &|| false).unwrap();
-        let archive =
-            archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+        source
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
+        let archive = archive::read(
+            &mut File::open(path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let root = tempfile::tempdir().unwrap();
         let target = Storage::open(root.path().into()).unwrap();
         let keep = target.create_meeting("既存会議は保持").unwrap();
@@ -251,16 +274,21 @@ fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof()
             output.path(),
             &Uuid::new_v4().to_string(),
             &target.connection.lock().unwrap(),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         {
             BatchPreparation::Pending(ids) => ids,
             _ => panic!("new batch"),
         };
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-        target.publish_restore(&sealed, &ids, &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let sealed =
+            SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
+        target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap();
         let new_meeting = ids.get("meetings", "", &meeting).unwrap();
         let new_draft = ids
             .get("working_drafts", &meeting, &record.draft_id)

@@ -8,7 +8,7 @@ mod removing;
 
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn consent(
@@ -67,7 +67,15 @@ fn model_deletion_consent_is_atomic_readable_and_preserves_history_and_files() {
     let p = f.preview().unwrap();
     let operation = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &operation, &p.census_hash, false, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &operation,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let db = f.storage.connection.lock().unwrap();
     assert_eq!(intent::read(&db, &operation).unwrap(), saved);
     let (rows, max_json, max_path): (i64,i64,i64) = db.query_row("SELECT count(*),max(length(CAST(identity_json AS BLOB))),max(length(CAST(relative_path AS BLOB))) FROM maintenance_paths WHERE operation_id=?1",params![operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
@@ -85,7 +93,9 @@ fn model_deletion_consent_is_atomic_readable_and_preserves_history_and_files() {
         )
         .is_err());
     drop(db);
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
     let after: serde_json::Value = serde_json::from_str(&f.evidence()).unwrap();
     for index in [0, 1, 3, 4, 5] {
         assert_eq!(before[index], after[index]);
@@ -109,22 +119,54 @@ fn model_deletion_consent_retry_keeps_consent_time_and_rejects_changed_policy_or
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let a = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
+    let a = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let original = receipt(&f, &op);
     assert_eq!(
         a,
-        consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap()
+        consent(
+            &f,
+            &op,
+            &p.census_hash,
+            false,
+            &owner,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
     );
     assert_eq!(original, receipt(&f, &op));
-    assert!(consent(&f, &op, &p.census_hash, true, &owner, &|| false).is_err());
-    assert!(consent(&f, &op, &"0".repeat(64), false, &owner, &|| false).is_err());
+    assert!(consent(
+        &f,
+        &op,
+        &p.census_hash,
+        true,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(consent(
+        &f,
+        &op,
+        &"0".repeat(64),
+        false,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(consent(
         &f,
         &uuid::Uuid::new_v4().to_string(),
         &p.census_hash,
         false,
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(original, receipt(&f, &op));
@@ -143,7 +185,7 @@ fn model_deletion_consent_rejects_stale_preview_and_requires_explicit_unknown_po
         &p.census_hash,
         true,
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     let p = f.preview().unwrap();
@@ -153,15 +195,31 @@ fn model_deletion_consent_rejects_stale_preview_and_requires_explicit_unknown_po
         &p.census_hash,
         false,
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(count(&f), 0);
     let op = uuid::Uuid::new_v4().to_string();
-    let saved = consent(&f, &op, &p.census_hash, true, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        true,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(f.path("new-after-consent"), b"NEVER ADOPT").unwrap();
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         std::fs::read(f.path("new-after-consent")).unwrap(),
         b"NEVER ADOPT"
@@ -230,21 +288,57 @@ fn model_deletion_consent_requires_live_lease_even_with_valid_saved_evidence() {
     let p = f.preview().unwrap();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = uuid::Uuid::new_v4().to_string();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     controller.begin_exit().unwrap();
     controller.abort_shutdown();
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    assert!(intent::keep_unstarted(&f.storage, &op, &owner, &|| false).is_err());
-    assert!(consent(&f, &op, &p.census_hash, false, &owner, &|| false).is_err());
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.storage.data_write_blocked());
     drop(owner);
     let owner = controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.storage.data_write_blocked());
 }
 
@@ -254,18 +348,50 @@ fn model_deletion_consent_keep_is_idempotent_preserves_changed_tree_and_never_re
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let original = receipt(&f, &op);
     std::fs::write(f.path("cli"), b"CHANGED KEEP").unwrap();
     std::fs::remove_file(f.path("weights/model.bin")).unwrap();
     std::fs::write(f.path("added"), b"ADDED KEEP").unwrap();
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(original, receipt(&f, &op));
     assert!(!f.storage.data_write_blocked());
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    assert!(consent(&f, &op, &p.census_hash, false, &owner, &|| false).is_err());
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(f.path("cli")).unwrap(), b"CHANGED KEEP");
     assert_eq!(std::fs::read(f.path("added")).unwrap(), b"ADDED KEEP");
     assert!(!f.path("weights/model.bin").exists());
@@ -278,7 +404,15 @@ fn model_deletion_consent_keep_cancellation_restores_fence_and_preserves_receipt
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let calls = Cell::new(0);
     assert!(intent::keep_unstarted(&f.storage, &op, &owner, &|| {
         calls.set(calls.get() + 1);
@@ -290,7 +424,13 @@ fn model_deletion_consent_keep_cancellation_restores_fence_and_preserves_receipt
     assert!(db.execute("DELETE FROM meetings", []).is_err());
     drop(db);
     assert!(f.storage.data_write_blocked());
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -298,7 +438,15 @@ fn model_deletion_consent_cold_keep_requires_restart_before_deferred_recovery() 
     let mut f = Fixture::new();
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
-    consent(&f, &op, &p.census_hash, false, &lease(), &|| false).unwrap();
+    consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     // Simulate another previously interrupted process in the closed DB. Startup
     // must NOT rewrite it while an unresolved deletion receipt exists.
     reopen(&mut f, |db| {
@@ -324,12 +472,24 @@ fn model_deletion_consent_cold_keep_requires_restart_before_deferred_recovery() 
     let controller = AnalysisController::default();
     controller.require_storage_restart();
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     let owner = controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(f
         .storage
         .require_data_writable()
@@ -360,7 +520,15 @@ fn model_deletion_consent_corrupt_chunks_and_unknown_asset_records_remain_fenced
         let mut f = Fixture::new();
         let p = f.preview().unwrap();
         let op = uuid::Uuid::new_v4().to_string();
-        consent(&f, &op, &p.census_hash, false, &lease(), &|| false).unwrap();
+        consent(
+            &f,
+            &op,
+            &p.census_hash,
+            false,
+            &lease(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         reopen(&mut f, |db| {
             db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
                 .unwrap();
@@ -393,7 +561,13 @@ fn model_deletion_consent_corrupt_chunks_and_unknown_asset_records_remain_fenced
             "{corruption}"
         );
         assert!(
-            intent::keep_unstarted(&f.storage, &op, &lease(), &|| false).is_err(),
+            intent::keep_unstarted(
+                &f.storage,
+                &op,
+                &lease(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{corruption}"
         );
         assert_eq!(
@@ -419,7 +593,7 @@ fn model_deletion_consent_rejects_running_sql_work_but_allows_stale_partial_pack
         &p.census_hash,
         false,
         &lease(),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(count(&f), 0);
@@ -444,9 +618,25 @@ fn model_deletion_consent_rejects_running_sql_work_but_allows_stale_partial_pack
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.path("cli").exists());
 }
 
@@ -461,9 +651,25 @@ fn model_deletion_consent_keeps_long_unicode_paths_without_path_table_truncation
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, true, &owner, &|| false).unwrap();
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        true,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(std::fs::read(f.path(&relative)).unwrap(), b"KEEP LONG PATH");
 }
 
@@ -474,9 +680,25 @@ fn model_deletion_consent_absent_package_is_not_recreated_and_missing_root_is_re
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.path("").exists());
     std::fs::rename(&f.root, f.root.parent().unwrap().join("held-root")).unwrap();
     assert!(consent(
@@ -485,7 +707,7 @@ fn model_deletion_consent_absent_package_is_not_recreated_and_missing_root_is_re
         &p.census_hash,
         false,
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(!f.root.exists());
@@ -497,7 +719,15 @@ fn model_deletion_consent_resume_admission_checks_native_gates_and_exact_record(
     let f = Fixture::new();
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
-    consent(&f, &op, &p.census_hash, false, &lease(), &|| false).unwrap();
+    consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let controller = AnalysisController::default();
     for (recording, importing, cancel) in [
         (true, false, false),
@@ -514,27 +744,58 @@ fn model_deletion_consent_resume_admission_checks_native_gates_and_exact_record(
             &uuid::Uuid::new_v4().to_string(),
             false,
             false,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     let export = controller.begin_export().unwrap();
     assert!(controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     drop(export);
     let owner = controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
 fn model_deletion_consent_typed_snapshot_rejects_forged_classification_and_structure() {
     let f = Fixture::new();
-    let snapshot = capture(&f.storage, &f.root, &f.package, &f.review, &|| false).unwrap();
+    let snapshot = capture(
+        &f.storage,
+        &f.root,
+        &f.package,
+        &f.review,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let original = serde_json::to_value(&snapshot).unwrap();
     for case in [
         "classification",
@@ -591,7 +852,7 @@ fn model_deletion_consent_rejects_disabled_reference_guards_and_unknown_schema()
                 &p.census_hash,
                 false,
                 &lease(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err(),
             "{case}"
@@ -610,14 +871,38 @@ fn model_deletion_consent_root_replacement_or_installing_state_never_reuses_unst
     let p = f.preview().unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = lease();
-    let saved = consent(&f, &op, &p.census_hash, false, &owner, &|| false).unwrap();
+    let saved = consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let held = f.root.parent().unwrap().join("held-models");
     std::fs::rename(&f.root, &held).unwrap();
     std::fs::create_dir(&f.root).unwrap();
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    assert!(consent(&f, &op, &p.census_hash, false, &owner, &|| false).is_err());
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(consent(
+        &f,
+        &op,
+        &p.census_hash,
+        false,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     // The safe keep path does not adopt or delete the replacement directory.
-    intent::keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(f.root.exists());
     assert!(held.join(&f.package).join("cli").exists());
     reopen(&mut f, |db| {
@@ -628,7 +913,13 @@ fn model_deletion_consent_root_replacement_or_installing_state_never_reuses_unst
         .unwrap();
     });
     assert!(f.storage.data_write_blocked());
-    assert!(intent::keep_unstarted(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(intent::authorize_review(&f.storage, &op).is_err());
     assert!(held.join(&f.package).join("cli").exists());
 }

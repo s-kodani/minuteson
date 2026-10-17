@@ -6,7 +6,7 @@ const native = (name: string) => readFileSync(new URL(`../src-tauri/src/${name}`
 
 test("meeting UI has no candidates, model preferences or global editing options", () => {
   const view = source("analysis.tsx") + source("transcript.tsx");
-  assert.doesNotMatch(view, /adopt_analysis|restore_analysis|save_analysis_preferences|save_diarization_preferences|undo_transcript_edit|splitUtterance|mergeSpeaker|TranscriptRecovery|DiarizationPanel|文字起こしの編集オプション|編集オプション/);
+  assert.doesNotMatch(view, /adopt_analysis|restore_analysis|save_analysis_preferences|save_diarization_preferences|undo_transcript_edit|TranscriptRecovery|DiarizationPanel|文字起こしの編集オプション|編集オプション/);
   assert.match(source("analysis.tsx"), /start_analysis_flow.*meetingId/);
   assert.match(source("analysis.tsx"), /await flushPendingEdits\("transcription"\)/);
   assert.doesNotMatch(source("analysis.tsx"),/retryOperations|retry_transcription|retry_diarization|>再試行<\/button>/);
@@ -34,8 +34,8 @@ test("individual speaker controls save only explicit input", () => {
   const view = source("transcript.tsx");
   assert.match(view, /className="speaker-name-button"[^\n]*openName\(speaker.id, event.currentTarget\)/);
   assert.match(view, /restoreTarget=\{\(\) => nameOpener.current\}/);
-  assert.match(view, /className="utterance-edit-tools"/);
-  assert.match(view, /assignSpeakers\(analysis, payload, \[utterance.id\]/);
+  assert.match(view, /className="utterance-edit-tools options-modal"/);
+  assert.match(view, /assignSpeakers\(analysis, payload, \[editing.utteranceId\]/);
   assert.match(view, /await ensureDraft\(\); queue.edit\(payload => addSpeaker/);
   assert.match(view, /await queue.retry\(\); if \(mounted.current\) setAdding\(false\)/);
 });

@@ -31,6 +31,37 @@ impl FixedData<'_, '_> {
         if !value.is_object() {
             return Err("固定条件はオブジェクトである必要があります".into());
         }
+        if let Some(voice) = original.get("voice") {
+            let mut plan: crate::voice::Plan =
+                serde_json::from_value(voice.clone()).map_err(|e| e.to_string())?;
+            for window in &mut plan.windows {
+                window.speaker_id = self.ids.get("speakers", meeting, &window.speaker_id)?;
+                window.track_id = self.ids.get("audio_tracks", meeting, &window.track_id)?;
+            }
+            if let Some(person) = plan.person_id.as_deref() {
+                let exists: bool = self
+                    .ids
+                    .source()
+                    .database
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM voice_people WHERE id=?1)",
+                        [person],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                // Enrollment history survives explicit deletion of its person.
+                // It cannot resurrect that person or prevent a later backup.
+                plan.person_id = if exists {
+                    Some(self.ids.get("voice_people", "", person)?)
+                } else {
+                    None
+                };
+            }
+            // The registry/editor hashes belong to the source environment.
+            // Restored historical voice jobs require a fresh reviewed operation.
+            value["voice"] = serde_json::to_value(plan).map_err(|e| e.to_string())?;
+            value["voiceRequest"] = Value::Null;
+        }
         if let Some(source) = original.get("source") {
             let known: Option<crate::storage::transcription::known::KnownInput> = original
                 .get("knownInput")
@@ -203,6 +234,26 @@ impl FixedData<'_, '_> {
                 track.track_id = self.ids.get("audio_tracks", meeting, &track.track_id)?;
             }
             value["tracks"] = serde_json::to_value(tracks).map_err(|e| e.to_string())?;
+        }
+        if let Some(consolidation) = original.get("utteranceConsolidation") {
+            let mut provenance: crate::storage::transcript_consolidation::Provenance =
+                serde_json::from_value(consolidation.clone()).map_err(|e| e.to_string())?;
+            if provenance.schema_version != 1 {
+                return Err("発言統合の履歴形式が不正です".into());
+            }
+            for group in &mut provenance.groups {
+                group.lineage_id = self
+                    .ids
+                    .get("utterance_lineage", meeting, &group.lineage_id)?;
+                for source in &mut group.source_lineages {
+                    *source = self.ids.get("utterance_lineage", meeting, source)?;
+                }
+            }
+            if let Some(draft) = &mut provenance.source_draft {
+                draft.id = self.ids.get("working_drafts", meeting, &draft.id)?;
+            }
+            value["utteranceConsolidation"] =
+                serde_json::to_value(provenance).map_err(|e| e.to_string())?;
         }
         if let Some(operations) = original.get("manualSpeakerOperations") {
             let mut operations: ManualSpeakerOperations =

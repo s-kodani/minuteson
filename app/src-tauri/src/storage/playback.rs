@@ -391,7 +391,15 @@ pub(in crate::storage) mod tests {
             .unwrap();
             let flac_relative = relative.join(format!("{sequence}.flac"));
             let flac = storage.managed_path(&flac_relative).unwrap();
-            write_segment(&mut input, 0, 24000, &flac, &|| false, &|_| {}).unwrap();
+            write_segment(
+                &mut input,
+                0,
+                24000,
+                &flac,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
+            .unwrap();
             let asset = storage
                 .register_ready_meeting_asset(&meeting, &flac_relative, "audio/flac")
                 .unwrap();
@@ -529,7 +537,37 @@ impl Storage {
         analysis_id: &str,
         utterance_id: &str,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_utterance_audio_cancellable(meeting_id, analysis_id, utterance_id, &|| false)
+        self.prepare_utterance_audio_cancellable(
+            meeting_id,
+            analysis_id,
+            utterance_id,
+            &crate::test_support::never_cancelled,
+        )
+    }
+
+    pub(in crate::storage) fn resolve_utterance_audio_reference(
+        &self,
+        meeting_id: &str,
+        analysis_id: &str,
+        utterance_id: &str,
+    ) -> Result<(String, i64, i64, String), String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let tx = connection.transaction().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        super::deletion::audio::require_source(&tx, meeting_id)?;
+        let utterance: Option<(String, i64, i64,String)> = tx.query_row(
+            "SELECT u.track_id, u.start_us, u.end_us,a.content_hash FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN meetings m ON m.id=u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))) AND t.state = 'ready'",
+            params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,row.get(3)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        let (track, start, end, hash) =
+            utterance.ok_or("この会議・解析版の再生可能な発言がありません")?;
+        if super::revisions::analysis_content_hash(&tx, analysis_id)? != hash {
+            return Err("解析版の内容が変更されています".into());
+        }
+        Ok((track, start, end, hash))
     }
 
     pub(crate) fn prepare_utterance_audio_cancellable(
@@ -542,27 +580,10 @@ impl Storage {
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
         }
-        let resolve = || -> Result<(String, i64, i64), String> {
-            let mut connection = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            let tx = connection.transaction().map_err(|e| e.to_string())?;
-            #[cfg(unix)]
-            super::deletion::audio::require_source(&tx, meeting_id)?;
-            let utterance: Option<(String, i64, i64,String)> = tx.query_row(
-                "SELECT u.track_id, u.start_us, u.end_us,a.content_hash FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN meetings m ON m.id=u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))) AND t.state = 'ready'",
-                params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,row.get(3)?)),
-            ).optional().map_err(|e| e.to_string())?;
-            let (track, start, end, hash) =
-                utterance.ok_or("この会議・解析版の再生可能な発言がありません")?;
-            if super::revisions::analysis_content_hash(&tx, analysis_id)? != hash {
-                return Err("解析版の内容が変更されています".into());
-            }
-            Ok((track, start, end))
-        };
+        let resolve =
+            || self.resolve_utterance_audio_reference(meeting_id, analysis_id, utterance_id);
         let before = resolve()?;
-        let audio = self.prepare_track_audio_cancellable(
+        let audio = self.prepare_preview_track_audio_cancellable(
             meeting_id, &before.0, before.1, before.2, cancelled,
         )?;
         if cancelled() {
@@ -584,7 +605,13 @@ impl Storage {
         start: i64,
         end: i64,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_cancellable(meeting_id, track, start, end, &|| false)
+        self.prepare_track_audio_cancellable(
+            meeting_id,
+            track,
+            start,
+            end,
+            &crate::test_support::never_cancelled,
+        )
     }
 
     pub(crate) fn prepare_track_audio_cancellable(
@@ -595,7 +622,18 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false)
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false, false)
+    }
+
+    pub(in crate::storage) fn prepare_preview_track_audio_cancellable(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false, true)
     }
 
     pub(in crate::storage) fn prepare_meeting_track_audio_cancellable(
@@ -606,7 +644,7 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true)
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, true)
     }
 
     fn prepare_track_audio_mode(
@@ -617,6 +655,7 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
         whole_meeting: bool,
+        direct_playback: bool,
     ) -> Result<PreparedAudio, String> {
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
@@ -728,12 +767,17 @@ impl Storage {
             if file.canonicalize().map_err(|e| e.to_string())? != root.join(relative) {
                 return Err("音声ファイルが管理領域外を参照しています".into());
             }
-            let audio = VerifiedAudio::open_cancellable(
-                File::open(file).map_err(|e| e.to_string())?,
-                chunk.size as u64,
-                &chunk.hash,
-                cancelled,
-            )?;
+            let file = File::open(file).map_err(|e| e.to_string())?;
+            let audio = if direct_playback {
+                VerifiedAudio::open_saved_cancellable(
+                    file,
+                    chunk.size as u64,
+                    &chunk.hash,
+                    cancelled,
+                )
+            } else {
+                VerifiedAudio::open_cancellable(file, chunk.size as u64, &chunk.hash, cancelled)
+            }?;
             let format = &audio.format;
             if format.frames != chunk.frame_count as u64
                 || i64::from(format.sample_rate) != chunk.rate

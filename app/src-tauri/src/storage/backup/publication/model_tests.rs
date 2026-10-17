@@ -155,8 +155,15 @@ fn restore_managed_model_jobs_and_flow_preserve_all_engine_proofs_without_instal
         .unwrap();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("managed.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for library in [
         "whisper-runtime.dylib",
         "llama-runtime.dylib",
@@ -176,9 +183,15 @@ fn restore_managed_model_jobs_and_flow_preserve_all_engine_proofs_without_instal
         false
     })
     .unwrap();
-    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    let fixed =
+        restore_fixed::FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    let sealed =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let restored = target.analysis_flow(&new_meeting).unwrap().unwrap();
     assert_eq!(restored.stage, "attention");
@@ -204,16 +217,38 @@ fn restore_managed_model_jobs_and_flow_preserve_all_engine_proofs_without_instal
         .all(|v| v.id.is_none() && !v.configuration_complete));
     assert!(target.acquire_local_inference_job().unwrap().is_none());
     let next = output.path().join("managed-rebackup.monbackup");
-    target.create_backup_archive(&next, &|| false).unwrap();
-    let next = archive::read(&mut File::open(next).unwrap(), output.path(), &|| false).unwrap();
+    target
+        .create_backup_archive(&next, &crate::test_support::never_cancelled)
+        .unwrap();
+    let next = archive::read(
+        &mut File::open(next).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         next.manifest.file_references,
         source.manifest.file_references
     );
-    let next_ids =
-        RestoreIds::prepare(&next, output.path(), &Uuid::new_v4().to_string(), &|| false).unwrap();
-    let next_fixed = restore_fixed::FixedData::new(&next_ids, output.path(), &|| false).unwrap();
-    SealedWorkspace::prepare(&next_fixed, output.path(), &|| false).unwrap();
+    let next_ids = RestoreIds::prepare(
+        &next,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let next_fixed = restore_fixed::FixedData::new(
+        &next_ids,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    SealedWorkspace::prepare(
+        &next_fixed,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -230,16 +265,28 @@ fn restore_model_metadata_diarization_rebackup_preserves_omitted_log_reason_and_
     ];
     let job = crate::storage::diarization::tests::enqueue(&storage, request, engine);
     storage.acquire_local_inference_job().unwrap().unwrap();
-    let revision = crate::diarization::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let revision = crate::diarization::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let original_view = storage
         .load_visible_analysis(&meeting, &revision)
         .unwrap()
         .unwrap();
     let path = output.path().join("diarization.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(source
         .manifest
         .omitted_assets
@@ -254,9 +301,15 @@ fn restore_model_metadata_diarization_rebackup_preserves_omitted_log_reason_and_
         false
     })
     .unwrap();
-    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let work = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
-    target.publish_restore(&work, &ids, &|| false).unwrap();
+    let fixed =
+        restore_fixed::FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    let work =
+        SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
+    target
+        .publish_restore(&work, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let new_revision = ids.get("analysis_revisions", &meeting, &revision).unwrap();
     let view = target
@@ -271,8 +324,15 @@ fn restore_model_metadata_diarization_rebackup_preserves_omitted_log_reason_and_
         );
     }
     let backup = output.path().join("diarization-rebackup.monbackup");
-    target.create_backup_archive(&backup, &|| false).unwrap();
-    let next = archive::read(&mut File::open(backup).unwrap(), output.path(), &|| false).unwrap();
+    target
+        .create_backup_archive(&backup, &crate::test_support::never_cancelled)
+        .unwrap();
+    let next = archive::read(
+        &mut File::open(backup).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         next.manifest.file_references,
         source.manifest.file_references
@@ -290,10 +350,25 @@ fn restore_model_metadata_diarization_rebackup_preserves_omitted_log_reason_and_
             .filter(|a| matches!(a.reason, archive::OmittedReason::NativeLog))
             .count()
     );
-    let next_ids =
-        RestoreIds::prepare(&next, output.path(), &Uuid::new_v4().to_string(), &|| false).unwrap();
-    let next_fixed = restore_fixed::FixedData::new(&next_ids, output.path(), &|| false).unwrap();
-    let _next_work = SealedWorkspace::prepare(&next_fixed, output.path(), &|| false).unwrap();
+    let next_ids = RestoreIds::prepare(
+        &next,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let next_fixed = restore_fixed::FixedData::new(
+        &next_ids,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let _next_work = SealedWorkspace::prepare(
+        &next_fixed,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(target.acquire_local_inference_job().unwrap().is_none());
 }
 
@@ -348,21 +423,26 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         crate::transcription::enqueue(&storage, &meeting, "metadata-roundtrip", engine, "standard")
             .unwrap();
     storage.acquire_local_inference_job().unwrap().unwrap();
-    let revision = crate::transcription::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let revision = crate::transcription::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let expected = storage
         .load_visible_analysis(&meeting, &revision)
         .unwrap()
         .unwrap();
     let archive_path = output.path().join("source.monbackup");
     storage
-        .create_backup_archive(&archive_path, &|| false)
+        .create_backup_archive(&archive_path, &crate::test_support::never_cancelled)
         .unwrap();
     let mut source = archive::read(
         &mut File::open(&archive_path).unwrap(),
         output.path(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let original = source.manifest.file_references.clone();
@@ -382,20 +462,29 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
             output.path(),
             &Uuid::new_v4().to_string(),
             &target.connection.lock().unwrap(),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         {
             restore_ids::BatchPreparation::Pending(ids) => ids,
             _ => panic!(),
         };
-        let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        let fixed = restore_fixed::FixedData::new(
+            &ids,
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        let work =
+            SealedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         let new_meeting = ids.get("meetings", "", &old_meeting).unwrap();
         let new_revision = ids
             .get("analysis_revisions", &old_meeting, &old_revision)
             .unwrap();
-        target.publish_restore(&work, &ids, &|| false).unwrap();
+        target
+            .publish_restore(&work, &ids, &crate::test_support::never_cancelled)
+            .unwrap();
         drop(work);
         drop(fixed);
         drop(ids);
@@ -469,7 +558,9 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         let path = output
             .path()
             .join(format!("generation-{generation}.monbackup"));
-        target.create_backup_archive(&path, &|| false).unwrap();
+        target
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
         let managed = target.root.clone();
         drop(target);
         let reopened = Storage::open(managed).unwrap();
@@ -478,9 +569,14 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
             .unwrap()
             .is_some());
         drop(reopened);
-        source = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+        source = archive::read(
+            &mut File::open(&path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(source.manifest.file_references, original);
-        assert_eq!(source.manifest.tables.len(), 33);
+        assert_eq!(source.manifest.tables.len(), 37);
         for table in crate::storage::model_metadata::TABLES {
             assert_eq!(
                 source

@@ -237,6 +237,7 @@ impl Storage {
         }
         let job = super::jobs::enqueue_in_transaction(&tx, &spec)?;
         tx.commit().map_err(|e| e.to_string())?;
+        crate::internal_logs::job(&job);
         Ok(job)
     }
 

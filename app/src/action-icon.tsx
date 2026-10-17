@@ -1,10 +1,13 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
   return <svg className="action-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {name === "voice" && <><path d="M3 10v4M7 6v12M11 3v18M15 7v10M19 5v14M23 10v4" /></>}
+    {name === "filter" && <path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z" />}
+    {name === "logs" && <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>}
     {name === "bell" && <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></>}
     {name === "gear" && <><path d="m9 3-.6 2.2-1.9 1.1-2.2-.6-2 3.5L4 10.8v2.4l-1.7 1.6 2 3.5 2.2-.6 1.9 1.1L9 21h4l.6-2.2 1.9-1.1 2.2.6 2-3.5-1.7-1.6v-2.4l1.7-1.6-2-3.5-2.2.6-1.9-1.1L13 3Z" /><circle cx="11" cy="12" r="3" /></>}
     {name === "trash" && <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></>}

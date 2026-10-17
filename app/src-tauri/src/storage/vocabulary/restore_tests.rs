@@ -30,7 +30,7 @@ fn plan(source: &Storage, target: &Storage) -> Result<GlobalMerge, String> {
     GlobalMerge::plan(
         &source.connection.lock().unwrap(),
         &target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
 }
 
@@ -68,7 +68,7 @@ fn restore_global_vocabulary_deduplicates_exact_content_keeps_conflicts_and_appe
             }]
         }
     );
-    let result = apply(&plan, &target, &|| false).unwrap();
+    let result = apply(&plan, &target, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(&result, plan.receipt());
     let book = target.vocabulary_book(None).unwrap();
     assert_eq!(book.lock_version, 2);
@@ -103,7 +103,7 @@ fn restore_global_vocabulary_compares_reading_note_and_enabled_without_normalizi
         let plan = plan(&source, &target).unwrap();
         assert_eq!(plan.receipt().conflicts.len(), 1);
         let before = target.vocabulary_book(None).unwrap();
-        apply(&plan, &target, &|| false).unwrap();
+        apply(&plan, &target, &crate::test_support::never_cancelled).unwrap();
         let after = target.vocabulary_book(None).unwrap();
         assert_eq!(after.payload, before.payload);
         assert_eq!(after.lock_version, before.lock_version);
@@ -114,7 +114,12 @@ fn restore_global_vocabulary_compares_reading_note_and_enabled_without_normalizi
 fn restore_global_vocabulary_empty_or_only_duplicates_never_creates_or_updates_scope() {
     let (_s, source) = storage();
     let (_t, target) = storage();
-    apply(&plan(&source, &target).unwrap(), &target, &|| false).unwrap();
+    apply(
+        &plan(&source, &target).unwrap(),
+        &target,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         target
             .connection
@@ -146,8 +151,8 @@ fn restore_global_vocabulary_empty_or_only_duplicates_never_creates_or_updates_s
         .unwrap();
     let plan = plan(&source, &target).unwrap();
     assert_eq!(plan.receipt().deduplicated, 1);
-    apply(&plan, &target, &|| false).unwrap();
-    apply(&plan, &target, &|| false).unwrap();
+    apply(&plan, &target, &crate::test_support::never_cancelled).unwrap();
+    apply(&plan, &target, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(target.connection.lock().unwrap().query_row("SELECT content_hash,lock_version,updated_at FROM vocabulary_scopes WHERE id='global'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap(),before);
 }
 
@@ -193,9 +198,11 @@ fn restore_global_vocabulary_rechecks_destination_after_confirmation_and_rejects
     target
         .save_vocabulary_book(None, 0, vec![entry("確認後の変更")])
         .unwrap();
-    assert!(apply(&planned, &target, &|| false)
-        .unwrap_err()
-        .contains("確認後"));
+    assert!(
+        apply(&planned, &target, &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("確認後")
+    );
     let local = target.create_meeting("別会議").unwrap();
     target
         .save_vocabulary_book(Some(&local.id), 0, vec![a])
@@ -264,7 +271,12 @@ fn restore_global_vocabulary_keeps_meeting_books_and_both_fixed_job_snapshots_un
     let t_before = target.fixed_job_input(&t_job.id).unwrap();
     let s_terms = source.vocabulary_book(Some(&s_meeting)).unwrap();
     let t_terms = target.vocabulary_book(Some(&t_meeting)).unwrap();
-    apply(&plan(&source, &target).unwrap(), &target, &|| false).unwrap();
+    apply(
+        &plan(&source, &target).unwrap(),
+        &target,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(source.fixed_job_input(&s_job.id).unwrap(), s_before);
     assert_eq!(target.fixed_job_input(&t_job.id).unwrap(), t_before);
     assert_eq!(

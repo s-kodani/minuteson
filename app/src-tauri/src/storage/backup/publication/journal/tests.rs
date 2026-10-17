@@ -30,11 +30,16 @@ fn history_install_preserves_restore_keep_receipt_on_destination_startup() {
         .prepare_recovery(
             recovery::Source::RestoreAddition,
             &item.operation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-    keep.resolve(&f.target, &keep.preview().confirmation_id, true, &|| false)
-        .unwrap();
+    keep.resolve(
+        &f.target,
+        &keep.preview().confirmation_id,
+        true,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(keep);
     drop(sealed);
     drop(ids);
@@ -55,7 +60,10 @@ fn history_install_preserves_restore_keep_receipt_on_destination_startup() {
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let native = f.target.prepare_relocation_snapshot(&|| false).unwrap();
+    let native = f
+        .target
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let op = Uuid::new_v4().to_string();
     b.begin_move(
         &op,
@@ -66,9 +74,13 @@ fn history_install_preserves_restore_keep_receipt_on_destination_startup() {
     )
     .unwrap();
     let mut p = b.pending_placement(&op, &native).unwrap();
-    p.copy(&native, &|| false).unwrap();
-    let control = native.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&control, &|| false).unwrap();
+    p.copy(&native, &crate::test_support::never_cancelled)
+        .unwrap();
+    let control = native
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&control, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         Connection::open(target.join(".mon-scratch.sqlite3"))
             .unwrap()
@@ -143,7 +155,7 @@ fn control_handoff_keeps_restore_consent_and_historical_root_proofs_without_rewr
         .prepare_recovery(
             recovery::Source::RestoreAddition,
             &item.operation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert_eq!(
@@ -159,9 +171,16 @@ fn control_handoff_keeps_restore_consent_and_historical_root_proofs_without_rewr
     drop(sealed);
     drop(ids);
     let before = all_rows(&f.target.connection.lock().unwrap());
-    let saved = f.target.prepare_relocation_snapshot(&|| false).unwrap();
-    let handoff = saved.prepare_control_handoff(&|| false).unwrap();
-    handoff.verify(&|| false).unwrap();
+    let saved = f
+        .target
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let handoff = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    handoff
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     // Inspect the sealed bytes for this test only; production cannot construct
     // a ControlHandoff from deserialized history or consent supplied by a UI.
     let path = saved
@@ -217,7 +236,11 @@ fn restore_attention_keep_preserves_files_on_restart_and_disables_old_batch_publ
     let operation = item.operation_id.clone();
     let mut review = f
         .target
-        .prepare_recovery(recovery::Source::RestoreAddition, &operation, &|| false)
+        .prepare_recovery(
+            recovery::Source::RestoreAddition,
+            &operation,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     let receipt = review
         .resolve(&f.target, &review.preview().confirmation_id, true, &|| {
@@ -228,7 +251,7 @@ fn restore_attention_keep_preserves_files_on_restart_and_disables_old_batch_publ
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
     assert!(f
         .target
-        .publish_restore(&sealed, &ids, &|| false)
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
         .unwrap_err()
         .contains("保持して確認済み"));
     assert_eq!(
@@ -277,7 +300,11 @@ fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_exi
     let before = all_rows(&f.target.connection.lock().unwrap());
     let mut review = f
         .target
-        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .prepare_recovery(
+            item.source,
+            &item.operation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     std::fs::write(first.join("new-unknown"), b"new").unwrap();
     assert!(review
@@ -288,7 +315,11 @@ fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_exi
     assert!(first.join("unknown").exists());
     let mut refreshed = f
         .target
-        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .prepare_recovery(
+            item.source,
+            &item.operation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert_eq!(
         refreshed
@@ -296,7 +327,7 @@ fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_exi
                 &f.target,
                 &refreshed.preview().confirmation_id,
                 false,
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .unwrap()
             .outcome,
@@ -307,7 +338,11 @@ fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_exi
     std::fs::remove_file(first.join("new-unknown")).unwrap();
     let mut final_review = f
         .target
-        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .prepare_recovery(
+            item.source,
+            &item.operation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert_eq!(
         final_review
@@ -315,7 +350,7 @@ fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_exi
                 &f.target,
                 &final_review.preview().confirmation_id,
                 false,
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .unwrap()
             .outcome,
@@ -340,7 +375,13 @@ fn recorded<'a>(
     ids: &RestoreIds<'_>,
 ) -> Installed<'a> {
     let journal = Journal::begin(db, &f.target.root, sealed, ids).unwrap();
-    Installed::prepare_recorded(&f.target.root, sealed, journal, &|| false).unwrap()
+    Installed::prepare_recorded(
+        &f.target.root,
+        sealed,
+        journal,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn paths(sealed: &SealedWorkspace, root: &Path) -> Vec<PathBuf> {
     read_meetings(sealed.connection())
@@ -366,10 +407,17 @@ fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backu
     );
     assert_eq!(all_rows(&target.connection.lock().unwrap()), before);
     let path = f.output.path().join("v22.monbackup");
-    target.create_backup_archive(&path, &|| false).unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), f.output.path(), &|| false).unwrap();
+    target
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
-    assert_eq!(source.manifest.tables.len(), 33);
+    assert_eq!(source.manifest.tables.len(), 37);
     assert!(source
         .manifest
         .tables
@@ -406,7 +454,7 @@ fn restore_journal_reopen_cleans_unpublished_files_and_reuses_the_same_batch_ids
         f.output.path(),
         &batch,
         &target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     {
@@ -414,7 +462,9 @@ fn restore_journal_reopen_cleans_unpublished_files_and_reuses_the_same_batch_ids
         _ => panic!(),
     };
     assert!(matches!(
-        target.publish_restore(&sealed, &replay, &|| false).unwrap(),
+        target
+            .publish_restore(&sealed, &replay, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { meetings: 2, .. }
     ));
     assert_eq!(
@@ -502,7 +552,9 @@ fn restore_journal_published_batch_never_reclaims_or_rewrites_its_files_after_re
     let batch = Uuid::new_v4().to_string();
     let ids = ids(&f, &batch);
     let sealed = sealed(&f, &ids);
-    f.target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    f.target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     let relative: String = sealed
         .connection()
         .query_row(
@@ -623,11 +675,20 @@ fn restore_journal_drop_after_successful_publication_never_unlinks_committed_ass
     let sealed = sealed(&f, &ids);
     let db = f.target.connection.lock().unwrap();
     let install = recorded(&f, &db, &sealed, &ids);
-    let merge = sealed.global_merge(&db, &|| false).unwrap();
+    let merge = sealed
+        .global_merge(&db, &crate::test_support::never_cancelled)
+        .unwrap();
     let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate).unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON;").unwrap();
-    append(&tx, sealed.connection(), &|| false).unwrap();
-    merge.apply(&mut tx, &|| false).unwrap();
+    append(
+        &tx,
+        sealed.connection(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    merge
+        .apply(&mut tx, &crate::test_support::never_cancelled)
+        .unwrap();
     tx.execute(
         "UPDATE restore_batches SET state='published',published_at=1 WHERE batch_id=?1",
         params![batch],
@@ -718,8 +779,15 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             .unwrap();
     }
     let path = f.output.path().join("after-recovery.monbackup");
-    f.target.create_backup_archive(&path, &|| false).unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), f.output.path(), &|| false).unwrap();
+    f.target
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for table in ["maintenance_operations", "maintenance_paths"] {
         assert_eq!(
             source
@@ -730,7 +798,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             0
         );
     }
-    assert_eq!(source.manifest.tables.len(), 33);
+    assert_eq!(source.manifest.tables.len(), 37);
 }
 
 #[test]

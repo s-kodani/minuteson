@@ -179,7 +179,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 4);
+  assert.equal(options.length, 6);
   assert.equal(options[0].review.manifest.engine, "llama.cpp");
   assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
   assert.equal(options[1].tokenLimits, null);
@@ -190,17 +190,29 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   assert.equal(options[1].review.manifest.files.filter(f => f.role === "notice").length, 5);
   assert.equal(options[1].review.downloadBytes, 65_153_215);
   assert.equal(options[1].review.archiveBytes, 25_210_612);
-  assert.equal(options[1].review.totalBytes, 75_117_137);
-  assert.equal(options[1].review.recipeHash, "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8");
-  assert.deepEqual(options.slice(2).map(o => o.review.recipeHash), [
+  assert.equal(options[1].review.totalBytes, 78_117_057);
+  assert.equal(options[1].review.recipeHash, "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee");
+  assert.deepEqual(options.slice(2, 4).map(o => o.review.recipeHash), [
     "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221",
-    "7295993aa83e948a5f3fd36ca26992e7a9833a7a90208148b0d6bf3306064350",
+    "7ae4eeab8889de993a9c726a9cf3f11a6e70a2dd0c1c8a9596f85e33822c7cfe",
   ]);
-  for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp")) {
+  for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && !o.id.includes("qwen3-"))) {
     assert.deepEqual(option.tokenLimits, options[0].tokenLimits);
     assert.match(option.label, /Qwen.*Q[48]/);
   }
   assert.equal(options[3].tokenLimits, null);
+  const qwen3 = options[4];
+  assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
+  assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });
+  assert.equal(qwen3.review.recipeHash, "1d3b48eebaea1750b93abbe1551423ca080ddff9b6c4f5069952aa188acbde37");
+  assert.equal(qwen3.review.manifest.files.find(file => file.role === "llm")?.expectedHash, "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785");
+  const qwen3_4b = options.find(o => o.id === "llama-b11533-qwen3-4b-q4km")!;
+  assert.equal(qwen3_4b.label, "Qwen 3 4B · Q4_K_M");
+  assert.deepEqual(qwen3_4b.tokenLimits, qwen3.tokenLimits);
+  assert.equal(qwen3_4b.review.recipeHash, "75f65a85091ad8cf44a33bfe2902be95acb3984244b099777d868de3e4f41fc8");
+  const model4b = qwen3_4b.review.manifest.files.find(file => file.role === "llm")!;
+  assert.equal(model4b.expectedHash, "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5");
+  assert.equal(model4b.expectedSize, 2_497_280_256);
   assert.equal(options[3].review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
     "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d");
   await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));

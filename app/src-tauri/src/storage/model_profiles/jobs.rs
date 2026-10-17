@@ -446,6 +446,12 @@ fn with_execution<T>(
                 .map_err(|e| e.to_string())?;
             run(Execution::Whisper(&e))
         }
+        JobKind::VoiceRegistration | JobKind::VoiceMatching => {
+            let e: SherpaConfig =
+                serde_json::from_value(spec.parameters["voice"]["engine"].clone())
+                    .map_err(|e| e.to_string())?;
+            run(Execution::Sherpa(&e))
+        }
         JobKind::Diarization => {
             let e: SherpaConfig =
                 serde_json::from_value(spec.parameters["diarization"]["engine"].clone())
@@ -503,6 +509,112 @@ fn flow_selection(
 }
 
 impl Storage {
+    // Admission reads sealed installation metadata only. Large model/package
+    // byte verification belongs to the claimed worker, before any inference.
+    pub(crate) fn prepare_minutes_admission(
+        &self,
+        request: &crate::generation::StartRequest,
+    ) -> Result<(LlamaConfig, Snapshot), String> {
+        let requested = Settings::Llama(
+            super::super::minutes_preferences::MinutesEnginePreferences {
+                executable_path: request
+                    .executable_path
+                    .to_str()
+                    .ok_or("実行パスが不正です")?
+                    .into(),
+                model_path: request
+                    .model_path
+                    .to_str()
+                    .ok_or("モデルパスが不正です")?
+                    .into(),
+                threads: request.threads,
+                context_tokens: request.context_tokens,
+                prediction_tokens: request.prediction_tokens,
+                gpu_layers: request.gpu_layers,
+                seed: request.seed,
+                prompt_budget: request.prompt_budget,
+            },
+        );
+        requested.validate()?;
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let existing: Option<String> = db
+            .query_row(
+                "SELECT id FROM processing_jobs WHERE operation_id=?1",
+                params![request.input.operation_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(id) = existing {
+            let (spec, _) = super::super::jobs::read_fixed_input(&db, &id)?;
+            if spec.kind != JobKind::MinutesGeneration
+                || spec.meeting_id != request.input.meeting_id
+                || spec.profile_snapshot["profile"] != request.profile
+            {
+                return Err("同じ操作IDで異なる議事録生成が指定されました".into());
+            }
+            let engine: LlamaConfig =
+                serde_json::from_value(spec.parameters["generation"]["engine"].clone())
+                    .map_err(|e| e.to_string())?;
+            let execution = Execution::Llama(&engine, request.prompt_budget);
+            if execution.settings()? != requested {
+                return Err("同じ操作IDで異なるモデル条件が指定されました".into());
+            }
+            let snapshot =
+                read(&spec.profile_snapshot)?.ok_or("議事録の管理モデル証拠がありません")?;
+            snapshot.validate(&request.profile, &execution)?;
+            return Ok((engine, snapshot));
+        }
+        let n = name(&request.profile)?;
+        let (heads, _) = heads(&db)?;
+        let head = heads.get(n).ok_or("設定で議事録モデルを準備してください")?;
+        let stored = load_profile(&db, n, head)?;
+        let binding = stored
+            .bindings
+            .iter()
+            .find(|b| b.settings.engine() == Engine::Llama)
+            .ok_or("設定で議事録モデルを準備してください")?;
+        if binding.settings != requested {
+            return Err("選択した議事録モデルが変更されています。再確認してください".into());
+        }
+        let record = binding.validate(&db)?;
+        let fingerprint = |role| -> Result<Fingerprint, String> {
+            let files: Vec<_> = record.files.iter().filter(|f| f.role == role).collect();
+            if files.len() != 1 {
+                return Err("議事録モデルの構成が不正です".into());
+            }
+            let file = files[0];
+            Ok(Fingerprint {
+                path: binding
+                    .models_root
+                    .join(&record.package_id)
+                    .join(&file.relative_path),
+                size: file.actual_size,
+                sha256: file.actual_hash.clone(),
+            })
+        };
+        let engine = LlamaConfig {
+            executable: fingerprint(Role::Executable)?,
+            model: fingerprint(Role::Llm)?,
+            threads: request.threads,
+            context_tokens: request.context_tokens,
+            prediction_tokens: request.prediction_tokens,
+            gpu_layers: request.gpu_layers,
+            seed: request.seed,
+        };
+        let snapshot = current(
+            &db,
+            &request.profile,
+            &Execution::Llama(&engine, request.prompt_budget),
+        )?
+        .ok_or("議事録の管理モデル証拠がありません")?
+        .0;
+        Ok((engine, snapshot))
+    }
+
     pub(crate) fn prepare_model_selection(
         &self,
         profile: &str,
@@ -589,6 +701,9 @@ pub(in crate::storage) fn gate(db: &Connection, spec: &JobSpec) -> Result<(), St
     ) && match spec.kind {
         JobKind::Transcription => spec.parameters["engine"].is_object(),
         JobKind::Diarization => spec.parameters["diarization"]["engine"].is_object(),
+        JobKind::VoiceRegistration | JobKind::VoiceMatching => {
+            spec.parameters["voice"]["engine"].is_object()
+        }
         JobKind::MinutesGeneration => spec.parameters["generation"]["engine"].is_object(),
     };
     if !native {

@@ -444,6 +444,7 @@ impl Storage {
             tx.execute("INSERT INTO vocabulary_snapshots(id,meeting_id,job_id,payload_json,content_hash,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![snapshot.id,meeting,job.id,serde_json::to_string(&snapshot).map_err(|e|e.to_string())?,snapshot.content_hash,now_ms()?]).map_err(|e|e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
+        crate::internal_logs::job(&job);
         Ok(job)
     }
     pub(crate) fn verify_vocabulary_snapshot(

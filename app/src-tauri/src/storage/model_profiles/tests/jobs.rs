@@ -9,7 +9,9 @@ mod rebinding;
 
 fn whisper(f: &Fixture) -> WhisperConfig {
     let p = f.storage.analysis_preferences().unwrap().payload.standard;
-    let capture = |s: &str| Fingerprint::capture(Path::new(s), &|| false).unwrap();
+    let capture = |s: &str| {
+        Fingerprint::capture(Path::new(s), &crate::test_support::never_cancelled).unwrap()
+    };
     WhisperConfig {
         executable: capture(&p.executable_path),
         model: capture(&p.model_path),
@@ -26,7 +28,9 @@ fn sherpa(f: &Fixture) -> SherpaConfig {
         .unwrap()
         .payload
         .standard;
-    let capture = |s: &str| Fingerprint::capture(Path::new(s), &|| false).unwrap();
+    let capture = |s: &str| {
+        Fingerprint::capture(Path::new(s), &crate::test_support::never_cancelled).unwrap()
+    };
     SherpaConfig {
         executable: capture(&p.executable_path),
         segmentation_model: capture(&p.segmentation_model_path),
@@ -41,7 +45,9 @@ fn sherpa(f: &Fixture) -> SherpaConfig {
 }
 fn llama(f: &Fixture) -> (LlamaConfig, usize) {
     let p = f.storage.minutes_preferences().unwrap().payload.standard;
-    let capture = |s: &str| Fingerprint::capture(Path::new(s), &|| false).unwrap();
+    let capture = |s: &str| {
+        Fingerprint::capture(Path::new(s), &crate::test_support::never_cancelled).unwrap()
+    };
     (
         LlamaConfig {
             executable: capture(&p.executable_path),
@@ -57,9 +63,14 @@ fn llama(f: &Fixture) -> (LlamaConfig, usize) {
 }
 fn ready(f: &mut Fixture) {
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    let id = crate::transcription::process(&f.storage, &f.baseline.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let id = crate::transcription::process(
+        &f.storage,
+        &f.baseline.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     f.storage
         .commit_analysis_candidate(&f.meeting, &id, 0, false)
         .unwrap();
@@ -67,6 +78,84 @@ fn ready(f: &mut Fixture) {
         let index = f.add(engine, true, false);
         f.apply(index, ProfileName::Standard);
     }
+}
+
+fn minutes_start(f: &Fixture) -> crate::generation::StartRequest {
+    let p = f.storage.minutes_preferences().unwrap().payload.standard;
+    crate::generation::StartRequest {
+        input: request(f, &Uuid::new_v4().to_string()),
+        executable_path: p.executable_path.into(),
+        model_path: p.model_path.into(),
+        threads: p.threads,
+        context_tokens: p.context_tokens,
+        prediction_tokens: p.prediction_tokens,
+        gpu_layers: p.gpu_layers,
+        seed: p.seed,
+        profile: "standard".into(),
+        prompt_budget: p.prompt_budget,
+    }
+}
+
+#[test]
+fn minutes_admission_uses_sealed_metadata_and_worker_rejects_missing_model_before_inference() {
+    let mut f = Fixture::new();
+    ready(&mut f);
+    let expected = llama(&f).0;
+    let start = minutes_start(&f);
+    // A removed large file must not be opened/scanned during admission. The
+    // worker must still reject it before starting a CLI or publishing output.
+    std::fs::remove_file(&expected.model.path).unwrap();
+    let (engine, selection) = f.storage.prepare_minutes_admission(&start).unwrap();
+    assert_eq!(engine, expected);
+    let job = crate::generation::markdown_job::enqueue_prepared_synthetic(
+        &f.storage,
+        start.input.clone(),
+        engine,
+        start.prompt_budget,
+        selection,
+    )
+    .unwrap();
+    assert_eq!(job.state, "queued");
+    let (again, snapshot) = f.storage.prepare_minutes_admission(&start).unwrap();
+    let replay = crate::generation::markdown_job::enqueue_prepared_synthetic(
+        &f.storage,
+        start.input,
+        again,
+        start.prompt_budget,
+        snapshot,
+    )
+    .unwrap();
+    assert_eq!(replay.id, job.id);
+    let claimed = f.storage.acquire_local_inference_job().unwrap().unwrap();
+    assert_eq!(claimed.id, job.id);
+    assert!(crate::generation::markdown_job::process(
+        &f.storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
+    assert_eq!(f.storage.get_job(&job.id).unwrap().completed_units, 0);
+    assert!(f
+        .storage
+        .get_minutes_markdown(&f.meeting)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn minutes_admission_rejects_unselected_paths_and_changed_settings_without_file_reads() {
+    let mut f = Fixture::new();
+    ready(&mut f);
+    let mut start = minutes_start(&f);
+    start.model_path = "/unselected/model.gguf".into();
+    assert!(f.storage.prepare_minutes_admission(&start).is_err());
+    let mut start = minutes_start(&f);
+    start.threads = if start.threads == 1 { 2 } else { 1 };
+    assert!(f.storage.prepare_minutes_admission(&start).is_err());
+    let mut start = minutes_start(&f);
+    start.profile = "unknown".into();
+    assert!(f.storage.prepare_minutes_admission(&start).is_err());
 }
 fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
     let a = f
@@ -152,11 +241,17 @@ pub(super) fn publication_fixture() -> (
     ready(&mut f);
     let jobs = enqueue_all(&f);
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    crate::transcription::process(&f.storage, &jobs[0].id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    crate::transcription::process(
+        &f.storage,
+        &jobs[0].id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     f.storage.ensure_analysis_flow(&f.meeting).unwrap();
-    crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     let flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
     let mut ids = jobs.into_iter().map(|j| j.id).collect::<Vec<_>>();
     ids.push(flow.transcription_job.unwrap().id);
@@ -193,7 +288,11 @@ fn managed_jobs_all_three_engines_bind_partial_or_complete_profile_without_runni
     let w = whisper(&partial);
     assert!(partial
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&w), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&w),
+            &crate::test_support::never_cancelled
+        )
         .unwrap()
         .is_some());
 }
@@ -243,7 +342,11 @@ fn managed_jobs_current_model_vad_executable_library_manifest_and_trial_artifact
     .unwrap();
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Sherpa(&sherpa(&f)), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Sherpa(&sherpa(&f)),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
 }
 
@@ -257,12 +360,20 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
     w.threads += 1;
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&w), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&w),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     let w = whisper(&f);
     assert!(f
         .storage
-        .prepare_model_selection("high_accuracy", Execution::Whisper(&w), &|| false)
+        .prepare_model_selection(
+            "high_accuracy",
+            Execution::Whisper(&w),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(f
         .storage
@@ -276,12 +387,20 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
         .unwrap();
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&whisper(&f)), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&whisper(&f)),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     f.apply(i, ProfileName::Standard);
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&whisper(&f)), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&whisper(&f)),
+            &crate::test_support::never_cancelled
+        )
         .unwrap()
         .is_some());
 }
@@ -389,7 +508,11 @@ fn managed_jobs_fixed_execution_and_same_operation_survive_head_settings_and_tri
         .unwrap();
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Sherpa(&d), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Sherpa(&d),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     for (job, e) in jobs.iter().zip([
         Execution::Whisper(&w),
@@ -397,12 +520,22 @@ fn managed_jobs_fixed_execution_and_same_operation_survive_head_settings_and_tri
         Execution::Llama(&l, b),
     ]) {
         let (s, _) = f.storage.fixed_job_input(&job.id).unwrap();
-        managed::verify(&s.profile_snapshot, e, &|| false).unwrap();
+        managed::verify(
+            &s.profile_snapshot,
+            e,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     }
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    crate::transcription::process(&f.storage, &jobs[0].id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    crate::transcription::process(
+        &f.storage,
+        &jobs[0].id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         f.storage.fixed_job_input(&jobs[0].id).unwrap().0,
         original.0
@@ -422,14 +555,26 @@ fn managed_jobs_runtime_refuses_mutated_package_before_any_child_process_and_pre
     let original = f.storage.fixed_job_input(&job.id).unwrap();
     // Drain the older fixture job; it stays executable under its original proof.
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    crate::transcription::process(&f.storage, &f.baseline.id, &|| false, &|_| {}).unwrap();
+    crate::transcription::process(
+        &f.storage,
+        &f.baseline.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     std::fs::write(
         f.models().join(&f.packages[i].id).join("vad.bin"),
         b"new bytes",
     )
     .unwrap();
     f.storage.acquire_local_inference_job().unwrap().unwrap();
-    assert!(crate::transcription::process(&f.storage, &job.id, &|| false, &|_| {}).is_err());
+    assert!(crate::transcription::process(
+        &f.storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     assert!(!f
         .models()
         .join(&f.packages[i].id)
@@ -443,7 +588,8 @@ fn managed_jobs_flow_freezes_both_engines_and_handoffs_use_old_proof_after_new_a
     let mut f = Fixture::new();
     ready(&mut f);
     f.storage.ensure_analysis_flow(&f.meeting).unwrap();
-    crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     let flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
     let original = flow.plan.clone().unwrap();
     assert!(original["whisperManaged"].is_object());
@@ -455,12 +601,13 @@ fn managed_jobs_flow_freezes_both_engines_and_handoffs_use_old_proof_after_new_a
     crate::transcription::process(
         &f.storage,
         &flow.transcription_job.unwrap().id,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap()
     .unwrap();
-    crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     let next = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
     assert_eq!(next.plan, Some(original));
     let job = next.diarization_job.as_ref().unwrap();
@@ -482,6 +629,83 @@ fn managed_jobs_flow_freezes_both_engines_and_handoffs_use_old_proof_after_new_a
 }
 
 #[test]
+fn cpu_thread_tuning_keeps_started_flow_conditions_and_new_jobs_use_new_threads() {
+    let mut f = Fixture::new();
+    ready(&mut f);
+    f.storage.ensure_analysis_flow(&f.meeting).unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
+    let flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
+    let original = flow.plan.clone().unwrap();
+    let old = crate::analysis_flow::saved_plan(original.clone(), "standard").unwrap();
+    let package = f
+        .packages
+        .iter()
+        .find(|p| p.record.manifest.engine == Engine::Sherpa)
+        .unwrap();
+    let preview = crate::model_application::preview_with_threads(
+        &f.storage,
+        &f.models(),
+        ProfileName::Standard,
+        &package.id,
+        &package.record.review_hash,
+        &package.check,
+        Some(8),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    crate::model_application::apply(
+        &f.storage,
+        &f.models(),
+        &Uuid::new_v4().to_string(),
+        &preview,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let new = crate::analysis_flow::prepare(
+        &f.storage,
+        "standard",
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert_eq!(new.sherpa.threads, 8);
+    let mut expected = old.sherpa.clone();
+    expected.threads = 8;
+    assert_eq!(new.sherpa, expected);
+    assert_ne!(new.sherpa_managed, old.sherpa_managed);
+    f.storage.acquire_local_inference_job().unwrap().unwrap();
+    crate::transcription::process(
+        &f.storage,
+        &flow.transcription_job.unwrap().id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
+    let next = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
+    assert_eq!(next.plan, Some(original));
+    let (spec, _) = f
+        .storage
+        .fixed_job_input(&next.diarization_job.unwrap().id)
+        .unwrap();
+    let frozen: SherpaConfig =
+        serde_json::from_value(spec.parameters["diarization"]["engine"].clone()).unwrap();
+    assert_eq!(frozen, old.sherpa);
+    let job = crate::diarization::enqueue(
+        &f.storage,
+        request(&f, &Uuid::new_v4().to_string()),
+        new.sherpa,
+        "standard",
+        tracks(&f),
+    )
+    .unwrap();
+    let (spec, _) = f.storage.fixed_job_input(&job.id).unwrap();
+    assert_eq!(spec.parameters["diarization"]["engine"]["threads"], 8);
+}
+
+#[test]
 fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tampered_hash_roles_and_mixed_paths(
 ) {
     let mut f = Fixture::new();
@@ -490,7 +714,11 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
     let w = whisper(&f);
     let selected = f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&w), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&w),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     let profile = managed::attach(json!({"profile":"standard"}), selected).unwrap();
     let mut portable = w.clone();
@@ -521,7 +749,12 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
     other["managedModel"]["compatibility"]["reviewHash"] = json!(record.review_hash);
     other["managedModel"]["package"] = serde_json::to_value(record).unwrap();
     managed::validate(&other, Execution::Whisper(&portable)).unwrap();
-    assert!(managed::verify(&other, Execution::Whisper(&portable), &|| false).is_err());
+    assert!(managed::verify(
+        &other,
+        Execution::Whisper(&portable),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let mut mixed = portable.clone();
     mixed.executable = w.executable.clone();
     assert!(managed::validate(&profile, Execution::Whisper(&mixed)).is_err());
@@ -534,7 +767,12 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
     p["managedModel"]["package"]["files"][1]["actualHash"] = json!("a".repeat(64));
     assert!(managed::validate(&p, Execution::Whisper(&portable)).is_err());
     // Native availability remains a separate operation, never a restore gate.
-    assert!(managed::verify(&profile, Execution::Whisper(&portable), &|| false).is_err());
+    assert!(managed::verify(
+        &profile,
+        Execution::Whisper(&portable),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -606,11 +844,19 @@ fn managed_jobs_plan_save_rechecks_current_head_and_never_commits_a_stale_plan()
     let d = sherpa(&f);
     let ws = f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&w), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Whisper(&w),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     let ds = f
         .storage
-        .prepare_model_selection("standard", Execution::Sherpa(&d), &|| false)
+        .prepare_model_selection(
+            "standard",
+            Execution::Sherpa(&d),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     let plan = json!({"schemaVersion":1,"profile":"standard","whisper":w,"sherpa":d,"whisperManaged":ws,"sherpaManaged":ds});
     let i = f.add(Engine::Whisper, true, false);
@@ -662,9 +908,19 @@ fn managed_jobs_diarization_and_minutes_runtime_reject_untracked_library_mutatio
             job.id
         );
         let result = if index == 1 {
-            crate::diarization::process(&f.storage, &job.id, &|| false, &|_| {})
+            crate::diarization::process(
+                &f.storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
         } else {
-            crate::generation::process(&f.storage, &job.id, &|| false, &|_| {})
+            crate::generation::process(
+                &f.storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
         };
         assert!(result.is_err());
         assert_eq!(f.storage.fixed_job_input(&job.id).unwrap(), spec);

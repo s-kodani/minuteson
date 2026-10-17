@@ -19,12 +19,12 @@ test("open text buffers are dirty independently of the durable payload; acknowle
   assert.equal(textBuffersDirty({ u: { ...session, value: "保存中に続けた入力" } }, [{ ...utterance, effectiveText: "入力中" }]), true);
   assert.equal(textBuffersDirty(sessions, []), false);
 });
-test("retained editing/focused rows survive filters and pagination in canonical order without changing search counts", () => {
+test("all matching rows and retained edits stay in canonical order without pagination", () => {
   const rows = Array.from({ length: 103 }, (_, i) => ({ ...utterance, id: String(i) })), before = structuredClone(rows);
-  const result = retainedTextRows(rows, rows, 1, 50, ["0", "102", "0", "missing"]);
-  assert.deepEqual(result.rows.map(item => item.id), ["0", ...rows.slice(50, 100).map(item => item.id), "102"]); assert.equal(result.extra, 2);
-  assert.deepEqual(retainedTextRows(rows, [], 0, 50, ["102", "0"]).rows.map(item => item.id), ["0", "102"]);
-  assert.deepEqual(retainedTextRows(rows, [], 0, 50, ["missing"]), { rows: [], extra: 0 }); assert.deepEqual(rows, before);
+  const result = retainedTextRows(rows, rows, ["0", "102", "0", "missing"]);
+  assert.deepEqual(result.rows.map(item => item.id), rows.map(item => item.id)); assert.equal(result.extra, 0);
+  assert.deepEqual(retainedTextRows(rows, [], ["102", "0"]).rows.map(item => item.id), ["0", "102"]);
+  assert.deepEqual(retainedTextRows(rows, [], ["missing"]), { rows: [], extra: 0 }); assert.deepEqual(rows, before);
 });
 test("cancel removes only a new text override, preserving unrelated edits and payload structures", () => {
   const original = payload(), baseline = textEditBaseline(original, utterance);

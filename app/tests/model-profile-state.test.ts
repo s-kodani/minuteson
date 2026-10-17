@@ -78,3 +78,17 @@ test("readback checks the selected actual preferences and never substitutes sett
   assert.equal(preferenceCommand("sherpa-onnx"), "get_diarization_preferences");
   assert.equal(preferenceCommand("llama.cpp"), "get_minutes_preferences");
 });
+test("CPU tuning requires the explicit requested thread count and cannot change model files or diarization conditions", () => {
+  const settings = { executablePath: "/app/models/sherpa", segmentationModelPath: "/app/models/seg.onnx", embeddingModelPath: "/app/models/emb.onnx", runtimeLibraryPaths: ["/app/models/lib.dylib"], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
+  const current: ModelProfileView = { ...applied, components: [{ ...component, engine: "sherpa-onnx", roles: ["segmentation", "speaker_embedding"] }] };
+  const p: ModelApplicationPreview = { ...preview, expectedProfileId: current.id, expectedProfileHash: "c".repeat(64), expectedProfileVersion: current.profileVersion, before: { engine: "sherpa-onnx", settings }, after: { engine: "sherpa-onnx", settings: { ...settings, threads: 8 } }, diarizationThreads: 8 };
+  const e = { ...entry, engine: "sherpa-onnx" as const };
+  assert.doesNotThrow(() => assertApplicationPreview(p, e, "standard", current, 8));
+  assert.throws(() => assertApplicationPreview(p, e, "standard", current));
+  assert.throws(() => assertApplicationPreview(p, e, "standard", current, 4));
+  assert.throws(() => assertApplicationPreview(p, e, "standard", { ...current, components: [{ ...current.components[0], settingsMatch: false }] }, 8));
+  for (const patch of [{ threads: 2 }, { segmentationModelPath: "/app/models/other.onnx" }, { embeddingModelPath: "/app/models/other.onnx" }, { clusterThresholdMilli: 900 }, { windowShiftMilli: 500 }, { minDurationOnMs: 300 }, { minDurationOffMs: 500 }]) {
+    assert.throws(() => assertApplicationPreview({ ...p, after: { engine: "sherpa-onnx", settings: { ...settings, threads: 8, ...patch } } }, e, "standard", current, 8));
+  }
+  assert.throws(() => assertApplicationPreview({ ...preview, diarizationThreads: 8 }, entry, "standard", empty, 8));
+});

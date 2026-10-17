@@ -6,14 +6,15 @@ async(page,capturePath)=>{
   const editor=page.getByRole('region',{name:'文字起こし編集',exact:true});
   const body=editor.getByRole('region',{name:'発言本文',exact:true});
   await body.waitFor();
-  check(await body.getByRole('article').count()===50,'initial pagination is not bounded');
+  check(await body.getByRole('article').count()===70,'utterance list still truncates matching rows');
   const count=()=>page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
   await editor.getByRole('button',{name:'田中の発言で絞り込み',exact:true}).click();
   check(await body.getByRole('article').count()===24,'speaker filter includes wrong rows');
   await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('本文0');check(await body.getByRole('article').count()===1,'speaker/text filters do not intersect');
-  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('');await editor.getByRole('button',{name:'話者不明の発言',exact:true}).click();check(await body.getByRole('article').count()===23,'unknown filter invents an assigned speaker');
-  await editor.getByRole('button',{name:/^すべての発言/}).click();await editor.getByRole('button',{name:'次へ',exact:true}).click();check(await body.getByRole('article').count()===20,'next page loses remaining utterances');await editor.getByRole('button',{name:'前へ',exact:true}).click();
-  results.push('speaker unknown and text filters combine correctly and manual pagination retains all 70 rows');
+  const unknown=editor.getByRole('button',{name:'話者不明の発言 23',exact:true});check(await unknown.isVisible(),'unknown speaker count is missing or affected by search');
+  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('');await unknown.click();check(await body.getByRole('article').count()===23,'unknown filter invents an assigned speaker');
+  await editor.getByRole('button',{name:/^すべての発言/}).click();check(await body.getByRole('article').count()===70,'clearing filters loses utterances');check(await editor.locator('.transcript-pages').count()===0,'utterance pagination remains');check(await body.locator('[data-utterance-id]').last().getAttribute('data-utterance-id')==='speech-69','final utterance is not in sequence');
+  results.push('speaker unknown and text filters combine correctly and all 70 rows remain available without pagination');
   await editor.getByRole('button',{name:'田中の名前を変更',exact:true}).click();
   const name=page.getByRole('dialog',{name:'話者名を変更',exact:true}),input=name.getByRole('textbox',{name:'表示名',exact:true});await input.waitFor();
   await input.fill('未確定の話者名');check(await count()===0,'typing a name automatically saves');await page.keyboard.press('Escape');await name.waitFor({state:'hidden'});check(await editor.getByRole('button',{name:'田中の名前を変更',exact:true}).count()===1,'cancelling changed the label');
@@ -31,7 +32,7 @@ async(page,capturePath)=>{
     if(width<=760){await drawer.getByRole('button',{name:'話者一覧を閉じる',exact:true}).click();await drawer.waitFor({state:'hidden'});}
   }
   results.push('wide speaker panel and narrow modal drawer fit both themes without horizontal overflow');
-  check(await page.getByRole('button',{name:/話者を統合|手動分割|編集を開始/}).count()===0,'retired bulk tools remain');
-  results.push('speaker controls contain no retired merges or bulk editing modes');
+  check(await page.getByRole('button',{name:/一括割り当て|編集を開始/}).count()===0,'retired bulk tools remain');
+  results.push('speaker controls retain individual editing and restored merge without bulk assignment');
   return {passed:results.length,results};
 }

@@ -79,8 +79,8 @@ export interface AudioPacket {
 }
 
 export function playbackStartFrame(info: PlaybackInfo, absoluteUs: number): number {
-  if (!Number.isSafeInteger(absoluteUs) || absoluteUs < info.startUs || absoluteUs >= info.endUs || info.totalFrames < 1) throw Error("推定区間の再生位置が発言の範囲外です。");
-  return Math.min(info.totalFrames-1,Math.floor((absoluteUs-info.startUs)*info.sampleRate/1_000_000));
+  if (!Number.isSafeInteger(absoluteUs) || absoluteUs < info.startUs || absoluteUs >= info.endUs || info.totalFrames < 1) throw Error("再生開始位置が音声の範囲外です。");
+  return Math.min(info.totalFrames-1,Number(BigInt(absoluteUs-info.startUs)*BigInt(info.sampleRate)/1000000n));
 }
 
 export function decodeAudioPacket(bytes: ArrayBuffer | number[]): AudioPacket {

@@ -5,21 +5,30 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 mod native_history;
 
 fn select(f: &Fixture) {
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let confirmation = p.pending.confirmation_id.clone();
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap();
 }
 
 #[test]
 fn activation_saved_manifest_requires_bounded_owned_paths_and_strict_native_fields() {
     let f = Fixture::new();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     validate_manifest(s.manifest()).unwrap();
     for failure in [
         "version",
@@ -56,12 +65,18 @@ fn activation_modified_source_or_target_refuses_before_selection_and_keeps_old_s
         "database",
     ] {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&h, &|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
         match failure {
             "source-audio" => {
                 std::fs::write(f.storage.root().join(&f.relative), b"changed source").unwrap()
@@ -85,7 +100,7 @@ fn activation_modified_source_or_target_refuses_before_selection_and_keeps_old_s
         let before = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
         let confirmation = p.pending.confirmation_id.clone();
         assert!(
-            p.activate_for_restart(&h, &confirmation, 1, &|| false)
+            p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
                 .is_err(),
             "{failure}"
         );
@@ -201,12 +216,18 @@ fn activation_admitted_binding_substitution_or_missing_current_schema_is_not_rep
 #[test]
 fn activation_old_placement_ledger_is_rejected_without_rewriting_any_copy_proofs() {
     let f = Fixture::new();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let owner = p.path.clone();
     drop(p);
     let db = Connection::open(&owner).unwrap();
@@ -263,19 +284,24 @@ fn activation_current_shared_app_parent_preserves_models_and_lost_response_repla
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let s = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let operation = Uuid::new_v4().to_string();
     let confirmation = Uuid::new_v4().to_string();
     b.begin_move(&operation, &confirmation, &target, s.manifest_hash(), 0)
         .unwrap();
     let mut p = b.pending_placement(&operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(
-        p.activate_for_restart(&h, &confirmation, 1, &|| false)
+        p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
             .unwrap()
             .revision,
         2
@@ -312,16 +338,21 @@ fn activation_second_move_uses_current_admitted_root_without_restoring_stale_sou
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let s = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let operation = Uuid::new_v4().to_string();
     let confirmation = Uuid::new_v4().to_string();
     b.begin_move(&operation, &confirmation, &target, s.manifest_hash(), 2)
         .unwrap();
     let mut p = b.pending_placement(&operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.activate_for_restart(&h, &confirmation, 3, &|| false)
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.activate_for_restart(&h, &confirmation, 3, &crate::test_support::never_cancelled)
         .unwrap();
     drop(p);
     drop(h);
@@ -362,15 +393,22 @@ fn activation_publication_failure_before_or_after_rename_never_releases_old_writ
         let config = f.bootstrap.config.clone();
         let legacy = f.bootstrap.models_root.parent().unwrap().to_owned();
         let source = f.storage.root().to_owned();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&h, &|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
         let confirmation = p.pending.confirmation_id.clone();
         FAULT.with(|f| f.set(Some(fault)));
-        let result = p.activate_for_restart(&h, &confirmation, 1, &|| false);
+        let result =
+            p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled);
         FAULT.with(|f| f.set(None));
         assert!(result
             .err()
@@ -421,14 +459,19 @@ fn activation_cutover_child() {
     ) = serde_json::from_str(&std::env::var("MON_ACTIVATION_TEST_PATHS").unwrap()).unwrap();
     let b = Bootstrap::open(&config, &legacy).unwrap();
     let storage = b.open_storage().unwrap();
-    let s = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     b.begin_move(&operation, &confirmation, &target, s.manifest_hash(), 0)
         .unwrap();
     let mut p = b.pending_placement(&operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap();
     drop(p);
     drop(h);
@@ -571,13 +614,23 @@ fn activation_actual_sigkill_before_selection_after_selection_and_after_admissio
             // Resume the interrupted, still-pending operation through new source
             // staging and the installed compatible history, not a fake receipt.
             let pending = document.record.pending_move.as_ref().unwrap();
-            let s = storage.prepare_relocation_snapshot(&|| false).unwrap();
-            let mut p = b.pending_placement(&f.operation, &s).unwrap();
-            p.copy(&s, &|| false).unwrap();
-            let h = s.prepare_control_handoff(&|| false).unwrap();
-            p.install_history(&h, &|| false).unwrap();
-            p.activate_for_restart(&h, &pending.confirmation_id, 1, &|| false)
+            let s = storage
+                .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
                 .unwrap();
+            let mut p = b.pending_placement(&f.operation, &s).unwrap();
+            p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+            let h = s
+                .prepare_control_handoff(&crate::test_support::never_cancelled)
+                .unwrap();
+            p.install_history(&h, &crate::test_support::never_cancelled)
+                .unwrap();
+            p.activate_for_restart(
+                &h,
+                &pending.confirmation_id,
+                1,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             drop(p);
             drop(h);
             drop(s);
@@ -608,15 +661,21 @@ fn activation_selection_freezes_old_storage_then_cold_start_admits_same_owned_me
     let legacy = models.parent().unwrap().to_owned();
     std::fs::create_dir_all(&models).unwrap();
     std::fs::write(models.join("model.bin"), b"keep model").unwrap();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let confirmation = p.pending.confirmation_id.clone();
     let view = p
-        .activate_for_restart(&h, &confirmation, 1, &|| false)
+        .activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(view.meeting_root, f.target);
     assert_eq!(view.active_meeting_root, source);
@@ -625,14 +684,16 @@ fn activation_selection_freezes_old_storage_then_cold_start_admits_same_owned_me
     assert_eq!(view.origin, "relocated");
     let bytes = std::fs::read(config.join(NAME)).unwrap();
     assert_eq!(
-        p.activate_for_restart(&h, &confirmation, 1, &|| false)
+        p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
             .unwrap()
             .revision,
         2
     );
     assert_eq!(std::fs::read(config.join(NAME)).unwrap(), bytes);
-    assert!(p.copy(&s, &|| false).is_err());
-    assert!(p.install_history(&h, &|| false).is_err());
+    assert!(p.copy(&s, &crate::test_support::never_cancelled).is_err());
+    assert!(p
+        .install_history(&h, &crate::test_support::never_cancelled)
+        .is_err());
     assert!(f.bootstrap.initialize(&f.storage).is_err());
     drop(p);
     drop(h);
@@ -685,13 +746,19 @@ fn activation_wrong_confirmation_revision_uninstalled_history_or_cancellation_pr
 ) {
     for failure in ["confirmation", "revision", "history", "cancel"] {
         let f = Fixture::new();
-        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let s = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&s);
         let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-        p.copy(&s, &|| false).unwrap();
-        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+        let h = s
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         if failure != "history" {
-            p.install_history(&h, &|| false).unwrap();
+            p.install_history(&h, &crate::test_support::never_cancelled)
+                .unwrap();
         }
         let before = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
         let confirmation = if failure == "confirmation" {
@@ -727,14 +794,20 @@ fn activation_first_launch_rejects_audio_tamper_without_opening_or_mutating_targ
     let f = Fixture::new();
     let config = f.bootstrap.config.clone();
     let legacy = f.bootstrap.models_root.parent().unwrap().to_owned();
-    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let s = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&s);
     let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
-    p.copy(&s, &|| false).unwrap();
-    let h = s.prepare_control_handoff(&|| false).unwrap();
-    p.install_history(&h, &|| false).unwrap();
+    p.copy(&s, &crate::test_support::never_cancelled).unwrap();
+    let h = s
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let confirmation = p.pending.confirmation_id.clone();
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.activate_for_restart(&h, &confirmation, 1, &crate::test_support::never_cancelled)
         .unwrap();
     drop(p);
     drop(h);

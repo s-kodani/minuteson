@@ -18,6 +18,7 @@ pub(crate) struct AnalysisFlow {
     pub plan: Option<Value>,
     pub ready_to_publish: bool,
     pub replacement_requested: bool,
+    pub replacement_ready: bool,
 }
 
 pub(super) fn ensure_flow(db: &Connection, meeting: &str) -> Result<(), String> {
@@ -57,14 +58,21 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
     let replacement_requested = plan
         .as_ref()
         .is_some_and(|p| p.get("replacement").is_some_and(|v| !v.is_null()));
-    let ready_to_publish = stage == "diarization"
+    let replacement_ready = matches!(stage.as_str(), "diarization" | "attention")
         && replacement_requested
+        && trans
+            .as_deref()
+            .map(|id| super::jobs::load_job(db, id))
+            .transpose()?
+            .flatten()
+            .is_some_and(|j| j.state == "succeeded")
         && diar
             .as_deref()
             .map(|id| super::jobs::load_job(db, id))
             .transpose()?
             .flatten()
             .is_some_and(|j| j.state == "succeeded");
+    let ready_to_publish = stage == "diarization" && replacement_ready;
     Ok(Some(AnalysisFlow {
         id,
         meeting_id: meeting.into(),
@@ -84,6 +92,7 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
         plan,
         ready_to_publish,
         replacement_requested,
+        replacement_ready,
     }))
 }
 
@@ -95,6 +104,14 @@ impl Storage {
         &self,
         old: &AnalysisFlow,
     ) -> Result<AnalysisFlow, String> {
+        self.complete_analysis_flow_with_confirmation(old, None)?
+            .published()
+    }
+    fn complete_analysis_flow_with_confirmation(
+        &self,
+        old: &AnalysisFlow,
+        confirmed_target: Option<&regeneration::Target>,
+    ) -> Result<regeneration::Publication, String> {
         let mut db = self
             .connection
             .lock()
@@ -103,7 +120,7 @@ impl Storage {
         let current = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
         if current.id != old.id
             || current.lock_version != old.lock_version
-            || current.stage != "diarization"
+            || !(current.stage == "diarization" || current.replacement_ready)
         {
             return Err("文字起こしの完了対象が変更されています".into());
         }
@@ -146,7 +163,34 @@ impl Storage {
             &current.profile,
         )?;
         if let Some(target) = &plan.replacement {
-            regeneration::require_target(&tx, &old.meeting_id, target)?;
+            if let Some(confirmed) = confirmed_target {
+                // Consent covers edits to this transcript, never a different
+                // public head. Keep the frozen execution plan unchanged.
+                if confirmed.analysis_id != target.analysis_id {
+                    return Err("置き換え対象の文字起こしが変更されています".into());
+                }
+                regeneration::require_target(&tx, &old.meeting_id, confirmed)?;
+            } else {
+                let latest = regeneration::target(&tx, &old.meeting_id)?;
+                if latest.as_ref() != Some(target) {
+                    let latest = latest.ok_or("置き換え対象の文字起こしがありません")?;
+                    if latest.analysis_id != target.analysis_id {
+                        return Err("置き換え対象の文字起こしが変更されています".into());
+                    }
+                    let meeting_title = tx
+                        .query_row(
+                            "SELECT title FROM meetings WHERE id=?1",
+                            params![old.meeting_id],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    return Ok(regeneration::Publication::ConfirmationRequired {
+                        flow: current,
+                        target: latest,
+                        meeting_title,
+                    });
+                }
+            }
         } else if head.is_some() || super::drafts::load_draft(&tx, &old.meeting_id)?.is_some() {
             return Err(
                 "既存の文字起こしと編集を保持しています。自動処理で上書きしません。".into(),
@@ -176,7 +220,7 @@ impl Storage {
         }
         let flow = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(flow)
+        Ok(regeneration::Publication::Published { flow })
     }
     pub(crate) fn analysis_flow(&self, meeting: &str) -> Result<Option<AnalysisFlow>, String> {
         let db = self

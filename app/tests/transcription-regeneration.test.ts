@@ -33,8 +33,8 @@ test("regeneration is explicit, retains unknown acceptance identity and never re
 test("publication is coordinated outside the selected meeting and does not save or discard Markdown",()=>{
   const hook=source("analysis-publication.ts"),main=source("main.tsx"),minutes=source("minutes.tsx");
   assert.match(hook,/get_ready_analysis_flows/);
-  assert.match(hook,/withConfirmedEdits\(live.current.saveThenAct/);
-  assert.match(hook,/publish_regenerated_transcription.*expectedLockVersion: flow.lockVersion/);
+  assert.match(hook,/publishWithReplacementConfirmation/);
+  assert.match(hook,/expectedLockVersion: current.lockVersion, confirmedTarget/);
   assert.match(main,/useAnalysisPublication\(writeLocked, action => withSavedEdits\(action, "transcription"\)\)/);
   assert.match(main,/reason === "transcription"\) flushSync/);
   assert.match(minutes,/if \(reason === "transcription"\) return/);

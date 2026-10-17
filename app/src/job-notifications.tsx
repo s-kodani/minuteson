@@ -1,16 +1,38 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IssueNotice, ToastNotice, toasts } from "./toast";
 import { toastKey } from "./toast-state";
 import { JobNotificationTracker, jobGroup, jobName, verifiedJobOutput, type JobNotice, type NotificationJob } from "./job-notification-state";
+import { usePublishJobReadStatus, usePublishProgress } from "./operation-progress";
+import { acceptMinutesRuntime, minutesRuntimeDetail, type MinutesRuntime } from "./minutes-runtime-state";
+import { jobProgress } from "./operation-progress-state";
+import { minutesAdmissions } from "./minutes-generation-admission";
 
 /** One main-window owner, independent of the selected meeting or workspace.
  * Events invalidate authoritative reads; no event can publish a success. */
 export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: (meetingId: string) => Promise<void> }) {
+  const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
+  const admissionErrors = useRef(new Set<string>());
+  useEffect(() => {
+    const errors = new Set(admissions.filter(item => item.error).map(item => item.meetingId));
+    for (const id of admissionErrors.current) if (!errors.has(id)) toasts.resolve(toastKey("minutes-admission", id));
+    admissionErrors.current = errors;
+  }, [admissions]);
+  usePublishProgress("minutes-admission", admissions.filter(item => item.pending).map(item => ({
+    id: `minutes-admission:${item.operationId}`, target: item.meetingTitle, meetingId: item.meetingId,
+    kind: "minutes_generation", state: "queued", label: "議事録生成 · 開始準備中",
+    completed: null, total: null, detail: "受付結果を確認しています。ほかの画面も操作できます。",
+  })));
   const [tracker] = useState(() => new JobNotificationTracker(Date.now()));
   const [notices, setNotices] = useState(new Map<string, JobNotice | null>());
   const [issues, setIssues] = useState<NotificationJob[]>([]);
+  const [progressJobs, setProgressJobs] = useState<NotificationJob[]>([]);
+  const [jobReadError, setJobReadError] = useState<string | null>(null);
+  usePublishJobReadStatus(jobReadError);
+  const [runtime, setRuntime] = useState(new Map<string, MinutesRuntime>());
+  const retried = new Set(progressJobs.map(job => job.retryOfJobId));
+  usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? { ...progress, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail } : null; }));
   const [readError, setReadError] = useState("");
   const [listenerError, setListenerError] = useState("");
   const [workerError, setWorkerError] = useState("");
@@ -45,6 +67,13 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
             const rows = await invoke<unknown>("get_analysis_notification_jobs", { watchedJobIds: tracker.watchedIds() });
             if (disposed) return;
             const state = tracker.ingest(rows);
+            for (const item of minutesAdmissions.getSnapshot()) {
+              minutesAdmissions.observe(item.meetingId, (rows as NotificationJob[])
+                .filter(job => job.meetingId === item.meetingId).map(job => job.operationId));
+            }
+            setProgressJobs(state.jobs);
+            setRuntime(prior => new Map([...prior].filter(([id, value]) => state.jobs.some(job => job.id === id && job.state === "running" && job.attempt === value.attempt && job.specHash === value.specHash && job.completedUnits <= value.unitIndex))));
+            setJobReadError("");
             setIssues(state.issues);
             const groups = new Set((rows as NotificationJob[]).map(jobGroup));
             publish(state.events, groups, new Set(state.issues.map(jobGroup)));
@@ -62,7 +91,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
               } catch (cause) { proofError ||= `「${job.meetingTitle}」の${jobName(job.kind)}の保存結果を確認できません: ${String(cause)}`; }
             }
             if (!disposed) setReadError(proofError);
-          } catch (cause) { if (!disposed) setReadError(String(cause)); }
+          } catch (cause) { if (!disposed) { setReadError(String(cause)); setJobReadError(String(cause)); } }
         } while (again && !disposed);
       })().finally(() => { inFlight = null; if (!disposed) setReading(false); });
       return inFlight;
@@ -73,6 +102,19 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     for (const event of ["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "meetings-changed"]) {
       void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
     }
+    void listen<unknown>("minutes-runtime-progress", event => {
+      if (disposed) return;
+      setRuntime(prior => {
+        const id = (event.payload as Partial<MinutesRuntime> | null)?.jobId;
+        if (typeof id !== "string") return prior;
+        const accepted = acceptMinutesRuntime(prior.get(id), event.payload);
+        if (!accepted || accepted === prior.get(id)) return prior;
+        const next = new Map(prior); next.set(id, accepted);
+        // Authoritative job reads prune ended jobs every three seconds.
+        if (next.size > 128) next.delete(next.keys().next().value!);
+        return next;
+      });
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
     void listen<unknown>("analysis-worker-error", event => {
       if (!disposed) { setWorkerError(typeof event.payload === "string" && event.payload ? event.payload : "解析ワーカーから異常の通知がありました。再起動後にジョブ状態を確認してください。"); void refresh(); }
     }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
@@ -81,6 +123,9 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
 
   const retryRead = async () => { if (!guard.current.locked) await refreshRef.current(); };
   return <>
+    {admissions.filter(item => item.error).map(item => <ToastNotice key={item.operationId} scope="minutes-admission" type={item.meetingId}
+      message={`「${item.meetingTitle}」の議事録生成の受付を確認できません：${item.error}`} level="error" meetingId={item.meetingId}
+      action={{ kind: "open", label: "会議を開く", disabled: locked, run: () => open(item.meetingId) }} />)}
     {[...notices].filter(([, event])=>event?.topic!=="issue").map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} meetingId={event?.job.meetingId} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
     <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" action={{ kind: "retry", label: "状態を再読込", disabled: locked || reading, run: retryRead }} />
     <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。` : ""} label="解析通知の受信" />

@@ -17,14 +17,21 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["voice", "voice-browser-fixture.js", "voice-browser-check.js"],
+  ["voice-selection", "voice-browser-fixture.js", "voice-selection-browser-check.js"],
+  ["voice-library", "voice-browser-fixture.js", "voice-library-browser-check.js"],
   ["notification-menu", "browser-fixture.js", "notification-menu-browser-check.js"],
   ["simple-workspace", "browser-fixture.js", "simple-workspace-browser-check.js"],
   ["notification-archive", null, "notification-archive-browser-check.js"],
   ["simple-transcript", "browser-fixture.js", "simple-transcript-browser-check.js"],
+  ["transcript-consolidation", "browser-fixture.js", "transcript-groups-browser-check.js"],
+  ["speaker-assignment", "browser-fixture.js", "speaker-assignment-browser-check.js"],
+  ["speaker-structure", "browser-fixture.js", "speaker-structure-browser-check.js"],
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
   ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
+  ["minutes-audio-tags", "plain-minutes-interval-browser-fixture.js", "minutes-audio-tags-browser-check.js"],
   ["plain-minutes-interval", "plain-minutes-interval-browser-fixture.js", "plain-minutes-interval-browser-check.js"],
   ["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"],
   ["keyboard-primary", "browser-fixture.js", "keyboard-primary-browser-check.js"],
@@ -96,6 +103,7 @@ const failures = [], continueOnFailure = args.includes("--continue-on-failure");
 const indexRoute = new RegExp(localPort(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/.source));
 const entryScript = /<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u;
 const readiness = {
+  "voice-browser-fixture.js": "monVoiceFixture",
   "common-modal-browser-fixture.tsx": "modalFixture", "action-confirmation-browser-fixture.tsx": "actionFixture",
   "info-popover-browser-fixture.tsx": "infoFixture", "browser-fixture.js": "monBrowserFixture",
   "import-browser-fixture.js": "monImportFixture", "model-deletion-browser-fixture.js": "modelDeletionFixture",

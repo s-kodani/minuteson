@@ -30,10 +30,14 @@ fn tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 fn preview(f: &Fixture) -> crate::storage::deletion::audio::Preview {
-    Census::capture(&f.storage, &f.session.meeting_id, &|| false)
-        .unwrap()
-        .preview(&Uuid::new_v4().to_string())
-        .unwrap()
+    Census::capture(
+        &f.storage,
+        &f.session.meeting_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .preview(&Uuid::new_v4().to_string())
+    .unwrap()
 }
 fn first_checkpoint(f: &Fixture) -> (Directory, String, Checkpoint) {
     let plan = f.plan();
@@ -69,9 +73,14 @@ fn flac_workspace_failed_commit_is_read_only_then_explicit_audio_only_deletion_r
     assert!(Census::capture(&f.storage, &f.session.meeting_id, &|| true).is_err());
     let controller = crate::analysis_worker::AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let census = Census::capture(&f.storage, &f.session.meeting_id, &|| false).unwrap();
+    let census = Census::capture(
+        &f.storage,
+        &f.session.meeting_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(intent::prepare(
         &f.storage,
         &Uuid::new_v4().to_string(),
@@ -81,7 +90,7 @@ fn flac_workspace_failed_commit_is_read_only_then_explicit_audio_only_deletion_r
             retain_unclassified: true
         },
         &lease,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     drop(lease);
@@ -106,10 +115,14 @@ fn flac_workspace_failed_commit_is_read_only_then_explicit_audio_only_deletion_r
     } = f;
     drop(storage);
     let reopened = Storage::open(temp.path().to_owned()).unwrap();
-    let p = Census::capture(&reopened, &session.meeting_id, &|| false)
-        .unwrap()
-        .preview(&Uuid::new_v4().to_string())
-        .unwrap();
+    let p = Census::capture(
+        &reopened,
+        &session.meeting_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .preview(&Uuid::new_v4().to_string())
+    .unwrap();
     assert_eq!(p.audio_files, 0);
     assert_eq!(p.unclassified_files, 1);
 }
@@ -184,10 +197,20 @@ fn flac_workspace_modified_receipt_invalidates_review_and_busy_converter_does_no
         0
     );
     let original = tree(f.base.parent().unwrap());
-    assert!(Census::capture(&f.storage, &f.session.meeting_id, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.session.meeting_id,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(tree(f.base.parent().unwrap()), original);
     drop(lock);
-    let census = Census::capture(&f.storage, &f.session.meeting_id, &|| false).unwrap();
+    let census = Census::capture(
+        &f.storage,
+        &f.session.meeting_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let (directory, name, mut checkpoint) = first_checkpoint(&f);
     checkpoint.staging_identity = None;
     checkpoint.audio = None;
@@ -195,7 +218,9 @@ fn flac_workspace_modified_receipt_invalidates_review_and_busy_converter_does_no
         &directory.path.join(name),
         &serde_json::to_vec(&checkpoint).unwrap(),
     );
-    assert!(census.verify(&f.storage, &|| false).is_err());
+    assert!(census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(preview(&f).audio_files, 7);
 }
 
@@ -294,7 +319,12 @@ fn flac_workspace_invalid_receipt_duplicate_outputs_and_links_fail_closed() {
         }
         let original = tree_without_links(f.base.parent().unwrap());
         assert!(
-            Census::capture(&f.storage, &f.session.meeting_id, &|| false).is_err(),
+            Census::capture(
+                &f.storage,
+                &f.session.meeting_id,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{kind}"
         );
         assert_eq!(tree_without_links(f.base.parent().unwrap()), original);

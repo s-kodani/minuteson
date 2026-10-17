@@ -15,7 +15,7 @@ async page=>{
   const textareaIdentity=await input.evaluate(e=>{e.dataset.identity="same-native-textarea";return e.dataset.identity;});
   await page.getByRole("button",{name:"議事録のプレビューを表示",exact:true}).click();
   await page.getByRole("heading",{name:"人間の編集",exact:true}).waitFor();
-  await page.getByRole("button",{name:"この区間を再生: 00:00:01.000001–00:00:02.999999",exact:true}).click();
+  await page.getByRole("button",{name:"この区間の開始時刻から再生: 00:00:01.000001–00:00:02.999999",exact:true}).click();
   check(await page.evaluate(()=>JSON.stringify(window.plainMinutesFixture.plays)===JSON.stringify([{startUs:1000001,endUs:2999999}])),"interval precision or callback lost");
   await edit.click();
   check(await input.getAttribute("data-identity")===textareaIdentity,"preview replaced the native textarea");

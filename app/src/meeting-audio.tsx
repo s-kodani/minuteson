@@ -1,45 +1,78 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { OptionsModal } from "./options-modal";
 import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";
-import { meetingPlaybackLabel, meetingPlaybackModes, preferredMeetingPlaybackMode, type MeetingPlaybackMode } from "./meeting-playback-state";
+import { meetingPlaybackLabel, meetingPlaybackModes, preferredMeetingPlaybackMode, type MeetingPlaybackMode, type MeetingPlaybackStartReference } from "./meeting-playback-state";
 import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
 import { IssueNotice } from "./toast";
 
-export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
-  meetingId: string; sourceType: "recording" | "audio_import"; locked: boolean; host: HTMLElement | null;
+type MeetingAudio = ReturnType<typeof useTranscriptAudio> & {
+  meetingId: string | null; mode: MeetingPlaybackMode; modes: MeetingPlaybackMode[];
+  canPlay: boolean; locked: boolean; summaryError: string; durationUs:number|null;
+  changeMode: (mode: MeetingPlaybackMode) => void;
+  playReference: (reference: MeetingPlaybackStartReference) => Promise<void>;
+};
+const MeetingAudioContext = createContext<MeetingAudio | null>(null);
+export function useMeetingAudio(meetingId?: string) {
+  const audio = useContext(MeetingAudioContext);
+  return audio && (!meetingId || audio.meetingId === meetingId) ? audio : null;
+}
+
+export function MeetingAudioProvider({ meetingId, sourceType, active, locked, children }: {
+  meetingId: string | null; sourceType?: "recording" | "audio_import" | null;
+  active: boolean; locked: boolean; children: ReactNode;
 }) {
   const [modes, setModes] = useState<MeetingPlaybackMode[]>([]);
   const [summaryError, setSummaryError] = useState("");
   const [mode, setMode] = useState<MeetingPlaybackMode>(sourceType === "audio_import" ? "imported" : "both");
-  const available = modes.includes(mode);
-  const audio = useTranscriptAudio(meetingId, locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode });
-  // The owner is keyed by meeting; a source change must not inherit a mode or
-  // native token from a different source. No preparation happens on mount.
+  const [summary, setSummary] = useState<(MeetingAudioSummary & { meetingId: string; sourceType: typeof sourceType }) | null>(null);
+  const available = active && !!meetingId && summary?.meetingId === meetingId && summary.sourceType === sourceType && modes.includes(mode);
+  const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, active });
+  // A source change must not inherit a mode or native token from a different
+  // source. Mounting creates no playback token;
+  // the native summary may warm a disposable mix in the background.
   useEffect(() => {
     let disposed = false;
-    audio.clear(); setModes([]); setSummaryError("");
+    audio.clear(); setModes([]); setSummaryError(""); setSummary(null);
+    if (!active || !meetingId || !sourceType) return;
     void invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId }).then(validateAudioSummary).then(summary => {
       if (disposed) return;
       const allowed = meetingPlaybackModes(sourceType);
       if (summary.modes.some(value => !allowed.includes(value))) throw Error("保存元と音声の種類が一致しません");
       const next = preferredMeetingPlaybackMode(summary.modes);
       if (!next) throw Error("再生できる確定済み音声がありません");
-      setModes(summary.modes); setMode(next);
+      setSummary({ ...summary, meetingId, sourceType }); setModes(summary.modes); setMode(next);
     }).catch(cause => { if (!disposed) setSummaryError(String(cause)); });
     return () => { disposed = true; };
-  }, [meetingId, sourceType]);
+  }, [meetingId, sourceType, active]);
+  const changeMode = (next: MeetingPlaybackMode) => {
+    if (locked || !available || !modes.includes(next)) return;
+    setMode(next);
+    if (audio.selected) void audio.startMeeting(next, true);
+  };
+  const playReference = (reference: MeetingPlaybackStartReference) => available && summary
+    ? audio.startMeetingAt(mode, reference, summary.durationUs) : Promise.resolve();
+  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, locked, summaryError, durationUs:available?summary!.durationUs:null, changeMode, playReference }}>
+    {children}{active && audio.controls}
+  </MeetingAudioContext.Provider>;
+}
+
+export function MeetingAudioControls({ meetingId, locked, host }: {
+  meetingId: string; sourceType: "recording" | "audio_import"; locked: boolean; host: HTMLElement | null;
+}) {
+  const audio = useMeetingAudio(meetingId);
+  if (!audio) return null;
+  const { mode, modes, canPlay:available, summaryError } = audio;
   return <><IssueNotice scope={meetingId} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{host && createPortal(<div className="meeting-audio-actions">
     <OptionsModal label="再生設定" icon="more" className="meeting-audio-settings"><div className="meeting-audio-settings-fields">
       <label>会議全体の再生トラック<select value={mode} disabled={locked || !available} onChange={event => {
         const next = event.target.value as MeetingPlaybackMode;
         if (!modes.includes(next)) return;
-        setMode(next);
-        if (audio.selected) void audio.startMeeting(next, true);
+        audio.changeMode(next);
       }}>{modes.map(value => <option key={value} value={value}>{meetingPlaybackLabel(value)}</option>)}</select></label>
-      <button type="button" className="small-secondary" disabled={locked || !available || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議全体の音声に戻す</button>
-      <p>切替は会議全体の再生に適用します。発言の時刻や議事録の区間を選ぶと、その区間へ切り替わります。</p>
+      <button type="button" className="small-secondary" disabled={locked || !available || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議の先頭に戻す</button>
+      <p>選択したトラックは発言・議事録からの再生にも適用します。開始時刻から、停止操作または音声末尾まで再生を続けます。</p>
     </div></OptionsModal>
-  </div>, host)}{audio.controls}</>;
+  </div>, host)}</>;
 }

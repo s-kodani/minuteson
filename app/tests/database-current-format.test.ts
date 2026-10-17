@@ -10,9 +10,12 @@ test("database startup rejects old formats before journal changes and recovery w
   assert.doesNotMatch(source, /apply_migrations|skip\(applied\)|pending upgrade/);
 });
 
-test("current database creation is empty-only and transactional", () => {
+test("new database creation is transactional and only schema 31 has an explicit voice upgrade", () => {
   assert.match(source, /name NOT GLOB 'sqlite_\*'/);
-  assert.match(source, /verify_migration_history\(connection\)\? != MIGRATIONS\.len\(\)/);
+  assert.match(source, /version != MIGRATIONS\.len\(\) && version != 31/);
+  assert.match(source, /verify_migration_history\(connection\)\? == 31/);
+  assert.match(source, /return upgrade_voice_registry\(connection\)/);
+  assert.match(source, /PRAGMA foreign_key_check/);
   assert.match(source, /if !empty_or_current_database\(&transaction\)\?/);
   assert.match(source, /transaction\.commit\(\)\?/);
 });

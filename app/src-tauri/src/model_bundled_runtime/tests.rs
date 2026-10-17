@@ -36,7 +36,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 8);
+    assert_eq!(catalog.as_array().unwrap().len(), 10);
     assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
@@ -45,7 +45,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     );
     assert_eq!(
         catalog[5]["review"]["recipeHash"],
-        "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8"
+        "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
@@ -133,7 +133,9 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
         let mut preparing = Bundle::open(&root).unwrap();
         assert!(preparing.prepare(&root, recipe, &|| true).is_err());
         assert!(preparing.archive.is_none());
-        preparing.prepare(&root, recipe, &|| false).unwrap();
+        preparing
+            .prepare(&root, recipe, &crate::test_support::never_cancelled)
+            .unwrap();
     }
     assert!(bundle.recipe_for("tiny.en").is_err());
     // The already shipped small recipe keeps its model provenance unchanged.
@@ -160,7 +162,7 @@ fn index_rejects_changed_version_options_types_paths_sha_unknown_and_oversize() 
         let (_temp, root, _, mut value) = fixture();
         match variant {
             "version" => value["engineVersion"] = json!("v0"),
-            "options" => value["buildOptions"][0] = json!("-DGGML_METAL=ON"),
+            "options" => value["buildOptions"][0] = json!("-DGGML_METAL=OFF"),
             "integer-bool" => value["cpuOnly"] = json!(1),
             "target" => value["target"] = json!("windows_x86_64"),
             "archive-path" => value["archive"]["file"] = json!("../outside"),
@@ -235,7 +237,9 @@ fn developer_id_packaging_metadata_keeps_unverified_trust_and_binds_changed_payl
     let review = recipe.review().unwrap();
     assert_eq!(review.publisher_authenticity, "not_verified");
     assert!(!review.ready && !review.installed);
-    bundle.prepare(&root, &recipe, &|| false).unwrap();
+    bundle
+        .prepare(&root, &recipe, &crate::test_support::never_cancelled)
+        .unwrap();
     let mut output = std::fs::File::create(temp.path().join("checked-copy")).unwrap();
     bundle
         .fetch(
@@ -243,7 +247,7 @@ fn developer_id_packaging_metadata_keeps_unverified_trust_and_binds_changed_payl
             bytes.len() as u64,
             &hash(bytes),
             &mut output,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert_eq!(
@@ -257,7 +261,7 @@ fn developer_id_packaging_metadata_keeps_unverified_trust_and_binds_changed_payl
             bytes.len() as u64,
             &hash(bytes),
             &mut output,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
 }
@@ -311,7 +315,9 @@ fn native_bundle_copy_checks_identity_size_sha_and_never_runs_or_reports_network
     let (temp, root, bytes, _) = fixture();
     let mut bundle = Bundle::open(&root).unwrap();
     let recipe = bundle.recipe().unwrap();
-    bundle.prepare(&root, &recipe, &|| false).unwrap();
+    bundle
+        .prepare(&root, &recipe, &crate::test_support::never_cancelled)
+        .unwrap();
     let output_path = temp.path().join("copy");
     let mut output = std::fs::File::create(&output_path).unwrap();
     bundle
@@ -320,7 +326,7 @@ fn native_bundle_copy_checks_identity_size_sha_and_never_runs_or_reports_network
             bytes.len() as u64,
             &hash(&bytes),
             &mut output,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert_eq!(std::fs::read(output_path).unwrap(), bytes);
@@ -330,7 +336,13 @@ fn native_bundle_copy_checks_identity_size_sha_and_never_runs_or_reports_network
         (BUNDLED_WHISPER, bytes.len() as u64, hash(b"changed")),
     ] {
         assert!(bundle
-            .fetch(url, size, &sha, &mut output, &|| false)
+            .fetch(
+                url,
+                size,
+                &sha,
+                &mut output,
+                &crate::test_support::never_cancelled
+            )
             .is_err());
     }
     assert!(bundle
@@ -349,7 +361,7 @@ fn native_bundle_copy_checks_identity_size_sha_and_never_runs_or_reports_network
             bytes.len() as u64,
             &hash(&bytes),
             &mut output,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
 }
@@ -402,7 +414,9 @@ fn changed_index_after_review_and_symlinked_index_archive_or_root_are_rejected()
             _ => unreachable!(),
         }
         assert!(
-            bundle.prepare(&root, &recipe, &|| false).is_err(),
+            bundle
+                .prepare(&root, &recipe, &crate::test_support::never_cancelled)
+                .is_err(),
             "{variant}"
         );
         if variant == "index-change" || variant == "index-link" {

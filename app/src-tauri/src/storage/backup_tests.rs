@@ -81,7 +81,9 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
         .unwrap();
     let wal = storage.root.join("meetings.sqlite3-wal");
     assert!(wal.metadata().unwrap().len() > 0);
-    let snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let stage = snapshot.stage.path().to_path_buf();
     assert_eq!(snapshot.assets.len(), 2);
     assert_eq!(snapshot.meetings[0].id, meeting);
@@ -116,7 +118,9 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
     );
     drop(original);
     drop(saved);
-    snapshot.verify(&|| false).unwrap();
+    snapshot
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(snapshot);
     assert!(!stage.exists());
     assert!(storage
@@ -172,7 +176,9 @@ fn snapshot_only_stages_registered_files_and_does_not_publish_raw_database() {
     for name in ["model.gguf", "temporary.pcm", "engine.log"] {
         std::fs::write(root.path().join(name), b"excluded binary").unwrap();
     }
-    let snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(snapshot.assets.len(), 1);
     assert_eq!(snapshot.assets[0].asset.id, managed.id);
     assert_eq!(std::fs::read(&snapshot.assets[0].path).unwrap(), b"audio");
@@ -255,7 +261,9 @@ fn panic_releases_maintenance_and_a_later_snapshot_can_succeed() {
         panic!("fixture panic outside DB mutex");
     }));
     assert!(result.is_err());
-    assert!(storage.prepare_backup_snapshot(&|| false).is_ok());
+    assert!(storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_ok());
 }
 
 #[test]
@@ -324,7 +332,7 @@ fn active_recording_import_export_track_building_or_ai_job_cannot_start_backup()
         }
         assert!(
             storage
-                .prepare_backup_snapshot(&|| false)
+                .prepare_backup_snapshot(&crate::test_support::never_cancelled)
                 .err()
                 .unwrap()
                 .contains("停止"),
@@ -377,7 +385,9 @@ fn changed_missing_unsafe_and_nonready_assets_are_rejected_without_mutating_sour
             _ => unreachable!(),
         }
         assert!(
-            storage.prepare_backup_snapshot(&|| false).is_err(),
+            storage
+                .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+                .is_err(),
             "{kind}"
         );
         assert_eq!(storage.list_meetings().unwrap(), vec![meeting]);
@@ -406,7 +416,9 @@ fn symlinked_parent_and_file_are_rejected_even_if_bytes_and_hash_match() {
         } else {
             symlink(outside.path().join("source.flac"), &path).unwrap();
         }
-        assert!(storage.prepare_backup_snapshot(&|| false).is_err());
+        assert!(storage
+            .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+            .is_err());
         assert!(storage.create_meeting("再開").is_ok());
     }
 }
@@ -417,9 +429,13 @@ fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = storage.create_meeting("破損検知").unwrap();
     asset(&storage, &meeting.id, b"audio");
-    let snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     std::fs::write(&snapshot.assets[0].path, b"other").unwrap();
-    assert!(snapshot.verify(&|| false).is_err());
+    assert!(snapshot
+        .verify(&crate::test_support::never_cancelled)
+        .is_err());
     drop(snapshot);
     storage
         .save_vocabulary_book(
@@ -441,7 +457,7 @@ fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
         .execute("UPDATE vocabulary_entries SET term='変更'", [])
         .unwrap();
     assert!(storage
-        .prepare_backup_snapshot(&|| false)
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("用語"));
@@ -461,7 +477,7 @@ fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
         )
         .unwrap();
     assert!(storage
-        .prepare_backup_snapshot(&|| false)
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("migration"));
@@ -490,7 +506,9 @@ fn queued_job_cannot_start_while_snapshot_exists_and_fixed_conditions_are_preser
     let meeting = storage.create_meeting("待機ジョブ").unwrap();
     let job = queued(&storage, &meeting.id);
     let original = storage.fixed_job_input(&job.id).unwrap();
-    let snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let db = read_only(&snapshot.database).unwrap();
     assert_eq!(
         super::super::jobs::read_fixed_input(&db, &job.id).unwrap(),
@@ -518,7 +536,9 @@ fn every_checkpoint_is_validated_not_only_the_most_recent_one() {
         .save_job_checkpoint(&job.id, 1, 2, serde_json::json!({"unit":2}))
         .unwrap();
     assert_eq!(storage.get_job(&job.id).unwrap().state, "paused");
-    assert!(storage.prepare_backup_snapshot(&|| false).is_ok());
+    assert!(storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_ok());
     storage
         .connection
         .lock()
@@ -531,7 +551,7 @@ fn every_checkpoint_is_validated_not_only_the_most_recent_one() {
     // Normal job resume checks the latest checkpoint; backup must inspect all.
     assert!(storage.fixed_job_input(&job.id).is_ok());
     assert!(storage
-        .prepare_backup_snapshot(&|| false)
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("チェックポイント"));
@@ -547,7 +567,12 @@ fn capacity_overflow_and_grown_file_are_bounded_rejections() {
     let path = root.path().join("growing");
     std::fs::write(&path, vec![0; 2 * BUFFER_BYTES]).unwrap();
     let mut file = File::open(path).unwrap();
-    assert!(stream(&mut file, None, BUFFER_BYTES as u64, &|| false)
-        .unwrap_err()
-        .contains("サイズ"));
+    assert!(stream(
+        &mut file,
+        None,
+        BUFFER_BYTES as u64,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err()
+    .contains("サイズ"));
 }

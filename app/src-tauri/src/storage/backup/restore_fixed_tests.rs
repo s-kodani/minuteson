@@ -74,8 +74,15 @@ pub(super) fn fixture_with_clock(storage: &Storage, operation: &str, corrected: 
 
 pub(super) fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
     let path = output.join("fixed.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    archive::read(
+        &mut File::open(path).unwrap(),
+        output,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 fn strings(db: &Connection, sql: &str) -> Vec<String> {
@@ -168,7 +175,9 @@ pub(super) fn register_assets_except(
                 .asset_bytes(&meeting, id, &serde_json::to_vec(&mapped).unwrap())
                 .unwrap()
         } else {
-            fixed.asset_file(&meeting, id, path, &|| false).unwrap()
+            fixed
+                .asset_file(&meeting, id, path, &crate::test_support::never_cancelled)
+                .unwrap()
         };
         target
             .execute(
@@ -302,7 +311,7 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut target = project(&fixed);
     register_assets(&fixed, &target);
     for scope in strings(&source.database, "SELECT id FROM vocabulary_scopes") {
@@ -321,7 +330,7 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
     }
     rebuild_analyses(&fixed, &mut target);
     rebuild_jobs(&fixed, &target);
-    super::super::validate_database(&mut target, &|| false).unwrap();
+    super::super::validate_database(&mut target, &crate::test_support::never_cancelled).unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let tx = target.transaction().unwrap();
     let new_minutes = crate::storage::minutes_markdown::read(&tx, &new_meeting)
@@ -413,7 +422,7 @@ fn fixed_audio_rejects_changed_time_track_owner_and_waveform_before_registration
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let target = project(&fixed);
     register_assets(&fixed, &target);
     let original = serde_json::to_value(storage.recorded_audio_plan(&meeting).unwrap()).unwrap();
@@ -446,7 +455,12 @@ fn fixed_audio_rejects_changed_time_track_owner_and_waveform_before_registration
         .unwrap_err()
         .contains("音声本体"));
     assert!(fixed
-        .asset_file(&other, asset, &source.assets[asset], &|| false)
+        .asset_file(
+            &other,
+            asset,
+            &source.assets[asset],
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(fixed
         .asset_file(&meeting, asset, &source.assets[asset], &|| true)
@@ -483,7 +497,7 @@ fn fixed_vocabulary_rejects_hash_forgery_and_retains_deleted_global_and_meeting_
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let text: String = source
         .database
         .query_row("SELECT payload_json FROM vocabulary_snapshots", [], |r| {
@@ -535,7 +549,7 @@ fn assignment_and_retry_hashes_reject_wrong_inputs_and_preserve_fixed_conditions
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut target = project(&fixed);
     register_assets(&fixed, &target);
     rebuild_analyses(&fixed, &mut target);
@@ -636,7 +650,7 @@ fn hash_registry_is_private_cancellable_and_resolves_exact_historical_draft_hash
     })
     .is_err());
     assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), before);
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let (draft,kind,text,hash):(String,String,String,String)=source.database.query_row("SELECT d.id,d.target_kind,e.payload_json,e.after_hash FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.target_kind='transcript' ORDER BY e.sequence LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     let (json, new) = ids.draft_json(&kind, &meeting, &text).unwrap();
     assert_eq!(
@@ -712,7 +726,7 @@ fn cross_domain_hash_order_places_input_before_job_and_job_before_output() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let position = |domain: &str, id: &str| {
         fixed
             .registry
@@ -806,7 +820,7 @@ fn cross_domain_cycles_and_foreign_config_job_references_are_rejected_with_priva
         })
         .unwrap();
         let before = std::fs::read_dir(output.path()).unwrap().count();
-        let error = FixedData::new(&ids, output.path(), &|| false)
+        let error = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled)
             .err()
             .unwrap();
         assert!(error.contains(expected), "{error}");

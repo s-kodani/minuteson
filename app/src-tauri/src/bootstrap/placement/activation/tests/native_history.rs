@@ -67,37 +67,66 @@ impl NativeFixture {
             .register_ready_meeting_asset(&meeting, Path::new(&audio), "audio/flac")
             .unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let deletion = Uuid::new_v4().to_string();
         audio::intent::prepare(
             &storage,
             &deletion,
-            &audio::Census::capture(&storage, &meeting, &|| false).unwrap(),
+            &audio::Census::capture(&storage, &meeting, &crate::test_support::never_cancelled)
+                .unwrap(),
             audio::intent::Policy {
                 include_unregistered_audio: true,
                 retain_unclassified: true,
             },
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         if kept {
-            audio::intent::keep_unstarted(&storage, &deletion, &lease, &|| false).unwrap();
+            audio::intent::keep_unstarted(
+                &storage,
+                &deletion,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         } else {
-            audio::intent::removal::start(&storage, &deletion, &lease, &|| false).unwrap();
-            audio::intent::removal::run(&storage, &deletion, &lease, &|| false).unwrap();
-            audio::intent::removal::completion::finish(&storage, &deletion, &lease, &|| false)
-                .unwrap();
+            audio::intent::removal::start(
+                &storage,
+                &deletion,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::run(
+                &storage,
+                &deletion,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::completion::finish(
+                &storage,
+                &deletion,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         }
         drop(lease);
         let mut full_deletion = None;
         if full {
-            let mut p = operations::Prepared::fresh(&storage, &meeting, &|| false).unwrap();
+            let mut p = operations::Prepared::fresh(
+                &storage,
+                &meeting,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let view = p.preview();
             full_deletion = Some(view.operation_id.clone());
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(
                 p.execute(
@@ -105,7 +134,7 @@ impl NativeFixture {
                     &lease,
                     &view.confirmation_id,
                     true,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .unwrap()
@@ -134,7 +163,9 @@ impl NativeFixture {
     fn select(&mut self) {
         let storage = self.storage.as_ref().unwrap();
         let bootstrap = self.bootstrap.as_ref().unwrap();
-        let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         bootstrap
             .begin_move(
                 &self.operation,
@@ -147,25 +178,39 @@ impl NativeFixture {
         let mut p = bootstrap
             .pending_placement(&self.operation, &snapshot)
             .unwrap();
-        p.copy(&snapshot, &|| false).unwrap();
-        let h = snapshot.prepare_control_handoff(&|| false).unwrap();
-        p.install_history(&h, &|| false).unwrap();
-        p.inspect_deletion_handoff(&h, &|| false)
+        p.copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap();
+        let h = snapshot
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
+        p.install_history(&h, &crate::test_support::never_cancelled)
+            .unwrap();
+        p.inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
             .unwrap()
             .require_clean()
             .unwrap();
         let confirmation = p.pending.confirmation_id.clone();
         let revision = bootstrap.view().unwrap().revision;
         let selected = p
-            .activate_for_restart(&h, &confirmation, revision, &|| false)
+            .activate_for_restart(
+                &h,
+                &confirmation,
+                revision,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         assert_eq!(selected.meeting_root, self.target);
         assert!(selected.restart_required && storage.restart_required());
         let config = std::fs::read(self.config.join(NAME)).unwrap();
         assert_eq!(
-            p.activate_for_restart(&h, &confirmation, revision, &|| false)
-                .unwrap()
-                .meeting_root,
+            p.activate_for_restart(
+                &h,
+                &confirmation,
+                revision,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .meeting_root,
             self.target
         );
         assert_eq!(std::fs::read(self.config.join(NAME)).unwrap(), config);
@@ -225,10 +270,14 @@ fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supe
             assert_eq!(f.live_record(&storage), before);
             let other = storage.create_meeting("UNRELATED CURRENT ROOT").unwrap();
             assert!(storage.get_meeting(&other.id).unwrap().is_some());
-            let mut delete_other =
-                operations::Prepared::fresh(&storage, &other.id, &|| false).unwrap();
+            let mut delete_other = operations::Prepared::fresh(
+                &storage,
+                &other.id,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(
                 delete_other
@@ -237,7 +286,7 @@ fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supe
                         &lease,
                         &delete_other.preview().confirmation_id,
                         true,
-                        &|| false,
+                        &crate::test_support::never_cancelled,
                         &|_| {}
                     )
                     .unwrap()
@@ -250,7 +299,9 @@ fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supe
                 ._base
                 .path()
                 .join(format!("{}-{}.monbackup", full, Uuid::new_v4()));
-            let exported = storage.create_backup_archive(&backup, &|| false).unwrap();
+            let exported = storage
+                .create_backup_archive(&backup, &crate::test_support::never_cancelled)
+                .unwrap();
             assert_eq!(exported.deleted_audio_meeting_count, usize::from(!full));
             assert!(!f.target.join(&f.audio).exists());
             drop(storage);
@@ -271,9 +322,15 @@ fn deletion_startup_admission_kept_audio_remains_present_and_old_consent_cannot_
         b"SYNTHETIC AUDIO"
     );
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::intent::removal::start(&storage, &f.deletion, &lease, &|| false).is_err());
+    assert!(audio::intent::removal::start(
+        &storage,
+        &f.deletion,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.live_record(&storage), before);
     assert!(storage
         .create_meeting("KEEP DOES NOT BECOME CONSENT")
@@ -292,10 +349,15 @@ fn deletion_startup_admission_kept_whole_meeting_is_readable_without_current_roo
     for _ in 0..2 {
         let (b, storage) = f.open();
         assert!(!storage.data_write_blocked());
-        let mut p = operations::Prepared::pending(&storage, &operation, &|| false).unwrap();
+        let mut p = operations::Prepared::pending(
+            &storage,
+            &operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!p.preview().execute_allowed);
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         assert!(p
             .execute(
@@ -303,7 +365,7 @@ fn deletion_startup_admission_kept_whole_meeting_is_readable_without_current_roo
                 &lease,
                 &p.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .is_err());
@@ -332,9 +394,15 @@ fn deletion_startup_admission_reappearance_is_fenced_without_deleting_new_body_o
     assert!(storage.data_write_blocked());
     assert!(storage.create_meeting("BLOCKED").is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::intent::removal::start(&storage, &f.deletion, &lease, &|| false).is_err());
+    assert!(audio::intent::removal::start(
+        &storage,
+        &f.deletion,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(file).unwrap(), b"NEW BODY NEVER DELETE");
     assert_eq!(f.live_record(&storage), before);
 }
@@ -521,15 +589,17 @@ fn deletion_startup_admission_restored_unavailable_audio_and_supersession_surviv
         let mut f = NativeFixture::new(false, false);
         let storage = f.storage.as_ref().unwrap();
         let archive = f._base.path().join("restore-input.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let selected = storage
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let restored = selected
             .publish(
                 storage,
                 &selected.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap()
@@ -539,9 +609,14 @@ fn deletion_startup_admission_restored_unavailable_audio_and_supersession_surviv
         let operation = synthetic_restored_audio_operation(storage, &restored);
         let before = synthetic_consent_record(storage, &operation);
         if full {
-            let mut prepared = operations::Prepared::fresh(storage, &restored, &|| false).unwrap();
+            let mut prepared = operations::Prepared::fresh(
+                storage,
+                &restored,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(
                 prepared
@@ -550,7 +625,7 @@ fn deletion_startup_admission_restored_unavailable_audio_and_supersession_surviv
                         &lease,
                         &prepared.preview().confirmation_id,
                         true,
-                        &|| false,
+                        &crate::test_support::never_cancelled,
                         &|_| {}
                     )
                     .unwrap()
@@ -569,7 +644,7 @@ fn deletion_startup_admission_restored_unavailable_audio_and_supersession_surviv
                 .join(format!("rebackup-{}.monbackup", Uuid::new_v4()));
             assert_eq!(
                 storage
-                    .create_backup_archive(&archive, &|| false)
+                    .create_backup_archive(&archive, &crate::test_support::never_cancelled)
                     .unwrap()
                     .deleted_audio_meeting_count,
                 if full { 1 } else { 2 }
@@ -621,7 +696,7 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
-    let report = model_inspection::inspect(&source, &|| false).unwrap();
+    let report = model_inspection::inspect(&source, &crate::test_support::never_cancelled).unwrap();
     let package = Uuid::new_v4().to_string();
     model_placement::place(
         storage,
@@ -629,7 +704,7 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
         &source,
         &package,
         &report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let preview = models::preview(
@@ -638,12 +713,12 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
         &Uuid::new_v4().to_string(),
         &package,
         &report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let operation = Uuid::new_v4().to_string();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     models::intent::prepare(
         storage,
@@ -654,14 +729,32 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
         &preview.census_hash,
         false,
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     if completed {
-        models::intent::removal::start(storage, &operation, &lease, &|| false).unwrap();
-        models::intent::removal::run(storage, &operation, &lease, &|| false).unwrap();
+        models::intent::removal::start(
+            storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        models::intent::removal::run(
+            storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     } else {
-        models::intent::keep_unstarted(storage, &operation, &lease, &|| false).unwrap();
+        models::intent::keep_unstarted(
+            storage,
+            &operation,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     }
     (operation, root.join(package).join("weights.bin"))
 }
@@ -680,11 +773,15 @@ fn deletion_startup_admission_models_use_only_native_root_and_never_moved_consen
             assert_eq!(synthetic_consent_record(&storage, &operation), before);
             assert_eq!(file.exists(), !completed);
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
-            assert!(
-                models::intent::removal::start(&storage, &operation, &lease, &|| false).is_err()
-            );
+            assert!(models::intent::removal::start(
+                &storage,
+                &operation,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
             assert!(storage.create_meeting("MODEL ROOT NOT RELOCATED").is_ok());
             drop(lease);
             drop(storage);

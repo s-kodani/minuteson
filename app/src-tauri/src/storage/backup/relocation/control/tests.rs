@@ -23,12 +23,17 @@ fn abandoned(storage: &Storage) -> (String, PathBuf) {
 }
 fn keep(storage: &Storage, id: &str) {
     let mut p = storage
-        .prepare_recovery(Source::Scratch, id, &|| false)
+        .prepare_recovery(Source::Scratch, id, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(
-        p.resolve(storage, &p.preview().confirmation_id, true, &|| false)
-            .unwrap()
-            .outcome,
+        p.resolve(
+            storage,
+            &p.preview().confirmation_id,
+            true,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .outcome,
         Outcome::Retained
     );
 }
@@ -55,14 +60,18 @@ fn control_handoff_preserves_exact_keep_receipts_history_and_native_rows_without
         .to_owned();
     drop(recovered);
     let before = std::fs::read(path.join("unknown")).unwrap();
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let native_rows = census(
         &read_only(&saved.image.join("meetings.sqlite3")).unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
-    h.verify(&|| false).unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
     assert_eq!(h.hash(), digest(&h.bytes));
     let history = history(&h);
     let areas = history["areas"].as_array().unwrap();
@@ -93,7 +102,7 @@ fn control_handoff_preserves_exact_keep_receipts_history_and_native_rows_without
     assert_eq!(
         census(
             &read_only(&saved.image.join("meetings.sqlite3")).unwrap(),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap(),
         native_rows
@@ -108,13 +117,19 @@ fn control_handoff_refuses_other_live_construction_then_includes_its_recovered_h
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let other = s.backup_stage().unwrap();
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-    assert!(saved.prepare_control_handoff(&|| false).is_err());
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(!saved.stage.path().join("relocation-control.json").exists());
     drop(other);
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(history(&h)["areas"].as_array().unwrap().len(), 1);
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
 }
 
 #[test]
@@ -122,12 +137,18 @@ fn control_handoff_cancel_is_non_destructive_and_existing_seal_is_never_replaced
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (id, path) = abandoned(&s);
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(saved.prepare_control_handoff(&|| true).is_err());
     assert!(!saved.stage.path().join("relocation-control.json").exists());
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(h.verify(&|| true).is_err());
-    assert!(saved.prepare_control_handoff(&|| false).is_err());
+    assert!(saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(&h.path).unwrap(), h.bytes);
     assert_eq!(
         std::fs::read(path.join("unknown")).unwrap(),
@@ -138,7 +159,7 @@ fn control_handoff_cancel_is_non_destructive_and_existing_seal_is_never_replaced
         .unwrap()
         .iter()
         .any(|a| a["id"] == id));
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
 }
 
 #[test]
@@ -163,13 +184,17 @@ fn control_handoff_preserves_kept_invalid_proof_as_invalid_history_not_cleanup_a
     db.execute_batch(&sql).unwrap();
     drop(db);
     keep(&s, &id);
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let area = history(&h)["areas"][0].clone();
     assert_eq!(area["record_valid"], false);
     assert_eq!(area["entries"][0]["proof"], "{}");
     assert_eq!(history(&h)["decisions"][0]["operation_id"], id);
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
     assert_eq!(
         std::fs::read(path.join("unknown")).unwrap(),
         b"unregistered body"
@@ -182,8 +207,12 @@ fn control_handoff_rechecks_source_state_and_new_history_before_any_future_trans
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
         let (id, path) = abandoned(&s);
-        let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-        let h = saved.prepare_control_handoff(&|| false).unwrap();
+        let saved = s
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let h = saved
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         if new_area {
             drop(s.backup_stage().unwrap());
         } else {
@@ -195,7 +224,7 @@ fn control_handoff_rechecks_source_state_and_new_history_before_any_future_trans
                 )
                 .unwrap();
         }
-        assert!(h.verify(&|| false).is_err());
+        assert!(h.verify(&crate::test_support::never_cancelled).is_err());
         assert_eq!(std::fs::read(&h.path).unwrap(), h.bytes);
         assert_eq!(
             std::fs::read(path.join("unknown")).unwrap(),
@@ -209,8 +238,12 @@ fn control_handoff_refuses_changed_seal_and_links_without_following_or_overwriti
     for mode in 0..3 {
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
-        let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-        let h = saved.prepare_control_handoff(&|| false).unwrap();
+        let saved = s
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let h = saved
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .unwrap();
         let foreign = root.path().join("foreign");
         std::fs::write(&foreign, b"foreign bytes").unwrap();
         match mode {
@@ -224,9 +257,11 @@ fn control_handoff_refuses_changed_seal_and_links_without_following_or_overwriti
                 std::fs::hard_link(&foreign, &h.path).unwrap();
             }
         }
-        assert!(h.verify(&|| false).is_err());
+        assert!(h.verify(&crate::test_support::never_cancelled).is_err());
         assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign bytes");
-        assert!(saved.prepare_control_handoff(&|| false).is_err());
+        assert!(saved
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .is_err());
     }
 }
 
@@ -263,8 +298,12 @@ fn control_handoff_refuses_orphan_keep_receipts_and_tampered_receipt_without_sou
                 r.get(0)
             })
             .unwrap();
-        let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-        assert!(saved.prepare_control_handoff(&|| false).is_err());
+        let saved = s
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        assert!(saved
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .is_err());
         assert!(!saved.stage.path().join("relocation-control.json").exists());
         assert_eq!(
             db.query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
@@ -290,8 +329,12 @@ fn control_handoff_lists_left_behind_models_unknown_names_and_links_without_payl
     std::fs::write(s.root.join("models/model.gguf"), b"large model body").unwrap();
     std::fs::write(s.root.join("unknown-root-file"), b"unknown root body").unwrap();
     symlink(foreign.path().join("outside"), s.root.join("outside-link")).unwrap();
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let data = history(&h);
     let left = data["remaining_root_objects"].as_array().unwrap();
     assert!(left
@@ -308,9 +351,9 @@ fn control_handoff_lists_left_behind_models_unknown_names_and_links_without_payl
         .unwrap()
         .contains("foreign body"));
     assert!(!saved.image.join("models").exists());
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
     std::fs::write(s.root.join("unknown-root-file"), b"changed unknown body").unwrap();
-    assert!(h.verify(&|| false).is_err());
+    assert!(h.verify(&crate::test_support::never_cancelled).is_err());
     assert_eq!(
         std::fs::read(foreign.path().join("outside")).unwrap(),
         b"foreign body"
@@ -327,17 +370,25 @@ fn control_handoff_fresh_restart_keeps_original_consent_and_does_not_change_payl
     let s = Storage::open(root.path().into()).unwrap();
     let (id, path) = abandoned(&s);
     keep(&s, &id);
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let original = history(&h)["decisions"][0].clone();
     let native_hash = saved.manifest_hash().to_owned();
     drop(h);
     drop(saved);
     drop(s);
     let reopened = Storage::open(root.path().into()).unwrap();
-    let next = reopened.prepare_relocation_snapshot(&|| false).unwrap();
+    let next = reopened
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(next.manifest_hash(), native_hash);
-    let h = next.prepare_control_handoff(&|| false).unwrap();
+    let h = next
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(history(&h)["decisions"][0], original);
     assert!(history(&h)["areas"]
         .as_array()
@@ -348,7 +399,7 @@ fn control_handoff_fresh_restart_keeps_original_consent_and_does_not_change_payl
         std::fs::read(path.join("unknown")).unwrap(),
         b"unregistered body"
     );
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
 }
 
 #[test]
@@ -383,8 +434,12 @@ fn control_handoff_refuses_changed_root_metadata_or_oversized_history_without_re
         let before: String = db
             .query_row("SELECT proof FROM metadata", [], |r| r.get(0))
             .unwrap();
-        let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-        assert!(saved.prepare_control_handoff(&|| false).is_err());
+        let saved = s
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        assert!(saved
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .is_err());
         assert!(!saved.stage.path().join("relocation-control.json").exists());
         assert_eq!(
             db.query_row("SELECT proof FROM metadata", [], |r| r.get::<_, String>(0))
@@ -405,9 +460,13 @@ fn control_handoff_crash_child() {
     };
     let marker = std::env::var("MON_CONTROL_HANDOFF_CRASH_MARKER").unwrap();
     let s = Storage::open(PathBuf::from(root)).unwrap();
-    let saved = s.prepare_relocation_snapshot(&|| false).unwrap();
-    let h = saved.prepare_control_handoff(&|| false).unwrap();
-    h.verify(&|| false).unwrap();
+    let saved = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let h = saved
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
     let mut ready = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -444,7 +503,9 @@ fn control_handoff_sigkill_after_seal_preserves_source_history_consent_and_unkno
             |r| r.get(0),
         )
         .unwrap();
-    let native = s.prepare_relocation_snapshot(&|| false).unwrap();
+    let native = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let native_hash = native.manifest_hash().to_owned();
     drop(native);
     drop(s);
@@ -487,9 +548,13 @@ fn control_handoff_sigkill_after_seal_preserves_source_history_consent_and_unkno
         .items
         .iter()
         .any(|i| i.operation_id == id && i.retained));
-    let next = reopened.prepare_relocation_snapshot(&|| false).unwrap();
+    let next = reopened
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(next.manifest_hash(), native_hash);
-    let h = next.prepare_control_handoff(&|| false).unwrap();
+    let h = next
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(history(&h)["decisions"][0]["receipt_json"], receipt);
-    h.verify(&|| false).unwrap();
+    h.verify(&crate::test_support::never_cancelled).unwrap();
 }

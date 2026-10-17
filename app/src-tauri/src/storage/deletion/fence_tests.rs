@@ -158,8 +158,13 @@ impl Fixture {
         intent::prepare(
             &self.storage,
             &self.operation,
-            &Census::capture(&self.storage, &self.meeting, &|| false).unwrap(),
-            &|| false,
+            &Census::capture(
+                &self.storage,
+                &self.meeting,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap(),
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
     }
@@ -246,7 +251,8 @@ fn deletion_fence_arms_after_durable_confirmation_and_keeps_read_views_and_porta
         f.storage.get_meeting(&f.meeting).unwrap().unwrap(),
         original
     );
-    p.verify_live(&f.storage, &|| false).unwrap();
+    p.verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(f.storage.create_meeting("must not be added").is_err());
     assert!(f
         .storage
@@ -317,7 +323,8 @@ fn deletion_fence_invalidates_cached_writes_at_confirmation_and_writes_prepared_
     assert!(db
         .prepare_cached("UPDATE meetings SET title='should be denied' WHERE id=?1")
         .is_err());
-    let writer = write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+    let writer =
+        write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).unwrap();
     let mut cached = db
         .prepare("UPDATE meetings SET title='escaped write' WHERE id=?1")
         .unwrap();
@@ -339,7 +346,8 @@ fn deletion_fence_writer_rolls_back_open_transaction_and_reinstates_guards_on_dr
     let f = Fixture::new();
     let p = f.prepare();
     let db = f.storage.connection.lock().unwrap();
-    let writer = write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+    let writer =
+        write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).unwrap();
     db.execute_batch("BEGIN IMMEDIATE").unwrap();
     db.execute(
         "UPDATE meetings SET title='uncommitted edit' WHERE id=?1",
@@ -372,7 +380,8 @@ fn deletion_fence_writer_unwind_does_not_leave_connection_writable_or_commit_par
     let p = f.prepare();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let db = f.storage.connection.lock().unwrap();
-        let _writer = write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        let _writer =
+            write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).unwrap();
         db.execute_batch("BEGIN IMMEDIATE").unwrap();
         db.execute(
             "UPDATE meetings SET title='uncommitted panic' WHERE id=?1",
@@ -406,7 +415,8 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
     let p = f.prepare();
     {
         let db = f.storage.connection.lock().unwrap();
-        let writer = write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        let writer =
+            write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         drop(writer);
@@ -421,10 +431,14 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
     let root = f.storage.root().to_owned();
     drop(f.storage);
     let storage = Storage::open(root).unwrap();
-    intent::read(&storage, &f.operation, &|| false)
-        .unwrap()
-        .verify_live(&storage, &|| false)
-        .unwrap();
+    intent::read(
+        &storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .verify_live(&storage, &crate::test_support::never_cancelled)
+    .unwrap();
     assert!(storage.data_write_blocked());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE ORIGINAL AUDIO");
 }
@@ -433,13 +447,16 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
 fn deletion_fence_blocks_backup_move_stage_and_startup_recording_import_recovery() {
     let f = Fixture::new();
     f.prepare();
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(f.storage.backup_stage().is_err());
     assert!(f.storage.require_data_writable().is_err());
     assert!(f.storage.recover_completed_recordings().unwrap().is_empty());
     assert!(f
         .storage
-        .recover_audio_imports_cancellable(&|| false)
+        .recover_audio_imports_cancellable(&crate::test_support::never_cancelled)
         .unwrap()
         .is_empty());
     f.untouched();
@@ -497,8 +514,10 @@ fn deletion_fence_keep_unstarted_preserves_changed_files_intent_paths_and_origin
     let f = Fixture::new();
     let p = f.prepare();
     std::fs::write(&f.file, b"CHANGED OUTSIDE THE APPLICATION").unwrap();
-    assert!(p.verify_live(&f.storage, &|| false).is_err());
-    intent::keep_unstarted(&f.storage, &p, &|| false).unwrap();
+    assert!(p
+        .verify_live(&f.storage, &crate::test_support::never_cancelled)
+        .is_err());
+    intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(f.state(), "recovered");
     assert!(!f.storage.data_write_blocked());
     assert!(!f.storage.restart_required());
@@ -528,8 +547,13 @@ fn deletion_fence_keep_unstarted_preserves_changed_files_intent_paths_and_origin
         )
         .is_err());
     drop(db);
-    intent::keep_unstarted(&f.storage, &p, &|| false).unwrap();
-    assert!(intent::read(&f.storage, &f.operation, &|| false).is_err());
+    intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).unwrap();
+    assert!(intent::read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(
         std::fs::read(&f.file).unwrap(),
         b"CHANGED OUTSIDE THE APPLICATION"
@@ -556,9 +580,10 @@ fn deletion_fence_keep_cancel_before_commit_keeps_receipt_pending_and_write_stop
         );
         assert_eq!(f.state(), "prepared");
         assert!(f.storage.data_write_blocked());
-        p.verify_live(&f.storage, &|| false).unwrap();
+        p.verify_live(&f.storage, &crate::test_support::never_cancelled)
+            .unwrap();
         f.untouched();
-        intent::keep_unstarted(&f.storage, &p, &|| false).unwrap();
+        intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).unwrap();
         assert!(!f.storage.data_write_blocked());
     }
 }
@@ -574,14 +599,17 @@ fn deletion_fence_keep_cannot_resolve_a_started_or_corrupted_receipt() {
         let p = f.prepare();
         {
             let db = f.storage.connection.lock().unwrap();
-            let _writer = write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+            let _writer =
+                write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).unwrap();
             db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
                 .unwrap();
             db.execute(sql, params![f.operation]).unwrap();
             db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
                 .unwrap();
         }
-        assert!(intent::keep_unstarted(&f.storage, &p, &|| false).is_err());
+        assert!(
+            intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).is_err()
+        );
         assert!(f.storage.data_write_blocked());
         f.untouched();
     }
@@ -595,7 +623,13 @@ fn deletion_fence_writer_cannot_adopt_another_operation_or_changed_root() {
     let foreign = other.prepare();
     {
         let db = f.storage.connection.lock().unwrap();
-        assert!(write_prepared(&f.storage, &db, &foreign, &|| false).is_err());
+        assert!(write_prepared(
+            &f.storage,
+            &db,
+            &foreign,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         let mut copied = Connection::open(f.base.path().join("copy.sqlite3")).unwrap();
         rusqlite::backup::Backup::new(&db, &mut copied)
             .unwrap()
@@ -603,8 +637,15 @@ fn deletion_fence_writer_cannot_adopt_another_operation_or_changed_root() {
             .unwrap();
         copied.execute_batch("PRAGMA foreign_keys=ON").unwrap();
         let copied_fence = Fence::open(&copied).unwrap();
-        p.verify_saved(&copied, &|| false).unwrap();
-        assert!(write_prepared(&f.storage, &copied, &p, &|| false).is_err());
+        p.verify_saved(&copied, &crate::test_support::never_cancelled)
+            .unwrap();
+        assert!(write_prepared(
+            &f.storage,
+            &copied,
+            &p,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(copied_fence.pending());
         assert!(copied
             .execute_batch("DELETE FROM meetings WHERE 0")
@@ -616,11 +657,13 @@ fn deletion_fence_writer_cannot_adopt_another_operation_or_changed_root() {
     std::fs::create_dir(&root).unwrap();
     {
         let db = f.storage.connection.lock().unwrap();
-        assert!(write_prepared(&f.storage, &db, &p, &|| false).is_err());
+        assert!(
+            write_prepared(&f.storage, &db, &p, &crate::test_support::never_cancelled).is_err()
+        );
         assert!(db.execute_batch("DELETE FROM meetings WHERE 0").is_err());
     }
     assert!(f.storage.data_write_blocked());
-    assert!(intent::keep_unstarted(&f.storage, &p, &|| false).is_err());
+    assert!(intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).is_err());
 }
 
 #[test]
@@ -632,7 +675,12 @@ fn deletion_fence_unknown_pending_manifest_still_blocks_startup_writes_without_a
     let storage = Storage::open(root).unwrap();
     assert!(storage.data_write_blocked());
     assert!(storage.create_meeting("not allowed").is_err());
-    assert!(intent::read(&storage, &f.operation, &|| false).is_err());
+    assert!(intent::read(
+        &storage,
+        &f.operation,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(storage.deleting_meeting_ids().unwrap(), vec![f.meeting]);
     assert_eq!(std::fs::read(f.file).unwrap(), b"PRIVATE ORIGINAL AUDIO");
 }
@@ -689,18 +737,23 @@ fn deletion_fence_keep_checkpoint_child_fixture() {
     let phase = std::env::var("MON_DELETE_FENCE_TEST_PHASE").unwrap();
     let f = Fixture::at(tempfile::tempdir_in(&base).unwrap());
     let p = f.prepare();
-    intent::keep_observed(&f.storage, &p, &|| false, &|point| {
-        if phase == point {
-            let receipt =
-                serde_json::to_vec(&(f.storage.root(), &f.operation, &f.meeting, &f.other))
-                    .unwrap();
-            std::fs::write(base.join("ready.tmp"), receipt).unwrap();
-            std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+    intent::keep_observed(
+        &f.storage,
+        &p,
+        &crate::test_support::never_cancelled,
+        &|point| {
+            if phase == point {
+                let receipt =
+                    serde_json::to_vec(&(f.storage.root(), &f.operation, &f.meeting, &f.other))
+                        .unwrap();
+                std::fs::write(base.join("ready.tmp"), receipt).unwrap();
+                std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("keep checkpoint not reached");
 }
@@ -747,9 +800,11 @@ fn deletion_fence_sigkill_before_and_after_keep_commit_preserves_all_data_and_co
         let storage = Storage::open(root).unwrap();
         assert_eq!(storage.data_write_blocked(), phase == "beforeCommit");
         if phase == "beforeCommit" {
-            let p = intent::read(&storage, &operation, &|| false).unwrap();
-            p.verify_live(&storage, &|| false).unwrap();
-            intent::keep_unstarted(&storage, &p, &|| false).unwrap();
+            let p =
+                intent::read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
+            p.verify_live(&storage, &crate::test_support::never_cancelled)
+                .unwrap();
+            intent::keep_unstarted(&storage, &p, &crate::test_support::never_cancelled).unwrap();
             assert!(storage.restart_required());
         } else {
             storage

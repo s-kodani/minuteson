@@ -11,6 +11,8 @@ pub enum JobKind {
     Transcription,
     Diarization,
     MinutesGeneration,
+    VoiceRegistration,
+    VoiceMatching,
 }
 
 impl JobKind {
@@ -19,6 +21,8 @@ impl JobKind {
             Self::Transcription => "transcription",
             Self::Diarization => "diarization",
             Self::MinutesGeneration => "minutes_generation",
+            Self::VoiceRegistration => "voice_registration",
+            Self::VoiceMatching => "voice_matching",
         }
     }
 }
@@ -71,6 +75,7 @@ pub(crate) struct NotificationOutput {
     pub job: JobSnapshot,
     pub content_hash: String,
     pub publication_state: String,
+    pub warnings: Vec<String>,
 }
 
 impl Storage {
@@ -90,6 +95,25 @@ impl Storage {
             return Err("通知対象の処理は成功していません".into());
         }
         let (spec, checkpoint) = read_fixed_input(&tx, job_id)?;
+        if matches!(
+            spec.kind,
+            JobKind::VoiceRegistration | JobKind::VoiceMatching
+        ) {
+            if checkpoint.as_ref().and_then(|c| c["voiceResult"].as_bool()) != Some(true)
+                || job.completed_units != 1
+                || job.total_units != Some(1)
+                || job.output_analysis_id.is_some()
+                || job.output_minutes_id.is_some()
+            {
+                return Err("声の処理の完了記録が一致しません".into());
+            }
+            return Ok(NotificationOutput {
+                content_hash: job.spec_hash.clone(),
+                job,
+                publication_state: "voice".into(),
+                warnings: vec![],
+            });
+        }
         if job.kind == "minutes_generation" && crate::generation::markdown_job::is_markdown(&spec) {
             verify_latest_checkpoint(&tx, job_id)?;
             if job.output_minutes_id.is_some()
@@ -138,6 +162,7 @@ impl Storage {
                 job,
                 content_hash: hash,
                 publication_state,
+                warnings: vec![],
             });
         }
         let (id, table, computed) = match job.kind.as_str() {
@@ -171,6 +196,7 @@ impl Storage {
             job,
             content_hash,
             publication_state,
+            warnings: vec![],
         })
     }
 
@@ -219,6 +245,7 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let snapshot = enqueue_in_transaction(&transaction, &spec)?;
         transaction.commit().map_err(|e| e.to_string())?;
+        crate::internal_logs::job(&snapshot);
         Ok(snapshot)
     }
 
@@ -260,7 +287,7 @@ impl Storage {
         // Preserve fixed historical jobs after audio deletion, but do not let
         // those queued entries starve another meeting or text-only work.
         let queued = {
-            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ('transcription','diarization','minutes_generation') AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
+            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ('transcription','diarization','minutes_generation','voice_registration','voice_matching') AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
             let mut rows = query
                 .query(params![kind.map(JobKind::as_str)])
                 .map_err(|e| e.to_string())?;
@@ -275,12 +302,13 @@ impl Storage {
                 let meeting: String = row.get(1).map_err(|e| e.to_string())?;
                 let job_kind: String = row.get(4).map_err(|e| e.to_string())?;
                 #[cfg(unix)]
-                if matches!(job_kind.as_str(), "transcription" | "diarization")
-                    && super::deletion::audio::intent::removal::completion::deleted(
-                        &transaction,
-                        &meeting,
-                    )?
-                {
+                if matches!(
+                    job_kind.as_str(),
+                    "transcription" | "diarization" | "voice_registration" | "voice_matching"
+                ) && super::deletion::audio::intent::removal::completion::deleted(
+                    &transaction,
+                    &meeting,
+                )? {
                     continue;
                 }
                 #[cfg(not(unix))]
@@ -319,6 +347,7 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
+        crate::internal_logs::job(&snapshot);
         Ok(Some(snapshot))
     }
 
@@ -404,6 +433,7 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
+        crate::internal_logs::job(&snapshot);
         Ok(snapshot)
     }
 
@@ -454,6 +484,7 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
+        crate::internal_logs::job(&snapshot);
         Ok(snapshot)
     }
 
@@ -496,13 +527,13 @@ impl Storage {
         let mut query = connection.prepare(
             "WITH ranked AS (
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY meeting_id, kind ORDER BY created_at DESC, rowid DESC) AS position
-                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation') AND (kind != 'minutes_generation' OR json_extract(parameters_json,'$.generation.schemaVersion') = 7)
+                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching') AND (kind != 'minutes_generation' OR json_extract(parameters_json,'$.generation.schemaVersion') = 7)
             )
             SELECT j.id, j.meeting_id, j.kind, j.state, j.operation_id, j.input_hash, j.spec_hash,
                 j.completed_units, j.total_units, j.error_code, j.created_at, j.updated_at,
                 j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, j.output_minutes_id, m.title
             FROM processing_jobs j JOIN meetings m ON m.id = j.meeting_id
-            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation') AND (j.kind != 'minutes_generation' OR json_extract(j.parameters_json,'$.generation.schemaVersion') = 7) AND (
+            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching') AND (j.kind != 'minutes_generation' OR json_extract(j.parameters_json,'$.generation.schemaVersion') = 7) AND (
                 j.state IN ('queued', 'running', 'pausing', 'paused', 'interrupted')
                 OR j.id IN (SELECT id FROM ranked WHERE position = 1)
                 OR j.id IN (SELECT value FROM json_each(?1))
@@ -683,6 +714,7 @@ impl Storage {
             return Err("再試行の登録を取り消しました".into());
         }
         transaction.commit().map_err(|e| e.to_string())?;
+        crate::internal_logs::job(&next);
         Ok(next)
     }
 
@@ -849,6 +881,7 @@ impl Storage {
         }
         let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
+        crate::internal_logs::job(&snapshot);
         Ok(snapshot)
     }
 }
@@ -877,7 +910,10 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
 
 fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<(), String> {
     #[cfg(unix)]
-    if matches!(kind, "transcription" | "diarization") {
+    if matches!(
+        kind,
+        "transcription" | "diarization" | "voice_registration" | "voice_matching"
+    ) {
         super::deletion::audio::require_source(db, meeting)?;
     }
     #[cfg(not(unix))]
@@ -899,8 +935,13 @@ pub(super) fn enqueue_in_transaction(
     if !spec.profile_snapshot.is_object() || !spec.parameters.is_object() {
         return Err("処理設定はJSONオブジェクトが必要です".into());
     }
-    if matches!(spec.kind, JobKind::MinutesGeneration | JobKind::Diarization)
-        != spec.input_analysis_id.is_some()
+    if matches!(
+        spec.kind,
+        JobKind::MinutesGeneration
+            | JobKind::Diarization
+            | JobKind::VoiceRegistration
+            | JobKind::VoiceMatching
+    ) != spec.input_analysis_id.is_some()
     {
         return Err("処理種別と入力解析版が一致しません".into());
     }
@@ -1124,14 +1165,14 @@ pub(super) fn verify_latest_checkpoint(
     }
 }
 
-fn valid_hash(hash: &str) -> bool {
+pub(super) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn hash_bytes(domain: &[u8], bytes: &[u8]) -> String {
+pub(super) fn hash_bytes(domain: &[u8], bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(bytes);

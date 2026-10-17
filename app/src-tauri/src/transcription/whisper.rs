@@ -172,6 +172,19 @@ pub fn run_unit(
     timeout: Duration,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Vec<Segment>>, String> {
+    run_unit_with_suppression(config, directory, duration_us, timeout, false, cancelled)
+}
+
+// Suppress non-speech tokens during decoding, never delete recognized words.
+// The caller fixes this choice in the job, rather than changing old replays.
+pub(super) fn run_unit_with_suppression(
+    config: &WhisperConfig,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    suppress_non_speech: bool,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<Segment>>, String> {
     if cancelled() {
         return Ok(None);
     }
@@ -208,6 +221,11 @@ pub fn run_unit(
         .create_new(true)
         .open(&stderr_path)
         .map_err(|e| e.to_string())?;
+    let _log_capture = crate::internal_logs::watch_engine(
+        &directory,
+        &["stdout.log", "stderr.log"],
+        "transcription",
+    );
     let mut launch = OwnedCommand::new(&config.executable.path)?;
     let command = &mut launch.command;
     command
@@ -228,6 +246,9 @@ pub fn run_unit(
         .arg("--threads")
         .arg(config.threads.to_string())
         .args(["--beam-size", "5"]);
+    if suppress_non_speech {
+        command.arg("--suppress-nst");
+    }
     if !config.use_gpu {
         command.arg("--no-gpu");
     }
@@ -293,6 +314,68 @@ mod tests {
 
     fn output() -> serde_json::Value {
         json!({"model":{"multilingual":true}, "params":{"model":"/model.bin","language":"ja","translate":false},"transcription":[{"offsets":{"from":125,"to":1000},"text":" 点検日 "}]})
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_speech_suppression_is_a_decode_flag_and_never_a_text_blacklist() {
+        use std::os::unix::fs::PermissionsExt;
+        for suppress in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let model = root.path().join("model.bin");
+            std::fs::write(&model, b"model").unwrap();
+            let executable = root.path().join("fake-cli");
+            let mut native = output();
+            native["params"]["model"] = json!(model.canonicalize().unwrap());
+            let text = "(記者)という表記と徳島新聞社について確認する。";
+            native["transcription"][0]["text"] = json!(text);
+            std::fs::write(
+                &executable,
+                format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > args.log\nprintf '%s' '{}' > result.json\n",
+                    native
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let config = WhisperConfig {
+                executable: Fingerprint::capture(
+                    &executable,
+                    &crate::test_support::never_cancelled,
+                )
+                .unwrap(),
+                model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
+                vad_model: None,
+                threads: 1,
+                use_gpu: false,
+                prompt: "登録用語".into(),
+            };
+            let unit = root.path().join("unit");
+            std::fs::create_dir(&unit).unwrap();
+            std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
+            let segments = run_unit_with_suppression(
+                &config,
+                &unit,
+                1_000_000,
+                Duration::from_secs(5),
+                suppress,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(segments[0].text, text);
+            assert_eq!(
+                (segments[0].start_us, segments[0].end_us),
+                (125_000, 1_000_000)
+            );
+            let args = std::fs::read_to_string(unit.join("args.log")).unwrap();
+            assert_eq!(args.lines().any(|a| a == "--suppress-nst"), suppress);
+            assert!(args.contains("--prompt\n登録用語\n"));
+            assert!(!args.contains("--suppress-regex"));
+            let raw: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(unit.join("result.json")).unwrap()).unwrap();
+            assert_eq!(raw, native);
+        }
     }
 
     #[test]
@@ -432,11 +515,20 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("model.bin");
         std::fs::write(&path, b"model").unwrap();
-        let fingerprint = Fingerprint::capture(&path, &|| false).unwrap();
-        fingerprint.verify(&|| false).unwrap();
+        let fingerprint =
+            Fingerprint::capture(&path, &crate::test_support::never_cancelled).unwrap();
+        fingerprint
+            .verify(&crate::test_support::never_cancelled)
+            .unwrap();
         std::fs::write(path, b"other").unwrap();
-        assert!(fingerprint.verify(&|| false).is_err());
-        assert!(Fingerprint::capture(Path::new("relative.bin"), &|| false).is_err());
+        assert!(fingerprint
+            .verify(&crate::test_support::never_cancelled)
+            .is_err());
+        assert!(Fingerprint::capture(
+            Path::new("relative.bin"),
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
 
     #[test]
@@ -447,7 +539,8 @@ mod tests {
         let cli = PathBuf::from(std::env::var("MON_WHISPER_CLI").unwrap());
         let model = PathBuf::from(std::env::var("MON_WHISPER_MODEL").unwrap());
         let input = PathBuf::from(std::env::var("MON_WHISPER_INPUT_CAF").unwrap());
-        let input_proof = Fingerprint::capture(&input, &|| false).unwrap();
+        let input_proof =
+            Fingerprint::capture(&input, &crate::test_support::never_cancelled).unwrap();
         let verified = VerifiedAudio::open(
             File::open(input).unwrap(),
             input_proof.size,
@@ -471,21 +564,23 @@ mod tests {
             }],
         };
         let config = WhisperConfig {
-            executable: Fingerprint::capture(&cli, &|| false).unwrap(),
-            model: Fingerprint::capture(&model, &|| false).unwrap(),
+            executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
+            model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
             threads: 4,
             use_gpu: false,
             prompt: String::new(),
         };
-        config.verify(&|| false).unwrap();
+        config
+            .verify(&crate::test_support::never_cancelled)
+            .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let converted = super::super::wave::write_window(
             &mut audio,
             0,
             frames,
             &directory.path().join("input.wav"),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(converted, (duration as u64 * 16_000 + 500_000) / 1_000_000);
@@ -494,7 +589,7 @@ mod tests {
             directory.path(),
             duration,
             Duration::from_secs(180),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
         .unwrap();
@@ -502,7 +597,9 @@ mod tests {
         assert!(segments.iter().all(|segment| segment.start_us >= 0
             && segment.end_us <= duration
             && segment.end_us > segment.start_us));
-        config.verify(&|| false).unwrap();
+        config
+            .verify(&crate::test_support::never_cancelled)
+            .unwrap();
         // No transcript is printed: the input may contain private meeting text.
         eprintln!(
             "real whisper.cpp integration: {} segments, input {} us, CLI SHA {}, model SHA {}",
@@ -520,7 +617,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let model = directory.path().join("model.bin");
         std::fs::write(&model, b"model").unwrap();
-        let proof = Fingerprint::capture(&model, &|| false).unwrap();
+        let proof = Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap();
         let executable = directory.path().join("fake-cli");
         let mut result = output();
         result["params"]["model"] = json!(proof.path);
@@ -535,7 +632,8 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let config = WhisperConfig {
-            executable: Fingerprint::capture(&executable, &|| false).unwrap(),
+            executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
+                .unwrap(),
             model: proof,
             vad_model: None,
             threads: 1,
@@ -545,11 +643,15 @@ mod tests {
         let unit = directory.path().join("unit");
         std::fs::create_dir(&unit).unwrap();
         std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
-        assert!(
-            run_unit(&config, &unit, 1_000_000, Duration::from_secs(3), &|| false)
-                .unwrap_err()
-                .contains("変更")
-        );
+        assert!(run_unit(
+            &config,
+            &unit,
+            1_000_000,
+            Duration::from_secs(3),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap_err()
+        .contains("変更"));
     }
 
     #[cfg(unix)]
@@ -563,28 +665,36 @@ mod tests {
         let model = directory.path().join("model.bin");
         std::fs::write(&model, b"model").unwrap();
         let mut config = WhisperConfig {
-            executable: Fingerprint::capture(&executable, &|| false).unwrap(),
-            model: Fingerprint::capture(&model, &|| false).unwrap(),
+            executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
+                .unwrap(),
+            model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
             threads: 1,
             use_gpu: false,
             prompt: "点検日; $(false)".into(),
         };
-        config.verify(&|| false).unwrap();
+        config
+            .verify(&crate::test_support::never_cancelled)
+            .unwrap();
         let unit = directory.path().join("unit");
         std::fs::create_dir(&unit).unwrap();
         std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
-        assert!(
-            run_unit(&config, &unit, 1_000_000, Duration::from_secs(3), &|| false)
-                .unwrap_err()
-                .contains("JSON")
-        );
+        assert!(run_unit(
+            &config,
+            &unit,
+            1_000_000,
+            Duration::from_secs(3),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap_err()
+        .contains("JSON"));
         std::fs::write(
             &executable,
             b"#!/bin/sh\nprintf '%s' $$ > child.pid\nexec /bin/sleep 30\n",
         )
         .unwrap();
-        config.executable = Fingerprint::capture(&executable, &|| false).unwrap();
+        config.executable =
+            Fingerprint::capture(&executable, &crate::test_support::never_cancelled).unwrap();
         for pause in [true, false] {
             let unit = directory
                 .path()

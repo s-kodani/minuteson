@@ -97,6 +97,7 @@ impl Startup {
         self.finish(None)
     }
     pub(crate) fn block(&self, failure: Failure) -> Result<(), String> {
+        crate::internal_logs::report_error("application", &format!("{failure:?}"));
         self.finish(Some(failure))
     }
     pub(crate) fn blocked(&self) -> bool {

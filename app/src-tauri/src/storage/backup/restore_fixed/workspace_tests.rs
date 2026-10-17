@@ -14,8 +14,10 @@ fn corrected_clock_proof_survives_archive_id_rebinding_and_fixed_job_rebuild() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let workspace =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let rebuilt = super::super::super::super::transcription::read_audio_plan(
         &workspace.database,
@@ -64,8 +66,10 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let mut workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let mut workspace =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let stage = workspace.stage.path().to_path_buf();
     let database = stage.join("fixed.sqlite3");
     assert!(database.is_file());
@@ -145,7 +149,7 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         assert!(relative.starts_with(&format!("meetings/{new_meeting}/restored/")));
         assert!(!relative.contains(&meeting));
         assert_eq!(
-            digest_file(&stage.join(relative), &|| false).unwrap(),
+            digest_file(&stage.join(relative), &crate::test_support::never_cancelled).unwrap(),
             (size as u64, hash)
         );
     }
@@ -168,7 +172,11 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         0
     );
     // This current human-Markdown fixture has no pending worker checkpoint.
-    super::super::super::validate_database(&mut workspace.database, &|| false).unwrap();
+    super::super::super::validate_database(
+        &mut workspace.database,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         storage.load_transcript_draft(&meeting).unwrap().unwrap(),
         original_draft
@@ -215,8 +223,10 @@ fn workspace_rebuilds_an_output_analysis_only_after_its_fixed_input_and_job() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let workspace =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let new_job = ids.get("processing_jobs", &meeting, &job).unwrap();
     let new_result = ids.get("analysis_revisions", &meeting, &result).unwrap();
     let (config, hash): (String, String) = workspace
@@ -271,14 +281,17 @@ fn a_substituted_archive_audio_symlink_is_rejected_without_removing_its_target()
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let audio = storage.recorded_audio_plan(&meeting).unwrap();
     let staged = &source.assets[&audio.tracks[0].chunks[0].asset_id];
     let substitute = output.path().join("substitute-synthetic.flac");
     std::fs::copy(staged, &substitute).unwrap();
     std::fs::remove_file(staged).unwrap();
     std::os::unix::fs::symlink(&substitute, staged).unwrap();
-    assert!(FixedWorkspace::prepare(&fixed, output.path(), &|| false).is_err());
+    assert!(
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .is_err()
+    );
     assert!(substitute.is_file());
     assert!(std::fs::symlink_metadata(staged)
         .unwrap()
@@ -298,7 +311,7 @@ fn cancellation_and_changed_verified_audio_remove_only_the_owned_workspace() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let before: std::collections::BTreeSet<_> = std::fs::read_dir(output.path())
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -335,7 +348,8 @@ fn cancellation_and_changed_verified_audio_remove_only_the_owned_workspace() {
     let audio = storage.recorded_audio_plan(&meeting).unwrap();
     let id = &audio.tracks[0].chunks[0].asset_id;
     std::fs::write(&source.assets[id], b"changed verified synthetic audio").unwrap();
-    let result = FixedWorkspace::prepare(&fixed, output.path(), &|| false);
+    let result =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled);
     assert!(matches!(result,Err(e) if e.contains("変更")));
     let after: std::collections::BTreeSet<_> = std::fs::read_dir(output.path())
         .unwrap()
@@ -357,8 +371,10 @@ fn every_meeting_is_reconstructed_without_cross_meeting_audio_or_markdown() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let mut workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let mut workspace =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     assert_eq!(
         workspace
             .database
@@ -412,8 +428,10 @@ fn workspace_and_its_database_and_audio_are_private() {
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+    let workspace =
+        FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     assert_eq!(
         std::fs::metadata(workspace.stage.path())
             .unwrap()

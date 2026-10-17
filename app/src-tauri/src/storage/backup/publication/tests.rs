@@ -49,9 +49,14 @@ pub(super) fn fixture() -> Fixture {
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("source.monbackup");
     source_storage
-        .create_backup_archive(&path, &|| false)
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
         .unwrap();
-    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    let source = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     archive::tests::meeting(&target, "existing");
@@ -78,7 +83,7 @@ pub(super) fn ids<'a>(f: &'a Fixture, batch: &str) -> RestoreIds<'a> {
         f.output.path(),
         batch,
         &f.target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     {
@@ -87,16 +92,22 @@ pub(super) fn ids<'a>(f: &'a Fixture, batch: &str) -> RestoreIds<'a> {
     };
     let mut db = f.target.connection.lock().unwrap();
     let mut tx = db.transaction().unwrap();
-    BatchPlan::new(&ids, &|| false)
+    BatchPlan::new(&ids, &crate::test_support::never_cancelled)
         .unwrap()
-        .reserve(&mut tx, &|| false)
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
     tx.commit().unwrap();
     ids
 }
 pub(super) fn sealed(f: &Fixture, ids: &RestoreIds<'_>) -> SealedWorkspace {
-    let fixed = FixedData::new(ids, f.output.path(), &|| false).unwrap();
-    SealedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap()
+    let fixed =
+        FixedData::new(ids, f.output.path(), &crate::test_support::never_cancelled).unwrap();
+    SealedWorkspace::prepare(
+        &fixed,
+        f.output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn dump(db: &Connection, table: &str) -> Vec<Vec<Value>> {
     let mut query = db
@@ -138,7 +149,10 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
     let sealed = sealed(&f, &ids);
     let old = all_rows(&f.target.connection.lock().unwrap());
     let old_schema = schema(&f.target.connection.lock().unwrap()).unwrap();
-    let result = f.target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    let result = f
+        .target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     let Publication::Published {
         meetings,
         vocabulary,
@@ -153,7 +167,7 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
     assert_eq!(f.target.list_meetings().unwrap().len(), 3);
     {
         let mut db = f.target.connection.lock().unwrap();
-        validate_database(&mut db, &|| false).unwrap();
+        validate_database(&mut db, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(schema(&db).unwrap(), old_schema);
         for (index, table) in portable::TABLES.iter().enumerate() {
             if *table == "vocabulary_scopes" {
@@ -176,7 +190,11 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
         );
         for asset in super::super::read_assets(&db).unwrap() {
             assert_eq!(
-                digest_file(&f.target.root.join(asset.relative_path), &|| false).unwrap(),
+                digest_file(
+                    &f.target.root.join(asset.relative_path),
+                    &crate::test_support::never_cancelled
+                )
+                .unwrap(),
                 (asset.size_bytes as u64, asset.content_hash)
             );
         }
@@ -184,7 +202,9 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
     triggers_enabled(&f.target);
     let published = all_rows(&f.target.connection.lock().unwrap());
     assert_eq!(
-        f.target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        f.target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::AlreadyPublished
     );
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), published);
@@ -193,7 +213,7 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
         f.output.path(),
         &batch,
         &f.target.connection.lock().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     {
@@ -208,8 +228,10 @@ fn restore_publication_new_explicit_batch_adds_again_without_duplicating_global_
     for iteration in 0..2 {
         let ids = ids(&f, &Uuid::new_v4().to_string());
         let sealed = sealed(&f, &ids);
-        let Publication::Published { vocabulary, .. } =
-            f.target.publish_restore(&sealed, &ids, &|| false).unwrap()
+        let Publication::Published { vocabulary, .. } = f
+            .target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap()
         else {
             panic!()
         };
@@ -230,9 +252,9 @@ fn restore_publication_cancellation_after_install_or_append_rolls_back_only_owne
     {
         let mut db = f.target.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
-        BatchPlan::new(&ids, &|| false)
+        BatchPlan::new(&ids, &crate::test_support::never_cancelled)
             .unwrap()
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap();
         tx.commit().unwrap();
     }
@@ -260,7 +282,9 @@ fn restore_publication_cancellation_after_install_or_append_rolls_back_only_owne
     assert!(new_meetings.iter().all(|p| !p.exists()));
     triggers_enabled(&f.target);
     assert!(matches!(
-        f.target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        f.target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
 }
@@ -276,7 +300,10 @@ fn restore_publication_refuses_existing_or_linked_target_and_keeps_unrelated_fil
     let unrelated = collision.join("user.txt");
     std::fs::write(&unrelated, b"keep").unwrap();
     let before = all_rows(&f.target.connection.lock().unwrap());
-    assert!(f.target.publish_restore(&sealed, &ids, &|| false).is_err());
+    assert!(f
+        .target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep");
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
     triggers_enabled(&f.target);
@@ -286,7 +313,9 @@ fn restore_publication_refuses_existing_or_linked_target_and_keeps_unrelated_fil
         let target = Storage::open(empty.path().into()).unwrap();
         std::os::unix::fs::symlink(f.target.root.join("meetings"), target.root.join("meetings"))
             .unwrap();
-        assert!(target.publish_restore(&sealed, &ids, &|| false).is_err());
+        assert!(target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep");
         assert!(target.list_meetings().unwrap().is_empty());
     }
@@ -300,7 +329,7 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
     let sealed = sealed(&f, &ids);
     assert!(f
         .target
-        .publish_restore(&sealed, &other, &|| false)
+        .publish_restore(&sealed, &other, &crate::test_support::never_cancelled)
         .unwrap_err()
         .contains("ID対応"));
     {
@@ -309,7 +338,7 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
     }
     assert!(f
         .target
-        .publish_restore(&sealed, &ids, &|| false)
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
         .unwrap_err()
         .contains("信頼済み"));
     f.target
@@ -339,7 +368,7 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
     let before = all_rows(&f.target.connection.lock().unwrap());
     assert!(f
         .target
-        .publish_restore(&sealed, &ids, &|| false)
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
         .unwrap_err()
         .contains("競合"));
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
@@ -404,7 +433,10 @@ fn restore_publication_commit_failure_rolls_back_meetings_merge_and_batch_and_re
             }
         }))
         .unwrap();
-    assert!(f.target.publish_restore(&sealed, &ids, &|| false).is_err());
+    assert!(f
+        .target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
     for meeting in read_meetings(sealed.connection()).unwrap() {
@@ -418,7 +450,9 @@ fn restore_publication_commit_failure_rolls_back_meetings_merge_and_batch_and_re
         .unwrap();
     triggers_enabled(&f.target);
     assert!(matches!(
-        f.target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        f.target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
     // An uncertain outcome must keep maintenance fail-closed, even if SQLite
@@ -477,7 +511,7 @@ fn restore_publication_rechecks_new_provenance_ids_across_domains_without_retain
     let before = all_rows(&f.target.connection.lock().unwrap());
     assert!(f
         .target
-        .publish_restore(&sealed, &ids, &|| false)
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
         .unwrap_err()
         .contains("復元由来ID"));
     assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
@@ -488,7 +522,9 @@ fn restore_publication_rechecks_new_provenance_ids_across_domains_without_retain
         .execute("DELETE FROM meetings WHERE id=?1", params![origin])
         .unwrap();
     assert!(matches!(
-        f.target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        f.target
+            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+            .unwrap(),
         Publication::Published { .. }
     ));
 }
@@ -500,7 +536,12 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let ids = ids(&f, &Uuid::new_v4().to_string());
     let sealed = sealed(&f, &ids);
     let outside = tempfile::tempdir().unwrap();
-    let install = Installed::prepare(&f.target.root, &sealed, &|| false).unwrap();
+    let install = Installed::prepare(
+        &f.target.root,
+        &sealed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let relative: String = sealed
         .connection()
         .query_row(
@@ -514,7 +555,10 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     std::fs::hard_link(&target, &hardlink).unwrap();
     let extra = target.parent().unwrap().join("user.txt");
     std::fs::write(&extra, b"unknown").unwrap();
-    assert!(install.verify(&|| false).unwrap_err().contains("リンク数"));
+    assert!(install
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap_err()
+        .contains("リンク数"));
     let bytes = std::fs::read(&hardlink).unwrap();
     drop(install);
     assert!(!target.exists());
@@ -523,7 +567,12 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     // Cleanup must also leave a substituted inode at an operation-owned path.
     let clean = tempfile::tempdir().unwrap();
     let target_storage = Storage::open(clean.path().into()).unwrap();
-    let install = Installed::prepare(&target_storage.root, &sealed, &|| false).unwrap();
+    let install = Installed::prepare(
+        &target_storage.root,
+        &sealed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let relative: String = sealed
         .connection()
         .query_row(
@@ -535,7 +584,9 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let substituted = target_storage.root.join(relative);
     std::fs::rename(&substituted, outside.path().join("owned-moved")).unwrap();
     std::fs::write(&substituted, b"replacement").unwrap();
-    assert!(install.verify(&|| false).is_err());
+    assert!(install
+        .verify(&crate::test_support::never_cancelled)
+        .is_err());
     drop(install);
     assert_eq!(std::fs::read(&substituted).unwrap(), b"replacement");
 }

@@ -1,0 +1,42 @@
+async(page,capturePath)=>{
+  const results=[],check=(v,m)=>{if(!v)throw Error(m);};
+  await page.getByRole('button',{name:'会議A',exact:true}).click();
+  const editor=page.getByRole('region',{name:'文字起こし編集',exact:true});await editor.getByRole('region',{name:'発言本文',exact:true}).waitFor();
+  await page.getByText('声の登録・照合',{exact:true}).click();
+  const panel=page.locator('.voice-panel');await panel.getByRole('button',{name:'声を登録',exact:true}).first().waitFor();
+  check(await panel.getByRole('button',{name:'声を登録',exact:true}).nth(1).isDisabled(),'mixed/absent speech is eligible');
+  await panel.getByRole('button',{name:'声を登録',exact:true}).first().click();
+  const dialog=page.getByRole('dialog',{name:'声を人物として登録',exact:true});await dialog.waitFor();await dialog.getByRole('textbox',{name:'人物名',exact:true}).fill('登録した田中');
+  check(await page.evaluate(()=>window.monVoiceFixture.requests.length)===0,'typing registers a voice');
+  await dialog.getByRole('button',{name:'候補1の登録区間を再生して確認',exact:true}).click();
+  await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='prepare_markdown_interval_playback'));
+  check(await page.evaluate(()=>{const r=window.monBrowserFixture.calls.find(c=>c.command==='prepare_markdown_interval_playback').args.request;return r.mode==='mic'&&r.startUs===0&&r.endUs===15000000;}),'voice preview mixes a different track or plays outside the selected interval');
+  await page.evaluate(()=>window.monVoiceFixture.failStart=true);await dialog.getByRole('button',{name:'声を登録',exact:true}).click();await dialog.getByRole('alert').waitFor();check(await dialog.getByRole('textbox',{name:'人物名',exact:true}).isEnabled(),'definitive rejection locks enrollment inputs');
+  await page.evaluate(()=>{window.monVoiceFixture.failStart=false;window.monVoiceFixture.loseResponse=true;});await dialog.getByRole('button',{name:'声を登録',exact:true}).click();await dialog.getByRole('button',{name:'同じ登録を再送して確認',exact:true}).waitFor();
+  await dialog.getByRole('button',{name:'同じ登録を再送して確認',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  check(await page.evaluate(()=>window.monVoiceFixture.requests.length)===1,'lost reply creates duplicate enrollment');
+  results.push('explicit registration retains the same operation after a lost reply and excludes mixed speech');
+  await page.evaluate(()=>window.monVoiceFixture.complete());await panel.getByRole('button',{name:'登録した声と照合',exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('.voice-panel button')?.disabled);
+  await panel.getByRole('button',{name:'登録した声と照合',exact:true}).click();await page.waitForFunction(()=>window.monVoiceFixture.requests.length===2);await page.evaluate(()=>window.monVoiceFixture.complete());
+  await panel.getByText('候補：登録した田中',{exact:true}).waitFor();check(await editor.getByRole('button',{name:'田中の名前を変更',exact:true}).count()===1,'uncalibrated matching overwrites a name');
+  await panel.getByRole('button',{name:'名前を適用',exact:true}).click();await editor.getByRole('button',{name:'登録した田中の名前を変更',exact:true}).waitFor();
+  results.push('uncalibrated match is a candidate until explicit confirmation saves the name');
+  await editor.getByRole('button',{name:'登録した田中の名前を変更',exact:true}).click();
+  const nameDialog=page.getByRole('dialog',{name:'話者名を変更',exact:true});await nameDialog.getByRole('textbox',{name:'表示名',exact:true}).fill('まだ確定していない名前');
+  const saveCount=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
+  await page.evaluate(()=>window.monVoiceFixture.emitChange());
+  check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length)===saveCount,'background result saved an unconfirmed name');
+  check(await nameDialog.getByRole('textbox',{name:'表示名',exact:true}).inputValue()==='まだ確定していない名前','background result lost pending name');await page.keyboard.press('Escape');await nameDialog.waitFor({state:'hidden'});
+  results.push('background voice results preserve pending text and never confirm an unfinished name');
+  await panel.getByRole('button',{name:'対応を解除',exact:true}).click();await panel.getByText('対応を解除済み',{exact:true}).waitFor();
+  results.push('confirmed identity can be detached without training the registry');
+  for(const width of [1280,390]){await page.setViewportSize({width,height:900});if(width<760){await page.getByRole('button',{name:'話者一覧を開く',exact:true}).click();await page.getByRole('dialog',{name:'話者一覧',exact:true}).waitFor();await panel.getByRole('button',{name:'声を登録',exact:true}).first().click();await dialog.waitFor();check(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth),'enrollment dialog overflows narrow screen');await page.screenshot({path:capturePath('voice-enrollment-narrow.png')});await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});}check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'voice controls overflow');await page.screenshot({path:capturePath(`voice-${width}.png`)});if(width<760)await page.getByRole('button',{name:'話者一覧を閉じる',exact:true}).click();}
+  results.push('voice panel fits desktop and narrow speaker drawer');
+  await page.setViewportSize({width:1280,height:900});await page.getByRole('button',{name:'設定',exact:true}).click();
+  await page.getByText('登録した話者',{exact:true}).click();const settings=page.locator('.voice-settings');await settings.getByText('登録した田中',{exact:true}).waitFor();
+  await settings.getByRole('button',{name:'名前を変更',exact:true}).click();const rename=page.getByRole('dialog',{name:'登録した人物名を変更',exact:true});await rename.getByRole('textbox',{name:'人物名',exact:true}).fill('台帳の名前');await rename.getByRole('button',{name:'保存',exact:true}).click();await rename.waitFor({state:'hidden'});await settings.getByText('台帳の名前',{exact:true}).waitFor();
+  await settings.getByRole('button',{name:'この声を削除',exact:true}).click();await settings.getByText(/0区間/).waitFor();
+  await settings.getByRole('button',{name:'人物と声を削除',exact:true}).click();const deletion=page.getByRole('dialog',{name:'人物と声を削除',exact:true});await deletion.getByRole('button',{name:'人物と声を削除',exact:true}).click();await deletion.waitFor({state:'hidden'});await settings.getByText('登録した話者はいません。',{exact:true}).waitFor();
+  results.push('settings rename, sample deletion and confirmed person deletion persist');
+  return {passed:results.length,results};
+}

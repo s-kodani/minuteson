@@ -87,7 +87,7 @@ fn root_renewal_coexisting_current_tree_and_reserved_contents_require_fresh_cons
                 std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
                 std::fs::write(&f.file, b"NEW LOGICAL AUDIO").unwrap();
             }
-            assert!(run(&f.storage, &mut r, &|| false).is_err());
+            assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
             let inspected = review(&f, &r);
             assert_eq!(audit_count(&f), 0);
             assert_eq!(r.progress_json().unwrap(), old);
@@ -96,15 +96,28 @@ fn root_renewal_coexisting_current_tree_and_reserved_contents_require_fresh_cons
                 .entries
                 .iter()
                 .any(|e| e.path.ends_with("/unknown.txt") && e.registered.is_none()));
-            assert!(
-                renewal::accept(&f.storage, &mut r, &inspected, false, &lease(), &|| false)
-                    .is_err()
-            );
+            assert!(renewal::accept(
+                &f.storage,
+                &mut r,
+                &inspected,
+                false,
+                &lease(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
             assert_eq!(
                 std::fs::read(reserved.join("unknown.txt")).unwrap(),
                 b"RESERVED UNKNOWN"
             );
-            renewal::accept(&f.storage, &mut r, &inspected, true, &lease(), &|| false).unwrap();
+            renewal::accept(
+                &f.storage,
+                &mut r,
+                &inspected,
+                true,
+                &lease(),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             assert_eq!(snapshot(&f), evidence);
             assert_eq!(audit_count(&f), 1);
             assert_eq!(r.manifest.reservation_roots.len(), 1);
@@ -128,12 +141,25 @@ fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fe
     assert!(storage.data_write_blocked());
     let analysis = AnalysisController::default();
     let admitted = analysis
-        .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            &operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut p = operations::Prepared::pending(&storage, &operation, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::pending(&storage, &operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(!p.preview().execute_allowed && p.preview().reconfirmation_allowed);
-    p.review_remaining(&storage, &admitted, &p.preview().confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        &storage,
+        &admitted,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = p.preview();
     assert_eq!(preview.phase, "reconfirmation");
     assert_eq!(preview.unregistered_count, 1);
@@ -161,7 +187,7 @@ fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fe
             &admitted,
             &preview.confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -227,13 +253,14 @@ fn root_renewal_committed_plan_cold_reopens_without_forgetting_original_reserved
     drop(r);
     drop(f.storage);
     let storage = Storage::open(path).unwrap();
-    let mut saved = read(&storage, &operation, &|| false).unwrap();
+    let mut saved = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(saved.progress_json().unwrap(), json);
     assert_eq!(saved.manifest.reservation_roots, roots);
     assert!(storage.data_write_blocked());
-    run(&storage, &mut saved, &|| false).unwrap();
-    let mut db = completion::start(&storage, &saved, &|| false).unwrap();
-    completion::run(&storage, &mut db, &|| false).unwrap();
+    run(&storage, &mut saved, &crate::test_support::never_cancelled).unwrap();
+    let mut db =
+        completion::start(&storage, &saved, &crate::test_support::never_cancelled).unwrap();
+    completion::run(&storage, &mut db, &crate::test_support::never_cancelled).unwrap();
     assert!(db.completed() && storage.restart_required());
     assert!(!reserved.exists());
     assert_eq!(std::fs::read(&f.other_file).unwrap(), b"KEEP OTHER AUDIO");
@@ -273,7 +300,7 @@ fn root_renewal_second_generation_handles_another_reserved_rename_without_expand
     })
     .is_err());
     assert!(stop.get());
-    assert!(run(&f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     accept(&f, &mut r, true);
     assert!(r.manifest.reservation_roots.contains(
         &first
@@ -328,7 +355,7 @@ fn current_v3_renewal_chain_retains_all_reserved_names_and_requires_fresh_consen
     std::fs::create_dir(&reserved).unwrap();
     std::fs::write(reserved.join("late"), b"CURRENT REAPPEARED UNKNOWN").unwrap();
     let progress = r.progress_json().unwrap();
-    assert!(run(&f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     assert_eq!(r.progress_json().unwrap(), progress);
     assert_eq!(
         std::fs::read(reserved.join("late")).unwrap(),
@@ -352,7 +379,10 @@ fn root_renewal_exact_sibling_links_or_files_are_retained_without_following_exte
         } else {
             std::fs::write(&reserved, b"KEEP FOREIGN FILE").unwrap();
         }
-        assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
+        assert!(
+            renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled)
+                .is_err()
+        );
         assert_eq!(audit_count(&f), 0);
         assert!(std::fs::symlink_metadata(&reserved).is_ok());
         f.unaffected();
@@ -365,11 +395,11 @@ fn root_renewal_late_historical_root_reappearance_blocks_fixed_plan_and_requires
     let (mut r, reserved) = paused_root(&f, "renamed");
     std::fs::write(reserved.join("unknown"), b"DELETE FIRST").unwrap();
     accept(&f, &mut r, true);
-    run(&f.storage, &mut r, &|| false).unwrap();
+    run(&f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
     assert!(!reserved.exists());
     std::fs::create_dir(&reserved).unwrap();
     std::fs::write(reserved.join("late"), b"KEEP UNTIL ANOTHER CONSENT").unwrap();
-    assert!(completion::start(&f.storage, &r, &|| false).is_err());
+    assert!(completion::start(&f.storage, &r, &crate::test_support::never_cancelled).is_err());
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
     assert_eq!(
         std::fs::read(reserved.join("late")).unwrap(),

@@ -180,7 +180,8 @@ fn bootstrap_shared_os_config_and_app_data_parent_uses_current_data_directory() 
     let (b, s) = f.start();
     let meeting = s.create_meeting("current shared parent").unwrap();
     let backup = f._directory.path().join("shared-parent.monbackup");
-    s.create_backup_archive(&backup, &|| false).unwrap();
+    s.create_backup_archive(&backup, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(b.view().unwrap().meeting_root, f.legacy.join("data"));
     assert_eq!(
         std::fs::read(f.legacy.join("models/model.bin")).unwrap(),

@@ -1,8 +1,22 @@
 import { validateMissingRanges, type PlaybackInfo } from "./playback.ts";
+import type { DraftUtteranceAudioRequest } from "./transcript-state.ts";
 
 export type MeetingPlaybackMode = "mic" | "system" | "both" | "imported";
-export type MeetingPlaybackRequest = { meetingId: string; mode: MeetingPlaybackMode };
+export type MeetingPlaybackStartReference =
+  | { kind: "utterance"; analysisId: string; utteranceId: string; expectedContentHash: string; startUs: number; endUs: number }
+  | { kind: "draftUtterance"; request: DraftUtteranceAudioRequest }
+  | { kind: "interval"; startUs: number; endUs: number; expectedDurationUs: number };
+export type MeetingPlaybackRequest = { meetingId: string; mode: MeetingPlaybackMode; startReference?: MeetingPlaybackStartReference };
 export type MeetingPlaybackRestore = { frame: number; rate: number; playing: boolean; endUs?: number };
+
+export function meetingPlaybackStart(reference: MeetingPlaybackStartReference, durationUs: number): number {
+  const start = reference.kind === "draftUtterance" ? reference.request.expectedStartUs : reference.startUs;
+  const end = reference.kind === "draftUtterance" ? reference.request.expectedEndUs : reference.endUs;
+  if (!Number.isSafeInteger(durationUs) || durationUs <= 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+    || start < 0 || end <= start || end > durationUs
+    || reference.kind === "interval" && reference.expectedDurationUs !== durationUs) throw Error("再生開始位置と会議音声の時間が一致しません。");
+  return start;
+}
 
 export function meetingPlaybackModes(sourceType?: "recording" | "audio_import" | null): MeetingPlaybackMode[] {
   return sourceType === "recording" ? ["mic", "system", "both"] : sourceType === "audio_import" ? ["imported"] : [];

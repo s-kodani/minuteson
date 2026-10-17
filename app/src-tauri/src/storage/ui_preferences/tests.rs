@@ -15,18 +15,35 @@ fn rows(storage: &Storage) -> String {
 fn ui_preferences_color_is_independent_persisted_and_version_bound() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = storage.create_meeting("color must not edit content").unwrap();
-    let purple = UiPreferences::V1 { schema_version: 1, theme: Theme::Dark, color_theme: ColorTheme::Purple };
+    let meeting = storage
+        .create_meeting("color must not edit content")
+        .unwrap();
+    let purple = UiPreferences::V1 {
+        schema_version: 1,
+        theme: Theme::Dark,
+        color_theme: ColorTheme::Purple,
+    };
     let saved = storage.save_ui_preferences(0, purple.clone()).unwrap();
     assert_eq!(saved.lock_version, 1);
-    assert!(storage.save_ui_preferences(0, payload(Theme::Light)).is_err());
+    assert!(storage
+        .save_ui_preferences(0, payload(Theme::Light))
+        .is_err());
     assert_eq!(storage.ui_preferences().unwrap().payload, purple);
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
     assert_eq!(storage.ui_preferences().unwrap().payload, purple);
     assert_eq!(storage.get_meeting(&meeting.id).unwrap(), Some(meeting));
-    assert_eq!(storage.save_ui_preferences(1, payload(Theme::Dark)).unwrap().lock_version, 2);
-    assert_eq!(storage.ui_preferences().unwrap().payload, payload(Theme::Dark));
+    assert_eq!(
+        storage
+            .save_ui_preferences(1, payload(Theme::Dark))
+            .unwrap()
+            .lock_version,
+        2
+    );
+    assert_eq!(
+        storage.ui_preferences().unwrap().payload,
+        payload(Theme::Dark)
+    );
 }
 
 #[test]
@@ -34,9 +51,20 @@ fn ui_preferences_absent_color_defaults_without_rewriting_or_accepting_invalid_c
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let json = r#"{"schemaVersion":1,"theme":"dark"}"#;
-    storage.connection.lock().unwrap().execute("INSERT INTO app_settings VALUES(?1,?2,?3,1,1)", params![KEY,json,format!("{:x}",Sha256::digest(json.as_bytes()))]).unwrap();
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO app_settings VALUES(?1,?2,?3,1,1)",
+            params![KEY, json, format!("{:x}", Sha256::digest(json.as_bytes()))],
+        )
+        .unwrap();
     let before = rows(&storage);
-    assert_eq!(storage.ui_preferences().unwrap().payload, payload(Theme::Dark));
+    assert_eq!(
+        storage.ui_preferences().unwrap().payload,
+        payload(Theme::Dark)
+    );
     assert_eq!(rows(&storage), before);
     for color in ["null", "\"blue\"", "true", "1"] {
         let json = format!(r#"{{"schemaVersion":1,"theme":"dark","colorTheme":{color}}}"#);
@@ -100,7 +128,9 @@ fn ui_preferences_native_maintenance_blocks_theme_writes_but_keeps_reads() {
         .save_ui_preferences(0, payload(Theme::Dark))
         .unwrap();
     let before = rows(&storage);
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         storage.ui_preferences().unwrap().payload,
         payload(Theme::Dark)
@@ -109,7 +139,9 @@ fn ui_preferences_native_maintenance_blocks_theme_writes_but_keeps_reads() {
         .save_ui_preferences(1, payload(Theme::Light))
         .is_err());
     assert_eq!(rows(&storage), before);
-    snapshot.retire_source_for_restart(&|| false).unwrap();
+    snapshot
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(snapshot);
     assert!(storage
         .save_ui_preferences(1, payload(Theme::Light))
@@ -297,7 +329,9 @@ fn ui_preferences_held_native_snapshot_and_retired_storage_never_accept_theme_wr
         .save_ui_preferences(0, payload(Theme::Dark))
         .unwrap();
     let before = rows(&storage);
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         storage.ui_preferences().unwrap().payload,
         payload(Theme::Dark)
@@ -310,8 +344,12 @@ fn ui_preferences_held_native_snapshot_and_retired_storage_never_accept_theme_wr
     storage
         .save_ui_preferences(1, payload(Theme::Light))
         .unwrap();
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
-    snapshot.retire_source_for_restart(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    snapshot
+        .retire_source_for_restart(&crate::test_support::never_cancelled)
+        .unwrap();
     drop(snapshot);
     let before = rows(&storage);
     assert!(storage.restart_required());

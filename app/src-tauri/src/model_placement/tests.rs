@@ -9,7 +9,12 @@ fn guided_model_placement_copies_canonical_manifest_without_touching_sources_and
     let f = fixture();
     std::fs::remove_file(f.source.path().join(model_inspection::MANIFEST)).unwrap();
     let manifest = f.report.manifest.clone();
-    let report = model_inspection::inspect_declared(f.source.path(), &manifest, &|| false).unwrap();
+    let report = model_inspection::inspect_declared(
+        f.source.path(),
+        &manifest,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let token = uuid::Uuid::new_v4().to_string();
     let root = f.app_data.path().join("models");
     let before = std::fs::read(f.source.path().join("weights/model.bin")).unwrap();
@@ -20,7 +25,7 @@ fn guided_model_placement_copies_canonical_manifest_without_touching_sources_and
         &token,
         &report.review_hash,
         Some(&manifest),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert!(!receipt.ready);
@@ -30,7 +35,9 @@ fn guided_model_placement_copies_canonical_manifest_without_touching_sources_and
         std::fs::read(f.source.path().join("weights/model.bin")).unwrap(),
         before
     );
-    let placed = model_inspection::inspect(&root.join(&token), &|| false).unwrap();
+    let placed =
+        model_inspection::inspect(&root.join(&token), &crate::test_support::never_cancelled)
+            .unwrap();
     assert_eq!(placed.review_hash, report.review_hash);
     assert_eq!(
         std::fs::read(root.join(&token).join(model_inspection::MANIFEST)).unwrap(),
@@ -43,7 +50,7 @@ fn guided_model_placement_copies_canonical_manifest_without_touching_sources_and
         &token,
         &report.review_hash,
         Some(&manifest),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(retry.review_hash, receipt.review_hash);
@@ -59,7 +66,12 @@ fn guided_model_placement_rejects_changed_declaration_bytes_and_cancel_before_an
     let f = fixture();
     std::fs::remove_file(f.source.path().join(model_inspection::MANIFEST)).unwrap();
     let mut manifest = f.report.manifest.clone();
-    let report = model_inspection::inspect_declared(f.source.path(), &manifest, &|| false).unwrap();
+    let report = model_inspection::inspect_declared(
+        f.source.path(),
+        &manifest,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let root = f.app_data.path().join("models");
     let token = uuid::Uuid::new_v4().to_string();
     assert!(place_with_manifest(
@@ -80,7 +92,7 @@ fn guided_model_placement_rejects_changed_declaration_bytes_and_cancel_before_an
         &token,
         &report.review_hash,
         Some(&manifest),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     manifest.model_name = report.manifest.model_name.clone();
@@ -92,7 +104,7 @@ fn guided_model_placement_rejects_changed_declaration_bytes_and_cancel_before_an
         &token,
         &report.review_hash,
         Some(&manifest),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(!root.exists());
@@ -145,7 +157,8 @@ fn fixture() -> Fixture {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
-    let report = model_inspection::inspect(source.path(), &|| false).unwrap();
+    let report =
+        model_inspection::inspect(source.path(), &crate::test_support::never_cancelled).unwrap();
     let meetings = tempfile::tempdir().unwrap();
     let app_data = tempfile::tempdir().unwrap();
     let storage = Storage::open(meetings.path().into()).unwrap();
@@ -209,7 +222,7 @@ fn manual_v1_record_keeps_legacy_serialized_bytes_hash_and_no_download_origin() 
 fn verified_copy_is_separate_private_persistent_idempotent_and_not_ai_ready() {
     let f = fixture();
     let token = uuid::Uuid::new_v4().to_string();
-    let receipt = placement(&f, &token, &|| false).unwrap();
+    let receipt = placement(&f, &token, &crate::test_support::never_cancelled).unwrap();
     assert!(receipt.placement_recorded && !receipt.ready);
     assert_eq!(receipt.engine_compatibility, "not_verified");
     assert_eq!(receipt.review_hash, f.report.review_hash);
@@ -236,7 +249,7 @@ fn verified_copy_is_separate_private_persistent_idempotent_and_not_ai_ready() {
         0o700
     );
     assert!(!f.meetings.path().join("models").exists());
-    placement(&f, &token, &|| false).unwrap();
+    placement(&f, &token, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(std::fs::read_dir(&models).unwrap().count(), 1);
     let old_meetings = f.storage.list_meetings().unwrap();
     let old_preferences = f.storage.analysis_preferences().unwrap().payload;
@@ -252,7 +265,25 @@ fn verified_copy_is_separate_private_persistent_idempotent_and_not_ai_ready() {
     let entry = reopened.list_model_placements().unwrap().remove(0);
     assert!(entry.placement_recorded && !entry.ready);
     assert_eq!(entry.review_hash, f.report.review_hash);
-    assert!(model_inspection::inspect(&package, &|| false).is_ok());
+    assert_eq!(entry.quantization, f.report.manifest.quantization);
+    let expected: Vec<_> = f
+        .report
+        .files
+        .iter()
+        .filter(|file| {
+            !matches!(
+                file.role,
+                Role::Executable | Role::RuntimeLibrary | Role::Notice
+            )
+        })
+        .collect();
+    assert_eq!(entry.model_files.len(), expected.len());
+    for (actual, expected) in entry.model_files.iter().zip(expected) {
+        assert_eq!(actual.role, expected.role);
+        assert_eq!(actual.size, expected.actual_size);
+        assert_eq!(actual.sha256, expected.actual_hash);
+    }
+    assert!(model_inspection::inspect(&package, &crate::test_support::never_cancelled).is_ok());
 }
 #[test]
 fn reviewed_bytes_bind_unknown_publisher_hashes_and_manifest_changes() {
@@ -272,7 +303,7 @@ fn reviewed_bytes_bind_unknown_publisher_hashes_and_manifest_changes() {
             .unwrap();
         }
         let token = uuid::Uuid::new_v4().to_string();
-        assert!(placement(&f, &token, &|| false)
+        assert!(placement(&f, &token, &crate::test_support::never_cancelled)
             .unwrap_err()
             .contains("再検査"));
         assert!(!f.app_data.path().join("models").exists());
@@ -290,20 +321,26 @@ fn model_placement_and_backup_maintenance_exclude_each_others_writes() {
     // can observe a half-written model placement as a completed preparation.
     assert!(f
         .storage
-        .prepare_backup_snapshot(&|| false)
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .err()
         .unwrap()
         .contains("モデル準備"));
     f.storage.interrupt_model_placement(&record).unwrap();
-    let snapshot = f.storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let next = uuid::Uuid::new_v4().to_string();
-    assert!(placement(&f, &next, &|| false).is_err());
+    assert!(placement(&f, &next, &crate::test_support::never_cancelled).is_err());
     assert!(!f.app_data.path().join("models").join(&next).exists());
     assert_eq!(f.storage.list_model_placements().unwrap().len(), 1);
     drop(snapshot);
-    let placed = placement(&f, &next, &|| false).unwrap();
+    let placed = placement(&f, &next, &crate::test_support::never_cancelled).unwrap();
     assert!(placed.placement_recorded && !placed.ready);
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_ok());
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_ok());
 }
 #[test]
 fn cancellation_after_intent_keeps_partial_bytes_unavailable_across_restart() {
@@ -332,7 +369,7 @@ fn cancellation_after_intent_keeps_partial_bytes_unavailable_across_restart() {
     let entries = f.storage.list_model_placements().unwrap();
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].placement_recorded && !entries[0].ready);
-    assert!(placement(&f, &token, &|| false).is_err());
+    assert!(placement(&f, &token, &crate::test_support::never_cancelled).is_err());
     assert_eq!(std::fs::read(&partial).unwrap(), before);
     drop(f.storage);
     let reopened = Storage::open(f.meetings.path().into()).unwrap();
@@ -345,7 +382,7 @@ fn cancellation_after_intent_keeps_partial_bytes_unavailable_across_restart() {
         f.source.path(),
         &next,
         &f.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(reopened.list_model_placements().unwrap().len(), 2);
@@ -361,13 +398,18 @@ fn colliding_package_and_symlink_root_never_overwrite_foreign_data() {
     std::fs::create_dir(root.join(&token)).unwrap();
     let foreign = root.join(&token).join("existing.txt");
     std::fs::write(&foreign, b"preserve me").unwrap();
-    assert!(placement(&f, &token, &|| false).is_err());
+    assert!(placement(&f, &token, &crate::test_support::never_cancelled).is_err());
     assert_eq!(std::fs::read(&foreign).unwrap(), b"preserve me");
     assert!(!f.storage.list_model_placements().unwrap()[0].placement_recorded);
     let other = fixture();
     let outside = tempfile::tempdir().unwrap();
     symlink(outside.path(), other.app_data.path().join("models")).unwrap();
-    assert!(placement(&other, &uuid::Uuid::new_v4().to_string(), &|| false).is_err());
+    assert!(placement(
+        &other,
+        &uuid::Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     assert!(other.storage.list_model_placements().unwrap().is_empty());
 }
@@ -399,7 +441,7 @@ fn descriptor_relative_creation_rejects_leaf_parent_substitution_and_existing_fi
 fn successful_retry_revalidates_target_and_metadata_corruption_is_rejected() {
     let f = fixture();
     let token = uuid::Uuid::new_v4().to_string();
-    placement(&f, &token, &|| false).unwrap();
+    placement(&f, &token, &crate::test_support::never_cancelled).unwrap();
     let target = f
         .app_data
         .path()
@@ -407,7 +449,7 @@ fn successful_retry_revalidates_target_and_metadata_corruption_is_rejected() {
         .join(&token)
         .join("weights/model.bin");
     std::fs::write(&target, b"tampered target").unwrap();
-    assert!(placement(&f, &token, &|| false).is_err());
+    assert!(placement(&f, &token, &crate::test_support::never_cancelled).is_err());
     assert_eq!(std::fs::read(&target).unwrap(), b"tampered target");
     drop(f.storage);
     let db = rusqlite::Connection::open(f.meetings.path().join("meetings.sqlite3")).unwrap();
@@ -474,7 +516,7 @@ fn startup_interrupts_preparing_intent_without_resuming_copy_or_deleting_partial
 fn model_intent_cannot_reuse_an_existing_meeting_identity() {
     let f = fixture();
     let token = f.storage.list_meetings().unwrap()[0].id.clone();
-    assert!(placement(&f, &token, &|| false).is_err());
+    assert!(placement(&f, &token, &crate::test_support::never_cancelled).is_err());
     assert!(f.storage.list_model_placements().unwrap().is_empty());
     assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
     assert!(!f.app_data.path().join("models").join(token).exists());

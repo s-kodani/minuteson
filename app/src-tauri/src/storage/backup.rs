@@ -92,21 +92,35 @@ pub(in crate::storage) fn published_restore_for_rebinding_test(
 ) -> (Storage, String, Vec<String>) {
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("model-rebinding.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
-    let archive = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let archive = archive::read(
+        &mut File::open(path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let ids = restore_ids::RestoreIds::prepare(
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed =
-        restore_fixed::workspace::seal::SealedWorkspace::prepare(&fixed, output.path(), &|| false)
+    let fixed =
+        restore_fixed::FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled)
             .unwrap();
+    let sealed = restore_fixed::workspace::seal::SealedWorkspace::prepare(
+        &fixed,
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target = Storage::open(target_root.to_owned()).unwrap();
-    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     (
         target,
         ids.get("meetings", "", meeting).unwrap(),
@@ -818,3 +832,7 @@ mod tests;
 #[cfg(test)]
 #[path = "backup/edit_recovery_tests.rs"]
 mod edit_recovery_tests;
+
+#[cfg(all(test, unix))]
+#[path = "backup/voice_tests.rs"]
+mod voice_tests;

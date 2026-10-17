@@ -21,13 +21,20 @@ pub(crate) enum ColorTheme {
     Purple,
 }
 impl Default for ColorTheme {
-    fn default() -> Self { Self::Monochrome }
+    fn default() -> Self {
+        Self::Monochrome
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields, rename_all_fields = "camelCase")]
 pub(crate) enum UiPreferences {
-    V1 { schema_version: u8, theme: Theme, #[serde(default)] color_theme: ColorTheme },
+    V1 {
+        schema_version: u8,
+        theme: Theme,
+        #[serde(default)]
+        color_theme: ColorTheme,
+    },
 }
 impl Default for UiPreferences {
     fn default() -> Self {

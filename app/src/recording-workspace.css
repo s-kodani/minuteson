@@ -7,7 +7,7 @@
 .recording-workspace .capture-input-selection{margin-top:24px;}
 .active-microphone-selection{display:flex;align-items:end;gap:10px;margin:16px 0;flex-wrap:wrap;}
 .active-microphone-selection label{flex:1 1 260px;min-width:0;}
-.active-microphone-selection select{width:100%;min-height:40px;padding:9px 12px;font:inherit;font-size:13px;line-height:20px;background:var(--surface);color:var(--text);border:1px solid var(--input-border);border-radius:8px;}
+.active-microphone-selection select{width:100%;}
 .active-microphone-selection button{min-height:40px;}
 .active-microphone-source{flex-basis:100%;color:var(--muted);font-size:12px;}
 .recording-workspace .clock{text-align:center;margin:24px 0;}

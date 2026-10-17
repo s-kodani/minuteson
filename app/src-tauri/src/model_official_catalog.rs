@@ -81,7 +81,7 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
         whisper.push(OptionView {
             id: format!("whisper-194-{name}-multilingual"),
             label: format!("Whisper {name}（多言語）"),
-            description: format!("アプリ同梱のCPU実行ファイルと、固定版Whisper {name}（多言語）を準備します。品質・速度は正式評価前です。"),
+            description: format!("アプリ同梱のCPU・Metal対応エンジンと、固定版Whisper {name}（多言語）を準備します。文字起こしでは利用可能なGPUを使います。品質・速度は正式評価前です。"),
             definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?,
             review: recipe.review()?, token_limits: None,
         });
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 4);
+        assert_eq!(choices.len(), 6);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
             assert!(ids.insert(choice.id.clone()));
@@ -121,7 +121,14 @@ mod tests {
                         limits.max_output_tokens,
                         limits.max_context_tokens
                     ),
-                    (32768, 8192, 32768)
+                    if matches!(
+                        choice.id.as_str(),
+                        "llama-b11533-qwen3-8b-q4km" | "llama-b11533-qwen3-4b-q4km"
+                    ) {
+                        (40960, 32768, 40960)
+                    } else {
+                        (32768, 8192, 32768)
+                    }
                 );
             }
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
@@ -130,13 +137,19 @@ mod tests {
                     "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
                 }
                 "sherpa-1138-pyannote3-eres2net-base" => {
-                    "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8"
+                    "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee"
                 }
                 "llama-b11533-qwen25-15b-q8" => {
                     "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221"
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
-                    "7295993aa83e948a5f3fd36ca26992e7a9833a7a90208148b0d6bf3306064350"
+                    "7ae4eeab8889de993a9c726a9cf3f11a6e70a2dd0c1c8a9596f85e33822c7cfe"
+                }
+                "llama-b11533-qwen3-8b-q4km" => {
+                    "1d3b48eebaea1750b93abbe1551423ca080ddff9b6c4f5069952aa188acbde37"
+                }
+                "llama-b11533-qwen3-4b-q4km" => {
+                    "75f65a85091ad8cf44a33bfe2902be95acb3984244b099777d868de3e4f41fc8"
                 }
                 _ => panic!("unverified catalog choice"),
             };
@@ -157,7 +170,7 @@ mod tests {
                     .count(),
                 notices
             );
-            assert!(recipe.transfer_bytes().unwrap() < 4 * 1024 * 1024 * 1024);
+            assert!(recipe.transfer_bytes().unwrap() < 6 * 1024 * 1024 * 1024);
             assert!(recipe.manifest.license_ref.contains("notices"));
         }
     }

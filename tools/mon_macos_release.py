@@ -266,7 +266,7 @@ def sign_asr_runtime(app, identity, team, policy):
             raise ValueError("release preparation must start from the original ad-hoc runtime")
         binary = extracted / "bin/whisper-cli"
         runtime.verify_binary(binary)
-        # Static CPU/Accelerate: no JIT, library-validation or debug exceptions.
+        # Static CPU/Metal with embedded shaders; use the normal app policy.
         sign(binary, identity, team, policy / "main.plist")
         runtime.verify_binary(binary)
         package = work / "package"

@@ -39,12 +39,50 @@ pub struct VerifiedAudio {
 }
 
 impl VerifiedAudio {
+    // Interactive playback of a ready managed FLAC: open its header and read
+    // only requested packets. Ingestion, AI and publication still use the full
+    // SHA256 + PCM/MD5 validation below. CAF retains that existing path too.
+    pub(crate) fn open_saved_cancellable(
+        mut file: File,
+        expected_size: u64,
+        expected_hash: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        if cancelled() {
+            return Err("音声ファイルの照合を中断しました".into());
+        }
+        let before = file.metadata().map_err(|e| e.to_string())?;
+        if !before.is_file() || before.len() != expected_size {
+            return Err("音声ファイルのサイズが保存時と一致しません".into());
+        }
+        let mut magic = [0; 4];
+        file.read_exact(&mut magic).map_err(|e| e.to_string())?;
+        if &magic != b"fLaC" {
+            return Self::open_cancellable(file, expected_size, expected_hash, cancelled);
+        }
+        let (format, flac) = flac::FlacAudio::open_saved(&mut file, expected_size, cancelled)?;
+        let audio = Self {
+            file,
+            size: expected_size,
+            modified: before.modified().map_err(|e| e.to_string())?,
+            format,
+            flac: Some(flac),
+        };
+        audio.check_unchanged()?;
+        Ok(audio)
+    }
+
     pub(crate) fn is_flac(&self) -> bool {
         self.flac.is_some()
     }
     #[cfg(test)]
     pub fn open(file: File, expected_size: u64, expected_hash: &str) -> Result<Self, String> {
-        Self::open_cancellable(file, expected_size, expected_hash, &|| false)
+        Self::open_cancellable(
+            file,
+            expected_size,
+            expected_hash,
+            &crate::test_support::never_cancelled,
+        )
     }
 
     pub fn open_cancellable(
@@ -94,7 +132,7 @@ impl VerifiedAudio {
         Ok(audio)
     }
 
-    fn check_unchanged(&self) -> Result<(), String> {
+    pub(crate) fn check_unchanged(&self) -> Result<(), String> {
         let metadata: Metadata = self.file.metadata().map_err(|e| e.to_string())?;
         if metadata.len() != self.size
             || metadata.modified().map_err(|e| e.to_string())? != self.modified
@@ -102,6 +140,31 @@ impl VerifiedAudio {
             return Err("再生準備後に音声ファイルが変更されました".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn cache_stamp(&self) -> Result<String, String> {
+        self.check_unchanged()?;
+        let metadata = self.file.metadata().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(format!(
+                "{}:{}:{}:{:?}:{}:{}",
+                metadata.dev(),
+                metadata.ino(),
+                self.size,
+                self.modified,
+                metadata.ctime(),
+                metadata.ctime_nsec()
+            ))
+        }
+        #[cfg(not(unix))]
+        Ok(format!(
+            "{}:{:?}:{:?}",
+            self.size,
+            self.modified,
+            metadata.created()
+        ))
     }
 
     pub fn read_frames(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
@@ -429,8 +492,11 @@ pub(crate) mod tests {
             let bytes = caf_fixture(48000, channels, flags, bits, width, &samples);
             let mut file = tempfile::tempfile().unwrap();
             file.write_all(&bytes).unwrap();
-            let (format, size, hash) =
-                inspect_recorded_caf(file.try_clone().unwrap(), &|| false).unwrap();
+            let (format, size, hash) = inspect_recorded_caf(
+                file.try_clone().unwrap(),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             assert_eq!(
                 (format.sample_rate, format.channels, format.frames),
                 (
@@ -464,7 +530,9 @@ pub(crate) mod tests {
                     let bytes = caf_fixture(48000, 1, 3, bits, width, &samples);
                     let mut file = tempfile::tempfile().unwrap();
                     file.write_all(&bytes).unwrap();
-                    let error = inspect_recorded_caf(file, &|| false).err().unwrap();
+                    let error = inspect_recorded_caf(file, &crate::test_support::never_cancelled)
+                        .err()
+                        .unwrap();
                     assert!(error.contains("非有限"), "{error}");
                 }
             }
@@ -498,7 +566,7 @@ pub(crate) mod tests {
         assert!(error.contains("検証中に変更"), "{error}");
         let mut incomplete = tempfile::tempfile().unwrap();
         incomplete.write_all(b"caff000000000000").unwrap();
-        assert!(inspect_recorded_caf(incomplete, &|| false).is_err());
+        assert!(inspect_recorded_caf(incomplete, &crate::test_support::never_cancelled).is_err());
     }
 
     #[test]

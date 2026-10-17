@@ -9,15 +9,29 @@ use std::cell::Cell;
 
 fn lease(f: &Fixture, op: &str) -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_model_deletion_maintenance(&f.storage, op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn finish(f: &Fixture) -> String {
     let op = uuid::Uuid::new_v4().to_string();
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let view = models::preview(&f.storage, &f.root, &op, &f.package, &f.review, &|| false).unwrap();
+    let view = models::preview(
+        &f.storage,
+        &f.root,
+        &op,
+        &f.package,
+        &f.review,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     intent::prepare(
         &f.storage,
         &f.root,
@@ -27,13 +41,24 @@ fn finish(f: &Fixture) -> String {
         &view.census_hash,
         false,
         &owner,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false)
-        .unwrap()
-        .completed());
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     op
 }
 fn reason(f: &Fixture, op: &str) -> Option<String> {
@@ -47,7 +72,8 @@ fn reappear(f: &Fixture) {
     std::fs::write(f.path("NEW"), b"NEW EXPLICIT CONSENT ONLY").unwrap();
 }
 fn accept(f: &Fixture, op: &str, owner: &DataMaintenanceLease) {
-    let view = renewal::review(&f.storage, op, owner, &|| false).unwrap();
+    let view =
+        renewal::review(&f.storage, op, owner, &crate::test_support::never_cancelled).unwrap();
     assert!(
         renewal::accept(&f.storage, &view, view.census_hash(), false, owner, &|| {
             false
@@ -106,9 +132,17 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
     let f = Fixture::new();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let view = models::preview(&f.storage, &f.root, &op, &f.package, &f.review, &|| false).unwrap();
+    let view = models::preview(
+        &f.storage,
+        &f.root,
+        &op,
+        &f.package,
+        &f.review,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     intent::prepare(
         &f.storage,
         &f.root,
@@ -118,7 +152,7 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
         &view.census_hash,
         false,
         &owner,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     {
@@ -135,7 +169,13 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
         assert!(intent::read(&db, &op).is_err());
     }
     let saved = fixed(&f, &op);
-    assert!(removal::start(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(fixed(&f, &op), saved);
     assert!(f.path("").exists());
     assert_eq!(f.operation_state(&op), "prepared");
@@ -153,9 +193,14 @@ fn model_startup_clean_completion_allows_ordinary_recovery_and_keeps_original() 
     assert_eq!(job_state(&f), "interrupted");
     assert_eq!(fixed(&f, &op), saved);
     let owner = lease(&f, &op);
-    assert!(removal::run(&f.storage, &op, &owner, &|| false)
-        .unwrap()
-        .completed());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 
 #[test]
@@ -181,11 +226,23 @@ fn model_startup_reappearance_is_memory_only_requires_new_consent_and_cold_resta
     let f = f.cold();
     assert_eq!(reason(&f, &op).as_deref(), Some(REAPPEARED));
     let owner = lease(&f, &op);
-    assert!(removal::run(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path("NEW").exists());
     accept(&f, &op, &owner);
     assert_eq!(f.operation_state(&op), "completed");
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(reason(&f, &op), None);
     assert_eq!(fixed(&f, &op), saved);
     assert!(f.storage.restart_required());
@@ -216,13 +273,25 @@ fn model_startup_defers_stale_jobs_but_never_bypasses_actual_worker_admission() 
             .is_err());
     }
     let owner = controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     accept(&f, &op, &owner);
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(job_state(&f), "running");
     drop(owner);
     let f = f.cold();
@@ -242,7 +311,13 @@ fn model_startup_exact_reserved_root_is_reviewed_without_adopting_neighbors() {
     let f = f.cold();
     assert_eq!(reason(&f, &op).as_deref(), Some(REAPPEARED));
     let owner = lease(&f, &op);
-    let view = renewal::review(&f.storage, &op, &owner, &|| false).unwrap();
+    let view = renewal::review(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(view.entries().iter().any(|e| e
         .relative_path
         .starts_with(reserved.file_name().unwrap().to_str().unwrap())));
@@ -254,7 +329,13 @@ fn model_startup_exact_reserved_root_is_reviewed_without_adopting_neighbors() {
         false
     })
     .unwrap();
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!reserved.exists());
     assert!(neighbor.join("NEW").exists());
 }
@@ -318,7 +399,13 @@ fn model_startup_regular_file_and_link_are_retained_without_following() {
             Some(if link { UNINSPECTABLE } else { REAPPEARED })
         );
         let owner = lease(&f, &op);
-        assert!(renewal::review(&f.storage, &op, &owner, &|| false).is_err());
+        assert!(renewal::review(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(f.storage.data_write_blocked());
         assert_eq!(
             std::fs::read(outside.path().join("KEEP")).unwrap(),
@@ -337,7 +424,13 @@ fn model_startup_native_root_identity_replacement_is_not_adopted() {
     let f = f.cold();
     assert_eq!(reason(&f, &op).as_deref(), Some(UNINSPECTABLE));
     let owner = lease(&f, &op);
-    assert!(removal::run(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.storage.data_write_blocked());
 }
 
@@ -372,7 +465,13 @@ fn model_startup_active_reconfirmation_chain_survives_cold_restart_and_rejects_o
     assert_eq!(reason(&f, &op), None); // Persistent v3 removing fence, not corrupt completion.
     assert!(f.storage.data_write_blocked());
     let owner = lease(&f, &op);
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(owner);
     let f = f.cold();
     assert!(!f.storage.data_write_blocked());
@@ -395,13 +494,25 @@ fn model_startup_independent_completed_hints_do_not_unlock_each_other() {
     assert_eq!(reason(&f, &second).as_deref(), Some(REAPPEARED));
     let owner = lease(&f, &first);
     accept(&f, &first, &owner);
-    removal::run(&f.storage, &first, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &first,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(reason(&f, &first), None);
     assert!(reason(&f, &second).is_some());
     assert!(f.storage.data_write_blocked());
     drop(owner);
     let owner = lease(&f, &second);
-    removal::run(&f.storage, &second, &owner, &|| false).unwrap();
+    removal::run(
+        &f.storage,
+        &second,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(reason(&f, &second), None);
     assert!(f.storage.restart_required());
 }
@@ -437,7 +548,13 @@ fn model_startup_final_reappearance_or_cancel_preserves_hint_for_explicit_ack() 
         } else {
             assert!(!f.path("").exists());
         }
-        removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+        removal::run(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(reason(&f, &op), None);
     }
 }

@@ -50,9 +50,12 @@ where
     let guard = window.state::<Inspector>().begin(&token)?;
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            work(&app, &|| guard.cancelled() || lease.cancelled())
-        })
+        crate::AnalysisController::with_model_preparation(
+            &app,
+            Some(&token),
+            &|| guard.cancelled(),
+            |lease| work(&app, &|| guard.cancelled() || lease.cancelled()),
+        )
     })
     .await
     .map_err(|e| e.to_string())?

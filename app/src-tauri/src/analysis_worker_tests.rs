@@ -8,7 +8,7 @@ fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover(
     let second = controller.begin_notice_storage().unwrap();
     assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 2);
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     {
         let mut state = controller.state.lock().unwrap();
@@ -23,7 +23,7 @@ fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover(
     // Backup/root cutover must still wait for the actual notification owner.
     controller.state.lock().unwrap().recording_intent = false;
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert_eq!(
         controller.data_operation_blocker().unwrap().as_deref(),
@@ -47,7 +47,11 @@ fn notice_shutdown_waits_for_actual_worker_and_old_lease_never_revives_on_abort(
     assert!(old.validate_active().is_err());
     assert!(controller.begin_notice_storage().is_err());
     assert!(controller
-        .wait_idle_inner(Duration::from_millis(10), &|| false, true)
+        .wait_idle_inner(
+            Duration::from_millis(10),
+            &crate::test_support::never_cancelled,
+            true
+        )
         .is_err());
     controller.abort_shutdown();
     assert!(old.validate_active().is_err());
@@ -57,10 +61,14 @@ fn notice_shutdown_waits_for_actual_worker_and_old_lease_never_revives_on_abort(
     assert!(fresh.validate_active().is_ok());
     drop(fresh);
     controller
-        .wait_idle_inner(Duration::from_millis(10), &|| false, true)
+        .wait_idle_inner(
+            Duration::from_millis(10),
+            &crate::test_support::never_cancelled,
+            true,
+        )
         .unwrap();
     let maintenance = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(controller.begin_notice_storage().is_err());
     drop(maintenance);
@@ -88,7 +96,7 @@ fn notice_storage_capacity_is_bounded_and_unwind_releases_just_its_lease() {
     assert!(leases[0].validate_active().is_ok());
     drop(leases);
     controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
 }
 
@@ -96,7 +104,7 @@ fn notice_storage_capacity_is_bounded_and_unwind_releases_just_its_lease() {
 fn checked_close_seals_admission_without_cancelling_unverified_work() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let model = Arc::new(AtomicBool::new(false));
     controller.state.lock().unwrap().model_preparation = Some(model.clone());
@@ -113,7 +121,7 @@ fn checked_close_seals_admission_without_cancelling_unverified_work() {
 fn deletion_lease_proof_requires_current_ownership_and_stays_cancelled_after_aborted_exit() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(lease.validate_active().is_ok());
     controller.begin_exit().unwrap();
@@ -123,7 +131,7 @@ fn deletion_lease_proof_requires_current_ownership_and_stays_cancelled_after_abo
     assert!(controller.begin_export().is_err());
     drop(lease);
     let next = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(next.validate_active().is_ok());
 }
@@ -132,7 +140,7 @@ fn deletion_lease_proof_requires_current_ownership_and_stays_cancelled_after_abo
 fn deletion_lease_proof_rejects_lost_ownership_without_clearing_another_owner() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let other = Arc::new(AtomicBool::new(false));
     controller.state.lock().unwrap().data_maintenance = Some(other.clone());
@@ -154,7 +162,7 @@ fn deletion_lease_proof_rejects_lost_ownership_without_clearing_another_owner() 
 fn storage_restart_fence_survives_temporary_lease_release_and_aborted_exit() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     controller.require_storage_restart();
     drop(lease);
@@ -167,10 +175,10 @@ fn storage_restart_fence_survives_temporary_lease_release_and_aborted_exit() {
     drop(state);
     assert!(controller.begin_export().is_err());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert_eq!(
         controller.data_operation_blocker().unwrap().as_deref(),
@@ -184,7 +192,7 @@ fn data_availability_is_informational_and_reports_the_held_start_gate() {
     let controller = AnalysisController::default();
     assert!(controller.data_operation_blocker().unwrap().is_none());
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(
         controller.data_operation_blocker().unwrap().as_deref(),
@@ -198,7 +206,7 @@ fn data_availability_is_informational_and_reports_the_held_start_gate() {
     );
     drop(export);
     let model = controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(
         controller.data_operation_blocker().unwrap().as_deref(),
@@ -231,7 +239,7 @@ fn data_availability_is_informational_and_reports_the_held_start_gate() {
 fn detached_runtime_task_retains_data_admission_after_its_receiver_is_dropped() {
     let controller = Arc::new(AnalysisController::default());
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let (started, ready) = std::sync::mpsc::channel();
     let (release, stop) = std::sync::mpsc::channel();
@@ -262,18 +270,18 @@ fn detached_runtime_task_retains_data_admission_after_its_receiver_is_dropped() 
 fn data_maintenance_cancellation_does_not_release_admission_or_allow_export_or_model_work() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(controller.state.lock().unwrap().blocks_worker());
     assert!(controller.begin_export().is_err());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_err());
     controller.begin_exit().unwrap();
     assert!(lease.cancelled());
     assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     controller.abort_shutdown();
     assert!(lease.cancelled());
@@ -282,7 +290,7 @@ fn data_maintenance_cancellation_does_not_release_admission_or_allow_export_or_m
     controller.wait_idle(Duration::from_millis(10)).unwrap();
     assert!(controller.begin_export().is_ok());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_ok());
 }
 
@@ -301,12 +309,12 @@ fn data_maintenance_rejects_each_admission_gate_without_pausing_existing_work() 
         controller.shutdown.store(gate == 3, Ordering::SeqCst);
         let model = (gate == 7).then(|| {
             controller
-                .begin_model_preparation(false, false, &|| false)
+                .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
                 .unwrap()
         });
         let data = (gate == 9).then(|| {
             controller
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap()
         });
         assert!(
@@ -342,7 +350,11 @@ fn data_and_markdown_admission_are_atomic_and_exit_seals_the_lane() {
             std::thread::spawn(move || {
                 start.wait();
                 if index == 0 {
-                    let lease = controller.begin_data_maintenance(false, false, &|| false);
+                    let lease = controller.begin_data_maintenance(
+                        false,
+                        false,
+                        &crate::test_support::never_cancelled,
+                    );
                     sent.send(lease.is_ok()).unwrap();
                     finish.wait();
                     drop(lease);
@@ -373,14 +385,14 @@ fn data_and_markdown_admission_are_atomic_and_exit_seals_the_lane() {
     controller.begin_exit().unwrap();
     assert!(controller.begin_export().is_err());
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_err());
     controller.abort_shutdown();
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_ok());
 }
 
@@ -390,7 +402,7 @@ fn data_maintenance_unwind_releases_only_its_lease_and_retains_wake() {
     controller.state.lock().unwrap().wake = true;
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _lease = controller
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         panic!("synthetic data work panic");
     }))
@@ -398,7 +410,7 @@ fn data_maintenance_unwind_releases_only_its_lease_and_retains_wake() {
     controller.wait_idle(Duration::from_millis(10)).unwrap();
     assert!(controller.state.lock().unwrap().wake);
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_ok());
 }
 
@@ -422,30 +434,30 @@ fn idle_wait_observes_completion_and_timeout_without_holding_worker_lock() {
 fn model_preparation_owns_admission_until_work_really_finishes_not_until_cancel() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(controller.state.lock().unwrap().blocks_worker());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_err());
     controller.state.lock().unwrap().cancel_model_preparation();
     assert!(lease.cancelled());
     assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_err());
     drop(lease);
     controller.wait_idle(Duration::from_millis(10)).unwrap();
     assert!(!controller.state.lock().unwrap().blocks_worker());
     assert!(!controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .unwrap()
         .cancelled());
 }
 
 #[test]
 fn model_preparation_rejects_every_admission_gate_without_changing_worker_state() {
-    for gate in 0..8 {
+    for gate in 1..8 {
         let controller = AnalysisController::default();
         {
             let mut state = controller.state.lock().unwrap();
@@ -466,7 +478,7 @@ fn model_preparation_rejects_every_admission_gate_without_changing_worker_state(
         };
         let held = (gate == 7).then(|| {
             controller
-                .begin_model_preparation(false, false, &|| false)
+                .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
                 .unwrap()
         });
         assert!(
@@ -492,6 +504,93 @@ fn model_preparation_rejects_every_admission_gate_without_changing_worker_state(
 }
 
 #[test]
+fn model_steps_reserve_the_lane_and_wait_for_a_worker_woken_between_steps() {
+    let controller = Arc::new(AnalysisController::default());
+    // Download, placement, compatibility, preview and apply each release the
+    // lane. Reproduce a queued worker winning admission between every pair.
+    for _ in 0..5 {
+        controller.state.lock().unwrap().busy = true;
+        let worker = controller.clone();
+        let (waiting, started) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let lease = worker
+                .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
+                .unwrap();
+            lease
+                .wait_for_worker(&crate::test_support::never_cancelled, |value| {
+                    waiting.send(value).unwrap();
+                })
+                .unwrap();
+            done.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+        assert!(started.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(
+            finished.try_recv().is_err(),
+            "model work must not overlap inference"
+        );
+        assert!(controller.state.lock().unwrap().blocks_worker());
+        assert!(controller
+            .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
+            .is_err());
+        assert!(controller
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+            .is_err());
+        controller.state.lock().unwrap().busy = false;
+        controller.idle.notify_all();
+        assert!(!started.recv_timeout(Duration::from_secs(2)).unwrap());
+        finished.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(controller.state.lock().unwrap().blocks_worker());
+        release.send(()).unwrap();
+        handle.join().unwrap();
+        controller.wait_idle(Duration::from_millis(10)).unwrap();
+    }
+}
+
+#[test]
+fn cancelling_a_waiting_model_preparation_releases_only_its_reservation() {
+    // IPC cancellation, recording admission and shutdown can all cancel the
+    // wait, even if the current inference worker has not returned yet.
+    for reason in 0..3 {
+        let controller = Arc::new(AnalysisController::default());
+        controller.state.lock().unwrap().busy = true;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker = controller.clone();
+        let stop = cancelled.clone();
+        let (waiting, started) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let lease = worker
+                .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
+                .unwrap();
+            assert!(lease
+                .wait_for_worker(&|| stop.load(Ordering::SeqCst), |value| {
+                    assert!(value);
+                    waiting.send(()).unwrap();
+                })
+                .is_err());
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        match reason {
+            0 => cancelled.store(true, Ordering::SeqCst),
+            1 => {
+                let mut state = controller.state.lock().unwrap();
+                state.recording_intent = true;
+                state.cancel_model_preparation();
+            }
+            _ => controller.shutdown.store(true, Ordering::SeqCst),
+        }
+        handle.join().unwrap();
+        let state = controller.state.lock().unwrap();
+        assert!(state.busy);
+        assert!(state.model_preparation.is_none());
+        assert_eq!(state.recording_intent, reason == 1);
+        assert_eq!(controller.shutdown.load(Ordering::SeqCst), reason == 2);
+    }
+}
+
+#[test]
 fn simultaneous_model_preparations_cannot_both_take_the_worker_lane() {
     let controller = Arc::new(AnalysisController::default());
     let start = Arc::new(std::sync::Barrier::new(3));
@@ -505,7 +604,11 @@ fn simultaneous_model_preparations_cannot_both_take_the_worker_lane() {
             let sent = sent.clone();
             std::thread::spawn(move || {
                 start.wait();
-                let lease = controller.begin_model_preparation(false, false, &|| false);
+                let lease = controller.begin_model_preparation(
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                );
                 sent.send(lease.is_ok()).unwrap();
                 finish.wait();
                 drop(lease);
@@ -531,7 +634,7 @@ fn model_preparation_unwinding_releases_lease_and_preserves_pending_wake() {
     controller.state.lock().unwrap().wake = true;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _lease = controller
-            .begin_model_preparation(false, false, &|| false)
+            .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         panic!("synthetic model preparation failure");
     }));
@@ -539,7 +642,7 @@ fn model_preparation_unwinding_releases_lease_and_preserves_pending_wake() {
     controller.wait_idle(Duration::from_millis(10)).unwrap();
     assert!(controller.state.lock().unwrap().wake);
     assert!(controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .is_ok());
 }
 
@@ -552,7 +655,7 @@ fn recording_and_exit_intents_wait_for_model_release_and_keep_their_own_gate() {
         let worker = controller.clone();
         let thread = std::thread::spawn(move || {
             let lease = worker
-                .begin_model_preparation(false, false, &|| false)
+                .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             started.send(()).unwrap();
             stop.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -572,7 +675,7 @@ fn recording_and_exit_intents_wait_for_model_release_and_keep_their_own_gate() {
         controller.wait_idle(Duration::from_secs(2)).unwrap();
         thread.join().unwrap();
         assert!(controller
-            .begin_model_preparation(false, false, &|| false)
+            .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
             .is_err());
         assert_eq!(controller.state.lock().unwrap().recording_intent, !closing);
         assert_eq!(controller.shutdown.load(Ordering::SeqCst), closing);
@@ -583,7 +686,7 @@ fn recording_and_exit_intents_wait_for_model_release_and_keep_their_own_gate() {
 fn cancelled_wait_does_not_release_or_clear_model_preparation() {
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_model_preparation(false, false, &|| false)
+        .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(controller
         .wait_idle_cancellable(Duration::from_secs(1), &|| true)
@@ -639,7 +742,9 @@ fn recording_cancellation_keeps_lease_through_real_partial_copy_and_db_finalizat
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
-    let report = crate::model_inspection::inspect(source.path(), &|| false).unwrap();
+    let report =
+        crate::model_inspection::inspect(source.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     let storage = Arc::new(Storage::open(meetings.path().into()).unwrap());
     let controller = Arc::new(AnalysisController::default());
     let models = data.path().join("models");
@@ -651,7 +756,7 @@ fn recording_cancellation_keeps_lease_through_real_partial_copy_and_db_finalizat
     let db = storage.clone();
     let thread = std::thread::spawn(move || {
         let lease = worker
-            .begin_model_preparation(false, false, &|| false)
+            .begin_model_preparation(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let reached = std::cell::RefCell::new(Some(reached));
         let result = crate::model_placement::place(

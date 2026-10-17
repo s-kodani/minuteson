@@ -1247,6 +1247,13 @@ pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> RecordingSnapshot {
     let snapshot = app.state::<SessionStore>().update(change);
+    crate::internal_logs::phase(
+        "recording",
+        snapshot.session_id.clone(),
+        snapshot.meeting_id.clone(),
+        &format!("{:?}", snapshot.phase).to_lowercase(),
+        snapshot.error_message.as_deref(),
+    );
     notify_session(app);
     snapshot
 }
@@ -1258,6 +1265,13 @@ fn notify_session(app: &AppHandle) {
     // a preparing/recording state over an already stopped or newer session.
     let _ = app.run_on_main_thread(move || {
         let snapshot = handle.state::<SessionStore>().snapshot();
+        crate::internal_logs::phase(
+            "recording",
+            snapshot.session_id.clone(),
+            snapshot.meeting_id.clone(),
+            &format!("{:?}", snapshot.phase).to_lowercase(),
+            snapshot.error_message.as_deref(),
+        );
         // Close the floating panel before publishing a stop/saving result to
         // the rest of the UI. A delayed start notification reads this latest
         // phase too, so it cannot reopen the panel after stop.
@@ -1406,6 +1420,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
     }
     match result {
         Ok(()) => {
+            let completed_meeting = app.state::<SessionStore>().snapshot().meeting_id;
             publish(&app, |snapshot| {
                 snapshot.phase = RecordingPhase::Idle;
                 snapshot.elapsed_ms = 0;
@@ -1415,6 +1430,9 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.session_id = None;
                 snapshot.error_message = None;
             });
+            if let Some(meeting) = completed_meeting {
+                crate::playback::mix_cache::warm(&app, &meeting);
+            }
         }
         Err(error) => {
             publish(&app, |snapshot| {

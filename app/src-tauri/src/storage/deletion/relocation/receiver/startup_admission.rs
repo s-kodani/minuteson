@@ -681,9 +681,14 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let storage = Storage::open(base.path().join("root")).unwrap();
         let meeting = storage.create_meeting("SYNTHETIC CURRENT RECEIPT").unwrap();
-        let mut deletion = operations::Prepared::fresh(&storage, &meeting.id, &|| false).unwrap();
+        let mut deletion = operations::Prepared::fresh(
+            &storage,
+            &meeting.id,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         deletion
             .execute(
@@ -691,13 +696,15 @@ mod tests {
                 &lease,
                 &deletion.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap();
         drop(lease);
-        let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
-        let source = Source::capture(&storage, &snapshot, &|| false)
+        let snapshot = storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        let source = Source::capture(&storage, &snapshot, &crate::test_support::never_cancelled)
             .unwrap()
             .unwrap();
         let current: SourceFacts =

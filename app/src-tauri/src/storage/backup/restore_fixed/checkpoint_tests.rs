@@ -102,7 +102,7 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
         false
     })
     .unwrap();
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
     let mut target = project(&fixed);
     register_assets_except(&fixed, &target, &BTreeSet::from([result.id.clone()]));
     rebuild_analyses(&fixed, &mut target);
@@ -162,7 +162,12 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
         let rows:Vec<(i64,i64)>=source.database.prepare("SELECT rowid,completed_units FROM job_checkpoints WHERE job_id=?1 ORDER BY sequence").unwrap().query_map(params![job.id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
         for (rowid, units) in rows {
             let mapped = fixed
-                .checkpoint(&meeting, &job.id, rowid, &|| false)
+                .checkpoint(
+                    &meeting,
+                    &job.id,
+                    rowid,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap();
             let json: Value = serde_json::from_str(&mapped.json).unwrap();
             assert_eq!(json["outputs"].as_array().unwrap().len() as i64, units);
@@ -243,7 +248,12 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
         .execute_batch("PRAGMA query_only=ON;")
         .unwrap();
     assert!(fixed
-        .checkpoint(&meeting, &transcription.id, rowid, &|| false)
+        .checkpoint(
+            &meeting,
+            &transcription.id,
+            rowid,
+            &crate::test_support::never_cancelled
+        )
         .err()
         .unwrap()
         .contains("変更"));
@@ -274,7 +284,12 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
         .execute_batch("PRAGMA query_only=ON;")
         .unwrap();
     assert!(fixed
-        .checkpoint(&meeting, &transcription.id, rowid, &|| false)
+        .checkpoint(
+            &meeting,
+            &transcription.id,
+            rowid,
+            &crate::test_support::never_cancelled
+        )
         .err()
         .unwrap()
         .contains("再開情報"));

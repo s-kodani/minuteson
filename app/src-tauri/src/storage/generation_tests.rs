@@ -45,13 +45,14 @@ fn retired_worker_never_changes_fixed_input_or_human_markdown() {
         storage.acquire_local_inference_job().unwrap().unwrap();
         let before = storage.get_job(&job.id).unwrap();
         let fixed = storage.fixed_job_input(&job.id).unwrap();
-        assert!(
-            generation::process(&storage, &job.id, &|| false, &|_| panic!(
-                "retired progress"
-            ))
-            .unwrap_err()
-            .contains("minutes_structured_generation_removed")
-        );
+        assert!(generation::process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| panic!("retired progress")
+        )
+        .unwrap_err()
+        .contains("minutes_structured_generation_removed"));
         assert_eq!(storage.get_job(&job.id).unwrap(), before);
         assert_eq!(storage.fixed_job_input(&job.id).unwrap(), fixed);
         assert_eq!(

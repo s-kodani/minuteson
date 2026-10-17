@@ -79,14 +79,16 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
-    let report = crate::model_inspection::inspect(source.path(), &|| false).unwrap();
+    let report =
+        crate::model_inspection::inspect(source.path(), &crate::test_support::never_cancelled)
+            .unwrap();
     crate::model_placement::place(
         &storage,
         &models,
         source.path(),
         &package,
         &report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let record = storage
@@ -108,7 +110,7 @@ fn trial(f: &Fixture, operation: &str) -> CheckSummary {
         operation,
         &f.record.package_id,
         &f.record.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
 }
@@ -245,7 +247,7 @@ fn compatibility_failure_and_new_explicit_retry_keep_completed_history_fixed() {
         &first,
         &f.record.package_id,
         &f.record.review_hash,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     std::fs::write(
@@ -326,11 +328,14 @@ fn compatibility_timeout_is_failed_not_success_and_native_child_is_reaped() {
         // Allow the shell to start under parallel test load. The fixture still
         // sleeps ten seconds, so this tests the deadline rather than completion.
         Duration::from_secs(1),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(summary.state, CheckState::Failed);
-    assert!(summary.error_message.unwrap().contains("制限時間"));
+    assert!(summary
+        .error_message
+        .unwrap()
+        .contains("minutes_generation_stalled"));
     pid_gone(&directory(&f, &operation).join("pid"));
 }
 
@@ -416,7 +421,7 @@ fn compatibility_saved_artifacts_and_rehashed_invalid_report_are_not_trusted() {
         &operation,
         &f.record.package_id,
         &f.record.review_hash,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .unwrap_err()
     .contains("証拠"));
@@ -456,7 +461,10 @@ fn compatibility_restart_interrupts_pending_intent_without_running_or_deleting_m
     let path = directory(&f, &operation);
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(path.join("stderr.log"), b"partial").unwrap();
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     drop(f.storage);
     let reopened = Storage::open(f.meetings.path().into()).unwrap();
     assert_eq!(
@@ -477,7 +485,9 @@ fn compatibility_restart_interrupts_pending_intent_without_running_or_deleting_m
             .remove(0)
             .placement_recorded
     );
-    assert!(reopened.prepare_backup_snapshot(&|| false).is_ok());
+    assert!(reopened
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_ok());
 }
 
 #[test]
@@ -501,14 +511,16 @@ fn compatibility_current_restart_keeps_placement_and_backup_omits_host_runtime_t
             &operation,
             &f.record.package_id,
             &f.record.review_hash,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap()
         .state,
         CheckState::Succeeded
     );
     let output = f.app_data.path().join("backup.monbackup");
-    reopened.create_backup_archive(&output, &|| false).unwrap();
+    reopened
+        .create_backup_archive(&output, &crate::test_support::never_cancelled)
+        .unwrap();
     let bytes = std::fs::read(output).unwrap();
     assert!(!bytes
         .windows(operation.len())

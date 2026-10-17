@@ -5,7 +5,7 @@ use crate::storage::deletion::{fence, operations, renewal};
 
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 #[test]
@@ -25,14 +25,19 @@ fn database_renewal_retains_old_generation_root_reservation_created_after_plan_s
             .root()
             .join(format!("meetings/.mon-delete-{}-{index}", f.operation));
     reappear(&f, b"KEEP NEW RANGE");
-    let review = renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+    let review = renewal::Review::capture_database(
+        &f.f.storage,
+        &original,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(renewal::accept_database_observed(
         &f.f.storage,
         &original,
         &review,
         true,
         &lease(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|event| {
             if event == "beforeReviewCommit" {
                 std::fs::create_dir(&reserved).unwrap();
@@ -78,11 +83,15 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
             .verify_live(
                 &f.f.storage,
                 &f.f.storage.connection.lock().unwrap(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err());
-        let mut prepared =
-            operations::Prepared::pending(&f.f.storage, &f.operation, &|| false).unwrap();
+        let mut prepared = operations::Prepared::pending(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(!prepared.preview().execute_allowed && prepared.preview().reconfirmation_allowed);
         let admitted = lease();
         prepared
@@ -90,7 +99,7 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
                 &f.f.storage,
                 &admitted,
                 &prepared.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
         let p = prepared.preview();
@@ -108,7 +117,7 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
                 &admitted,
                 &p.confirmation_id,
                 false,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .is_err());
@@ -125,7 +134,7 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
                 &f.f.storage,
                 &admitted,
                 &prepared.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
         let p = prepared.preview();
@@ -135,7 +144,7 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
                 &admitted,
                 &p.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap();
@@ -157,29 +166,61 @@ fn database_renewal_after_cold_completion_retains_actual_restart_fenced_admissio
     let operation = f.operation.clone();
     drop(f.f.storage);
     let storage = Storage::open(path).unwrap();
-    let mut original = read(&storage, &operation, &|| false).unwrap();
-    run(&storage, &mut original, &|| false).unwrap();
+    let mut original = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
+    run(
+        &storage,
+        &mut original,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(storage.restart_required());
     let analysis = AnalysisController::default();
     analysis.require_storage_restart();
     std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
     std::fs::write(&f.file, b"NEW AFTER COLD COMPLETION").unwrap();
-    let review = renewal::Review::capture_database(&storage, &original, &|| false).unwrap();
+    let review = renewal::Review::capture_database(
+        &storage,
+        &original,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let admitted = analysis
-        .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            &operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    renewal::accept_database(&storage, &original, &review, true, &admitted, &|| false).unwrap();
+    renewal::accept_database(
+        &storage,
+        &original,
+        &review,
+        true,
+        &admitted,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(admitted);
     assert!(!storage.restart_required());
     assert!(storage.data_write_blocked());
     assert!(analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert!(analysis.begin_export().is_err());
     let admitted = analysis
-        .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+        .begin_deletion_maintenance(
+            &storage,
+            &operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let mut pending = operations::Prepared::pending(&storage, &operation, &|| false).unwrap();
+    let mut pending =
+        operations::Prepared::pending(&storage, &operation, &crate::test_support::never_cancelled)
+            .unwrap();
     assert_eq!(pending.preview().phase, "database_files");
     assert!(pending.preview().row_phase_committed);
     let receipt = pending
@@ -188,14 +229,14 @@ fn database_renewal_after_cold_completion_retains_actual_restart_fenced_admissio
             &admitted,
             &pending.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
     assert!(receipt.deleted && receipt.restart_required);
     drop(admitted);
     assert!(analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     assert!(storage.require_data_writable().is_err());
     assert!(!f.file.exists());
@@ -230,13 +271,25 @@ fn database_renewal_residual_file_boundaries_cold_resume_preserve_staging_and_co
             drop(f.f.storage);
             let storage = Storage::open(path).unwrap();
             assert!(storage.data_write_blocked());
-            let mut resumed = removal::read(&storage, &operation, &|| false).unwrap();
+            let mut resumed =
+                removal::read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(resumed.progress_json().unwrap(), json);
             assert_eq!(resumed.progress.database_phase, Some(phase));
-            removal::run(&storage, &mut resumed, &|| false).unwrap();
-            let mut database = start(&storage, &resumed, &|| false).unwrap();
+            removal::run(
+                &storage,
+                &mut resumed,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            let mut database =
+                start(&storage, &resumed, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(database.database_phase(), phase);
-            run(&storage, &mut database, &|| false).unwrap();
+            run(
+                &storage,
+                &mut database,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             assert!(database.completed());
             assert!(storage.restart_required());
             assert!(storage.get_meeting(&meeting).unwrap().is_none());
@@ -287,8 +340,21 @@ fn audits(f: &Fixture) -> i64 {
         .unwrap()
 }
 fn accept(f: &Fixture, receipt: &Receipt) -> removal::Receipt {
-    let review = renewal::Review::capture_database(&f.f.storage, receipt, &|| false).unwrap();
-    renewal::accept_database(&f.f.storage, receipt, &review, true, &lease(), &|| false).unwrap()
+    let review = renewal::Review::capture_database(
+        &f.f.storage,
+        receipt,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    renewal::accept_database(
+        &f.f.storage,
+        receipt,
+        &review,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -300,7 +366,12 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
         let fixed = evidence(&f);
         let old_progress = root_json(&f);
         reappear(&f, b"NEW CURRENT FILE");
-        let review = renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+        let review = renewal::Review::capture_database(
+            &f.f.storage,
+            &original,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(root_json(&f), old_progress);
         assert_eq!(audits(&f), 0);
         if phase.rows_committed() {
@@ -310,14 +381,20 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
                 &review,
                 false,
                 &lease(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err());
             assert_eq!(root_json(&f), old_progress);
         }
-        let mut files =
-            renewal::accept_database(&f.f.storage, &original, &review, true, &lease(), &|| false)
-                .unwrap();
+        let mut files = renewal::accept_database(
+            &f.f.storage,
+            &original,
+            &review,
+            true,
+            &lease(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(files.progress.database_phase, Some(phase));
         assert_eq!(files.processed_paths(), 0);
         assert_eq!(evidence(&f), fixed);
@@ -329,7 +406,9 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
         let db = f.f.storage.connection.lock().unwrap();
         assert!(fence::has_pending(&db).unwrap());
         assert!(f.f.storage.data_write_blocked());
-        assert!(original.verify_saved(&db, &|| false).is_err());
+        assert!(original
+            .verify_saved(&db, &crate::test_support::never_cancelled)
+            .is_err());
         let reference = files.progress.confirmation.as_ref().unwrap();
         let json: String = db
             .query_row(
@@ -349,15 +428,26 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
         );
         drop(db);
         assert_eq!(operations::listing(&f.f.storage).unwrap().items.len(), 1);
-        removal::run(&f.f.storage, &mut files, &|| false).unwrap();
-        let mut restored = start(&f.f.storage, &files, &|| false).unwrap();
+        removal::run(
+            &f.f.storage,
+            &mut files,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        let mut restored =
+            start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(restored.database_phase(), phase);
-        let replay = start(&f.f.storage, &files, &|| false).unwrap();
+        let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(
             replay.progress_json().unwrap(),
             restored.progress_json().unwrap()
         );
-        run(&f.f.storage, &mut restored, &|| false).unwrap();
+        run(
+            &f.f.storage,
+            &mut restored,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(restored.completed());
         assert!(!f.file.exists());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -382,8 +472,12 @@ fn database_renewal_cancellation_rolls_back_audit_and_plan_at_all_precommit_boun
             let fixed = evidence(&f);
             let progress = root_json(&f);
             reappear(&f, b"KEEP CANCELLED CURRENT FILE");
-            let review =
-                renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+            let review = renewal::Review::capture_database(
+                &f.f.storage,
+                &original,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let stop = Cell::new(false);
             assert!(renewal::accept_database_observed(
                 &f.f.storage,
@@ -420,7 +514,12 @@ fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_fence_until_r
         let f = Fixture::new();
         let original = at_database_phase(&f, phase);
         reappear(&f, b"KEEP COMMITTED CURRENT FILE");
-        let review = renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+        let review = renewal::Review::capture_database(
+            &f.f.storage,
+            &original,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let stop = Cell::new(false);
         let mut files = renewal::accept_database_observed(
             &f.f.storage,
@@ -446,14 +545,20 @@ fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_fence_until_r
         assert!(storage.data_write_blocked());
         assert_eq!(operations::listing(&storage).unwrap().items.len(), 1);
         operations::authorize_review(&storage, Some(&operation)).unwrap();
-        let mut saved = removal::read(&storage, &operation, &|| false).unwrap();
+        let mut saved =
+            removal::read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(saved.progress.database_phase, Some(phase));
         assert_eq!(saved.progress.confirmation.as_ref().unwrap().generation, 1);
         assert!(storage.require_data_writable().is_err());
-        removal::run(&storage, &mut saved, &|| false).unwrap();
-        let mut restored = start(&storage, &saved, &|| false).unwrap();
+        removal::run(&storage, &mut saved, &crate::test_support::never_cancelled).unwrap();
+        let mut restored = start(&storage, &saved, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(restored.database_phase(), phase);
-        run(&storage, &mut restored, &|| false).unwrap();
+        run(
+            &storage,
+            &mut restored,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(storage.require_data_writable().is_err());
         assert!(storage.restart_required());
         assert!(operations::listing(&storage).unwrap().items.is_empty());
@@ -474,8 +579,13 @@ fn database_renewal_chained_reviews_preserve_monotonic_row_and_purge_stages() {
     let fixed = evidence(&f);
     reappear(&f, b"FIRST GENERATION");
     let mut files = accept(&f, &first);
-    removal::run(&f.f.storage, &mut files, &|| false).unwrap();
-    let mut rows = start(&f.f.storage, &files, &|| false).unwrap();
+    removal::run(
+        &f.f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut rows = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     let stop = Cell::new(false);
     assert!(
         run_inner(&f.f.storage, &mut rows, &|| stop.get(), &|event| {
@@ -490,9 +600,19 @@ fn database_renewal_chained_reviews_preserve_monotonic_row_and_purge_stages() {
     let mut files = accept(&f, &rows);
     assert_eq!(files.progress.database_phase, Some(Phase::RowsDeleted));
     assert_eq!(files.progress.confirmation.as_ref().unwrap().generation, 2);
-    removal::run(&f.f.storage, &mut files, &|| false).unwrap();
-    let mut purged = start(&f.f.storage, &files, &|| false).unwrap();
-    run(&f.f.storage, &mut purged, &|| false).unwrap();
+    removal::run(
+        &f.f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut purged = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    run(
+        &f.f.storage,
+        &mut purged,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     reappear(&f, b"THIRD GENERATION");
     let mut files = accept(&f, &purged);
     assert_eq!(files.progress.database_phase, Some(Phase::Finished));
@@ -500,14 +620,35 @@ fn database_renewal_chained_reviews_preserve_monotonic_row_and_purge_stages() {
     // A change during the residual file phase requires another explicit review,
     // but may not drop the previously committed DB phase.
     std::fs::write(&f.file, b"FOURTH GENERATION").unwrap();
-    let review = renewal::Review::capture(&f.f.storage, &files, &|| false).unwrap();
-    renewal::accept(&f.f.storage, &mut files, &review, true, &lease(), &|| false).unwrap();
+    let review =
+        renewal::Review::capture(&f.f.storage, &files, &crate::test_support::never_cancelled)
+            .unwrap();
+    renewal::accept(
+        &f.f.storage,
+        &mut files,
+        &review,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(files.progress.database_phase, Some(Phase::Finished));
     assert_eq!(files.progress.confirmation.as_ref().unwrap().generation, 4);
-    removal::run(&f.f.storage, &mut files, &|| false).unwrap();
-    let mut final_receipt = start(&f.f.storage, &files, &|| false).unwrap();
+    removal::run(
+        &f.f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut final_receipt =
+        start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(final_receipt.database_phase(), Phase::Finished);
-    run(&f.f.storage, &mut final_receipt, &|| false).unwrap();
+    run(
+        &f.f.storage,
+        &mut final_receipt,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(evidence(&f), fixed);
     assert_eq!(audits(&f), 4);
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -523,7 +664,13 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
     let files = accept(&f, &original);
     let json = root_json(&f);
     let db = f.f.storage.connection.lock().unwrap();
-    let _writer = fence::write_removal(&f.f.storage, &db, &files, &|| false).unwrap();
+    let _writer = fence::write_removal(
+        &f.f.storage,
+        &db,
+        &files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for (version, phase) in [
         (2, None),
         (3, Some("rowsPending")),
@@ -542,7 +689,10 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
             params![f.operation, changed.to_string()],
         )
         .unwrap();
-        assert!(removal::Receipt::load(&db, &f.operation, &|| false).is_err());
+        assert!(
+            removal::Receipt::load(&db, &f.operation, &crate::test_support::never_cancelled)
+                .is_err()
+        );
         db.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, json],
@@ -555,7 +705,9 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
             params![f.operation]
         )
         .is_err());
-    files.verify_saved(&db, &|| false).unwrap();
+    files
+        .verify_saved(&db, &crate::test_support::never_cancelled)
+        .unwrap();
     drop(_writer);
     drop(db);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP INVALID PLAN FILE");
@@ -570,13 +722,22 @@ fn database_renewal_native_preview_requires_new_id_and_unknown_decision_then_fin
         let f = Fixture::new();
         at_database_phase(&f, phase);
         reappear(&f, b"CURRENT API TARGET");
-        let mut prepared =
-            operations::Prepared::pending(&f.f.storage, &f.operation, &|| false).unwrap();
+        let mut prepared = operations::Prepared::pending(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let old = prepared.preview();
         assert!(!old.execute_allowed && old.reconfirmation_allowed);
         let admitted = lease();
         prepared
-            .review_remaining(&f.f.storage, &admitted, &old.confirmation_id, &|| false)
+            .review_remaining(
+                &f.f.storage,
+                &admitted,
+                &old.confirmation_id,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         let next = prepared.preview();
         assert_eq!(next.phase, "database_reconfirmation");
@@ -592,7 +753,7 @@ fn database_renewal_native_preview_requires_new_id_and_unknown_decision_then_fin
                 &admitted,
                 &old.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .is_err());
@@ -603,7 +764,7 @@ fn database_renewal_native_preview_requires_new_id_and_unknown_decision_then_fin
                     &admitted,
                     &next.confirmation_id,
                     false,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .is_err());
@@ -613,7 +774,7 @@ fn database_renewal_native_preview_requires_new_id_and_unknown_decision_then_fin
                     &f.f.storage,
                     &admitted,
                     &prepared.preview().confirmation_id,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                 )
                 .unwrap();
         }
@@ -624,7 +785,7 @@ fn database_renewal_native_preview_requires_new_id_and_unknown_decision_then_fin
                 &admitted,
                 &current.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap();
@@ -641,15 +802,19 @@ fn database_renewal_native_cancel_after_publication_reloads_fixed_stage_and_does
     let f = Fixture::new();
     at_database_phase(&f, Phase::Finished);
     reappear(&f, b"KEEP PUBLISHED API TARGET");
-    let mut prepared =
-        operations::Prepared::pending(&f.f.storage, &f.operation, &|| false).unwrap();
+    let mut prepared = operations::Prepared::pending(
+        &f.f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let admitted = lease();
     prepared
         .review_remaining(
             &f.f.storage,
             &admitted,
             &prepared.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     let stop = Cell::new(false);
@@ -675,7 +840,9 @@ fn database_renewal_native_cancel_after_publication_reloads_fixed_stage_and_does
         std::fs::read(&f.file).unwrap(),
         b"KEEP PUBLISHED API TARGET"
     );
-    prepared.refresh(&f.f.storage, &|| false).unwrap();
+    prepared
+        .refresh(&f.f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     let current = prepared.preview();
     assert!(current.execute_allowed && !current.reconfirmation_allowed);
     let result = prepared
@@ -684,7 +851,7 @@ fn database_renewal_native_cancel_after_publication_reloads_fixed_stage_and_does
             &admitted,
             &current.confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -699,22 +866,42 @@ fn database_renewal_refuses_changed_review_and_cancelled_actual_lease_without_ne
     let original = at_database_phase(&f, Phase::RowsDeleted);
     reappear(&f, b"FIRST REVIEW");
     let progress = root_json(&f);
-    let review = renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+    let review = renewal::Review::capture_database(
+        &f.f.storage,
+        &original,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&f.file, b"CHANGED AFTER REVIEW").unwrap();
-    assert!(
-        renewal::accept_database(&f.f.storage, &original, &review, true, &lease(), &|| false)
-            .is_err()
-    );
-    let review = renewal::Review::capture_database(&f.f.storage, &original, &|| false).unwrap();
+    assert!(renewal::accept_database(
+        &f.f.storage,
+        &original,
+        &review,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = renewal::Review::capture_database(
+        &f.f.storage,
+        &original,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let controller = AnalysisController::default();
     let admitted = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     controller.begin_exit().unwrap();
-    assert!(
-        renewal::accept_database(&f.f.storage, &original, &review, true, &admitted, &|| false)
-            .is_err()
-    );
+    assert!(renewal::accept_database(
+        &f.f.storage,
+        &original,
+        &review,
+        true,
+        &admitted,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(root_json(&f), progress);
     assert_eq!(audits(&f), 0);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"CHANGED AFTER REVIEW");

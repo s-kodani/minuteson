@@ -2,6 +2,36 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn model_qwen3_exact_bytes_use_non_thinking_template_and_recommended_sampling() {
+    for (size, sha256) in [
+        (
+            5_027_783_488,
+            "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+        ),
+        (
+            2_497_280_256,
+            "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+        ),
+    ] {
+        let mut model = Fingerprint {
+            path: "/not-run/model.gguf".into(),
+            size,
+            sha256: sha256.into(),
+        };
+        let args = model_arguments(&model);
+        assert!(args.windows(2).any(|a| a == ["--temp", "0.7"]));
+        assert!(args.windows(2).any(|a| a == ["--presence-penalty", "1.5"]));
+        assert!(args.contains(&"--chat-template"));
+        assert!(args.last().unwrap().contains("<think>\\n\\n</think>"));
+        model.size -= 1;
+        assert_eq!(model_arguments(&model), &["--temp", "0"]);
+        model.size += 1;
+        model.sha256 = "a".repeat(64);
+        assert_eq!(model_arguments(&model), &["--temp", "0"]);
+    }
+}
+
+#[test]
 fn incomplete_output_is_not_repaired_or_published_and_has_a_recoverable_message() {
     for source in [
         br#"{"markdown":"unfinished"#.as_slice(),
@@ -91,8 +121,9 @@ fn fake(script: &str) -> (tempfile::TempDir, LlamaConfig) {
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(&model, b"test GGUF identity").unwrap();
     let config = LlamaConfig {
-        executable: Fingerprint::capture(&executable, &|| false).unwrap(),
-        model: Fingerprint::capture(&model, &|| false).unwrap(),
+        executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
+            .unwrap(),
+        model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
         threads: 2,
         context_tokens: 2048,
         prediction_tokens: 256,
@@ -122,7 +153,7 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
             "入力\\n",
             &json!({"type":"object"}),
             Duration::from_secs(5),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap(),
         Some(json!({"items":[]}))
@@ -159,13 +190,15 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
         "input",
         &json!({}),
         Duration::from_secs(5),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(std::fs::read(path.join("result.json")).unwrap(), saved);
     let mut invalid = config.clone();
     invalid.prediction_tokens = invalid.context_tokens;
-    assert!(invalid.verify(&|| false).is_err());
+    assert!(invalid
+        .verify(&crate::test_support::never_cancelled)
+        .is_err());
     std::fs::write(&config.model.path, b"changed model").unwrap();
     let second = unit(dir.path(), "changed");
     assert!(run_unit(
@@ -175,7 +208,7 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
         "input",
         &json!({}),
         Duration::from_secs(5),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(!second.join("result.json").exists());
@@ -194,7 +227,7 @@ fn explicit_gpu_selection_is_not_silently_overridden_by_cpu_flags() {
         "input",
         &json!({}),
         Duration::from_secs(5),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let args = std::fs::read_to_string(path.join("args.log")).unwrap();
@@ -222,7 +255,7 @@ fn failure_pause_timeout_and_log_overflow_never_return_a_result_and_reap_child()
             "input",
             &json!({}),
             Duration::from_secs(5),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     }
@@ -261,7 +294,7 @@ fn failure_pause_timeout_and_log_overflow_never_return_a_result_and_reap_child()
             assert!(result.unwrap().is_none());
             assert!(pause_requested.get().unwrap().elapsed() < Duration::from_secs(3));
         } else {
-            assert!(result.unwrap_err().contains("制限時間"));
+            assert!(result.unwrap_err().contains("minutes_generation_stalled"));
             assert!(started.elapsed() < Duration::from_secs(3));
         }
         let pid = std::fs::read_to_string(path.join("child.pid")).unwrap();
@@ -288,7 +321,7 @@ fn running_engine_cannot_change_fixed_model_or_prompt() {
             "input",
             &json!({}),
             Duration::from_secs(5),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     }
@@ -300,12 +333,12 @@ fn real_llama_completion_runs_local_schema_constrained_json() {
     let config = LlamaConfig {
         executable: Fingerprint::capture(
             Path::new(&std::env::var("MON_LLAMA_COMPLETION").unwrap()),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap(),
         model: Fingerprint::capture(
             Path::new(&std::env::var("MON_LLAMA_MODEL").unwrap()),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap(),
         threads: 4,
@@ -319,7 +352,7 @@ fn real_llama_completion_runs_local_schema_constrained_json() {
     let result = run_unit(
         &config, dir.path(), crate::generation::markdown::system(),
         "点検日を確認することに決まりました。短いMarkdown議事録をJSONのmarkdownフィールドに返してください。",
-        &schema, Duration::from_secs(180), &|| false,
+        &schema, Duration::from_secs(180), &crate::test_support::never_cancelled,
     ).unwrap().unwrap();
     assert!(!crate::generation::markdown::text(result)
         .unwrap()
@@ -330,4 +363,151 @@ fn real_llama_completion_runs_local_schema_constrained_json() {
         "real llama.cpp constrained JSON: CLI SHA {}, model SHA {}, CPU only, context {}",
         config.executable.sha256, config.model.sha256, config.context_tokens
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn growing_result_can_finish_after_the_idle_deadline_but_stderr_cannot_extend_it() {
+    let (dir, config) = fake("printf '{\"markdown\":\"'\nfor part in a b c d e; do printf '%s' \"$part\"; /bin/sleep 0.4; done\nprintf '\"}'");
+    let path = unit(dir.path(), "slow-progress");
+    let started = Instant::now();
+    let value = run_unit(
+        &config,
+        &path,
+        "fixed",
+        "input",
+        &json!({}),
+        Duration::from_secs(1),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(started.elapsed() > Duration::from_secs(1));
+    assert_eq!(value, json!({"markdown":"abcde"}));
+
+    let (dir, config) = fake("printf '%s' \"$$\" > child.pid\nprintf '{'\nwhile :; do printf 'still waiting\\n' >&2; /bin/sleep 0.1; done");
+    let path = unit(dir.path(), "stalled-with-logs");
+    let error = run_unit(
+        &config,
+        &path,
+        "fixed",
+        "input",
+        &json!({}),
+        Duration::from_millis(400),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap_err();
+    assert!(error.contains("minutes_generation_stalled"));
+    assert!(std::fs::metadata(path.join("stderr.log")).unwrap().len() > 0);
+    let pid = std::fs::read_to_string(path.join("child.pid")).unwrap();
+    assert!(!Command::new("/bin/kill")
+        .args(["-0", &pid])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+    assert!(parse_output(&std::fs::read(path.join("result.json")).unwrap()).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn measurements_observe_output_without_changing_json_or_disclosing_meeting_text() {
+    let (root, config) = fake("printf '%s\\n' 'llama_perf_context_print: prompt eval time = 12.5 ms / 10 tokens (1.25 ms per token, 800.0 tokens per second)' 'llama_perf_context_print:        eval time = 20.0 ms / 2 runs (10.0 ms per token, 100.0 tokens per second)' >&2\nprintf '%s' '{\"markdown\":\"秘密の本文\"}'");
+    let path = unit(root.path(), "measured");
+    let events = std::cell::RefCell::new(Vec::new());
+    let value = run_unit_observed(
+        &config,
+        &path,
+        "secret system",
+        "secret meeting",
+        &json!({}),
+        Duration::from_secs(5),
+        &crate::test_support::never_cancelled,
+        &|phase| {
+            events
+                .borrow_mut()
+                .push(serde_json::to_value(phase).unwrap())
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(value["markdown"], "秘密の本文");
+    let metrics = std::fs::read_to_string(path.join("performance.json")).unwrap();
+    assert!(!metrics.contains("secret") && !metrics.contains("秘密"));
+    let metrics: Value = serde_json::from_str(&metrics).unwrap();
+    assert_eq!(metrics["promptEvaluation"]["tokens"], 10);
+    assert_eq!(metrics["generation"]["tokensPerSecond"], 100.0);
+    assert_eq!(metrics["gpuLayers"], 0);
+    assert!(metrics["metalDevice"].is_null() && metrics["peakMemoryBytes"].is_null());
+    assert!(metrics["firstOutputMs"].as_u64().unwrap() <= metrics["totalMs"].as_u64().unwrap());
+    let events = events.borrow();
+    assert_eq!(events.first().unwrap(), "verifying");
+    assert!(events.iter().any(|v| v == "input"));
+    assert!(events.iter().any(|v| v == "generating"));
+    assert_eq!(events.last().unwrap(), "saving");
+}
+
+#[test]
+#[cfg(unix)]
+fn pinned_metal_requires_actual_offload_and_explicit_local_device() {
+    for layers in [2, 3] {
+        let script=format!("printf '%s\\n' \"$@\" > args.log\nprintf '%s\\n' 'llama_prepare_model_devices: using device MTL0 (Apple M1 Max)' 'load_tensors: offloaded {layers}/3 layers to GPU' >&2\nprintf '%s' '{{\"markdown\":\"GPU result\"}}'");
+        let (root, mut config) = fake(&script);
+        config.gpu_layers = 3;
+        let dir = unit(root.path(), "metal");
+        let result = run_unit_observed_on_device(
+            &config,
+            &dir,
+            "fixed",
+            "input",
+            &json!({}),
+            Duration::from_secs(5),
+            &crate::test_support::never_cancelled,
+            &|_| {},
+            Some("MTL0"),
+        );
+        if layers == 3 {
+            assert_eq!(result.unwrap().unwrap()["markdown"], "GPU result");
+        } else {
+            assert!(result.unwrap_err().contains("minutes_gpu_unavailable"));
+        }
+        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        assert!(args.contains("--device\nMTL0\n"));
+        assert!(args.contains("--log-verbosity\n4\n"));
+        assert!(!args.contains("--no-kv-offload"));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn auto_metal_request_may_exceed_the_models_total_layers_but_must_actually_offload_all_of_them() {
+    for (actual, total, success) in [
+        (29, 29, true),
+        (37, 37, true),
+        (28, 29, false),
+        (0, 29, false),
+        (30, 29, false),
+    ] {
+        let script = format!("printf '%s\\n' 'using device MTL0 (Apple GPU)' 'load_tensors: offloaded {actual}/{total} layers to GPU' >&2\nprintf '%s' '{{\"ok\":true}}'");
+        let (root, mut config) = fake(&script);
+        config.gpu_layers = 256;
+        let dir = unit(root.path(), "auto-metal");
+        let result = run_unit_observed_on_device(
+            &config,
+            &dir,
+            "fixed",
+            "input",
+            &json!({}),
+            Duration::from_secs(5),
+            &crate::test_support::never_cancelled,
+            &|_| {},
+            Some("MTL0"),
+        );
+        if success {
+            assert_eq!(result.unwrap().unwrap(), json!({"ok":true}));
+        } else {
+            assert!(result.unwrap_err().contains("minutes_gpu_unavailable"));
+        }
+    }
 }

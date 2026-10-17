@@ -210,7 +210,7 @@ fn live_sessions_foreign_pairs_hidden_windows_and_retired_storage_cannot_adopt_w
                 Some(&nonce),
                 "receive"
             ),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
     assert!(controller

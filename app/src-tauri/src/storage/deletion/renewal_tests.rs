@@ -8,7 +8,7 @@ mod root_renewal_tests;
 
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn snapshot(f: &Fixture) -> (String, String, i64, String) {
@@ -56,16 +56,30 @@ fn pause_first(f: &Fixture, r: &mut Receipt, phase: &str) {
     assert!(stop.get());
 }
 fn review(f: &Fixture, r: &Receipt) -> renewal::Review {
-    renewal::Review::capture(&f.storage, r, &|| false).unwrap()
+    renewal::Review::capture(&f.storage, r, &crate::test_support::never_cancelled).unwrap()
 }
 fn accept(f: &Fixture, r: &mut Receipt, include: bool) {
     let v = review(f, r);
-    renewal::accept(&f.storage, r, &v, include, &lease(), &|| false).unwrap();
+    renewal::accept(
+        &f.storage,
+        r,
+        &v,
+        include,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 fn finish(f: &Fixture, r: &mut Receipt) {
-    run(&f.storage, r, &|| false).unwrap();
-    let mut db_phase = completion::start(&f.storage, r, &|| false).unwrap();
-    completion::run(&f.storage, &mut db_phase, &|| false).unwrap();
+    run(&f.storage, r, &crate::test_support::never_cancelled).unwrap();
+    let mut db_phase =
+        completion::start(&f.storage, r, &crate::test_support::never_cancelled).unwrap();
+    completion::run(
+        &f.storage,
+        &mut db_phase,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(db_phase.completed());
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
     assert!(f.storage.get_meeting(&f.other).unwrap().is_some());
@@ -88,18 +102,41 @@ fn rootless_renewal_uses_current_v3_and_rejects_noncurrent_audit_versions_withou
     let storage = Storage::open(base.path().join("root")).unwrap();
     let meeting = storage.create_meeting("EMPTY CURRENT MEETING").unwrap();
     let keep = storage.create_meeting("KEEP CURRENT MEETING").unwrap();
-    let census =
-        crate::storage::deletion::files::Census::capture(&storage, &meeting.id, &|| false).unwrap();
+    let census = crate::storage::deletion::files::Census::capture(
+        &storage,
+        &meeting.id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(census.manifest().entries.is_empty());
     let operation = uuid::Uuid::new_v4().to_string();
-    let prepared =
-        crate::storage::deletion::intent::prepare(&storage, &operation, &census, &|| false)
-            .unwrap();
+    let prepared = crate::storage::deletion::intent::prepare(
+        &storage,
+        &operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let reviewed = Reviewed::confirm(&census, false).unwrap();
-    let mut receipt = start(&storage, &prepared, &reviewed, &|| false).unwrap();
-    let view = renewal::Review::capture(&storage, &receipt, &|| false).unwrap();
+    let mut receipt = start(
+        &storage,
+        &prepared,
+        &reviewed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let view = renewal::Review::capture(&storage, &receipt, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(view.manifest().reservation_roots.is_empty());
-    renewal::accept(&storage, &mut receipt, &view, false, &lease(), &|| false).unwrap();
+    renewal::accept(
+        &storage,
+        &mut receipt,
+        &view,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let audit = receipt
         .progress
         .confirmation
@@ -125,9 +162,20 @@ fn rootless_renewal_uses_current_v3_and_rejects_noncurrent_audit_versions_withou
         let unsupported = format!("{{\"version\":{version},{tail}");
         assert!(renewal::audit_source(&unsupported).is_err());
     }
-    run(&storage, &mut receipt, &|| false).unwrap();
-    let mut completed = completion::start(&storage, &receipt, &|| false).unwrap();
-    completion::run(&storage, &mut completed, &|| false).unwrap();
+    run(
+        &storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut completed =
+        completion::start(&storage, &receipt, &crate::test_support::never_cancelled).unwrap();
+    completion::run(
+        &storage,
+        &mut completed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let root = storage.root().to_owned();
     drop(storage);
     let reopened = Storage::open(root).unwrap();
@@ -157,14 +205,30 @@ fn renewal_partial_deletion_requires_separate_unknown_consent_and_preserves_orig
     let old_progress = r.progress_json().unwrap();
     let extra = f.file.parent().unwrap().join("extra.txt");
     std::fs::write(&extra, b"NEW UNKNOWN FILE").unwrap();
-    assert!(run(&f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     let v = review(&f, &r);
     assert_eq!(audit_count(&f), 0); // Inspection has no mutation or consent.
-    assert!(renewal::accept(&f.storage, &mut r, &v, false, &lease(), &|| false).is_err());
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(old_progress, r.progress_json().unwrap());
     assert_eq!(audit_count(&f), 0);
     assert!(extra.exists());
-    renewal::accept(&f.storage, &mut r, &v, true, &lease(), &|| false).unwrap();
+    renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(r.progress.next, 0); // This generation's remaining plan, not restored files.
     assert_eq!(r.progress.confirmation.as_ref().unwrap().generation, 1);
     assert_eq!(audit_count(&f), 1);
@@ -218,7 +282,7 @@ fn renewal_changed_registered_remaining_file_rechecks_new_bytes_but_keeps_origin
     pause_first(&f, &mut r, "advanced");
     assert!(!f.file.exists());
     std::fs::write(&remaining, b"CHANGED SECOND AUDIO").unwrap();
-    assert!(run(&f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     accept(&f, &mut r, false);
     assert!(r.manifest.entries.iter().any(|e| e.registered.is_some()
         && e.proof.is_some()
@@ -234,9 +298,25 @@ fn renewal_multiple_generations_reject_stale_review_and_cold_reload_keeps_linked
     let mut r = f.begin(false);
     std::fs::write(&f.file, b"FIRST CHANGED CONTENT").unwrap();
     let stale = review(&f, &r);
-    renewal::accept(&f.storage, &mut r, &stale, false, &lease(), &|| false).unwrap();
+    renewal::accept(
+        &f.storage,
+        &mut r,
+        &stale,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let first = r.progress.confirmation.clone().unwrap();
-    assert!(renewal::accept(&f.storage, &mut r, &stale, false, &lease(), &|| false).is_err());
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &stale,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(audit_count(&f), 1);
     std::fs::write(&f.file, b"SECOND CHANGED CONTENT").unwrap();
     accept(&f, &mut r, false);
@@ -261,7 +341,7 @@ fn renewal_multiple_generations_reject_stale_review_and_cold_reload_keeps_linked
     drop(storage);
     let reopened = Storage::open(path).unwrap();
     assert!(reopened.data_write_blocked());
-    let mut cold = read(&reopened, &operation, &|| false).unwrap();
+    let mut cold = read(&reopened, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(cold.progress_json().unwrap(), expected);
     let f = Fixture {
         storage: reopened,
@@ -275,8 +355,18 @@ fn renewal_multiple_generations_reject_stale_review_and_cold_reload_keeps_linked
     };
     finish(&f, &mut cold);
     assert!(f.storage.restart_required());
-    let mut replay = completion::read(&f.storage, &f.operation, &|| false).unwrap();
-    completion::run(&f.storage, &mut replay, &|| false).unwrap();
+    let mut replay = completion::read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    completion::run(
+        &f.storage,
+        &mut replay,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(replay.completed());
 }
 
@@ -290,7 +380,15 @@ fn renewal_internal_staged_file_requires_unknown_consent_and_new_generation_rese
         let v = review(&f, &r);
         if boundary != "unlinked" {
             assert!(original_reserved.exists());
-            assert!(renewal::accept(&f.storage, &mut r, &v, false, &lease(), &|| false).is_err());
+            assert!(renewal::accept(
+                &f.storage,
+                &mut r,
+                &v,
+                false,
+                &lease(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
         }
         renewal::accept(
             &f.storage,
@@ -298,7 +396,7 @@ fn renewal_internal_staged_file_requires_unknown_consent_and_new_generation_rese
             &v,
             boundary != "unlinked",
             &lease(),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert!(r.reserved().contains("-r1-"));
@@ -354,10 +452,14 @@ fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_toget
             assert_eq!(before, r.progress_json().unwrap());
             assert_eq!(
                 before,
-                read(&f.storage, &f.operation, &|| false)
-                    .unwrap()
-                    .progress_json()
-                    .unwrap()
+                read(
+                    &f.storage,
+                    &f.operation,
+                    &crate::test_support::never_cancelled
+                )
+                .unwrap()
+                .progress_json()
+                .unwrap()
             );
             assert_eq!(audit_count(&f), 0);
             assert_eq!(original, snapshot(&f));
@@ -381,7 +483,7 @@ fn renewal_after_commit_unwind_reloads_committed_generation_without_deleting_fil
             &v,
             false,
             &admitted,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|p| {
                 if p == "reviewCommitted" {
                     panic!("test lost post-commit acknowledgement");
@@ -396,12 +498,25 @@ fn renewal_after_commit_unwind_reloads_committed_generation_without_deleting_fil
         std::fs::read(&f.file).unwrap(),
         b"COMMITTED NEW OBSERVATION"
     );
-    let mut resumed = read(&f.storage, &f.operation, &|| false).unwrap();
+    let mut resumed = read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         resumed.progress.confirmation.as_ref().unwrap().generation,
         1
     );
-    assert!(renewal::accept(&f.storage, &mut resumed, &v, false, &admitted, &|| false).is_err());
+    assert!(renewal::accept(
+        &f.storage,
+        &mut resumed,
+        &v,
+        false,
+        &admitted,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     finish(&f, &mut resumed);
 }
 
@@ -421,7 +536,7 @@ fn renewal_real_lease_cancellation_overrides_caller_and_retains_old_plan() {
         let before = r.progress_json().unwrap();
         let analysis = AnalysisController::default();
         let admitted = analysis
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         if point == "before" {
             analysis.begin_exit().unwrap();
@@ -432,7 +547,7 @@ fn renewal_real_lease_cancellation_overrides_caller_and_retains_old_plan() {
             &v,
             false,
             &admitted,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|p| {
                 if p == point {
                     analysis.begin_exit().unwrap();
@@ -471,7 +586,7 @@ fn renewal_rejects_inventory_changes_since_review_and_just_before_commit() {
             &v,
             false,
             &lease(),
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|p| {
                 if p == point {
                     std::fs::write(&f.file, b"NEWER CONTENT").unwrap();
@@ -493,7 +608,15 @@ fn renewal_rejects_foreign_review_without_adopting_its_scope() {
     let foreign = Fixture::new();
     let other = foreign.begin(false);
     let v = review(&foreign, &other);
-    assert!(renewal::accept(&f.storage, &mut r, &v, false, &lease(), &|| false).is_err());
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(audit_count(&f), 0);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE SOURCE");
     f.unaffected();
@@ -508,8 +631,13 @@ fn renewal_immutable_audit_targets_and_paths_reject_updates_deletes_or_post_comp
     accept(&f, &mut r, false);
     let id = &r.progress.confirmation.as_ref().unwrap().operation_id;
     let db = f.storage.connection.lock().unwrap();
-    let writer =
-        crate::storage::deletion::fence::write_removal(&f.storage, &db, &r, &|| false).unwrap();
+    let writer = crate::storage::deletion::fence::write_removal(
+        &f.storage,
+        &db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     for sql in [
         "UPDATE maintenance_operations SET target_manifest_json='{}' WHERE id=?1",
         "UPDATE maintenance_operations SET consent_at=consent_at+1 WHERE id=?1",
@@ -550,8 +678,13 @@ fn renewal_invalid_reference_policy_cursor_or_audit_progress_refuses_loading_and
             .operation_id
             .clone();
         let db = f.storage.connection.lock().unwrap();
-        let writer =
-            crate::storage::deletion::fence::write_removal(&f.storage, &db, &r, &|| false).unwrap();
+        let writer = crate::storage::deletion::fence::write_removal(
+            &f.storage,
+            &db,
+            &r,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         if corruption == "audit_progress" {
             db.execute(
                 "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
@@ -579,10 +712,15 @@ fn renewal_invalid_reference_policy_cursor_or_audit_progress_refuses_loading_and
         drop(writer);
         drop(db);
         assert!(
-            read(&f.storage, &f.operation, &|| false).is_err(),
+            read(
+                &f.storage,
+                &f.operation,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "must reject {corruption}"
         );
-        assert!(run(&f.storage, &mut r, &|| false).is_err());
+        assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
         assert_eq!(std::fs::read(&f.file).unwrap(), b"REVIEWED AND KEPT");
         f.unaffected();
     }
@@ -599,7 +737,10 @@ fn renewal_rejects_symlinks_and_hardlinks_instead_of_adopting_external_files() {
         } else {
             std::os::unix::fs::symlink(&f.external, &linked).unwrap();
         }
-        assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
+        assert!(
+            renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled)
+                .is_err()
+        );
         assert_eq!(audit_count(&f), 0);
         assert_eq!(std::fs::read(&f.external).unwrap(), b"KEEP EXTERNAL EXPORT");
         f.unaffected();
@@ -626,7 +767,8 @@ fn renewal_preserves_reserved_meeting_root_outside_logical_tree_without_silently
     assert!(stop.get());
     let reserved = f.storage.root().join("meetings").join(r.reserved());
     assert!(reserved.exists());
-    let inspected = renewal::Review::capture(&f.storage, &r, &|| false).unwrap();
+    let inspected =
+        renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled).unwrap();
     assert!(inspected.manifest().entries.iter().any(|e| e.path
         == reserved
             .strip_prefix(f.storage.root())
@@ -652,7 +794,15 @@ fn renewal_many_remaining_files_store_observations_separately_and_keep_cursor_bo
     }
     let v = review(&f, &r);
     assert!(serde_json::to_vec(v.manifest()).unwrap().len() > 65536);
-    renewal::accept(&f.storage, &mut r, &v, true, &lease(), &|| false).unwrap();
+    renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let id = &r.progress.confirmation.as_ref().unwrap().operation_id;
     let db = f.storage.connection.lock().unwrap();
     let (bytes, paths): (i64,i64) = db.query_row("SELECT length(CAST(target_manifest_json AS BLOB)),(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![id],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
@@ -673,14 +823,20 @@ fn renewal_generation_limit_retains_last_valid_plan_and_does_not_create_an_extra
         assert_eq!(r.progress.confirmation.as_ref().unwrap().generation, n);
     }
     let before = r.progress_json().unwrap();
-    assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
+    assert!(
+        renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled).is_err()
+    );
     assert_eq!(audit_count(&f), 32);
     assert_eq!(
         before,
-        read(&f.storage, &f.operation, &|| false)
-            .unwrap()
-            .progress_json()
-            .unwrap()
+        read(
+            &f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .progress_json()
+        .unwrap()
     );
     assert_eq!(std::fs::read(&f.file).unwrap(), b"CHANGED GENERATION 32");
     finish(&f, &mut r);
@@ -693,13 +849,28 @@ fn renewal_another_pending_kind_blocks_inspection_and_acceptance_without_changin
     let v = review(&f, &r);
     let before = r.progress_json().unwrap();
     let db = f.storage.connection.lock().unwrap();
-    let writer =
-        crate::storage::deletion::fence::write_removal(&f.storage, &db, &r, &|| false).unwrap();
+    let writer = crate::storage::deletion::fence::write_removal(
+        &f.storage,
+        &db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(), f.other,"0".repeat(64)]).unwrap();
     drop(writer);
     drop(db);
-    assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
-    assert!(renewal::accept(&f.storage, &mut r, &v, false, &lease(), &|| false).is_err());
+    assert!(
+        renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled).is_err()
+    );
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(audit_count(&f), 0);
     assert_eq!(before, r.progress_json().unwrap());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE SOURCE");
@@ -710,13 +881,22 @@ fn renewal_another_pending_kind_blocks_inspection_and_acceptance_without_changin
 fn renewal_saved_generation_is_used_by_native_preview_paging_execution_and_final_acknowledgement() {
     let f = Fixture::new();
     let mut r = f.begin(false);
-    let prior = operations::Prepared::pending(&f.storage, &f.operation, &|| false)
-        .unwrap()
-        .preview();
+    let prior = operations::Prepared::pending(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .preview();
     let unknown = f.file.parent().unwrap().join("new-unknown.txt");
     std::fs::write(&unknown, b"NEW EXPLICIT CONTENT").unwrap();
     accept(&f, &mut r, true);
-    let mut native = operations::Prepared::pending(&f.storage, &f.operation, &|| false).unwrap();
+    let mut native = operations::Prepared::pending(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let current = native.preview();
     assert!(current.execute_allowed && current.pending && !current.keep_allowed);
     assert_eq!(current.phase, "files");
@@ -735,14 +915,19 @@ fn renewal_saved_generation_is_used_by_native_preview_paging_execution_and_final
             &lease(),
             &current.confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
     assert!(receipt.deleted && !receipt.retained);
     assert!(!f.file.exists());
     assert!(!unknown.exists());
-    let mut replay = operations::Prepared::pending(&f.storage, &f.operation, &|| false).unwrap();
+    let mut replay = operations::Prepared::pending(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = replay.preview();
     assert_eq!(preview.phase, "awaiting_ack");
     assert!(
@@ -752,7 +937,7 @@ fn renewal_saved_generation_is_used_by_native_preview_paging_execution_and_final
                 &lease(),
                 &preview.confirmation_id,
                 false,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -773,7 +958,15 @@ fn renewal_preexisting_generation_reservation_is_not_overwritten_even_with_unkno
     std::fs::write(&reserved, b"PREEXISTING UNKNOWN RESERVATION").unwrap();
     let v = review(&f, &r);
     let before = r.progress_json().unwrap();
-    assert!(renewal::accept(&f.storage, &mut r, &v, true, &lease(), &|| false).is_err());
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        true,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(before, r.progress_json().unwrap());
     assert_eq!(audit_count(&f), 0);
     assert_eq!(
@@ -790,8 +983,13 @@ fn renewal_cannot_replace_original_database_scope_even_after_a_new_file_review()
     let v = review(&f, &r);
     let before = r.progress_json().unwrap();
     let db = f.storage.connection.lock().unwrap();
-    let writer =
-        crate::storage::deletion::fence::write_removal(&f.storage, &db, &r, &|| false).unwrap();
+    let writer = crate::storage::deletion::fence::write_removal(
+        &f.storage,
+        &db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute(
         "UPDATE meetings SET title='UNREVIEWED DATABASE CHANGE' WHERE id=?1",
         params![f.meeting],
@@ -799,8 +997,18 @@ fn renewal_cannot_replace_original_database_scope_even_after_a_new_file_review()
     .unwrap();
     drop(writer);
     drop(db);
-    assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
-    assert!(renewal::accept(&f.storage, &mut r, &v, false, &lease(), &|| false).is_err());
+    assert!(
+        renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled).is_err()
+    );
+    assert!(renewal::accept(
+        &f.storage,
+        &mut r,
+        &v,
+        false,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(before, r.progress_json().unwrap());
     assert_eq!(audit_count(&f), 0);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE SOURCE");
@@ -813,14 +1021,26 @@ fn renewal_cached_builtin_schema_never_adopts_a_changed_live_constraint() {
     let r = f.begin(false); // Warm the fixed built-in reference schema.
     assert!(review(&f, &r).manifest().entries.len() > 1);
     let db = f.storage.connection.lock().unwrap();
-    let writer =
-        crate::storage::deletion::fence::write_removal(&f.storage, &db, &r, &|| false).unwrap();
+    let writer = crate::storage::deletion::fence::write_removal(
+        &f.storage,
+        &db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute_batch("DROP TRIGGER maintenance_operation_fixed")
         .unwrap();
     drop(writer);
     drop(db);
-    assert!(read(&f.storage, &f.operation, &|| false).is_err());
-    assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
+    assert!(read(
+        &f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(
+        renewal::Review::capture(&f.storage, &r, &crate::test_support::never_cancelled).is_err()
+    );
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE SOURCE");
     f.unaffected();
 }
@@ -861,7 +1081,7 @@ fn renewal_checkpoint_child_fixture() {
         &v,
         true,
         &lease(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|point| {
             if point == phase {
                 let receipt = serde_json::to_vec(&(
@@ -974,7 +1194,12 @@ fn sigkill_reconfirmation(reserved_root: bool) {
             b"KEEP UNTIL EXPLICIT RESUME"
         );
         assert_eq!(snapshot(&f), original);
-        let mut resumed = read(&f.storage, &f.operation, &|| false).unwrap();
+        let mut resumed = read(
+            &f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         if phase == "reviewCommitted" {
             assert_eq!(audit_count(&f), 1);
             assert_eq!(
@@ -984,7 +1209,12 @@ fn sigkill_reconfirmation(reserved_root: bool) {
         } else {
             assert_eq!(audit_count(&f), 0);
             assert_eq!(resumed.progress_json().unwrap(), old_progress);
-            assert!(run(&f.storage, &mut resumed, &|| false).is_err());
+            assert!(run(
+                &f.storage,
+                &mut resumed,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
             accept(&f, &mut resumed, true);
         }
         finish(&f, &mut resumed);

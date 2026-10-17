@@ -10,9 +10,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_FLAC};
+use symphonia::core::codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_FLAC};
 use symphonia::core::errors::Error;
-use symphonia::core::formats::Packet;
+use symphonia::core::formats::{FormatReader, Packet, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
 use symphonia::core::probe::Hint;
 
@@ -94,53 +94,67 @@ pub(super) struct FlacAudio {
     channels: u32,
     cached_start: u64,
     cached: Vec<f32>,
+    stream: Option<Box<dyn FormatReader>>,
+    next_frame: u64,
 }
 
 impl FlacAudio {
-    pub(super) fn open(
+    // Normal file playback: header-only open, sequential packet decoding and
+    // the demuxer's byte search for seeks. No whole-file hash, scan or decode.
+    pub(super) fn open_saved(
         file: &mut File,
         size: u64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(PcmFormat, Self), String> {
-        // Validate lengths before a metadata parser can allocate an image/tag.
-        let mut byte_offset = check_metadata(file, size, cancelled)?;
-        let mut header = read_at(file, 0, 42)?;
-        header[4] = 0x80; // STREAMINFO is the last block of this virtual source.
-        let source = MediaSourceStream::new(
-            Box::new(EssentialFlacSource {
-                file: file.try_clone().map_err(|e| e.to_string())?,
-                header,
-                audio_offset: byte_offset,
-                size: (size - byte_offset) + 42,
-                position: 0,
-            }),
-            MediaSourceStreamOptions::default(),
-        );
-        let mut hint = Hint::new();
-        hint.with_extension("flac");
-        let mut reader = symphonia::default::get_probe()
-            .format(&hint, source, &Default::default(), &Default::default())
-            .map_err(|e| format!("FLAC形式を確認できません: {e}"))?
-            .format;
-        if reader.tracks().len() != 1 {
-            return Err("FLACは単一音声トラックである必要があります".into());
-        }
-        let parameters = reader.tracks()[0].codec_params.clone();
+        let (reader, parameters, _) = open_reader(file, size, cancelled)?;
         let rate = parameters.sample_rate.ok_or("FLACの周波数がありません")?;
         let channels = parameters
             .channels
             .ok_or("FLACのチャネルがありません")?
             .count() as u32;
-        if parameters.codec != CODEC_TYPE_FLAC
-            || !(8_000..=384_000).contains(&rate)
-            || !(1..=8).contains(&channels)
-            || !matches!(parameters.bits_per_sample, Some(4..=32))
-            || parameters
-                .n_frames
-                .is_some_and(|n| n == 0 || n > u64::from(rate) * MAX_SECONDS)
-        {
-            return Err("FLACの形式または時間が対応範囲外です".into());
-        }
+        let frames = parameters
+            .n_frames
+            .ok_or("保存FLACのフレーム数がありません")?;
+        let decoder = symphonia::default::get_codecs()
+            .make(&parameters, &DecoderOptions::default())
+            .map_err(|e| e.to_string())?;
+        let format = PcmFormat {
+            sample_rate: rate,
+            channels,
+            frames,
+            data_offset: 0,
+            bytes_per_frame: channels * 4,
+            float: true,
+            little_endian: true,
+        };
+        check_cancelled(cancelled)?;
+        Ok((
+            format,
+            Self {
+                file: file.try_clone().map_err(|e| e.to_string())?,
+                index: vec![],
+                decoder,
+                rate,
+                channels,
+                cached_start: 0,
+                cached: vec![],
+                stream: Some(reader),
+                next_frame: 0,
+            },
+        ))
+    }
+
+    pub(super) fn open(
+        file: &mut File,
+        size: u64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(PcmFormat, Self), String> {
+        let (mut reader, parameters, mut byte_offset) = open_reader(file, size, cancelled)?;
+        let rate = parameters.sample_rate.ok_or("FLACの周波数がありません")?;
+        let channels = parameters
+            .channels
+            .ok_or("FLACのチャネルがありません")?
+            .count() as u32;
         let mut decoder = symphonia::default::get_codecs()
             .make(&parameters, &DecoderOptions { verify: true })
             .map_err(|e| e.to_string())?;
@@ -222,6 +236,8 @@ impl FlacAudio {
                 channels,
                 cached_start: 0,
                 cached: vec![],
+                stream: None,
+                next_frame: 0,
             },
         ))
     }
@@ -237,22 +253,61 @@ impl FlacAudio {
                 // Seek by the fully validated packet index, including a short
                 // last block. Do not rely on a demuxer resync or replay a long
                 // meeting from the beginning for every preview/AI window.
-                let entry = self
-                    .index
-                    .partition_point(|p| p.start <= position)
-                    .checked_sub(1)
-                    .and_then(|i| self.index.get(i))
-                    .ok_or("FLAC区間がありません")?;
-                let bytes = read_at(&self.file, entry.offset, entry.bytes)?;
-                if !valid_crc(&bytes) {
-                    return Err("FLACの再生区間CRCが一致しません".into());
-                }
-                let packet = Packet::new_from_boxed_slice(
-                    0,
-                    entry.start,
-                    entry.frames,
-                    bytes.into_boxed_slice(),
-                );
+                let packet = if let Some(reader) = &mut self.stream {
+                    if self.next_frame != position {
+                        // The FLAC demuxer's seek can retain its EOF packet
+                        // builder when resync lands exactly on a frame start
+                        // (notably tiny/constant segments). Recreate that small
+                        // reader on discontinuous reads so every seek starts
+                        // with clean parser state, without scanning the file.
+                        let size = self.file.metadata().map_err(|e| e.to_string())?.len();
+                        *reader = open_reader(&mut self.file, size, &|| false)?.0;
+                        if position != 0 {
+                            reader
+                                .seek(
+                                    SeekMode::Accurate,
+                                    SeekTo::TimeStamp {
+                                        ts: position,
+                                        track_id: 0,
+                                    },
+                                )
+                                .map_err(|e| format!("FLACの再生位置へ移動できません: {e}"))?;
+                        }
+                    }
+                    let packet = reader
+                        .next_packet()
+                        .map_err(|e| format!("FLACの読出しに失敗しました: {e}"))?;
+                    if packet.track_id() != 0
+                        || packet.data.len() > MAX_PACKET_BYTES
+                        || packet.dur() == 0
+                        || packet.dur() > 65535
+                        || !valid_crc(&packet.data)
+                    {
+                        return Err("FLACの再生区間CRCまたは形式が不正です".into());
+                    }
+                    self.next_frame = packet
+                        .ts()
+                        .checked_add(packet.dur())
+                        .ok_or("FLAC時間が範囲外です")?;
+                    packet
+                } else {
+                    let entry = self
+                        .index
+                        .partition_point(|p| p.start <= position)
+                        .checked_sub(1)
+                        .and_then(|i| self.index.get(i))
+                        .ok_or("FLAC区間がありません")?;
+                    let bytes = read_at(&self.file, entry.offset, entry.bytes)?;
+                    if !valid_crc(&bytes) {
+                        return Err("FLACの再生区間CRCが一致しません".into());
+                    }
+                    Packet::new_from_boxed_slice(
+                        0,
+                        entry.start,
+                        entry.frames,
+                        bytes.into_boxed_slice(),
+                    )
+                };
                 self.decoder.reset();
                 if packet.ts() > position || position >= packet.ts().saturating_add(packet.dur()) {
                     return Err("FLACの要求区間と移動先が一致しません".into());
@@ -284,6 +339,52 @@ impl FlacAudio {
         }
         Ok(output)
     }
+}
+
+fn open_reader(
+    file: &mut File,
+    size: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(Box<dyn FormatReader>, CodecParameters, u64), String> {
+    let audio_offset = check_metadata(file, size, cancelled)?;
+    let mut header = read_at(file, 0, 42)?;
+    header[4] = 0x80;
+    let source = MediaSourceStream::new(
+        Box::new(EssentialFlacSource {
+            file: file.try_clone().map_err(|e| e.to_string())?,
+            header,
+            audio_offset,
+            size: (size - audio_offset) + 42,
+            position: 0,
+        }),
+        MediaSourceStreamOptions::default(),
+    );
+    let mut hint = Hint::new();
+    hint.with_extension("flac");
+    let reader = symphonia::default::get_probe()
+        .format(&hint, source, &Default::default(), &Default::default())
+        .map_err(|e| format!("FLAC形式を確認できません: {e}"))?
+        .format;
+    if reader.tracks().len() != 1 {
+        return Err("FLACは単一音声トラックである必要があります".into());
+    }
+    let parameters = reader.tracks()[0].codec_params.clone();
+    let rate = parameters.sample_rate.ok_or("FLACの周波数がありません")?;
+    let channels = parameters
+        .channels
+        .ok_or("FLACのチャネルがありません")?
+        .count();
+    if parameters.codec != CODEC_TYPE_FLAC
+        || !(8000..=384000).contains(&rate)
+        || !(1..=8).contains(&channels)
+        || !matches!(parameters.bits_per_sample, Some(4..=32))
+        || parameters
+            .n_frames
+            .is_some_and(|n| n == 0 || n > u64::from(rate) * MAX_SECONDS)
+    {
+        return Err("FLACの形式または時間が対応範囲外です".into());
+    }
+    Ok((reader, parameters, audio_offset))
 }
 
 fn check_metadata(

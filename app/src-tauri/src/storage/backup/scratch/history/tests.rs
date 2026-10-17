@@ -38,11 +38,16 @@ fn old_registry_versions_two_and_three_are_rejected_without_rewriting_keep_recei
             .prepare_recovery(
                 crate::storage::backup::recovery::Source::Scratch,
                 &id,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
-        keep.resolve(&s, &keep.preview().confirmation_id, true, &|| false)
-            .unwrap();
+        keep.resolve(
+            &s,
+            &keep.preview().confirmation_id,
+            true,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(keep);
         let journal = s.root.join(".mon-scratch.sqlite3");
         drop(s);

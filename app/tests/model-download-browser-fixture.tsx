@@ -41,6 +41,7 @@ f.settingsByEngine = {
   "sherpa-onnx": { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 2, clusterThresholdMilli: 500, windowShiftMilli: 10000, minDurationOnMs: 300, minDurationOffMs: 500 },
   "llama.cpp": { executablePath: "", modelPath: "", threads: 2, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 },
 };
+f.preferenceVersions = { "whisper.cpp": 0, "sherpa-onnx": 0, "llama.cpp": 0 };
 const componentRoles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 2, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: "c".repeat(64), memberPath: "model" } }] });
@@ -54,7 +55,7 @@ async function receipt(operationId: string, review: DownloadReview) {
 }
 f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: downloadTransferBytes(review) }); };
 f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review = await reviewed(f.definition); f.operations.set(id, { review, state: "complete", receipt: await receipt(id, review) }); return id; };
-mockIPC(async (command, args) => {
+export const modelDownloadIPC = async (command: string, args: any) => {
   f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_official_model_options") {
     if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...officialChoices].map(async choice => {
@@ -65,6 +66,10 @@ mockIPC(async (command, args) => {
   }
   if (command === "get_model_placements") return structuredClone(f.entries);
   if (command === "get_model_profiles") return structuredClone(f.profiles);
+  if (command === "get_diarization_preferences") {
+    if (f.mode === "threadReadFailure") throw Error("模擬CPU設定読込失敗");
+    return { lockVersion: f.preferenceVersions["sherpa-onnx"], payload: { standard: structuredClone(f.settingsByEngine["sherpa-onnx"]), highAccuracy: structuredClone(f.settingsByEngine["sherpa-onnx"]) } };
+  }
   if (command === "check_model_compatibility") {
     const entry = f.entries.find((item: any) => item.packageId === args.packageId);
     if (!entry || entry.reviewHash !== args.expectedReviewHash) throw Error("模擬モデル不一致");
@@ -80,7 +85,8 @@ mockIPC(async (command, args) => {
       after.embeddingModelPath = `/synthetic/${entry.packageId}/embedding.onnx`;
       after.runtimeLibraryPaths = [`/synthetic/${entry.packageId}/runtime.dylib`];
     } else after.modelPath = `/synthetic/${entry.packageId}/model`;
-    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: 0, before: { engine: entry.engine, settings: before }, after: { engine: entry.engine, settings: after }, reviewDigest: "b".repeat(64) };
+    if (args.diarizationThreads !== undefined) after.threads = args.diarizationThreads;
+    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: f.preferenceVersions[entry.engine], before: { engine: entry.engine, settings: before }, after: { engine: entry.engine, settings: after }, ...(args.diarizationThreads === undefined ? {} : { diarizationThreads: args.diarizationThreads }), reviewDigest: "b".repeat(64) };
   }
   if (command === "apply_model_profile_application") {
     const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);
@@ -89,6 +95,7 @@ mockIPC(async (command, args) => {
     profile.id = args.token; profile.profileVersion++;
     profile.components = [...profile.components.filter((item: any) => item.engine !== entry.engine), { roles: componentRoles[entry.engine as keyof typeof componentRoles], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
     profile.configurationComplete = profile.components.length === 3;
+    if (JSON.stringify(f.settingsByEngine[entry.engine]) !== JSON.stringify(preview.after.settings)) f.preferenceVersions[entry.engine]++;
     f.settingsByEngine[entry.engine] = structuredClone(preview.after.settings);
     if (f.mode === "applyLost") throw Error("模擬選択保存応答喪失");
     return structuredClone(profile);
@@ -131,13 +138,14 @@ mockIPC(async (command, args) => {
     if (f.mode === "placeFailure") throw Error("模擬コピー失敗");
     f.active.add(args.token);
     const result = { packageId: args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
-    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
+    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, quantization: item.review.manifest.quantization, modelFiles: item.review.manifest.files.filter((file: any) => !["executable", "runtime_library", "notice"].includes(file.role)).map((file: any) => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
     if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
     const complete = finish(); if (f.mode === "lost") throw Error("模擬コピー完了応答喪失"); return complete;
   }
   if (command === "get_downloaded_model_placement_result") return { active: f.active.has(args.packageId), cancelled: f.cancelled.has(args.packageId), receipt: f.placements.get(args.packageId) ?? null };
   throw Error(`Unexpected download fixture command: ${command}`);
-}, { shouldMockEvents: true });
+};
+mockIPC(modelDownloadIPC, { shouldMockEvents: true });
 function Fixture() {
   const [locked, setLocked] = useState(false), [visible, setVisible] = useState(true), [busy, setBusy] = useState(false), [parent, setParent] = useState(false);
   f.setLocked = setLocked; f.setVisible = setVisible; f.setParent = setParent; f.busy = busy;
@@ -149,4 +157,4 @@ function Fixture() {
       <button onClick={() => { for (const item of f.operations.values()) item.state = "incomplete"; }}>合成の記録を未完了にする</button></>}
     {visible && <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} />}<NotificationList visible={false}/></main>;
 }
-createRoot(document.getElementById("root")!).render(<Fixture />);
+if (!(window as any).skipModelDownloadFixtureMain) createRoot(document.getElementById("root")!).render(<Fixture />);

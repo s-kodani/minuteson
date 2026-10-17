@@ -38,6 +38,7 @@ mod meeting_playback;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
+pub(crate) mod minutes_prompt_preferences;
 mod model_checks;
 mod model_metadata;
 mod model_placements;
@@ -50,12 +51,14 @@ mod recording_preparation;
 pub(crate) mod recordings;
 mod restored_input;
 mod revisions;
+pub(crate) mod transcript_consolidation;
 mod transcription;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
 mod ui_preferences;
 pub(crate) mod vocabulary;
+pub(crate) mod voice;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
@@ -71,7 +74,7 @@ pub(crate) use jobs::{
     retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
 pub(crate) use meeting_playback::{
-    MeetingAudioSummary, MeetingIntervalRequest, MeetingPlaybackRequest,
+    MeetingAudioSummary, MeetingIntervalRequest, MeetingPlaybackMode, MeetingPlaybackRequest,
 };
 pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
@@ -115,6 +118,7 @@ const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.s
 const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
 const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
 const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
+const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -653,7 +657,8 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
     if empty {
         return Ok(true);
     }
-    if verify_migration_history(connection)? != MIGRATIONS.len() {
+    let version = verify_migration_history(connection)?;
+    if version != MIGRATIONS.len() && version != 31 {
         return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
     }
     Ok(false)
@@ -661,6 +666,9 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
 
 fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
+        if verify_migration_history(connection)? == 31 {
+            return upgrade_voice_registry(connection);
+        }
         return Ok(());
     }
     // These trusted SQL definitions construct a NEW current database only.
@@ -685,6 +693,51 @@ fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>
         )?;
     }
     transaction.commit()?;
+    Ok(())
+}
+
+// The immediately previous product schema is the sole supported upgrade.
+// Rebuilding a parent table requires FK enforcement to be disabled before BEGIN;
+// the complete rebuild/history update is atomic and checked before publication.
+fn upgrade_voice_registry(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
+    if verify_migration_history(connection)? != 31 {
+        return Err("声の登録DBの更新元が一致しません".into());
+    }
+    let unfinished:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention'))",[],|r|r.get(0))?;
+    if unfinished || deletion::fence::has_pending(connection)? {
+        return Err(
+            "保存先の削除・復元・移動が未完了です。旧版で処理を完了してから更新してください".into(),
+        );
+    }
+    connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    let result = (|| -> Result<(), Box<dyn Error>> {
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if verify_migration_history(&tx)? != 31 {
+            return Err("DB形式が更新開始前に変わりました".into());
+        }
+        tx.execute_batch(MIGRATION_32)?;
+        let invalid: bool = tx
+            .prepare("PRAGMA foreign_key_check")?
+            .query([])?
+            .next()?
+            .is_some();
+        if invalid {
+            return Err("声の登録DBの更新で参照不整合を検出しました".into());
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(32,?1,?2)",
+            params![
+                format!("{:x}", Sha256::digest(MIGRATION_32.as_bytes())),
+                now_ms()?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })();
+    let enforcement =
+        connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF;");
+    result?;
+    enforcement?;
     Ok(())
 }
 
@@ -720,6 +773,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (29, MIGRATION_29),
     (30, MIGRATION_30),
     (31, MIGRATION_31),
+    (32, MIGRATION_32),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

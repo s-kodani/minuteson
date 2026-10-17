@@ -13,6 +13,40 @@ const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PROMPT_BYTES: usize = 64 * 1024;
 
+// Qwen3's published non-thinking ChatML generation prefix. b11533 completion
+// does not pass its --reasoning option into the initial template application,
+// so fix the no-thinking prefix explicitly rather than stripping model output.
+const QWEN3_NON_THINKING_TEMPLATE: &str = r#"{%- for message in messages %}{{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' }}{%- endif %}"#;
+fn model_arguments(model: &Fingerprint) -> &'static [&'static str] {
+    if matches!(
+        (model.size, model.sha256.as_str()),
+        (
+            5_027_783_488,
+            "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+        ) | (
+            2_497_280_256,
+            "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+        )
+    ) {
+        &[
+            "--temp",
+            "0.7",
+            "--top-p",
+            "0.8",
+            "--top-k",
+            "20",
+            "--min-p",
+            "0",
+            "--presence-penalty",
+            "1.5",
+            "--chat-template",
+            QWEN3_NON_THINKING_TEMPLATE,
+        ]
+    } else {
+        &["--temp", "0"]
+    }
+}
+
 // Value's default object decoder silently keeps the last duplicate field.
 // Reject duplicates at every level before downstream typed deserialization.
 struct StrictValue(Value);
@@ -90,8 +124,8 @@ pub(crate) struct LlamaConfig {
 impl LlamaConfig {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.threads)
-            || !(2048..=32768).contains(&self.context_tokens)
-            || !(64..=8192).contains(&self.prediction_tokens)
+            || !(2048..=40960).contains(&self.context_tokens)
+            || !(64..=32768).contains(&self.prediction_tokens)
             || self.prediction_tokens > self.context_tokens - 256
             || self.gpu_layers > 256
         {
@@ -198,9 +232,59 @@ pub(crate) fn run_unit(
     system_prompt: &str,
     prompt: &str,
     schema: &Value,
-    timeout: Duration,
+    idle_timeout: Duration,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Value>, String> {
+    run_unit_observed(
+        config,
+        directory,
+        system_prompt,
+        prompt,
+        schema,
+        idle_timeout,
+        cancelled,
+        &|_| {},
+    )
+}
+pub(crate) fn run_unit_observed(
+    config: &LlamaConfig,
+    directory: &Path,
+    system_prompt: &str,
+    prompt: &str,
+    schema: &Value,
+    idle_timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+    observe: &impl Fn(super::llama_metrics::Phase),
+) -> Result<Option<Value>, String> {
+    run_unit_observed_on_device(
+        config,
+        directory,
+        system_prompt,
+        prompt,
+        schema,
+        idle_timeout,
+        cancelled,
+        observe,
+        None,
+    )
+}
+pub(crate) fn run_unit_observed_on_device(
+    config: &LlamaConfig,
+    directory: &Path,
+    system_prompt: &str,
+    prompt: &str,
+    schema: &Value,
+    idle_timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+    observe: &impl Fn(super::llama_metrics::Phase),
+    device: Option<&str>,
+) -> Result<Option<Value>, String> {
+    use super::llama_metrics::{Metrics, Phase};
+    if device.is_some_and(|v| v != "MTL0" || config.gpu_layers == 0) {
+        return Err("GPUデバイスの固定条件が不正です".into());
+    }
+    let started = Instant::now();
+    observe(Phase::Verifying);
     if cancelled() {
         return Ok(None);
     }
@@ -213,8 +297,8 @@ pub(crate) fn run_unit(
         || prompt.contains('\0')
         || !schema.is_object()
         || schema_bytes.len() > 32 * 1024
-        || timeout.is_zero()
-        || timeout > Duration::from_secs(1800)
+        || idle_timeout.is_zero()
+        || idle_timeout > Duration::from_secs(1800)
     {
         return Err("議事録の入力・schema・制限時間が不正です".into());
     }
@@ -263,6 +347,8 @@ pub(crate) fn run_unit(
         .create_new(true)
         .open(&log_path)
         .map_err(|e| e.to_string())?;
+    let _log_capture =
+        crate::internal_logs::watch_engine(&directory, &["stderr.log"], "minutes_generation");
     let mut launch = OwnedCommand::new(&config.executable.path)?;
     let command = &mut launch.command;
     command
@@ -295,9 +381,8 @@ pub(crate) fn run_unit(
         .arg(config.gpu_layers.to_string())
         .arg("--seed")
         .arg(config.seed.to_string())
+        .args(model_arguments(&config.model))
         .args([
-            "--temp",
-            "0",
             "--conversation",
             "--jinja",
             "--single-turn",
@@ -315,31 +400,57 @@ pub(crate) fn run_unit(
             "off",
             "--log-colors",
             "off",
-            "--log-verbosity",
-            "2",
             "--simple-io",
         ]);
+    command.args(["--log-verbosity", if device.is_some() { "4" } else { "3" }]);
+    if let Some(device) = device {
+        command.args(["--device", device]);
+    }
     if config.gpu_layers == 0 {
         // Zero model layers alone still permits Metal KV/host-op offload in
         // official shared builds. CPU trials and CPU jobs must stay on CPU.
         command.args(["--device", "none", "--no-kv-offload", "--no-op-offload"]);
     }
+    let verification = started.elapsed();
+    observe(Phase::Starting);
+    let spawning = Instant::now();
     let mut child = launch
         .spawn()
         .map_err(|e| format!("llama.cppを起動できません: {e}"))?;
-    let started = Instant::now();
+    // A CPU job may legitimately need longer than 30 minutes. Bound lack of
+    // output, not total wall time; --predict and byte limits still bound work.
+    // Only result growth counts: a noisy stderr must not keep a stuck job alive.
+    let spawn = spawning.elapsed();
+    observe(Phase::Input);
+    let mut first_output = None;
+    let mut notified = Instant::now();
+    let mut last_output = Instant::now();
+    let mut output_bytes = 0;
     loop {
         if cancelled() {
             return Ok(None);
-        }
-        if started.elapsed() > timeout {
-            return Err("議事録生成が制限時間を超えました".into());
         }
         for (path, limit) in [(&result_path, MAX_OUTPUT_BYTES), (&log_path, MAX_LOG_BYTES)] {
             let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
             if !meta.is_file() || meta.len() > limit {
                 return Err("議事録の出力・ログが上限を超えたか通常ファイルではありません".into());
             }
+            if path == &result_path && meta.len() > output_bytes {
+                if first_output.is_none() {
+                    first_output = Some(started.elapsed());
+                    observe(Phase::Generating);
+                }
+                output_bytes = meta.len();
+                last_output = Instant::now();
+            }
+        }
+        if notified.elapsed() >= Duration::from_secs(1) {
+            observe(if first_output.is_some() {
+                Phase::Generating
+            } else {
+                Phase::Input
+            });
+            notified = Instant::now();
         }
         if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
@@ -347,11 +458,16 @@ pub(crate) fn run_unit(
             }
             break;
         }
+        if last_output.elapsed() > idle_timeout {
+            return Err("議事録の出力が30分間更新されなかったため処理を停止しました。完了済みの解析結果は保持しています。（minutes_generation_stalled）".into());
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     if cancelled() {
         return Ok(None);
     }
+    observe(Phase::Saving);
+    let validating = Instant::now();
     for file in &watched {
         file.verify()?;
     }
@@ -368,6 +484,12 @@ pub(crate) fn run_unit(
     file.take(MAX_OUTPUT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
+    if let Some(device) = device {
+        let log = std::fs::read_to_string(&log_path).map_err(|e| e.to_string())?;
+        if !super::llama_metrics::metal_matches(&log, device, config.gpu_layers) {
+            return Err("固定したMetal GPUの利用を確認できません。処理済みの結果を保持しています。新しく生成してGPU設定を確認してください。（minutes_gpu_unavailable）".into());
+        }
+    }
     let value = parse_output(&bytes)?;
     validate_markdown_bound(&value, schema)?;
     // Freeze exactly the validated adapter result, including the fixed CLI's
@@ -378,6 +500,21 @@ pub(crate) fn run_unit(
         .map_err(|e| e.to_string())?;
     if cancelled() {
         return Ok(None);
+    }
+    let log_text = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let metrics = Metrics::new(
+        config,
+        &log_text,
+        system_prompt.len() + prompt.len(),
+        started.elapsed(),
+        verification,
+        spawn,
+        first_output,
+        validating.elapsed(),
+    );
+    // Optional diagnostics cannot turn a valid, durable result into a failure.
+    if let Ok(bytes) = serde_json::to_vec_pretty(&metrics) {
+        let _ = write_new(&directory.join("performance.json"), &bytes);
     }
     Ok(Some(value))
 }

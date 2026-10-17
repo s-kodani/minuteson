@@ -45,7 +45,7 @@ fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_an
         &operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |n, total| progress.push((n, total)),
         &mut |url, _, _, file, _, report| {
             calls += 1;
@@ -69,9 +69,14 @@ fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_an
         Some(&(MODEL.len() as u64, MODEL.len() as u64))
     );
     assert_eq!(
-        readback(&root, &operation, &recipe.hash().unwrap(), &|| false)
-            .unwrap()
-            .state,
+        readback(
+            &root,
+            &operation,
+            &recipe.hash().unwrap(),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .state,
         "complete"
     );
     let meetings = tempfile::tempdir().unwrap();
@@ -86,7 +91,7 @@ fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_an
         &recipe.hash().unwrap(),
         &package,
         &receipt.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let record = crate::model_placement::PlacementRecord::downloaded(
@@ -125,7 +130,7 @@ fn archive_is_fetched_once_selected_regular_members_only_and_v2_origin_survives_
         &operation,
         &recipe,
         &recipe.hash().unwrap(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &mut |n, total| progress.push((n, total)),
         &mut |_, _, _, file, _, report| {
             calls += 1;
@@ -154,9 +159,14 @@ fn archive_is_fetched_once_selected_regular_members_only_and_v2_origin_survives_
         0o600
     );
     assert_eq!(
-        readback(&root, &operation, &recipe.hash().unwrap(), &|| false)
-            .unwrap()
-            .state,
+        readback(
+            &root,
+            &operation,
+            &recipe.hash().unwrap(),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .state,
         "complete"
     );
     let meetings = tempfile::tempdir().unwrap();
@@ -171,7 +181,7 @@ fn archive_is_fetched_once_selected_regular_members_only_and_v2_origin_survives_
         &recipe.hash().unwrap(),
         &package,
         &receipt.report.review_hash,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let record = crate::model_placement::PlacementRecord::downloaded(
@@ -252,7 +262,7 @@ fn archive_rejects_unsafe_duplicate_missing_link_device_and_hash_mismatch_withou
             &operation,
             &recipe,
             &recipe.hash().unwrap(),
-            &|| false,
+            &crate::test_support::never_cancelled,
             &mut |_, _| {},
             &mut |_, _, _, file, _, _| {
                 file.write_all(&bytes).unwrap();
@@ -263,9 +273,14 @@ fn archive_rejects_unsafe_duplicate_missing_link_device_and_hash_mismatch_withou
         assert!(!root.join(&operation).join(COMPLETE).exists(), "{variant}");
         assert!(!temp.path().join("outside").exists());
         assert_eq!(
-            readback(&root, &operation, &recipe.hash().unwrap(), &|| false)
-                .unwrap()
-                .state,
+            readback(
+                &root,
+                &operation,
+                &recipe.hash().unwrap(),
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .state,
             "incomplete"
         );
     }
@@ -298,9 +313,14 @@ fn archive_cancellation_after_fetch_preserves_non_executable_partial_and_never_m
         .is_file());
     assert!(!root.join(&operation).join(COMPLETE).exists());
     assert_eq!(
-        readback(&root, &operation, &recipe.hash().unwrap(), &|| false)
-            .unwrap()
-            .state,
+        readback(
+            &root,
+            &operation,
+            &recipe.hash().unwrap(),
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .state,
         "incomplete"
     );
 }

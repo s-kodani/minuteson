@@ -285,6 +285,24 @@ impl Storage {
                     }),
                     model_name: record.manifest.model_name,
                     model_version: record.manifest.model_version,
+                    quantization: record.manifest.quantization,
+                    model_files: record
+                        .files
+                        .iter()
+                        .filter(|file| {
+                            !matches!(
+                                file.role,
+                                crate::model_inspection::Role::Executable
+                                    | crate::model_inspection::Role::RuntimeLibrary
+                                    | crate::model_inspection::Role::Notice
+                            )
+                        })
+                        .map(|file| crate::model_placement::ModelFileIdentity {
+                            role: file.role,
+                            size: file.actual_size,
+                            sha256: file.actual_hash.clone(),
+                        })
+                        .collect(),
                     engine: engine.as_str().ok_or("モデルエンジンが不正です")?.into(),
                     engine_version: record.manifest.engine_version,
                     total_bytes: receipt.total_bytes,

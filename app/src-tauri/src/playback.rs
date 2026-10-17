@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 mod clock;
 mod meeting;
+pub(crate) mod mix_cache;
 mod preparation;
 pub(crate) use clock::ClockAudio;
 pub(crate) use meeting::{MeetingAudio, MeetingIntervalAudio};

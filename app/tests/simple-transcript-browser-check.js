@@ -3,7 +3,7 @@ async page => {
   await page.getByRole("button",{name:"会議A",exact:true}).click();
   await page.getByRole("heading",{name:"発言一覧",exact:true}).waitFor();
   check(await page.getByRole("button",{name:/編集オプション|内容を確認|候補を採用|直前版|エンジン設定/}).count()===0,"obsolete editing/model/candidate actions remain");
-  check(await page.locator(".transcript-workspace-tools,.speaker-merge-tools,.split-dialog").count()===0,"removed options are only hidden");
+  check(await page.locator(".transcript-workspace-tools,.speaker-merge-tools").count()===0,"removed options are only hidden");
   results.push("meeting has no candidate, per-meeting model or edit-options screens");
   const body=()=>page.getByRole("button",{name:"00:00:00の発言を編集",exact:true});
   const editor=()=>page.getByRole("textbox",{name:"00:00:00の発言",exact:true});
@@ -23,9 +23,12 @@ async page => {
   results.push("speaker label opens a small rename modal and saves");
   await page.getByRole("button",{name:"00:00:00の話者を変更",exact:true}).click();
   const assignment=page.getByRole("dialog",{name:"00:00:00の話者を変更",exact:true});
+  const assignmentWrites=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="save_transcript_draft").length);
   await assignment.getByRole("checkbox",{name:"佐藤",exact:true}).check();
+  check(await assignment.isVisible() && await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="save_transcript_draft").length)===assignmentWrites,"checkbox saved or closed assignment");
+  await assignment.getByRole("button",{name:"保存",exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.draft.payload.utterances.find(u=>u.utterance_id==="speech-a").speaker_ids.includes("speaker-b"));
-  await assignment.getByRole("button",{name:/閉じる$/}).click();
+  await assignment.waitFor({state:"hidden"});
   results.push("individual speaker assignment saves without bulk selection");
   await body().click();await editor().fill("保存失敗でも保持する本文");
   await page.evaluate(()=>{window.monBrowserFixture.failSave=true;});await save().click();

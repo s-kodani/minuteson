@@ -18,6 +18,7 @@ fn assert_whole_gap_playback(storage: &Storage, meeting: &str, end: i64) {
             .insert_meeting(
                 storage
                     .prepare_meeting_audio(&MeetingPlaybackRequest {
+                        start_reference: None,
                         meeting_id: meeting.into(),
                         mode,
                     })
@@ -399,14 +400,21 @@ fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without
     let (meeting, session, _, value) = ending(&storage);
     storage.finalize_recording(&session).unwrap();
     let archive = destination.path().join("ending.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     let prepared = target
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let confirmation = prepared.preview().confirmation_id;
     let receipt = prepared
-        .publish(&target, &confirmation, &|| false, &|_| {})
+        .publish(
+            &target,
+            &confirmation,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     let restored = &receipt.meeting_ids[0];
     assert_ne!(restored, &meeting);
@@ -687,6 +695,7 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
             .insert_meeting(
                 reopened
                     .prepare_meeting_audio(&MeetingPlaybackRequest {
+                        start_reference: None,
                         meeting_id: meeting.id.clone(),
                         mode,
                     })

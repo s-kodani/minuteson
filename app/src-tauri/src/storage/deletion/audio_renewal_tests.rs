@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 fn owner() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn started(f: &Fixture, lease: &DataMaintenanceLease) -> String {
@@ -20,10 +20,16 @@ fn started(f: &Fixture, lease: &DataMaintenanceLease) -> String {
             retain_unclassified: true,
         },
         lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    super::super::start(&f.storage, &op, lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &op,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     op
 }
 fn fixed(f: &Fixture, op: &str) -> (String, String, i64, i64, i64) {
@@ -33,13 +39,19 @@ fn fixed(f: &Fixture, op: &str) -> (String, String, i64, i64, i64) {
     ).unwrap()
 }
 fn finish(f: &Fixture, op: &str, lease: &DataMaintenanceLease) -> Receipt {
-    super::super::run(&f.storage, op, lease, &|| false).unwrap();
-    super::super::completion::finish(&f.storage, op, lease, &|| false).unwrap()
+    super::super::run(&f.storage, op, lease, &crate::test_support::never_cancelled).unwrap();
+    super::super::completion::finish(&f.storage, op, lease, &crate::test_support::never_cancelled)
+        .unwrap()
 }
 fn descendant(f: &Fixture, parent: &str, lease: &DataMaintenanceLease) -> String {
     std::fs::write(&f.path, b"REGISTERED AUDIO RETURNED FOR NEW OPERATION").unwrap();
-    let review =
-        intent::reconfirmation::Review::capture(&f.storage, parent, lease, &|| false).unwrap();
+    let review = intent::reconfirmation::Review::capture(
+        &f.storage,
+        parent,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     intent::reconfirmation::accept(
         &f.storage,
@@ -50,10 +62,16 @@ fn descendant(f: &Fixture, parent: &str, lease: &DataMaintenanceLease) -> String
             retain_unclassified: true,
         },
         lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    super::super::start(&f.storage, &op, lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &op,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     op
 }
 
@@ -70,7 +88,13 @@ fn ancestral_unobserved_reservation_requires_new_choice_and_cold_resumes_exact_s
     let unrelated = f.path.with_file_name(reserved(&parent, 0, 999));
     std::fs::write(&returned, b"ANCESTOR RESERVATION RETURNED LATE").unwrap();
     std::fs::write(&unrelated, b"LOOKALIKE MUST SURVIVE").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let relative = returned
         .strip_prefix(f.storage.root())
         .unwrap()
@@ -78,9 +102,23 @@ fn ancestral_unobserved_reservation_requires_new_choice_and_cold_resumes_exact_s
         .unwrap()
         .to_owned();
     assert_eq!(review.snapshot.historical_audio, BTreeSet::from([relative]));
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 2);
-    let saved = accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let saved = accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(fixed(&f, &parent), old);
     assert_eq!(saved.progress.version, 3);
@@ -88,9 +126,20 @@ fn ancestral_unobserved_reservation_requires_new_choice_and_cold_resumes_exact_s
     drop(lease);
     let f = f.reopen();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let current = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let current = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(current, saved);
     finish(&f, &op, &lease);
     assert!(!returned.exists() && !f.path.exists());
@@ -108,25 +157,73 @@ fn grandparent_paths_survive_multiple_completed_sources_and_repeated_remaining_r
     let lease = owner();
     let parent = started(&f, &lease);
     std::fs::write(&f.path, b"CHANGED BEFORE PARENT RENEWAL").unwrap();
-    let review = Review::capture(&f.storage, &parent, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &parent,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &parent, &lease);
     let middle = descendant(&f, &parent, &lease);
     finish(&f, &middle, &lease);
     let op = descendant(&f, &middle, &lease);
     let returned = f.path.with_file_name(reserved(&parent, 1, 0));
     std::fs::write(&returned, b"GRANDPARENT ONLY").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(review.snapshot.historical_audio.len(), 1);
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&returned, b"GRANDPARENT CHANGED AGAIN").unwrap();
-    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
-    let source =
-        intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
-            .unwrap();
+    let source = intent::reconfirmation::Source::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(source.paths().contains(
         returned
             .strip_prefix(f.storage.root())
@@ -171,12 +268,30 @@ fn ancestral_full_meeting_purge(long: bool) {
         long
     );
     std::fs::write(&returned, b"ANCESTOR RETURNED BEFORE FULL PURGE").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     let parent_record = fixed(&f, &parent);
     let child_record = fixed(&f, &op);
-    let mut prepared = operations::Prepared::fresh(&f.storage, &f.meeting, &|| false).unwrap();
+    let mut prepared = operations::Prepared::fresh(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let preview = prepared.preview();
     assert!(
         prepared
@@ -185,7 +300,7 @@ fn ancestral_full_meeting_purge(long: bool) {
                 &lease,
                 &preview.confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -204,19 +319,26 @@ fn ancestral_full_meeting_purge(long: bool) {
             .unwrap(),
             None
         );
-        assert!(Receipt::load(&db, id, &|| false).is_err());
-        assert!(intent::reconfirmation::Source::load(&db, id, &|| false).is_err());
+        assert!(Receipt::load(&db, id, &crate::test_support::never_cancelled).is_err());
+        assert!(intent::reconfirmation::Source::load(
+            &db,
+            id,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(crate::storage::deletion::audio_supersession::superseded(
             &db,
             &f.storage.managed_anchor,
             id,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap());
     }
-    assert!(audio::backup_deleted(&f.storage, &db, &|| false)
-        .unwrap()
-        .is_empty());
+    assert!(
+        audio::backup_deleted(&f.storage, &db, &crate::test_support::never_cancelled)
+            .unwrap()
+            .is_empty()
+    );
     drop(db);
     drop(lease);
     let f = f.reopen();
@@ -229,11 +351,17 @@ fn ancestral_full_meeting_purge(long: bool) {
 // Canonical corruption of a private fixture. No product permission is relaxed.
 fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut audio::Snapshot)) {
     let db = f.storage.connection.lock().unwrap();
-    let receipt = Receipt::load(&db, op, &|| false).unwrap();
+    let receipt = Receipt::load(&db, op, &crate::test_support::never_cancelled).unwrap();
     let mut reference = receipt.progress.confirmation.clone().unwrap();
     let mut budget = receipt.saved.header.snapshot_bytes;
-    let (mut record, mut snapshot, _) =
-        read_record(&db, &reference, &receipt.saved, &mut budget, &|| false).unwrap();
+    let (mut record, mut snapshot, _) = read_record(
+        &db,
+        &reference,
+        &receipt.saved,
+        &mut budget,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     mutate(&mut record, &mut snapshot);
     let bytes = snapshot.encode().unwrap();
     record.snapshot_bytes = bytes.len();
@@ -286,8 +414,21 @@ fn forged_canonical_ancestral_membership_never_becomes_a_receipt_or_deletion_per
     let op = descendant(&f, &parent, &lease);
     let unknown = f.path.with_file_name(reserved(&parent, 0, 999));
     std::fs::write(&unknown, b"UNOWNED LOOKALIKE").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let path = unknown
         .strip_prefix(f.storage.root())
         .unwrap()
@@ -299,9 +440,25 @@ fn forged_canonical_ancestral_membership_never_becomes_a_receipt_or_deletion_per
     });
     // The structural frame and recorded policy are internally valid. Only
     // the oldest-first typed ancestry check can reject this forged membership.
-    assert!(Receipt::source_frame(&f.storage.connection.lock().unwrap(), &op, &|| false).is_ok());
-    assert!(Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).is_err());
-    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(Receipt::source_frame(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_ok());
+    assert!(Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(unknown.exists() && f.path.exists() && f.storage.data_write_blocked());
     drop(lease);
     let f = f.reopen();
@@ -317,14 +474,31 @@ fn version_one_remaining_record_keeps_its_exact_original_classification() {
     finish(&f, &parent, &lease);
     let op = descendant(&f, &parent, &lease);
     std::fs::write(&f.path, b"LEGACY CHANGED OWN AUDIO").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     rewrite_audit(&f, &op, |record, _| {
         record.version = 1;
     });
     finish(&f, &op, &lease);
-    intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
-        .unwrap();
+    intent::reconfirmation::Source::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     drop(lease);
     assert!(!f.reopen().storage.data_write_blocked());
 }
@@ -337,22 +511,60 @@ fn changed_remaining_requires_new_consent_preserves_original_and_exact_retry() {
     let lease = owner();
     let op = started(&f, &lease);
     let original = fixed(&f, &op);
-    let saved = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let saved = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let old_scope = saved.saved.snapshot.scope.clone();
     std::fs::write(&f.path, b"CHANGED AUDIO").unwrap();
-    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.exists());
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    let current = accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let current = accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(current.policy.include_unregistered_audio, false);
     assert_eq!(current.progress.version, 3);
     assert_eq!(current.audits.len(), 1);
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(
-        accept(&f.storage, &review, false, &lease, &|| false).unwrap(),
+        accept(
+            &f.storage,
+            &review,
+            false,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         current
     );
-    assert!(accept(&f.storage, &review, true, &lease, &|| false).is_err());
+    assert!(accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 2);
     assert!(f.storage.data_write_blocked());
     let completed = finish(&f, &op, &lease);
@@ -361,7 +573,13 @@ fn changed_remaining_requires_new_consent_preserves_original_and_exact_retry() {
     assert!(document.is_file() && unknown.is_file());
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(completed.saved.snapshot.scope, old_scope);
-    assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let f = f.reopen();
     assert!(!f.storage.data_write_blocked());
     assert!(audio::require_source(&f.storage.connection.lock().unwrap(), &f.meeting).is_err());
@@ -372,14 +590,47 @@ fn new_unregistered_audio_and_stale_review_never_borrow_old_consent() {
     let lease = owner();
     let op = started(&f, &lease);
     let extra = f.unregistered_audio();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 1);
     std::fs::write(&extra, b"CHANGED AGAIN").unwrap();
-    assert!(accept(&f.storage, &review, true, &lease, &|| false).is_err());
+    assert!(accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 1);
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     assert!(!extra.exists() && !f.path.exists());
 }
@@ -394,7 +645,13 @@ fn cancellation_at_each_transaction_boundary_rolls_back_audit_and_cursor() {
         let lease = owner();
         let op = started(&f, &lease);
         std::fs::write(&f.path, b"NEW").unwrap();
-        let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+        let review = Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancelled = Cell::new(false);
         assert!(accept_inner(
             &f.storage,
@@ -411,11 +668,23 @@ fn cancellation_at_each_transaction_boundary_rolls_back_audit_and_cursor() {
         .is_err());
         assert_eq!(f.operation_count(), 1);
         assert_eq!(
-            Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap(),
+            Receipt::load(
+                &f.storage.connection.lock().unwrap(),
+                &op,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap(),
             review.receipt
         );
         assert!(f.storage.data_write_blocked() && f.path.exists());
-        accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+        accept(
+            &f.storage,
+            &review,
+            false,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         finish(&f, &op, &lease);
     }
 }
@@ -424,13 +693,26 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
     let f = Fixture::new();
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"NEW").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     controller.begin_exit().unwrap();
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.exists());
     let lease = owner();
     let db = f.storage.connection.lock().unwrap();
@@ -443,8 +725,21 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
     .unwrap();
     f.storage.deletion_fence.arm(&db).unwrap();
     drop(db);
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
-    assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 1);
 }
 #[cfg(unix)]
@@ -462,7 +757,13 @@ fn symlink_and_hardlink_are_not_adopted_into_a_new_plan() {
         } else {
             std::os::unix::fs::symlink(&external, &f.path).unwrap();
         }
-        assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(external).unwrap(), b"EXTERNAL");
         assert_eq!(f.operation_count(), 1);
     }
@@ -482,26 +783,51 @@ fn staged_reservation_is_exact_history_and_old_pending_proof_is_preserved() {
         })
         .is_err()
     );
-    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let old = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let staged = f.storage.root().join(old.reserved_path(0));
     assert!(staged.exists() && !f.path.exists());
     std::fs::write(&staged, b"CHANGED RESERVED AUDIO").unwrap();
     let near = staged.with_file_name(format!(".mon-delete-audio-{op}-999"));
     std::fs::write(&near, b"KEEP LOOKALIKE").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         review.snapshot.historical_audio,
         BTreeSet::from([old.reserved_path(0)])
     );
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
-    let renewed = accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let renewed = accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut budget = old.saved.header.snapshot_bytes;
     let (record, _, _) = read_record(
         &f.storage.connection.lock().unwrap(),
         renewed.progress.confirmation.as_ref().unwrap(),
         &old.saved,
         &mut budget,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(record.previous_progress, old.progress);
@@ -533,14 +859,25 @@ fn long_audio_unchanged_reserved_rename_cold_resumes_without_another_consent() {
         })
         .is_err()
     );
-    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let old = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let staged = f.storage.root().join(old.reserved_path(0));
     assert!(old.reserved_path(0).len() > 256 && staged.exists() && !f.path.exists());
     assert!(old.progress.pending.as_ref().unwrap().staged.is_none());
     drop(lease);
     let f = f.reopen();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     finish(&f, &op, &lease);
     assert!(!staged.exists() && !f.path.exists());
@@ -606,24 +943,49 @@ fn long_audio_changed_staged_path_requires_new_choice_and_keeps_previous_pending
         })
         .is_err()
     );
-    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let old = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let staged = f.storage.root().join(old.reserved_path(0));
     assert!(old.reserved_path(0).len() > 256);
     std::fs::write(&staged, b"CHANGED LONG RESERVED AUDIO").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(
         review.snapshot.historical_audio,
         BTreeSet::from([old.reserved_path(0)])
     );
-    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
-    let saved = accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    assert!(accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let saved = accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut budget = saved.saved.header.snapshot_bytes;
     let (record, _, _) = read_record(
         &f.storage.connection.lock().unwrap(),
         saved.progress.confirmation.as_ref().unwrap(),
         &saved.saved,
         &mut budget,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(record.previous_progress, old.progress);
@@ -631,7 +993,13 @@ fn long_audio_changed_staged_path_requires_new_choice_and_keeps_previous_pending
     drop(lease);
     let f = f.reopen();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     finish(&f, &op, &lease);
     assert!(!staged.exists());
@@ -650,8 +1018,13 @@ fn long_audio_completed_and_ancestral_reservations_need_distinct_and_remaining_c
     let old = finish(&f, &parent, &lease);
     let returned = f.storage.root().join(old.reserved_path(0));
     std::fs::write(&returned, b"COMPLETED LONG RESERVATION RETURNED").unwrap();
-    let review =
-        intent::reconfirmation::Review::capture(&f.storage, &parent, &lease, &|| false).unwrap();
+    let review = intent::reconfirmation::Review::capture(
+        &f.storage,
+        &parent,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     intent::reconfirmation::accept(
         &f.storage,
@@ -662,18 +1035,40 @@ fn long_audio_completed_and_ancestral_reservations_need_distinct_and_remaining_c
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    super::super::start(&f.storage, &op, &lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&returned, b"CHANGED AGAIN WHILE CHILD WAS UNFINISHED").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     assert!(!returned.exists());
-    let source =
-        intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
-            .unwrap();
+    let source = intent::reconfirmation::Source::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(source.paths().contains(&old.reserved_path(0)));
     drop(lease);
     assert!(!f.reopen().storage.data_write_blocked());
@@ -686,7 +1081,12 @@ fn long_audio_lookalike_links_and_directories_never_become_observation_or_remova
         f.use_long_audio_path();
         let lease = owner();
         let op = started(&f, &lease);
-        let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let old = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let path = if variant == 0 {
             f.path.with_file_name(reserved(&op, 0, 999))
         } else {
@@ -701,8 +1101,20 @@ fn long_audio_lookalike_links_and_directories_never_become_observation_or_remova
         } else {
             std::fs::create_dir(&path).unwrap();
         }
-        assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
-        assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
+        assert!(super::super::run(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(path.symlink_metadata().is_ok() && f.path.exists());
         assert_eq!(
             std::fs::read(external.path()).unwrap(),
@@ -719,8 +1131,21 @@ fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
     let lease = owner();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"OWN AUDIO CHANGED").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let unknown = f.path.with_file_name(reserved(&op, 0, 999));
     std::fs::write(&unknown, b"UNOWNED LONG RESERVATION").unwrap();
     let path = unknown
@@ -729,9 +1154,13 @@ fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
         .to_str()
         .unwrap()
         .to_owned();
-    let mut forged = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
-        .unwrap()
-        .plan;
+    let mut forged = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
+    .plan;
     {
         let snapshot = &mut forged;
         let mut entry = snapshot
@@ -763,8 +1192,19 @@ fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
         .is_err());
     }
     rewrite_audit(&f, &op, |_, snapshot| *snapshot = forged);
-    assert!(Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).is_err());
-    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(unknown.exists() && f.path.exists());
     drop(lease);
     assert!(f.reopen().storage.data_write_blocked());
@@ -784,15 +1224,46 @@ fn two_reconfirmations_keep_processed_cursor_and_all_historical_reservations() {
         })
         .is_err()
     );
-    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let old = Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(old.progress.next, 1);
     assert!(!f.path.exists() && other.exists());
     std::fs::write(&other, b"FIRST CHANGE").unwrap();
-    let first = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    let first_saved = accept(&f.storage, &first, false, &lease, &|| false).unwrap();
+    let first = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let first_saved = accept(
+        &f.storage,
+        &first,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&other, b"SECOND CHANGE").unwrap();
-    let second = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    let saved = accept(&f.storage, &second, false, &lease, &|| false).unwrap();
+    let second = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let saved = accept(
+        &f.storage,
+        &second,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(saved.audits.len(), 2);
     assert!(saved
         .historical_paths
@@ -803,7 +1274,7 @@ fn two_reconfirmations_keep_processed_cursor_and_all_historical_reservations() {
         first_saved.progress.confirmation.as_ref().unwrap(),
         &old.saved,
         &mut budget,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert_eq!(record.previous_progress.next, 1);
@@ -817,12 +1288,37 @@ fn cleanup_reappearance_can_be_reviewed_before_availability_commit() {
     let f = Fixture::new();
     let lease = owner();
     let op = started(&f, &lease);
-    super::super::run(&f.storage, &op, &lease, &|| false).unwrap();
+    super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&f.path, b"RETURNED BEFORE COMPLETION").unwrap();
-    assert!(super::super::completion::finish(&f.storage, &op, &lease, &|| false).is_err());
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    assert!(super::super::completion::finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(review.receipt.progress.phase, Phase::AudioFilesRemoved);
-    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     assert!(!f.path.exists());
 }
@@ -832,7 +1328,13 @@ fn committed_consent_wins_late_cancellation_but_cold_resume_requires_saved_polic
     let lease = owner();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"NEW").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let cancelled = Cell::new(false);
     let saved = accept_inner(
         &f.storage,
@@ -852,13 +1354,23 @@ fn committed_consent_wins_late_cancellation_but_cold_resume_requires_saved_polic
     drop(lease);
     let f = f.reopen();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(
-        !Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
-            .unwrap()
-            .policy
-            .include_unregistered_audio
+        !Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .policy
+        .include_unregistered_audio
     );
     finish(&f, &op, &lease);
     drop(lease);
@@ -871,8 +1383,21 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
         let lease = owner();
         let op = started(&f, &lease);
         std::fs::write(&f.path, b"NEW").unwrap();
-        let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-        let saved = accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+        let review = Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        let saved = accept(
+            &f.storage,
+            &review,
+            false,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let audit = saved.audits[0].clone();
         if orphan {
             let db = f.storage.connection.lock().unwrap();
@@ -881,7 +1406,7 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
                 &db,
                 &saved,
                 &lease,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             let copied = uuid::Uuid::new_v4().to_string();
@@ -906,7 +1431,13 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
             assert!(f.storage.data_write_blocked() && f.path.exists());
         } else {
             f.corrupt_operation_header(&audit, "{}");
-            assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+            assert!(super::super::run(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
             let f = f.reopen();
             assert!(crate::storage::deletion::startup::contains(
                 &f.storage.connection.lock().unwrap(),
@@ -932,12 +1463,30 @@ fn renewed_completion_is_a_typed_source_for_a_new_distinct_audio_operation() {
     let lease = owner();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"NEW").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     std::fs::write(&f.path, b"RETURNED AFTER COMPLETION").unwrap();
-    let review =
-        intent::reconfirmation::Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let review = intent::reconfirmation::Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let new_op = uuid::Uuid::new_v4().to_string();
     intent::reconfirmation::accept(
         &f.storage,
@@ -948,10 +1497,16 @@ fn renewed_completion_is_a_typed_source_for_a_new_distinct_audio_operation() {
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    super::super::start(&f.storage, &new_op, &lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &new_op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &new_op, &lease);
     assert_ne!(op, new_op);
     drop(lease);
@@ -963,27 +1518,62 @@ fn renewed_audit_remains_valid_after_whole_meeting_fk_detachment() {
     let lease = owner();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"NEW").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    let saved = accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let saved = accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     finish(&f, &op, &lease);
     drop(lease);
     use crate::storage::deletion::{completion, files, intent as meeting_intent, removal};
-    let census = files::Census::capture(&f.storage, &f.meeting, &|| false).unwrap();
+    let census = files::Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let reviewed = removal::Reviewed::confirm(&census, true).unwrap();
     let original = meeting_intent::prepare(
         &f.storage,
         &uuid::Uuid::new_v4().to_string(),
         &census,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let mut files = removal::start(&f.storage, &original, &reviewed, &|| false).unwrap();
-    removal::run(&f.storage, &mut files, &|| false).unwrap();
-    let mut rows = completion::start(&f.storage, &files, &|| false).unwrap();
-    completion::run(&f.storage, &mut rows, &|| false).unwrap();
+    let mut files = removal::start(
+        &f.storage,
+        &original,
+        &reviewed,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    removal::run(
+        &f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut rows =
+        completion::start(&f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    completion::run(&f.storage, &mut rows, &crate::test_support::never_cancelled).unwrap();
     let f = f.reopen();
     assert!(!f.storage.data_write_blocked());
-    assert!(Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).is_err());
+    assert!(Receipt::load(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     crate::storage::deletion::audio::intent::removal::inspect_audit_member(
         &f.storage.connection.lock().unwrap(),
         &f.storage.managed_anchor,
@@ -1002,13 +1592,13 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
         std::fs::write(&f.path, b"NEW").unwrap();
         if future {
             let db = f.storage.connection.lock().unwrap();
-            let saved = Receipt::load(&db, &op, &|| false).unwrap();
+            let saved = Receipt::load(&db, &op, &crate::test_support::never_cancelled).unwrap();
             let _writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
                 &db,
                 &saved,
                 &lease,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             db.execute(
@@ -1020,8 +1610,21 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
             let collision = f.path.with_file_name(reserved(&op, 1, 0));
             std::fs::write(collision, b"KEEP COLLISION").unwrap();
         }
-        let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-        assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+        let review = Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        assert!(accept(
+            &f.storage,
+            &review,
+            false,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(f.operation_count(), 1);
         assert!(f.path.is_file() && f.storage.data_write_blocked());
     }
@@ -1032,13 +1635,32 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
     let lease = owner();
     let op = started(&f, &lease);
     std::fs::write(&f.path, b"NEW").unwrap();
-    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-    let saved = accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let saved = accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let db = f.storage.connection.lock().unwrap();
     let reference = saved.progress.confirmation.as_ref().unwrap();
     let mut budget = saved.saved.header.snapshot_bytes;
-    let (mut record, _, _) =
-        read_record(&db, reference, &saved.saved, &mut budget, &|| false).unwrap();
+    let (mut record, _, _) = read_record(
+        &db,
+        reference,
+        &saved.saved,
+        &mut budget,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     record.snapshot_bytes = intent::MAX_BYTES;
     record.chunk_count = intent::MAX_CHUNKS;
     let json = record.encode().unwrap();
@@ -1069,11 +1691,19 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
     )
     .unwrap();
     f.storage.deletion_fence.arm(&db).unwrap();
-    assert!(Receipt::load(&db, &op, &|| false)
-        .unwrap_err()
-        .contains("証拠合計が容量上限"));
+    assert!(
+        Receipt::load(&db, &op, &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("証拠合計が容量上限")
+    );
     drop(db);
-    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.is_file() && f.storage.data_write_blocked());
 }
 #[test]
@@ -1084,8 +1714,21 @@ fn thirty_two_real_generations_are_valid_and_the_next_review_is_not_admitted() {
     let original = fixed(&f, &op);
     for generation in 1..=MAX_GENERATIONS {
         std::fs::write(&f.path, format!("CHANGED GENERATION {generation}")).unwrap();
-        let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-        let saved = accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+        let review = Review::capture(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        let saved = accept(
+            &f.storage,
+            &review,
+            false,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(
             saved.progress.confirmation.as_ref().unwrap().generation,
             generation
@@ -1093,7 +1736,13 @@ fn thirty_two_real_generations_are_valid_and_the_next_review_is_not_admitted() {
         assert_eq!(saved.audits.len(), generation as usize);
         assert_eq!(fixed(&f, &op), original);
     }
-    assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(f.operation_count(), 33);
     finish(&f, &op, &lease);
     assert!(!f.path.exists());
@@ -1136,7 +1785,12 @@ fn real_sigkill_before_and_after_commit_cold_reads_only_the_committed_generation
         f.storage = Storage::open(root).unwrap();
         assert!(f.storage.data_write_blocked() && f.path.exists());
         assert_eq!(fixed(&f, &op), original);
-        let saved = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let saved = Receipt::load(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(
             saved.audits.len(),
             usize::from(boundary == "audioRenewalCommitted")
@@ -1150,12 +1804,37 @@ fn real_sigkill_before_and_after_commit_cold_reads_only_the_committed_generation
             }
         );
         let lease = AnalysisController::default()
-            .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &f.storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         if boundary == "beforeAudioRenewalCommit" {
-            assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
-            let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
-            accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+            assert!(super::super::run(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled
+            )
+            .is_err());
+            let review = Review::capture(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            accept(
+                &f.storage,
+                &review,
+                false,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         }
         finish(&f, &op, &lease);
         assert_eq!(fixed(&f, &op), original);
@@ -1190,17 +1869,36 @@ fn audio_renewal_crash_child() {
     ));
     let storage = Storage::open(root).unwrap();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&storage, &operation, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &storage,
+            &operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    let review = Review::capture(&storage, &operation, &lease, &|| false).unwrap();
-    accept_inner(&storage, &review, false, &lease, &|| false, &|event| {
-        if event == boundary {
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
+    let review = Review::capture(
+        &storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    accept_inner(
+        &storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+        &|event| {
+            if event == boundary {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                panic!("SIGKILL failed");
             }
-            panic!("SIGKILL failed");
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("boundary not reached");
 }

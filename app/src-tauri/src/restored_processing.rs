@@ -134,8 +134,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().canonicalize().unwrap().join("result.json");
         write_new(&path, b"{\"ok\":true}").unwrap();
-        assert_eq!(read_local(&path, 64, &|| false).unwrap(), b"{\"ok\":true}");
-        assert!(read_local(&path, 2, &|| false).is_err());
+        assert_eq!(
+            read_local(&path, 64, &crate::test_support::never_cancelled).unwrap(),
+            b"{\"ok\":true}"
+        );
+        assert!(read_local(&path, 2, &crate::test_support::never_cancelled).is_err());
         assert!(read_local(&path, 64, &|| true).is_err());
         assert!(write_new(&path, b"changed").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{\"ok\":true}");
@@ -143,7 +146,7 @@ mod tests {
         {
             let link = path.parent().unwrap().join("link.json");
             std::os::unix::fs::symlink(&path, &link).unwrap();
-            assert!(read_local(&link, 64, &|| false).is_err());
+            assert!(read_local(&link, 64, &crate::test_support::never_cancelled).is_err());
         }
     }
 }

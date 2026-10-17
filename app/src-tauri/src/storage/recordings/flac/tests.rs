@@ -346,9 +346,9 @@ fn remove_reviewed_audio(storage: &Storage, meeting: &str) -> usize {
     };
     let controller = crate::analysis_worker::AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let census = Census::capture(storage, meeting, &|| false).unwrap();
+    let census = Census::capture(storage, meeting, &crate::test_support::never_cancelled).unwrap();
     let count = census
         .preview(&Uuid::new_v4().to_string())
         .unwrap()
@@ -363,18 +363,32 @@ fn remove_reviewed_audio(storage: &Storage, meeting: &str) -> usize {
             retain_unclassified: true,
         },
         &lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    intent::removal::start(storage, &operation, &lease, &|| false).unwrap();
-    assert!(intent::removal::run(storage, &operation, &lease, &|| false)
-        .unwrap()
-        .files_removed());
-    assert!(
-        intent::removal::completion::finish(storage, &operation, &lease, &|| false)
-            .unwrap()
-            .completed()
-    );
+    intent::removal::start(
+        storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(intent::removal::run(
+        storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .files_removed());
+    assert!(intent::removal::completion::finish(
+        storage,
+        &operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     count
 }
 
@@ -394,20 +408,24 @@ fn native_raw_audio_final_flac_additive_restore_preserves_pcm_clocks_gaps_and_ma
     let archive_path = output.path().join("normal-final-flac.monbackup");
     let receipt = fixture
         .storage
-        .create_backup_archive(&archive_path, &|| false)
+        .create_backup_archive(&archive_path, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(receipt.asset_count, 5); // Four final FLACs and the manifest, not raw PCM.
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().to_owned()).unwrap();
     let existing = target.create_meeting("保持する既存会議").unwrap().id;
     let selection = target
-        .prepare_additive_restore(&archive_path, &|| false, &|_| {})
+        .prepare_additive_restore(
+            &archive_path,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     let done = selection
         .publish(
             &target,
             &selection.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -516,10 +534,12 @@ fn native_raw_audio_completed_relocation_image_keeps_raw_final_flac_and_all_side
         .unwrap();
     let image = fixture
         .storage
-        .prepare_relocation_snapshot(&|| false)
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
         .unwrap();
-    image.verify(&|| false).unwrap();
-    image.verify_source(&|| false).unwrap();
+    image.verify(&crate::test_support::never_cancelled).unwrap();
+    image
+        .verify_source(&crate::test_support::never_cancelled)
+        .unwrap();
     for entry in image
         .manifest()
         .entries
@@ -853,8 +873,15 @@ fn valid_foreign_flac_with_rewritten_checkpoint_hash_is_not_adopted_as_recorded_
     .unwrap();
     let mut destination = directory.required(&format!("{id}.flac"), true).unwrap();
     destination.set_len(0).unwrap();
-    let forged =
-        encode_segment_file(&mut source, 0, 2000, &mut destination, &|| false, &|_| {}).unwrap();
+    let forged = encode_segment_file(
+        &mut source,
+        0,
+        2000,
+        &mut destination,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
     let name = format!(".{id}.json");
     let (bytes, stamp) = directory.read_json(&name).unwrap().unwrap();
     let mut receipt: Checkpoint = serde_json::from_slice(&bytes).unwrap();
@@ -1464,20 +1491,20 @@ fn partial_startup_backup_additive_restore_and_audio_deletion_keep_history_not_a
     let archive = output.path().join("partial.monbackup");
     let receipt = fixture
         .storage
-        .create_backup_archive(&archive, &|| false)
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(receipt.asset_count, 3);
     let root = tempfile::tempdir().unwrap();
     let target = Storage::open(root.path().to_owned()).unwrap();
     let existing = target.create_meeting("保持する会議").unwrap().id;
     let selection = target
-        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let done = selection
         .publish(
             &target,
             &selection.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -1795,6 +1822,7 @@ fn assert_partial_whole_meeting_playback(storage: &Storage, meeting: &str, durat
     ] {
         let audio = storage
             .prepare_meeting_audio(&MeetingPlaybackRequest {
+                start_reference: None,
                 meeting_id: meeting.into(),
                 mode,
             })
@@ -1919,6 +1947,7 @@ fn partial_recovery_commit_marker_cannot_authorize_unmarked_track_or_invent_know
     assert!(fixture
         .storage
         .prepare_meeting_audio(&MeetingPlaybackRequest {
+            start_reference: None,
             meeting_id: result.meeting_id.clone(),
             mode: MeetingPlaybackMode::Mic
         })

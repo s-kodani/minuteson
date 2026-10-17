@@ -232,7 +232,14 @@ mod tests {
         let samples: Vec<f32> = (0..48_000).flat_map(|_| [0.25, 0.75]).collect();
         let mut source = audio(48_000, 2, &samples);
         assert_eq!(
-            write_window(&mut source, 0, 48_000, &path, &|| false).unwrap(),
+            write_window(
+                &mut source,
+                0,
+                48_000,
+                &path,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap(),
             16_000
         );
         let bytes = std::fs::read(&path).unwrap();
@@ -241,13 +248,20 @@ mod tests {
         for sample in bytes[44..].chunks_exact(2) {
             assert_eq!(i16::from_le_bytes(sample.try_into().unwrap()), 16384);
         }
-        assert!(write_window(&mut source, 0, 48_000, &path, &|| false).is_err());
+        assert!(write_window(
+            &mut source,
+            0,
+            48_000,
+            &path,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(write_window(
             &mut source,
             0,
             48_001,
             &directory.path().join("bad.wav"),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
         assert!(write_window(
@@ -297,7 +311,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("input.wav");
         assert_eq!(
-            write_window(&mut source, 80, 160, &path, &|| false).unwrap(),
+            write_window(
+                &mut source,
+                80,
+                160,
+                &path,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap(),
             160
         );
         let bytes = std::fs::read(path).unwrap();
@@ -323,13 +344,25 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let window = directory.path().join("window.wav");
             let track = directory.path().join("track.wav");
-            let count = write_window(&mut source, 0, frames, &window, &|| false).unwrap();
-            assert_eq!(write_track(&mut source, &track, &|| false).unwrap(), count);
+            let count = write_window(
+                &mut source,
+                0,
+                frames,
+                &window,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            assert_eq!(
+                write_track(&mut source, &track, &crate::test_support::never_cancelled).unwrap(),
+                count
+            );
             assert_eq!(
                 std::fs::read(&track).unwrap(),
                 std::fs::read(window).unwrap()
             );
-            assert!(write_track(&mut source, &track, &|| false).is_err());
+            assert!(
+                write_track(&mut source, &track, &crate::test_support::never_cancelled).is_err()
+            );
         }
     }
 
@@ -346,11 +379,14 @@ mod tests {
             0,
             frames,
             &directory.path().join("window.wav"),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
         let path = directory.path().join("track.wav");
-        assert_eq!(write_track(&mut source, &path, &|| false).unwrap(), frames);
+        assert_eq!(
+            write_track(&mut source, &path, &crate::test_support::never_cancelled).unwrap(),
+            frames
+        );
         let bytes = std::fs::read(path).unwrap();
         assert_eq!(bytes.len(), 44 + frames as usize * 2);
         for (i, sample) in bytes[44..].chunks_exact(2).enumerate() {

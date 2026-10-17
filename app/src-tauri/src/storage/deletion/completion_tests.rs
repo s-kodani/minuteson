@@ -21,7 +21,12 @@ fn at_database_phase(f: &Fixture, phase: Phase) -> Receipt {
             );
             assert_eq!(receipt.progress.database_phase, Phase::RowsDeleted);
         }
-        Phase::Finished => run(&f.f.storage, &mut receipt, &|| false).unwrap(),
+        Phase::Finished => run(
+            &f.f.storage,
+            &mut receipt,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
     }
     receipt
 }
@@ -38,7 +43,9 @@ fn compound_current_census_keeps_original_scope_and_never_resurrects_deleted_ass
             db.query_row("SELECT target_manifest_json,target_hash,consent_at,progress_json,updated_at FROM maintenance_operations WHERE id=?1", params![f.operation], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?))).unwrap()
         };
         let before = saved();
-        let census = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+        let census = receipt
+            .review_census(&f.f.storage, &db, &crate::test_support::never_cancelled)
+            .unwrap();
         assert_eq!(census.scope(), receipt.confirmed.scope());
         assert_eq!(
             census.manifest().database_scope_hash,
@@ -64,7 +71,9 @@ fn compound_current_census_keeps_original_scope_and_never_resurrects_deleted_ass
         );
         removal::Reviewed::confirm(&census, true).unwrap();
         assert_eq!(saved(), before);
-        assert!(receipt.verify_live(&f.f.storage, &db, &|| false).is_err());
+        assert!(receipt
+            .verify_live(&f.f.storage, &db, &crate::test_support::never_cancelled)
+            .is_err());
         drop(db);
         assert_eq!(std::fs::read(&f.file).unwrap(), b"REAPPEARED CURRENT AUDIO");
         assert_eq!(
@@ -89,9 +98,13 @@ fn compound_current_census_rejects_changed_rows_and_recreated_deleted_meeting_wi
         );
         let db = f.f.storage.connection.lock().unwrap();
         {
-            let _writer =
-                super::super::fence::write_completion(&f.f.storage, &db, &receipt, &|| false)
-                    .unwrap();
+            let _writer = super::super::fence::write_completion(
+                &f.f.storage,
+                &db,
+                &receipt,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             if committed {
                 db.execute("INSERT INTO meetings(id,title,lifecycle,source_type,created_at,updated_at,lock_version) VALUES(?1,'RECREATED','draft','recording',0,0,0)", params![f.f.meeting]).unwrap();
             } else {
@@ -102,7 +115,9 @@ fn compound_current_census_rejects_changed_rows_and_recreated_deleted_meeting_wi
                 .unwrap();
             }
         }
-        assert!(receipt.review_census(&f.f.storage, &db, &|| false).is_err());
+        assert!(receipt
+            .review_census(&f.f.storage, &db, &crate::test_support::never_cancelled)
+            .is_err());
         let title: String = db
             .query_row(
                 "SELECT title FROM meetings WHERE id=?1",
@@ -149,7 +164,8 @@ fn compound_current_census_retains_reserved_root_and_external_symlink_without_fo
             path
         };
         let db = f.f.storage.connection.lock().unwrap();
-        let census = receipt.review_census(&f.f.storage, &db, &|| false);
+        let census =
+            receipt.review_census(&f.f.storage, &db, &crate::test_support::never_cancelled);
         if reserved {
             let census = census.unwrap();
             assert!(census
@@ -226,12 +242,18 @@ fn compound_current_census_cancellation_is_read_only_and_changed_second_inventor
     std::fs::write(&f.file, b"FIRST CURRENT CONTENT").unwrap();
     let db = f.f.storage.connection.lock().unwrap();
     assert!(receipt.review_census(&f.f.storage, &db, &|| true).is_err());
-    let first = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+    let first = receipt
+        .review_census(&f.f.storage, &db, &crate::test_support::never_cancelled)
+        .unwrap();
     std::fs::write(&f.file, b"SECOND CURRENT CONTENT").unwrap();
-    let second = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+    let second = receipt
+        .review_census(&f.f.storage, &db, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_ne!(first.manifest(), second.manifest());
     assert_eq!(first.scope(), second.scope());
-    assert!(receipt.verify_live(&f.f.storage, &db, &|| false).is_err());
+    assert!(receipt
+        .verify_live(&f.f.storage, &db, &crate::test_support::never_cancelled)
+        .is_err());
     drop(db);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"SECOND CURRENT CONTENT");
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -251,21 +273,25 @@ fn compound_current_census_after_cold_row_commit_keeps_absent_rows_and_original_
     drop(f.f.storage);
     let storage = Storage::open(path).unwrap();
     assert!(storage.data_write_blocked());
-    let receipt = read(&storage, &operation, &|| false).unwrap();
+    let receipt = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
     original
         .confirmed
         .matches_saved(&receipt.confirmed)
         .unwrap();
     assert_eq!(original.progress, receipt.progress);
     let db = storage.connection.lock().unwrap();
-    let census = receipt.review_census(&storage, &db, &|| false).unwrap();
+    let census = receipt
+        .review_census(&storage, &db, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(census
         .manifest()
         .entries
         .iter()
         .filter(|e| !e.directory)
         .all(|e| e.registered.is_none()));
-    assert!(receipt.verify_live(&storage, &db, &|| false).is_err());
+    assert!(receipt
+        .verify_live(&storage, &db, &crate::test_support::never_cancelled)
+        .is_err());
     drop(db);
     assert!(storage.require_data_writable().is_err());
     assert!(storage.get_meeting(&meeting).unwrap().is_none());
@@ -310,10 +336,16 @@ fn assert_matching_copy_is_not_a_writer(f: &Fixture, receipt: &Receipt) {
         .run_to_completion(32, std::time::Duration::from_millis(1), None)
         .unwrap();
     copied.execute_batch("PRAGMA foreign_keys=ON").unwrap();
-    receipt.verify_saved(&copied, &|| false).unwrap();
-    assert!(
-        super::super::fence::write_completion(&f.f.storage, &copied, receipt, &|| false).is_err()
-    );
+    receipt
+        .verify_saved(&copied, &crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(super::super::fence::write_completion(
+        &f.f.storage,
+        &copied,
+        receipt,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 struct Fixture {
@@ -379,15 +411,42 @@ impl Fixture {
         }
     }
     fn files(&self) -> removal::Receipt {
-        let c = Census::capture(&self.f.storage, &self.f.meeting, &|| false).unwrap();
+        let c = Census::capture(
+            &self.f.storage,
+            &self.f.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let review = removal::Reviewed::confirm(&c, false).unwrap();
-        let p = intent::prepare(&self.f.storage, &self.operation, &c, &|| false).unwrap();
-        removal::start(&self.f.storage, &p, &review, &|| false).unwrap()
+        let p = intent::prepare(
+            &self.f.storage,
+            &self.operation,
+            &c,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        removal::start(
+            &self.f.storage,
+            &p,
+            &review,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn begin(&self) -> Receipt {
         let mut files = self.files();
-        removal::run(&self.f.storage, &mut files, &|| false).unwrap();
-        start(&self.f.storage, &files, &|| false).unwrap()
+        removal::run(
+            &self.f.storage,
+            &mut files,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        start(
+            &self.f.storage,
+            &files,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn unaffected(&self) {
         assert_eq!(
@@ -436,7 +495,7 @@ impl Fixture {
 fn compound_deletion_requires_completed_file_phase_and_keeps_all_rows_when_refused() {
     let f = Fixture::new();
     let files = f.files();
-    assert!(start(&f.f.storage, &files, &|| false).is_err());
+    assert!(start(&f.f.storage, &files, &crate::test_support::never_cancelled).is_err());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"DELETE TARGET AUDIO");
 }
@@ -447,9 +506,11 @@ fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_obs
     let mut r = f.begin();
     let db = f.f.storage.connection.lock().unwrap();
     let original:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
-    let other = database::Scope::capture(&db, &f.f.other, "", &|| false).unwrap();
+    let other =
+        database::Scope::capture(&db, &f.f.other, "", &crate::test_support::never_cancelled)
+            .unwrap();
     drop(db);
-    run(&f.f.storage, &mut r, &|| false).unwrap();
+    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
     assert!(r.completed());
     assert!(!f.file.exists());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -459,7 +520,8 @@ fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_obs
     assert!(!original.0.contains(&f.marker));
     assert_eq!(
         other,
-        database::Scope::capture(&db, &f.f.other, "", &|| false).unwrap()
+        database::Scope::capture(&db, &f.f.other, "", &crate::test_support::never_cancelled)
+            .unwrap()
     );
     assert_eq!(
         db.query_row("PRAGMA secure_delete", [], |r| r.get::<_, i64>(0))
@@ -477,8 +539,18 @@ fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_obs
         }
     }
     assert_free_pages_zero(&std::fs::read(f.f.storage.root().join("meetings.sqlite3")).unwrap());
-    let mut replay = read(&f.f.storage, &f.operation, &|| false).unwrap();
-    run(&f.f.storage, &mut replay, &|| false).unwrap();
+    let mut replay = read(
+        &f.f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    run(
+        &f.f.storage,
+        &mut replay,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.f.storage.data_write_blocked());
     f.unaffected();
 }
@@ -497,10 +569,20 @@ fn compound_deletion_cancel_before_row_commit_rolls_back_rows_and_progress_toget
         assert_eq!(r.progress.database_phase, Phase::RowsPending);
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
         assert!(!f.file.exists());
-        let mut saved = read(&f.f.storage, &f.operation, &|| false).unwrap();
+        let mut saved = read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(saved.progress.database_phase, Phase::RowsPending);
         assert!(f.f.storage.data_write_blocked());
-        run(&f.f.storage, &mut saved, &|| false).unwrap();
+        run(
+            &f.f.storage,
+            &mut saved,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         f.unaffected();
     }
 }
@@ -525,9 +607,19 @@ fn compound_deletion_after_row_commit_cancel_retains_partial_state_and_finishes_
             .is_err()
         );
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
-        let mut saved = read(&f.f.storage, &f.operation, &|| false).unwrap();
+        let mut saved = read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_ne!(saved.progress.database_phase, Phase::RowsPending);
-        run(&f.f.storage, &mut saved, &|| false).unwrap();
+        run(
+            &f.f.storage,
+            &mut saved,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(saved.completed());
         f.unaffected();
     }
@@ -539,8 +631,13 @@ fn compound_deletion_refuses_changed_database_scope_and_recreated_file_tree_befo
         let mut r = f.begin();
         if change == "scope" {
             let db = f.f.storage.connection.lock().unwrap();
-            let _writer =
-                super::super::fence::write_completion(&f.f.storage, &db, &r, &|| false).unwrap();
+            let _writer = super::super::fence::write_completion(
+                &f.f.storage,
+                &db,
+                &r,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             db.execute(
                 "UPDATE meetings SET title='KEEP CHANGED' WHERE id=?1",
                 params![f.f.meeting],
@@ -550,7 +647,7 @@ fn compound_deletion_refuses_changed_database_scope_and_recreated_file_tree_befo
             std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
             std::fs::write(&f.file, b"KEEP RECREATED").unwrap();
         }
-        assert!(run(&f.f.storage, &mut r, &|| false).is_err());
+        assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
         assert_eq!(r.progress.database_phase, Phase::RowsPending);
     }
@@ -561,8 +658,13 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
         let f = Fixture::new();
         let r = f.begin();
         let db = f.f.storage.connection.lock().unwrap();
-        let _writer =
-            super::super::fence::write_completion(&f.f.storage, &db, &r, &|| false).unwrap();
+        let _writer = super::super::fence::write_completion(
+            &f.f.storage,
+            &db,
+            &r,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let mut json = serde_json::to_value(&r.progress).unwrap();
         match change {
             "version" => json["version"] = 2.into(),
@@ -578,7 +680,12 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
         .unwrap();
         drop(_writer);
         drop(db);
-        assert!(read(&f.f.storage, &f.operation, &|| false).is_err());
+        assert!(read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     }
 }
@@ -586,10 +693,10 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
 fn compound_deletion_finished_retry_refuses_recreated_target_without_erasing_it() {
     let f = Fixture::new();
     let mut r = f.begin();
-    run(&f.f.storage, &mut r, &|| false).unwrap();
+    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
     std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
     std::fs::write(&f.file, b"KEEP NEW CONTENT").unwrap();
-    assert!(run(&f.f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP NEW CONTENT");
     f.unaffected();
 }
@@ -599,12 +706,17 @@ fn compound_deletion_start_acknowledgement_replays_the_same_progress_without_rec
 ) {
     let f = Fixture::new();
     let mut files = f.files();
-    removal::run(&f.f.storage, &mut files, &|| false).unwrap();
-    let mut r = start(&f.f.storage, &files, &|| false).unwrap();
-    let replay = start(&f.f.storage, &files, &|| false).unwrap();
+    removal::run(
+        &f.f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut r = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(r.progress, replay.progress);
-    run(&f.f.storage, &mut r, &|| false).unwrap();
-    let replay = start(&f.f.storage, &files, &|| false).unwrap();
+    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
+    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     assert!(replay.completed());
     f.unaffected();
 }
@@ -614,15 +726,21 @@ fn compound_deletion_foreign_connection_and_other_pending_operation_cannot_mutat
     let mut r = f.begin();
     assert_matching_copy_is_not_a_writer(&f, &r);
     let db = f.f.storage.connection.lock().unwrap();
-    let _writer = super::super::fence::write_completion(&f.f.storage, &db, &r, &|| false).unwrap();
+    let _writer = super::super::fence::write_completion(
+        &f.f.storage,
+        &db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(),f.f.other,"0".repeat(64)]).unwrap();
     drop(_writer);
     drop(db);
-    assert!(run(&f.f.storage, &mut r, &|| false).is_err());
+    assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     let f = Fixture::new();
     let mut r = f.begin();
-    run(&f.f.storage, &mut r, &|| false).unwrap();
+    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
     assert_matching_copy_is_not_a_writer(&f, &r);
 }
 #[test]
@@ -633,14 +751,21 @@ fn compound_deletion_blocked_wal_checkpoint_retains_cleanup_then_retries_after_r
     let mut statement = db.prepare("SELECT id FROM model_packages").unwrap();
     let mut rows = statement.query([]).unwrap();
     assert!(rows.next().unwrap().is_some());
-    assert!(run_locked(&f.f.storage, &db, &mut r, &|| false, &|_| {}).is_err());
+    assert!(run_locked(
+        &f.f.storage,
+        &db,
+        &mut r,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .is_err());
     assert_eq!(r.progress.database_phase, Phase::RowsDeleted);
     drop(rows);
     drop(statement);
     drop(db);
     assert!(f.f.storage.data_write_blocked());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
-    run(&f.f.storage, &mut r, &|| false).unwrap();
+    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
     assert!(r.completed());
     f.unaffected();
 }
@@ -650,8 +775,13 @@ fn compound_deletion_rejects_claimed_row_completion_when_actual_rows_still_exist
         let f = Fixture::new();
         let r = f.begin();
         let db = f.f.storage.connection.lock().unwrap();
-        let _writer =
-            super::super::fence::write_completion(&f.f.storage, &db, &r, &|| false).unwrap();
+        let _writer = super::super::fence::write_completion(
+            &f.f.storage,
+            &db,
+            &r,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let mut progress = r.progress.clone();
         progress.database_phase = phase;
         let state = if progress.database_phase == Phase::Finished {
@@ -662,8 +792,18 @@ fn compound_deletion_rejects_claimed_row_completion_when_actual_rows_still_exist
         db.execute("UPDATE maintenance_operations SET state=?2,meeting_id=NULL,progress_json=?3 WHERE id=?1",params![f.operation,state,progress.encode().unwrap()]).unwrap();
         drop(_writer);
         drop(db);
-        let mut forged = read(&f.f.storage, &f.operation, &|| false).unwrap();
-        assert!(run(&f.f.storage, &mut forged, &|| false).is_err());
+        let mut forged = read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        assert!(run(
+            &f.f.storage,
+            &mut forged,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     }
 }
@@ -675,13 +815,13 @@ fn compound_deletion_unknown_at_row_commit_boundary_rolls_back_rows_and_keeps_ne
         &f.f.storage.connection.lock().unwrap(),
         &f.f.meeting,
         &f.operation,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert!(run_inner(
         &f.f.storage,
         &mut r,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|point| if point == "beforeRowsCommit" {
             std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
             std::fs::write(&f.file, b"KEEP NEW CONTENT BEFORE ROW COMMIT").unwrap();
@@ -695,16 +835,20 @@ fn compound_deletion_unknown_at_row_commit_boundary_rolls_back_rows_and_keeps_ne
             &f.f.storage.connection.lock().unwrap(),
             &f.f.meeting,
             &f.operation,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
     );
     assert_eq!(r.progress.database_phase, Phase::RowsPending);
     assert_eq!(
-        read(&f.f.storage, &f.operation, &|| false)
-            .unwrap()
-            .progress
-            .database_phase,
+        read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .progress
+        .database_phase,
         Phase::RowsPending
     );
     assert_eq!(
@@ -729,7 +873,7 @@ fn compound_deletion_reappearing_unknown_after_row_commit_is_kept_and_never_ackn
         assert!(run_inner(
             &f.f.storage,
             &mut r,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|point| if point == phase {
                 std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
                 std::fs::write(&f.file, b"KEEP NEW UNKNOWN").unwrap();
@@ -738,8 +882,18 @@ fn compound_deletion_reappearing_unknown_after_row_commit_is_kept_and_never_ackn
         .is_err());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
         assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP NEW UNKNOWN");
-        let mut saved = read(&f.f.storage, &f.operation, &|| false).unwrap();
-        assert!(run(&f.f.storage, &mut saved, &|| false).is_err());
+        let mut saved = read(
+            &f.f.storage,
+            &f.operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        assert!(run(
+            &f.f.storage,
+            &mut saved,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP NEW UNKNOWN");
         f.unaffected();
     }
@@ -754,7 +908,7 @@ fn compound_deletion_database_replacement_stops_before_commit_or_next_purge_oper
         assert!(run_inner(
             &f.f.storage,
             &mut r,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|point| if point == phase {
                 std::fs::rename(&path, &kept).unwrap();
                 std::fs::write(&path, b"KEEP REPLACEMENT WITHOUT SQLITE INIT").unwrap();
@@ -784,25 +938,30 @@ fn compound_deletion_checkpoint_child_fixture() {
         tempfile::tempdir_in(&base).unwrap(),
     );
     let mut r = f.begin();
-    run_inner(&f.f.storage, &mut r, &|| false, &|point| {
-        if point == phase {
-            let receipt = serde_json::to_vec(&(
-                f.f.storage.root(),
-                &f.operation,
-                &f.f.meeting,
-                &f.f.other,
-                &f.other_file,
-                f.outside.path().join("export.md"),
-                &f.marker,
-            ))
-            .unwrap();
-            std::fs::write(base.join("ready.tmp"), receipt).unwrap();
-            std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+    run_inner(
+        &f.f.storage,
+        &mut r,
+        &crate::test_support::never_cancelled,
+        &|point| {
+            if point == phase {
+                let receipt = serde_json::to_vec(&(
+                    f.f.storage.root(),
+                    &f.operation,
+                    &f.f.meeting,
+                    &f.f.other,
+                    &f.other_file,
+                    f.outside.path().join("export.md"),
+                    &f.marker,
+                ))
+                .unwrap();
+                std::fs::write(base.join("ready.tmp"), receipt).unwrap();
+                std::fs::rename(base.join("ready.tmp"), base.join("ready.json")).unwrap();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("compound checkpoint not reached");
 }
@@ -861,13 +1020,19 @@ fn compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_a
             .unwrap()
             .starts_with(base.path().canonicalize().unwrap()));
         let storage = Storage::open(root.clone()).unwrap();
-        let mut receipt = read(&storage, &operation, &|| false).unwrap();
+        let mut receipt =
+            read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         let pending_at_open = !receipt.completed();
         assert_eq!(
             storage.get_meeting(&meeting).unwrap().is_some(),
             matches!(phase, "rowsErased" | "beforeRowsCommit")
         );
-        run(&storage, &mut receipt, &|| false).unwrap();
+        run(
+            &storage,
+            &mut receipt,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(receipt.completed());
         assert!(storage.get_meeting(&meeting).unwrap().is_none());
         assert!(storage.get_meeting(&other).unwrap().is_some());
@@ -890,8 +1055,14 @@ fn compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_a
         drop(storage);
         let storage = Storage::open(root).unwrap();
         assert!(!storage.data_write_blocked());
-        let mut receipt = read(&storage, &operation, &|| false).unwrap();
-        run(&storage, &mut receipt, &|| false).unwrap();
+        let mut receipt =
+            read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
+        run(
+            &storage,
+            &mut receipt,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(receipt.completed());
     }
 }

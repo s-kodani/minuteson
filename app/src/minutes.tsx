@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IconButton } from "./action-icon";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
@@ -13,10 +13,11 @@ import { MarkdownSaveController, markdownStamp, type MarkdownDocument } from "./
 import { confirmMarkdownLeave } from "./minutes-markdown-leave";
 import { MarkdownExportController, type MarkdownExportRecord, type MarkdownExportStatus } from "./minutes-markdown-export";
 import "./minutes-markdown-editor.css";
-import { markdownIntervalRequest, validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
-import { useTranscriptAudio } from "./transcript-audio";
+import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
+import { useMeetingAudio } from "./meeting-audio";
 import { topOpenModal } from "./modal-state";
 import type { ConfirmationOptions } from "./confirmation-state";
+import { minutesAdmissions } from "./minutes-generation-admission";
 
 type Job = AnalysisJob & { operationId: string };
 
@@ -37,7 +38,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const exportOpener = useRef<HTMLButtonElement|null>(null), returnExportFocus = useRef(false);
   const [source, setSource] = useState<VersionState | null>(null);
   const [audioSummary, setAudioSummary] = useState<MeetingAudioSummary | null>(null);
-  const audio = useTranscriptAudio(meetingId, locked, { scope: "interval", label: "議事録の再生区間" });
+  const audio = useMeetingAudio(meetingId);
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -45,7 +46,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [actionsHost, setActionsHost] = useState<HTMLDivElement | null>(null);
   const alive = useRef(true), running = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
-  const startOperations = useRef(new Map<string, string>());
+  const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
+  const preparing = admissions.some(item => item.meetingId === meetingId && item.pending);
   // Navigation/quit sets a main-window lock while awaiting this decision.
   // That lock must not disable the confirmation which resolves it.
   const confirm = useActionConfirmation(false);
@@ -105,7 +107,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
             setExternalChange(!controller.observe(saved));
             setSource(analysis); setSettings(preferences.payload); setJobs(allJobs); setLoaded(true);
             setAudioSummary(summary);
-            for (const [key, operation] of startOperations.current) if (allJobs.some(j => j.operationId === operation)) startOperations.current.delete(key);
+            minutesAdmissions.observe(meetingId, allJobs.map(job => job.operationId));
           } catch (cause) { if (!disposed) setError(String(cause)); }
         } while (again && !disposed);
       })().finally(() => { inFlight = null; });
@@ -129,10 +131,12 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     catch (cause) { if (alive.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); }
     finally { running.current = false; if (alive.current) setBusy(false); }
   };
-  const start = () => run(() => withConfirmedEdits(withSavedEdits, async () => {
+  const start = () => run(async () => {
+    let submit: (() => Promise<void>) | undefined;
+    await withConfirmedEdits(withSavedEdits, async () => {
     const saved = await read();
     if (!controller.observe(saved)) throw Error("保存済みの議事録が変更されています。入力を保持し、再読込から確認してください。");
-    const enqueue = async () => {
+    const prepare = async () => {
       const preferences = await invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences");
       // The global model picker writes the standard slot. Read it again at
       // admission (after replacement confirmation), never a meeting override.
@@ -145,18 +149,26 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
         expectedMeetingLockVersion: analysis.meetingLockVersion, expectedDraft: analysis.draft },
         ...engine, profile: "standard" };
       const expected = markdownStamp(saved), key = JSON.stringify({ base, expected });
-      const operationId = startOperations.current.get(key) ?? crypto.randomUUID();
-      startOperations.current.set(key, operationId);
-      await invoke("start_markdown_minutes_generation", { request: { ...base, input: { ...base.input, operationId } }, expected });
-      startOperations.current.delete(key); await refreshRef.current();
+      // Freeze the confirmed inputs while the edit barrier is held. The IPC
+      // starts only after that barrier and the confirmation dialog are released.
+      submit = () => minutesAdmissions.start(meetingId, meetingTitle, key, async operationId => {
+        await invoke("start_markdown_minutes_generation", { request: { ...base, input: { ...base.input, operationId } }, expected });
+      });
     };
     if (saved) await confirm({ title: "議事録を再生成", target: `会議「${meetingTitle}」`,
       message: "生成に成功すると保存済みの議事録を置き換えます。手動編集も置き換わり、旧版は保存しません。失敗した場合は現在の本文を保持します。",
       confirmLabel: "議事録を再生成", validate: () => alive.current && !controller.snapshot().dirty
-        && controller.snapshot().document?.operationId === saved.operationId, action: enqueue,
+        && controller.snapshot().document?.operationId === saved.operationId, action: prepare,
       onError: cause => { if (alive.current) setError(String(cause)); } });
-    else await enqueue();
-  }));
+    else await prepare();
+    });
+    if (submit) {
+      // The main-window admission owner also reports failures after this
+      // meeting view unmounts; do not emit a second local error toast.
+      try { await submit(); } catch { return; }
+      if (alive.current) await refreshRef.current();
+    }
+  });
   const exportMarkdown = (opener:HTMLButtonElement) => run(async () => {
     exportOpener.current = opener;
     // WebKit mouse activation otherwise leaves focus on the containing main.
@@ -190,7 +202,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const pending = generationJobs.some(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state));
   const disabled = locked || busy || !loaded || !isTauri();
   const engine = settings?.standard;
-  const cannotGenerate = disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine);
+  const cannotGenerate = disabled || recordingActive || pending || preparing || !source?.currentId || !engine || !minutesConfigured(engine);
   return <section className="analysis-card minutes-card plain-minutes-card" aria-label="議事録">
     <div className="card-head"><h2>議事録</h2><div className="plain-minutes-primary-actions">
       <div ref={setActionsHost} className="plain-minutes-editor-actions-host" />
@@ -208,8 +220,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     {!loaded && <p className="minutes-empty-state">議事録を読み込んでいます。</p>}
     {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost} inputRef={editorInput}
       durationUs={audioSummary?.modes.length ? audioSummary.durationUs : null}
-      onPlay={interval => { if (audioSummary) void audio.start("", `markdown:${interval.startUs}:${interval.endUs}`, markdownIntervalRequest(meetingId, audioSummary, interval)); }} />}
-    {audio.controls}
+      onPlay={audio?.canPlay && !audio.locked && audioSummary ? interval => { void audio.playReference({ kind:"interval", ...interval, expectedDurationUs:audioSummary.durationUs }); } : undefined} />}
     <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。入力を保持しています" />
     <IssueNotice scope={meetingId} type="plain-minutes-export-error" label="議事録の書き出し" message={exportState.error} toastMessage="議事録の書き出し結果を確認してください" />
     <ToastNotice scope={meetingId} type="plain-minutes-export" eventId={exportedEvent} message={exportedEvent ? "議事録をMarkdownで保存しました" : ""} />

@@ -1,3 +1,5 @@
+import {projectTranscript} from "../src/transcript-state";
+import {groupTranscriptRows,transcriptFragmentSeparator} from "../src/transcript-groups";
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
 import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
@@ -17,7 +19,7 @@ const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingMod
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
   showToast: input => toasts.show(input),
   notifications: () => toasts.getSnapshot().map(({key,id,message})=>({key,id,message})),
-  notificationJobs: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
+  notificationJobs: [], notificationWarnings: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
   lostRetryResponse: false,
   transcriptHistory: [],
   diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
@@ -27,19 +29,24 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
     { id: "job-failed", kind: "transcription", state: "failed", completedUnits: 2, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "b".repeat(64), retryOfJobId: null, attempt: 1 }],
   currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
 };
+const promptDefaults = {schemaVersion:1,extractPrompt:"既定の作成用プロンプト",mergePrompt:"既定の統合用プロンプト"};
+fixture.promptPreferences = {id:"minutes_prompt_preferences",lockVersion:0,payload:structuredClone(promptDefaults),defaults:promptDefaults};
+fixture.failPromptSave = false;
+fixture.losePromptResponse = false;
 const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
 fixture.recovery = recoveryFixture({ drafts: () => [fixture.draft,...Object.values(fixture.archivedDrafts)],current: () => fixture.draft });
 const recoveredSeed = sessionStorage.getItem("MON_TRANSCRIPT_RECOVERY_FIXTURE");
 if(recoveredSeed) { sessionStorage.removeItem("MON_TRANSCRIPT_RECOVERY_FIXTURE"); const seed = JSON.parse(recoveredSeed); Object.assign(fixture,seed.fixture); fixture.recovery.records = seed.records; if(seed.utterances) analysis.utterances = seed.utterances; }
 fixture.crashSeed = () => sessionStorage.setItem("MON_TRANSCRIPT_RECOVERY_FIXTURE",JSON.stringify({ fixture: { draft: fixture.draft,archivedDrafts: fixture.archivedDrafts,currentId: fixture.currentId,previousId: fixture.previousId },records: fixture.recovery.records,utterances: analysis.utterances }));
 const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
-  versions: [analysis, fixture.candidate].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
+  versions: [analysis, fixture.candidate,...(fixture.consolidationHistory??[])].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
 const switchDraft = (nextId) => {
   if (fixture.draft) fixture.archivedDrafts[fixture.draft.baseAnalysisId] = structuredClone(fixture.draft);
   fixture.draft = fixture.archivedDrafts[nextId] ? structuredClone(fixture.archivedDrafts[nextId]) : null;
 };
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.emitMinutesRuntime = payload => emit("minutes-runtime-progress", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.emitUiPreferences = () => emit("ui-preferences-changed",fixture.uiPreferences?.lockVersion??0);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
@@ -56,7 +63,7 @@ fixture.regenerationTarget = async () => {
   return {target:fixture.currentId?{analysisId:fixture.currentId,contentHash:currentAnalysis().contentHash,draft:draft?{id:draft.id,contentHash:draft.contentHash,lockVersion:draft.lockVersion}:null}:null,flow:fixture.analysisFlow?{id:fixture.analysisFlow.id,lockVersion:fixture.analysisFlow.lockVersion}:null};
 };
 fixture.finishRegeneration = async () => {
-  fixture.analysisFlow={...fixture.analysisFlow,stage:"diarization",lockVersion:3,readyToPublish:true,
+  fixture.analysisFlow={...fixture.analysisFlow,stage:"diarization",lockVersion:3,readyToPublish:true,replacementReady:true,
     transcriptionJob:{id:"regen-asr",kind:"transcription",state:"succeeded"},diarizationJob:{id:"regen-diar",kind:"diarization",state:"succeeded",outputAnalysisId:"regenerated-analysis"}};
   await emit("analysis-job-changed",{});
 };
@@ -120,7 +127,7 @@ mockIPC(async (command, args) => {
     if (fixture.notificationProofMode === "delay") await new Promise(resolve => { fixture.releaseNotificationProof = resolve; });
     const job = fixture.notificationJobs.find(job => job.id === args.jobId);
     if (!job || job.state !== "succeeded") throw Error("模擬通知対象の成功ジョブがありません");
-    return { job: { ...structuredClone(job), ...(fixture.notificationProofMode === "foreign" ? { meetingId: meetings[1].id } : {}) }, contentHash: "c".repeat(64), publicationState: fixture.notificationProofMode === "hidden" ? "internal_snapshot" : fixture.notificationPublication ?? "candidate" };
+    return { job: { ...structuredClone(job), ...(fixture.notificationProofMode === "foreign" ? { meetingId: meetings[1].id } : {}) }, contentHash: "c".repeat(64), publicationState: fixture.notificationProofMode === "hidden" ? "internal_snapshot" : fixture.notificationPublication ?? "candidate", warnings: structuredClone(fixture.notificationWarnings) };
   }
   if (command === "get_ui_preferences" && fixture.uiReadFail) throw Error("模擬表示設定読込失敗");
   if (command === "get_ui_preferences" && fixture.uiPreferences) return structuredClone(fixture.uiPreferences);
@@ -165,16 +172,16 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.analysisFlow);
     }
     case "publish_regenerated_transcription": {
-      if(fixture.analysisFlow?.id!==args.flowId||!fixture.analysisFlow.readyToPublish)throw Error("模擬再生成完了対象不一致");
+      if(fixture.analysisFlow?.id!==args.flowId||fixture.analysisFlow.lockVersion!==args.expectedLockVersion||!fixture.analysisFlow.replacementReady)throw Error("模擬再生成完了対象不一致");
       const target=(await fixture.regenerationTarget()).target;
-      if(JSON.stringify(target)!==JSON.stringify(fixture.regenerationRequest.expected.target)){
-        fixture.analysisFlow={...fixture.analysisFlow,stage:"attention",readyToPublish:false,errorMessage:"再生成の開始後に文字起こしが編集されました。現在の修正を保持しています。"};
-        await emit("analysis-flow-changed",{});throw Error(fixture.analysisFlow.errorMessage);
+      if(args.confirmedTarget && JSON.stringify(target)!==JSON.stringify(args.confirmedTarget)) throw Error("確認後に文字起こしが編集されました。置き換えの確認を開き直してください。");
+      if(!args.confirmedTarget && JSON.stringify(target)!==JSON.stringify(fixture.regenerationRequest.expected.target)){
+        return {status:"confirmationRequired",flow:structuredClone(fixture.analysisFlow),target,meetingTitle:meetings[0].title};
       }
       fixture.candidate={...structuredClone(analysis),id:"regenerated-analysis",contentHash:"d".repeat(64),utterances:analysis.utterances.map(u=>({...u,effectiveText:"再生成された本文"}))};
       fixture.currentId=fixture.candidate.id;fixture.draft=null;fixture.candidateVisible=false;
-      fixture.analysisFlow={...fixture.analysisFlow,stage:"review",lockVersion:4,readyToPublish:false};
-      await emit("analysis-flow-changed",{});return structuredClone(fixture.analysisFlow);
+      fixture.analysisFlow={...fixture.analysisFlow,stage:"review",lockVersion:4,readyToPublish:false,replacementReady:false,errorMessage:null};
+      await emit("analysis-flow-changed",{});return {status:"published",flow:structuredClone(fixture.analysisFlow)};
     }
     case "get_diarization_tracks": if (fixture.failTracks) throw Error("模擬トラック読込失敗"); return fixture.trackPlan??{ tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
     case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
@@ -293,9 +300,34 @@ mockIPC(async (command, args) => {
       if (fixture.lostPublicationResponse) { fixture.lostPublicationResponse = false; throw Error("模擬復元応答喪失"); }
       return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
+    case "consolidate_transcript": {
+      const request=args.request,base=currentAnalysis(),draft=fixture.draft;
+      const receipt=fixture.consolidationReceipts?.[request.operationId];
+      if(receipt){
+        if(JSON.stringify(receipt.request)!==JSON.stringify(request)||fixture.currentId!==receipt.analysis.id||draft)throw Error("統合の確認対象が変更されています");
+        return {analysis:structuredClone(receipt.analysis),draft:null,changed:true};
+      }
+      if(fixture.failConsolidation)throw Error("合成の発言統合失敗");
+      if(request.meetingId!==base.meetingId||request.analysisId!==base.id||request.expectedContentHash!==base.contentHash||JSON.stringify(request.expectedDraft)!==JSON.stringify(draft?{id:draft.id,lockVersion:draft.lockVersion}:null))throw Error("統合前の内容が変更されています");
+      const view=projectTranscript(structuredClone(base),draft?.payload??null),groups=groupTranscriptRows(view.utterances,view.utterances);
+      if(!groups.some(g=>g.length>1))return {analysis:structuredClone(base),draft:structuredClone(draft),changed:false};
+      const hidden=new Set(draft?.payload.speaker_merges?.map(m=>m.source_id)??[]);
+      const active=view.speakers.filter(s=>!hidden.has(s.id));
+      const before=structuredClone(base),speakerIds=new Map(active.map(s=>[s.id,crypto.randomUUID()]));
+      const text=(group,key)=>group.reduce((text,row)=>text+transcriptFragmentSeparator(text,row[key])+row[key],"");
+      const next={...view,id:crypto.randomUUID(),contentHash:'f'.repeat(64),speakers:active.map(s=>({...s,id:speakerIds.get(s.id)})),utterances:groups.map(g=>({...g[0],id:crypto.randomUUID(),sourceUtteranceId:undefined,endUs:g.at(-1).endUs,recognizedText:text(g,'recognizedText'),effectiveText:text(g,'effectiveText'),speakerIds:g[0].speakerIds.map(id=>speakerIds.get(id))}))};
+      (fixture.consolidationHistory??=[]).push(before);
+      if(draft)fixture.archivedDrafts[before.id]=structuredClone(draft);
+      Object.assign(analysis,next);fixture.currentId=next.id;fixture.previousId=before.id;fixture.draft=null;meetings[0].lockVersion++;
+      (fixture.consolidationReceipts??={})[request.operationId]={request:structuredClone(request),analysis:structuredClone(next)};
+      if(fixture.loseConsolidationReply){fixture.loseConsolidationReply=false;throw Error("合成の発言統合応答喪失");}
+      return {analysis:structuredClone(next),draft:null,changed:true};
+    }
     case "prepare_meeting_playback": {
       const entry=preparationEntry(args);
       const data=fixture.meetingAudio,mode=args.request.mode;
+      if(args.request.startReference && fixture.holdPlayback) await new Promise((resolve,reject)=>{fixture.releasePlayback=resolve;if(entry)entry.reject=reject;});
+      if(args.request.startReference && fixture.failPlayback) throw Error("音声ファイルのハッシュが保存時と一致しません");
       const info={token:crypto.randomUUID(),sampleRate:48000,channels:1,totalFrames:Math.ceil(data.endUs*48000/1000000),startUs:0,endUs:data.endUs,trackKind:mode,alignment:"unverified"};
       const gaps=data.gaps.filter(gap=>mode==="both"? ["mic","system"].includes(gap.trackKind):gap.trackKind===mode)
         .map(gap=>({...structuredClone(gap),startFrame:Math.floor(gap.startUs*48000/1e6),endFrame:Math.ceil(gap.endUs*48000/1e6)}))
@@ -328,6 +360,15 @@ mockIPC(async (command, args) => {
     }
     case "close_playback": if(fixture.preparation.failClose)throw Error("模擬音声解放の失敗");delete fixture.meetingAudio.sessions[args.token]; return null;
     case "finish_main_close": return null;
+    case "get_minutes_prompt_preferences": return structuredClone(fixture.promptPreferences);
+    case "save_minutes_prompt_preferences": {
+      if (fixture.failPromptSave) throw Error("模擬プロンプト保存失敗");
+      if (fixture.promptPreferences.lockVersion !== args.expectedLockVersion) throw Error("プロンプト設定の競合");
+      fixture.promptPreferences.payload = structuredClone(args.payload);
+      fixture.promptPreferences.lockVersion++;
+      if (fixture.losePromptResponse) { fixture.losePromptResponse=false; throw Error("模擬プロンプト応答欠落"); }
+      return structuredClone(fixture.promptPreferences);
+    }
     case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
     case "get_minutes_versions": return { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
     case "get_current_minutes": return null;

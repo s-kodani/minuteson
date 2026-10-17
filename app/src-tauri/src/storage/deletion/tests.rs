@@ -98,7 +98,13 @@ fn edit_recovery_is_in_confirmed_deletion_scope_and_new_input_invalidates_old_co
         assert_ne!(before.hash().unwrap(), after.hash().unwrap());
         let operation = f.consent(&before);
         let db = f.storage.connection.lock().unwrap();
-        assert!(erase_confirmed_rows(&db, &operation, &before, &|| false).is_err());
+        assert!(erase_confirmed_rows(
+            &db,
+            &operation,
+            &before,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(
             db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
                 .get::<_, i64>(
@@ -145,8 +151,20 @@ fn edit_recovery_confirmed_full_deletion_purges_text_and_names_preserving_unrela
         let scope = f.scope();
         let operation = f.consent(&scope);
         let db = f.storage.connection.lock().unwrap();
-        erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
-        finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+        erase_confirmed_rows(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        finish_database_purge(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(
             db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
                 .get::<_, i64>(
@@ -246,7 +264,7 @@ impl Fixture {
             &self.storage.connection.lock().unwrap(),
             &self.meeting,
             "",
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
     }
@@ -300,7 +318,13 @@ fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_mo
     let db = f.storage.connection.lock().unwrap();
     let total: u64 = scope.tables.iter().map(|t| t.rows).sum();
     assert_eq!(
-        erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap(),
+        erase_confirmed_rows(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         total
     );
     assert_eq!(count(&db, "meetings"), 1);
@@ -385,14 +409,32 @@ fn deletion_changed_title_draft_rows_and_provenance_refuse_confirmed_manifest_be
             }
             _ => unreachable!(),
         }
-        let actual = Scope::capture(&db, &f.meeting, &operation, &|| false).unwrap();
+        let actual = Scope::capture(
+            &db,
+            &f.meeting,
+            &operation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(
-            erase_confirmed_rows(&db, &operation, &scope, &|| false).is_err(),
+            erase_confirmed_rows(
+                &db,
+                &operation,
+                &scope,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{change}"
         );
         assert_eq!(
             actual,
-            Scope::capture(&db, &f.meeting, &operation, &|| false).unwrap()
+            Scope::capture(
+                &db,
+                &f.meeting,
+                &operation,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
         );
         assert!(db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
@@ -406,9 +448,13 @@ fn deletion_missing_consent_wrong_operation_and_changed_durable_hash_remove_no_r
     let scope = f.scope();
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    assert!(
-        erase_confirmed_rows(&db, &uuid::Uuid::new_v4().to_string(), &scope, &|| false).is_err()
-    );
+    assert!(erase_confirmed_rows(
+        &db,
+        &uuid::Uuid::new_v4().to_string(),
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
     db.execute(
@@ -418,7 +464,13 @@ fn deletion_missing_consent_wrong_operation_and_changed_durable_hash_remove_no_r
     .unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
-    assert!(erase_confirmed_rows(&db, &operation, &scope, &|| false).is_err());
+    assert!(erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
     db.execute(
@@ -428,7 +480,13 @@ fn deletion_missing_consent_wrong_operation_and_changed_durable_hash_remove_no_r
     .unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
-    assert!(erase_confirmed_rows(&db, &operation, &scope, &|| false).is_err());
+    assert!(erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(count(&db, "minutes_markdown"), 1);
     assert_eq!(count(&db, "meetings"), 2);
 }
@@ -448,7 +506,13 @@ fn deletion_cancel_after_partial_sql_work_rolls_back_rows_heads_and_receipt_and_
     assert!(erase_confirmed_rows(&db, &operation, &scope, &cancel).is_err());
     assert!(cancelled.get());
     assert_eq!(
-        Scope::capture(&db, &f.meeting, &operation, &|| false).unwrap(),
+        Scope::capture(
+            &db,
+            &f.meeting,
+            &operation,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         scope
     );
     assert!(db
@@ -469,7 +533,13 @@ fn deletion_cancel_after_partial_sql_work_rolls_back_rows_heads_and_receipt_and_
         .unwrap(),
         "cleanup"
     );
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -491,7 +561,13 @@ fn deletion_unwinding_after_partial_sql_work_cannot_leave_trigger_protection_dis
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
         .unwrap());
     assert_eq!(
-        Scope::capture(&db, &f.meeting, &operation, &|| false).unwrap(),
+        Scope::capture(
+            &db,
+            &f.meeting,
+            &operation,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         scope
     );
     assert!(db
@@ -514,9 +590,11 @@ fn deletion_scope_refuses_cross_meeting_retry_references_without_widening_its_ta
     db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,retry_of_job_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) SELECT 'other-retry',?1,kind,'cancelled','other-operation',id,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,0 FROM processing_jobs LIMIT 1",params![f.other]).unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("対象外"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("対象外")
+    );
     assert_eq!(count(&db, "meetings"), 2);
 }
 
@@ -525,9 +603,11 @@ fn deletion_scope_refuses_foreign_schema_missing_guards_and_active_work() {
     let f = Fixture::new();
     let db = f.storage.connection.lock().unwrap();
     db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active',?1,'transcription','running','active',?2,'{}','{}',?2,1,1)",params![f.meeting,"a".repeat(64)]).unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("停止完了"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("停止完了")
+    );
     db.execute(
         "UPDATE processing_jobs SET state='cancelled' WHERE state='running'",
         [],
@@ -535,9 +615,11 @@ fn deletion_scope_refuses_foreign_schema_missing_guards_and_active_work() {
     .unwrap();
     db.execute_batch("DROP TRIGGER minutes_committed_no_delete")
         .unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("保護制約"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("保護制約")
+    );
 }
 
 fn operation_state(db: &Connection, operation: &str) -> String {
@@ -569,22 +651,37 @@ fn deletion_database_purge_removes_unique_text_from_database_and_wal_without_rem
         .unwrap()
         .windows(marker.len())
         .any(|w| w == marker.as_bytes()));
-    let other = Scope::capture(&db, &f.other, "", &|| false).unwrap();
+    let other = Scope::capture(&db, &f.other, "", &crate::test_support::never_cancelled).unwrap();
     drop(db);
     let scope = f.scope();
     let operation = f.consent(&scope);
     let original = std::fs::metadata(&path).unwrap();
     let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(operation_state(&db, &operation), "cleanup");
     assert_eq!(
         db.query_row("PRAGMA secure_delete", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         1
     );
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(operation_state(&db, &operation), "completed");
-    assert_eq!(Scope::capture(&db, &f.other, "", &|| false).unwrap(), other);
+    assert_eq!(
+        Scope::capture(&db, &f.other, "", &crate::test_support::never_cancelled).unwrap(),
+        other
+    );
     assert_eq!(count(&db, "vocabulary_entries"), 1);
     assert_eq!(count(&db, "model_packages"), 1);
     let after = std::fs::metadata(&path).unwrap();
@@ -606,7 +703,13 @@ fn deletion_database_purge_removes_unique_text_from_database_and_wal_without_rem
     }
     // Lost completion acknowledgement does not repeat row removal or invent
     // another operation, and its checkpoint is safe to retry.
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(count(&db, "meetings"), 1);
 }
 
@@ -619,7 +722,7 @@ fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
         &f.storage.connection.lock().unwrap(),
         &operation,
         &scope,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let Fixture {
@@ -642,7 +745,13 @@ fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
         .unwrap(),
         0
     );
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(operation_state(&db, &operation), "completed");
     drop(_writer);
     drop(db);
@@ -655,7 +764,13 @@ fn deletion_database_purge_cancel_after_vacuum_keeps_cleanup_until_successful_re
     let scope = f.scope();
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let checks = Cell::new(0);
     assert!(finish_database_purge(&db, &operation, &scope, &|| {
         checks.set(checks.get() + 1);
@@ -668,7 +783,13 @@ fn deletion_database_purge_cancel_after_vacuum_keeps_cleanup_until_successful_re
     assert!(db
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
         .unwrap());
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(operation_state(&db, &operation), "completed");
 }
 
@@ -678,29 +799,62 @@ fn deletion_database_purge_requires_exact_consent_row_phase_and_no_recreated_mee
     let scope = f.scope();
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    assert!(finish_database_purge(&db, &operation, &scope, &|| false).is_err());
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut wrong = scope.clone();
     wrong.maintenance_hash = "f".repeat(64);
-    assert!(finish_database_purge(&db, &operation, &wrong, &|| false).is_err());
-    assert!(
-        finish_database_purge(&db, &uuid::Uuid::new_v4().to_string(), &scope, &|| false).is_err()
-    );
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &wrong,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(finish_database_purge(
+        &db,
+        &uuid::Uuid::new_v4().to_string(),
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     db.execute(
         "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
         params![operation],
     )
     .unwrap();
-    assert!(finish_database_purge(&db, &operation, &scope, &|| false).is_err());
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     db.execute(
         "UPDATE maintenance_operations SET progress_json='{\"databaseDeleted\":true}' WHERE id=?1",
         params![operation],
     )
     .unwrap();
     db.execute("INSERT INTO meetings(id,title,lifecycle,source_type,created_at,updated_at) VALUES(?1,'別の会議に再利用','draft','recording',1,1)",params![f.meeting]).unwrap();
-    assert!(finish_database_purge(&db, &operation, &scope, &|| false)
-        .unwrap_err()
-        .contains("完了記録"));
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err()
+    .contains("完了記録"));
     assert_eq!(operation_state(&db, &operation), "cleanup");
     assert_eq!(count(&db, "meetings"), 2);
 }
@@ -711,28 +865,34 @@ fn deletion_scope_checks_migration_history_and_disabled_guards_before_mutation()
     let db = f.storage.connection.lock().unwrap();
     db.execute_batch("CREATE TEMP TABLE meetings(id TEXT)")
         .unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("一時オブジェクト"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("一時オブジェクト")
+    );
     db.execute_batch("DROP TABLE temp.meetings").unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("参照保護"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("参照保護")
+    );
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
     db.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false)
-        .unwrap_err()
-        .contains("参照保護"));
+    assert!(
+        Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
+            .unwrap_err()
+            .contains("参照保護")
+    );
     db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
     db.execute(
         "UPDATE schema_migrations SET checksum=?1 WHERE version=1",
         params!["f".repeat(64)],
     )
     .unwrap();
-    assert!(Scope::capture(&db, &f.meeting, "", &|| false).is_err());
+    assert!(Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled).is_err());
     assert_eq!(count(&db, "meetings"), 2);
 }
 
@@ -757,9 +917,21 @@ fn deletion_dependency_order_removes_retry_leaves_before_parents() {
     );
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(count(&db, "processing_jobs"), 0);
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -768,17 +940,35 @@ fn deletion_database_purge_checkpoint_failure_does_not_complete_cleanup() {
     let scope = f.scope();
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut statement = db.prepare("SELECT * FROM meetings").unwrap();
     let mut rows = statement.query([]).unwrap();
     assert!(rows.next().unwrap().is_some());
     // A live read prevents truncating this connection's WAL. Production
     // admission flushes users before the purge; this verifies fail-closed.
-    assert!(finish_database_purge(&db, &operation, &scope, &|| false).is_err());
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(operation_state(&db, &operation), "cleanup");
     drop(rows);
     drop(statement);
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(operation_state(&db, &operation), "completed");
 }
 
@@ -788,18 +978,35 @@ fn deletion_database_purge_refuses_active_other_meeting_work_before_completion()
     let scope = f.scope();
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+    erase_confirmed_rows(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('other-active',?1,'transcription','running','other-active',?2,'{}','{}',?2,1,1)", params![f.other,"a".repeat(64)]).unwrap();
-    assert!(finish_database_purge(&db, &operation, &scope, &|| false)
-        .unwrap_err()
-        .contains("停止完了"));
+    assert!(finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err()
+    .contains("停止完了"));
     assert_eq!(operation_state(&db, &operation), "cleanup");
     db.execute(
         "UPDATE processing_jobs SET state='cancelled' WHERE id='other-active'",
         [],
     )
     .unwrap();
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+    finish_database_purge(
+        &db,
+        &operation,
+        &scope,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(count(&db, "processing_jobs"), 1);
 }
 
@@ -895,10 +1102,22 @@ fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_r
             .unwrap());
         if phase == "partial_rows" {
             assert_eq!(
-                Scope::capture(&db, &scope.meeting_id, &operation, &|| false).unwrap(),
+                Scope::capture(
+                    &db,
+                    &scope.meeting_id,
+                    &operation,
+                    &crate::test_support::never_cancelled
+                )
+                .unwrap(),
                 scope
             );
-            erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+            erase_confirmed_rows(
+                &db,
+                &operation,
+                &scope,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         } else {
             assert_eq!(count(&db, "meetings"), 1);
             assert_eq!(
@@ -910,7 +1129,13 @@ fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_r
                 }
             );
         }
-        finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+        finish_database_purge(
+            &db,
+            &operation,
+            &scope,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(operation_state(&db, &operation), "completed");
         assert_eq!(count(&db, "meetings"), 1);
         drop(_writer);

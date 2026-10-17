@@ -30,7 +30,12 @@ fn deletion_database_reconfirmation_controller_replays_inspection_requires_unkno
         .begin_request(request.clone())
         .unwrap()
         .unwrap();
-    let reviewed = f.finish(work, &started, &|| false, &|_| {});
+    let reviewed = f.finish(
+        work,
+        &started,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     let p = reviewed.deletion_preview.as_ref().unwrap();
     assert_eq!(p.phase, "database_reconfirmation");
     assert!(!p.row_phase_committed && !p.keep_allowed);
@@ -118,7 +123,12 @@ fn deletion_reconfirmation_review_is_read_only_replayable_and_needs_new_unknown_
         .begin_request(request.clone())
         .unwrap()
         .is_none());
-    let reviewed = f.finish(work, &started, &|| false, &|_| {});
+    let reviewed = f.finish(
+        work,
+        &started,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     let p = reviewed.deletion_preview.as_ref().unwrap();
     assert_eq!(p.phase, "reconfirmation");
     assert!(p.execute_allowed && !p.keep_allowed && !p.reconfirmation_allowed);
@@ -199,7 +209,7 @@ fn deletion_reconfirmation_inspection_without_real_lease_or_with_cancel_is_not_a
                 }
             })
         } else {
-            let done = work.run(&f.storage, &|| false, &|_| {});
+            let done = work.run(&f.storage, &crate::test_support::never_cancelled, &|_| {});
             f.controller
                 .finish(started.token.as_deref().unwrap(), done)
                 .unwrap()
@@ -287,11 +297,17 @@ fn deletion_reconfirmation_cold_resume_recovers_only_durable_consent_and_require
         let controller = DataController::default();
         let (started, _, previous) = controller.begin(Kind::Deletion).unwrap();
         let lease = analysis
-            .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &operation,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         let done = Work::Deletion(operation.clone(), true, previous).run_admitted(
             &storage,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
             Some(&lease),
         );
@@ -328,9 +344,20 @@ fn deletion_reconfirmation_cold_resume_recovers_only_durable_consent_and_require
             };
             let (work, _, started) = controller.begin_request(request.clone()).unwrap().unwrap();
             let lease = analysis
-                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .begin_deletion_maintenance(
+                    &storage,
+                    &operation,
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap();
-            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            let done = work.run_admitted(
+                &storage,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+                Some(&lease),
+            );
             snapshot = controller
                 .finish(started.token.as_deref().unwrap(), done)
                 .unwrap();
@@ -384,22 +411,46 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
         assert!(storage.data_write_blocked());
         let analysis = AnalysisController::default();
         assert!(analysis
-            .begin_deletion_maintenance(&storage, "wrong", false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                "wrong",
+                false,
+                false,
+                &crate::test_support::never_cancelled
+            )
             .is_err());
         assert!(analysis
-            .begin_deletion_maintenance(&storage, &operation, true, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &operation,
+                true,
+                false,
+                &crate::test_support::never_cancelled
+            )
             .is_err());
         assert!(analysis
-            .begin_deletion_maintenance(&storage, &operation, false, true, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &operation,
+                false,
+                true,
+                &crate::test_support::never_cancelled
+            )
             .is_err());
         let controller = DataController::default();
         let (started, _, previous) = controller.begin(Kind::Deletion).unwrap();
         let lease = analysis
-            .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &operation,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         let reviewed = Work::Deletion(operation.clone(), true, previous).run_admitted(
             &storage,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
             Some(&lease),
         );
@@ -424,9 +475,20 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             };
             let (work, _, started) = controller.begin_request(request.clone()).unwrap().unwrap();
             let lease = analysis
-                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .begin_deletion_maintenance(
+                    &storage,
+                    &operation,
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap();
-            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            let done = work.run_admitted(
+                &storage,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+                Some(&lease),
+            );
             snapshot = controller
                 .finish(started.token.as_deref().unwrap(), done)
                 .unwrap();
@@ -437,7 +499,7 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             drop(lease);
             if storage.restart_required() {
                 assert!(analysis
-                    .begin_data_maintenance(false, false, &|| false)
+                    .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                     .is_err());
             }
             assert!(storage.require_data_writable().is_err());
@@ -456,11 +518,17 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             let next = DataController::default();
             let (started, _, previous) = next.begin(Kind::Deletion).unwrap();
             let lease = analysis
-                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .begin_deletion_maintenance(
+                    &storage,
+                    &operation,
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap();
             let reviewed = Work::Deletion(operation.clone(), true, previous).run_admitted(
                 &storage,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
                 Some(&lease),
             );
@@ -480,9 +548,20 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             };
             let (work, _, started) = next.begin_request(req).unwrap().unwrap();
             let lease = analysis
-                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .begin_deletion_maintenance(
+                    &storage,
+                    &operation,
+                    false,
+                    false,
+                    &crate::test_support::never_cancelled,
+                )
                 .unwrap();
-            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            let done = work.run_admitted(
+                &storage,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+                Some(&lease),
+            );
             assert!(
                 next.finish(started.token.as_deref().unwrap(), done)
                     .unwrap()
@@ -492,7 +571,7 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             );
             drop(lease);
             assert!(analysis
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .is_err());
         }
         drop(storage);
@@ -538,7 +617,11 @@ impl Fixture {
     }
     fn review(&self, id: String, pending: bool) -> Snapshot {
         let (snapshot, _, previous) = self.controller.begin(Kind::Deletion).unwrap();
-        let done = Work::Deletion(id, pending, previous).run(&self.storage, &|| false, &|_| {});
+        let done = Work::Deletion(id, pending, previous).run(
+            &self.storage,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        );
         self.controller
             .finish(snapshot.token.as_deref().unwrap(), done)
             .unwrap()
@@ -555,7 +638,7 @@ impl Fixture {
     ) -> Snapshot {
         let analysis = AnalysisController::default();
         let lease = analysis
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let done = work.run_admitted(&self.storage, check, progress, Some(&lease));
         assert!(analysis.begin_export().is_err());
@@ -586,7 +669,12 @@ impl Fixture {
             .begin_request(self.request(snapshot, action))
             .unwrap()
             .unwrap();
-        self.finish(work, &started, &|| false, &|_| {})
+        self.finish(
+            work,
+            &started,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
     }
 }
 #[test]
@@ -620,9 +708,14 @@ fn deletion_controller_uses_owned_confirmation_and_replays_success_after_late_ca
         .is_none());
     let analysis = AnalysisController::default();
     let lease = analysis
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let completion = work.run_admitted(&f.storage, &|| false, &|_| {}, Some(&lease));
+    let completion = work.run_admitted(
+        &f.storage,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+        Some(&lease),
+    );
     cancel.store(true, Ordering::Release);
     let done = f
         .controller
@@ -649,7 +742,7 @@ fn deletion_controller_rejects_execution_without_actual_shared_lease_and_require
         .begin_request(f.request(&ready, Action::Publish))
         .unwrap()
         .unwrap();
-    let completion = work.run(&f.storage, &|| false, &|_| {});
+    let completion = work.run(&f.storage, &crate::test_support::never_cancelled, &|_| {});
     assert!(completion.error.is_some());
     assert!(completion.deletion.is_none());
     let failed = f
@@ -699,7 +792,7 @@ fn deletion_controller_unregistered_decision_is_separate_and_cannot_apply_to_bac
         Ok(Some(out.path().join("test.monbackup"))),
         previous,
     )
-    .run(&f.storage, &|| false, &|_| {});
+    .run(&f.storage, &crate::test_support::never_cancelled, &|_| {});
     let ready = controller
         .finish(s.token.as_deref().unwrap(), completion)
         .unwrap();
@@ -714,8 +807,11 @@ fn deletion_controller_unregistered_decision_is_separate_and_cannot_apply_to_bac
 fn deletion_controller_cancelled_review_requires_refresh_before_any_destructive_request() {
     let f = Fixture::new();
     let (s, cancel, previous) = f.controller.begin(Kind::Deletion).unwrap();
-    let completion =
-        Work::Deletion(f.id.clone(), false, previous).run(&f.storage, &|| false, &|_| {});
+    let completion = Work::Deletion(f.id.clone(), false, previous).run(
+        &f.storage,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     cancel.store(true, Ordering::Release);
     let cancelled = f
         .controller
@@ -803,11 +899,16 @@ fn deletion_controller_panic_after_file_phase_retains_progress_and_never_fabrica
         .begin_request(f.request(&ready, Action::Publish))
         .unwrap()
         .unwrap();
-    let partial = f.finish(work, &started, &|| false, &|phase| {
-        if phase == "deleting_database" {
-            panic!("simulated worker panic after file handoff")
-        }
-    });
+    let partial = f.finish(
+        work,
+        &started,
+        &crate::test_support::never_cancelled,
+        &|phase| {
+            if phase == "deleting_database" {
+                panic!("simulated worker panic after file handoff")
+            }
+        },
+    );
     assert_eq!(partial.phase, "attention");
     assert!(partial.deletion_receipt.is_none());
     assert!(!f.audio.exists());

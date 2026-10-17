@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+  <title>MON monochrome app icon</title>
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="#27272a"/>
+  <path transform="translate(7 -3)" d="M116 334V189h38v17c13-15 30-23 52-23 24 0 42 9 53 27 14-18 34-27 59-27 39 0 64 27 64 70v81h-40v-76c0-24-11-37-32-37-22 0-35 15-35 40v73h-40v-76c0-24-11-37-32-37-22 0-35 15-35 40v73z" fill="#fff"/>
+</svg>

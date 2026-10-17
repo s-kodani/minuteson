@@ -63,28 +63,38 @@ fn queued(storage: &Storage, root: &Path, partial: bool) -> (String, JobSnapshot
         job.id
     );
     if partial {
-        assert!(synthetic::process(storage, &job.id, &|| false, &|j| {
-            if j.state == "running"
-                && storage
-                    .fixed_job_input(&job.id)
-                    .unwrap()
-                    .1
-                    .as_ref()
-                    .is_some_and(|c| {
-                        c["pending"]["batches"]
-                            .as_array()
-                            .is_some_and(|b| b.len() == 1)
-                    })
-            {
-                storage.request_job_pause(&job.id, "user").unwrap();
+        assert!(synthetic::process(
+            storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|j| {
+                if j.state == "running"
+                    && storage
+                        .fixed_job_input(&job.id)
+                        .unwrap()
+                        .1
+                        .as_ref()
+                        .is_some_and(|c| {
+                            c["pending"]["batches"]
+                                .as_array()
+                                .is_some_and(|b| b.len() == 1)
+                        })
+                {
+                    storage.request_job_pause(&job.id, "user").unwrap();
+                }
             }
-        })
+        )
         .unwrap()
         .is_none());
     } else {
-        assert!(synthetic::process(storage, &job.id, &|| false, &|_| {})
-            .unwrap()
-            .is_some());
+        assert!(synthetic::process(
+            storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
+        .unwrap()
+        .is_some());
     }
     let job = storage.get_job(&job.id).unwrap();
     (meeting, job)

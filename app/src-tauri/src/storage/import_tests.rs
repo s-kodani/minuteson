@@ -89,7 +89,7 @@ pub(in crate::storage) fn pending_configured(
         0,
         64000,
         &base.join("audio.flac"),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap();
@@ -545,7 +545,7 @@ fn fake_helper(root: &Path) -> Fingerprint {
     )
     .unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
-    Fingerprint::capture(&helper, &|| false).unwrap()
+    Fingerprint::capture(&helper, &crate::test_support::never_cancelled).unwrap()
 }
 #[cfg(unix)]
 #[test]
@@ -556,9 +556,13 @@ fn import_cancellation_cleans_only_uncommitted_copy_and_conversion() {
         let helper = fake_helper(root.path());
         let original = root.path().join("source.wav");
         std::fs::write(&original, wav()).unwrap();
-        let selected =
-            audio_import::inspect(&original, &helper, s.import_scratch().unwrap(), &|| false)
-                .unwrap_or_else(|error| panic!("{phase}: {error}"));
+        let selected = audio_import::inspect(
+            &original,
+            &helper,
+            s.import_scratch().unwrap(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap_or_else(|error| panic!("{phase}: {error}"));
         let stop = Cell::new(false);
         assert!(audio_import::import(
             &s,
@@ -596,8 +600,13 @@ fn inspected_source_changes_and_duplicate_starts_never_delete_an_active_import()
     let helper = fake_helper(root.path());
     let original = root.path().join("source.wav");
     std::fs::write(&original, wav()).unwrap();
-    let selected =
-        audio_import::inspect(&original, &helper, s.import_scratch().unwrap(), &|| false).unwrap();
+    let selected = audio_import::inspect(
+        &original,
+        &helper,
+        s.import_scratch().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let (active, created) = s
         .begin_audio_import(
             "会議",
@@ -610,9 +619,16 @@ fn inspected_source_changes_and_duplicate_starts_never_delete_an_active_import()
     assert!(created);
     let directory = s.audio_import_directory(&active).unwrap();
     std::fs::write(directory.join("original.wav"), b"active copy").unwrap();
-    assert!(
-        audio_import::import(&s, selected, &helper, "会議", "same", &|| false, &|_, _| {}).is_err()
-    );
+    assert!(audio_import::import(
+        &s,
+        selected,
+        &helper,
+        "会議",
+        "same",
+        &crate::test_support::never_cancelled,
+        &|_, _| {}
+    )
+    .is_err());
     assert_eq!(s.audio_import(&active.id).unwrap().state, "copying");
     assert_eq!(
         std::fs::read(directory.join("original.wav")).unwrap(),
@@ -621,8 +637,13 @@ fn inspected_source_changes_and_duplicate_starts_never_delete_an_active_import()
     s.fail_audio_import(&active.id, "cancelled", "cancelled")
         .unwrap();
     s.cleanup_audio_import(&active.id).unwrap();
-    let selected =
-        audio_import::inspect(&original, &helper, s.import_scratch().unwrap(), &|| false).unwrap();
+    let selected = audio_import::inspect(
+        &original,
+        &helper,
+        s.import_scratch().unwrap(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&original, b"changed").unwrap();
     assert!(audio_import::import(
         &s,
@@ -630,7 +651,7 @@ fn inspected_source_changes_and_duplicate_starts_never_delete_an_active_import()
         &helper,
         "変更",
         "changed",
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_, _| {}
     )
     .is_err());
@@ -644,7 +665,7 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
     use std::process::Command;
     let helper = Fingerprint::capture(
         Path::new(&std::env::var("MON_IMPORT_HELPER").unwrap()),
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let ffmpeg = std::env::var("MON_IMPORT_FFMPEG").unwrap();
@@ -672,9 +693,13 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
             String::from_utf8_lossy(&result.stderr)
         );
         let s = Storage::open(root.path().join(format!("store-{name}"))).unwrap();
-        let selected =
-            audio_import::inspect(&source, &helper, s.import_scratch().unwrap(), &|| false)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let selected = audio_import::inspect(
+            &source,
+            &helper,
+            s.import_scratch().unwrap(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(
             selected.info.detected_format,
             if name == "aac" || name == "alac" {
@@ -692,7 +717,7 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
             &helper,
             "実復号試験",
             name,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_, _| {},
         )
         .unwrap();
@@ -719,7 +744,9 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
             .unwrap()
             .join(format!("original.{}", saved.info.detected_format));
         assert_eq!(
-            Fingerprint::capture(&original, &|| false).unwrap().sha256,
+            Fingerprint::capture(&original, &crate::test_support::never_cancelled)
+                .unwrap()
+                .sha256,
             proof.sha256
         );
     }
@@ -746,15 +773,19 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
         String::from_utf8_lossy(&result.stderr)
     );
     let s = Storage::open(root.path().join("rejected")).unwrap();
-    assert!(
-        audio_import::inspect(&video, &helper, s.import_scratch().unwrap(), &|| false).is_err()
-    );
+    assert!(audio_import::inspect(
+        &video,
+        &helper,
+        s.import_scratch().unwrap(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     std::fs::write(root.path().join("broken.wav"), b"not audio").unwrap();
     assert!(audio_import::inspect(
         &root.path().join("broken.wav"),
         &helper,
         s.import_scratch().unwrap(),
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(s.list_meetings().unwrap().is_empty());

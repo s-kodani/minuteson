@@ -52,7 +52,7 @@ fn markdown_interval_native_request_never_uses_another_mode_or_changed_duration(
     let (_dir, storage, meeting) = fixture();
     let mut r = interval(&meeting);
     let audio = storage
-        .prepare_meeting_interval_cancellable(&r, &|| false)
+        .prepare_meeting_interval_cancellable(&r, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(audio.start_us, r.start_us);
     assert_eq!(audio.end_us, r.end_us);
@@ -67,17 +67,17 @@ fn markdown_interval_native_request_never_uses_another_mode_or_changed_duration(
         r.end_us = end;
         r.expected_duration_us = duration;
         assert!(storage
-            .prepare_meeting_interval_cancellable(&r, &|| false)
+            .prepare_meeting_interval_cancellable(&r, &crate::test_support::never_cancelled)
             .is_err());
     }
     r = interval(&meeting);
     r.mode = MeetingPlaybackMode::System;
     assert!(storage
-        .prepare_meeting_interval_cancellable(&r, &|| false)
+        .prepare_meeting_interval_cancellable(&r, &crate::test_support::never_cancelled)
         .is_err());
     r = interval("other");
     assert!(storage
-        .prepare_meeting_interval_cancellable(&r, &|| false)
+        .prepare_meeting_interval_cancellable(&r, &crate::test_support::never_cancelled)
         .is_err());
 }
 
@@ -112,7 +112,7 @@ fn markdown_interval_verifies_all_managed_sources_and_honors_cancellation() {
     bytes[last] ^= 1;
     std::fs::write(file, bytes).unwrap();
     assert!(storage
-        .prepare_meeting_interval_cancellable(&r, &|| false)
+        .prepare_meeting_interval_cancellable(&r, &crate::test_support::never_cancelled)
         .is_err());
 }
 

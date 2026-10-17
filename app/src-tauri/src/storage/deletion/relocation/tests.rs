@@ -40,28 +40,52 @@ impl Fixture {
             .unwrap();
         std::fs::write(directory.join("retained.md"), b"SYNTHETIC PRIVATE TEXT").unwrap();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let operation = uuid::Uuid::new_v4().to_string();
         audio::intent::prepare(
             &storage,
             &operation,
-            &audio::Census::capture(&storage, &meeting, &|| false).unwrap(),
+            &audio::Census::capture(&storage, &meeting, &crate::test_support::never_cancelled)
+                .unwrap(),
             audio::intent::Policy {
                 include_unregistered_audio: true,
                 retain_unclassified: true,
             },
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         if completed {
-            audio::intent::removal::start(&storage, &operation, &lease, &|| false).unwrap();
-            audio::intent::removal::run(&storage, &operation, &lease, &|| false).unwrap();
-            audio::intent::removal::completion::finish(&storage, &operation, &lease, &|| false)
-                .unwrap();
+            audio::intent::removal::start(
+                &storage,
+                &operation,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::run(
+                &storage,
+                &operation,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            audio::intent::removal::completion::finish(
+                &storage,
+                &operation,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         } else {
-            audio::intent::keep_unstarted(&storage, &operation, &lease, &|| false).unwrap();
+            audio::intent::keep_unstarted(
+                &storage,
+                &operation,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         }
         Self {
             _base: base,
@@ -73,19 +97,42 @@ impl Fixture {
         }
     }
     fn full_delete(&self) {
-        let c = files::Census::capture(&self.storage, &self.meeting, &|| false).unwrap();
+        let c = files::Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let review = removal::Reviewed::confirm(&c, true).unwrap();
         let p = intent::prepare(
             &self.storage,
             &uuid::Uuid::new_v4().to_string(),
             &c,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let mut files = removal::start(&self.storage, &p, &review, &|| false).unwrap();
-        removal::run(&self.storage, &mut files, &|| false).unwrap();
-        let mut rows = completion::start(&self.storage, &files, &|| false).unwrap();
-        completion::run(&self.storage, &mut rows, &|| false).unwrap();
+        let mut files = removal::start(
+            &self.storage,
+            &p,
+            &review,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        removal::run(
+            &self.storage,
+            &mut files,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
+        let mut rows =
+            completion::start(&self.storage, &files, &crate::test_support::never_cancelled)
+                .unwrap();
+        completion::run(
+            &self.storage,
+            &mut rows,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
     }
     fn original(&self) -> String {
         native_rows(&self.storage.connection.lock().unwrap())
@@ -105,8 +152,10 @@ fn image(snapshot: &NativeSnapshot<'_>) -> Connection {
     db
 }
 fn capture(storage: &Storage) -> Source {
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
-    Source::capture(storage, &snapshot, &|| false)
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    Source::capture(storage, &snapshot, &crate::test_support::never_cancelled)
         .unwrap()
         .unwrap()
 }
@@ -147,9 +196,16 @@ fn deletion_relocation_immutable_stamp_retains_consent_and_target_but_not_typed_
 fn deletion_relocation_completed_audio_seals_every_row_and_proof_without_consent_rewrite() {
     let f = Fixture::new(true);
     let original = f.original();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
-    let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
-    handoff.verify(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let handoff = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    handoff
+        .verify(&crate::test_support::never_cancelled)
+        .unwrap();
     let envelope: serde_json::Value = serde_json::from_slice(handoff.bytes()).unwrap();
     assert_eq!(envelope["version"], 4);
     let sealed = &envelope["deletion_history"];
@@ -189,9 +245,20 @@ fn deletion_relocation_completed_audio_seals_every_row_and_proof_without_consent
 #[test]
 fn deletion_relocation_kept_audio_and_meeting_are_preserved_and_not_resumable_consent() {
     let f = Fixture::new(false);
-    let c = files::Census::capture(&f.storage, &f.meeting, &|| false).unwrap();
-    let p = intent::prepare(&f.storage, &uuid::Uuid::new_v4().to_string(), &c, &|| false).unwrap();
-    intent::keep_unstarted(&f.storage, &p, &|| false).unwrap();
+    let c = files::Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let p = intent::prepare(
+        &f.storage,
+        &uuid::Uuid::new_v4().to_string(),
+        &c,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::keep_unstarted(&f.storage, &p, &crate::test_support::never_cancelled).unwrap();
     let before = f.original();
     let source = capture(&f.storage);
     assert_eq!(source.records.len(), 2);
@@ -203,9 +270,15 @@ fn deletion_relocation_kept_audio_and_meeting_are_preserved_and_not_resumable_co
     assert_eq!(f.original(), before);
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"SYNTHETIC AUDIO BODY");
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::intent::removal::start(&f.storage, &f.operation, &lease, &|| false).is_err());
+    assert!(audio::intent::removal::start(
+        &f.storage,
+        &f.operation,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -235,7 +308,10 @@ fn deletion_relocation_refuses_reappearance_after_completed_audio_or_full_deleti
             f.full_delete();
         }
         let before = f.original();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         std::fs::create_dir_all(f.audio.parent().unwrap()).unwrap();
         std::fs::write(&f.audio, b"REAPPEARED NEVER DELETE").unwrap();
         let db = image(&snapshot);
@@ -246,8 +322,12 @@ fn deletion_relocation_refuses_reappearance_after_completed_audio_or_full_deleti
         )
         .unwrap()
         .is_empty());
-        assert!(Source::capture(&f.storage, &snapshot, &|| false).is_err());
-        assert!(snapshot.prepare_control_handoff(&|| false).is_err());
+        assert!(
+            Source::capture(&f.storage, &snapshot, &crate::test_support::never_cancelled).is_err()
+        );
+        assert!(snapshot
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(
             db.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r
                 .get::<_, i64>(0))
@@ -280,8 +360,13 @@ fn deletion_relocation_unknown_recovered_or_corrupt_completed_record_is_not_a_su
             }
         }
         let before = f.original();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
-        assert!(snapshot.prepare_control_handoff(&|| false).is_err());
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        assert!(snapshot
+            .prepare_control_handoff(&crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(f.original(), before);
         assert!(!f.audio.exists());
     }
@@ -291,17 +376,24 @@ fn deletion_relocation_unknown_recovered_or_corrupt_completed_record_is_not_a_su
 fn deletion_relocation_cancel_and_source_reappearance_invalidate_without_removing_new_files() {
     let f = Fixture::new(true);
     let before = f.original();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let n = Cell::new(0);
     assert!(Source::capture(&f.storage, &snapshot, &|| {
         n.set(n.get() + 1);
         n.get() > 4
     })
     .is_err());
-    let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
+    let handoff = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(handoff.verify(&|| true).is_err());
     std::fs::write(&f.audio, b"NEW BODY MUST REMAIN").unwrap();
-    assert!(handoff.verify(&|| false).is_err());
+    assert!(handoff
+        .verify(&crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(f.original(), before);
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"NEW BODY MUST REMAIN");
 }
@@ -311,8 +403,10 @@ fn deletion_relocation_over_limit_is_rejected_before_typed_scan_without_temp_or_
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     s.connection.lock().unwrap().execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10001) INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) SELECT printf('00000000-0000-4000-8000-%012x',x),'delete_assets','completed','{}',printf('%064d',0),'{}',0,0 FROM n;").unwrap();
-    let snapshot = s.prepare_relocation_snapshot(&|| false).unwrap();
-    let error = Source::capture(&s, &snapshot, &|| false).unwrap_err();
+    let snapshot = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let error = Source::capture(&s, &snapshot, &crate::test_support::never_cancelled).unwrap_err();
     assert!(error.contains("件数・容量上限"));
     let db = image(&snapshot);
     assert_eq!(
@@ -341,8 +435,13 @@ fn deletion_relocation_over_limit_is_rejected_before_typed_scan_without_temp_or_
 #[test]
 fn deletion_relocation_envelope_refuses_missing_changed_or_version_downgraded_native_seal() {
     let f = Fixture::new(true);
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
-    let h = snapshot.prepare_control_handoff(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let h = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     h.check_compatible(h.bytes()).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(h.bytes()).unwrap();
     for mode in 0..4 {
@@ -365,9 +464,17 @@ fn deletion_relocation_envelope_refuses_missing_changed_or_version_downgraded_na
 fn deletion_relocation_no_native_history_keeps_exact_version_three_shape_and_rejects_fake_seal() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
-    let snapshot = s.prepare_relocation_snapshot(&|| false).unwrap();
-    assert!(Source::capture(&s, &snapshot, &|| false).unwrap().is_none());
-    let h = snapshot.prepare_control_handoff(&|| false).unwrap();
+    let snapshot = s
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(
+        Source::capture(&s, &snapshot, &crate::test_support::never_cancelled)
+            .unwrap()
+            .is_none()
+    );
+    let h = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let mut value: serde_json::Value = serde_json::from_slice(h.bytes()).unwrap();
     assert_eq!(value["version"], 3);
     assert!(value.get("deletion_history").is_none());
@@ -382,7 +489,7 @@ fn deletion_relocation_row_and_path_hashes_bind_nulls_consent_and_logical_proof_
     let f = Fixture::new(false);
     let source = capture(&f.storage);
     let db = f.storage.connection.lock().unwrap();
-    let a = paths(&db, &f.operation, &|| false).unwrap();
+    let a = paths(&db, &f.operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(
         a,
         (
@@ -400,7 +507,7 @@ fn deletion_relocation_row_and_path_hashes_bind_nulls_consent_and_logical_proof_
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
     db.execute("UPDATE maintenance_paths SET relative_path='audio-deletion-proof/z00000' WHERE operation_id=?1 AND relative_path='audio-deletion-proof/000000'", [&f.operation]).unwrap();
-    let changed = paths(&db, &f.operation, &|| false).unwrap();
+    let changed = paths(&db, &f.operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(changed.0, a.0);
     assert_ne!(changed.1, a.1);
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
@@ -415,8 +522,11 @@ fn deletion_relocation_row_and_path_hashes_bind_nulls_consent_and_logical_proof_
         header
     );
     drop(db);
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
-    assert!(Source::capture(&f.storage, &snapshot, &|| false).is_err());
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(Source::capture(&f.storage, &snapshot, &crate::test_support::never_cancelled).is_err());
     let mut none = Sha256::new();
     let mut empty = Sha256::new();
     frame(&mut none, &Option::<i64>::None).unwrap();
@@ -433,7 +543,10 @@ fn deletion_relocation_source_root_or_kept_parent_symlink_cannot_be_adopted() {
     let moved = directory.with_extension("retained");
     std::fs::rename(directory, &moved).unwrap();
     symlink(&moved, directory).unwrap();
-    assert!(f.storage.prepare_relocation_snapshot(&|| false).is_err());
+    assert!(f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(f.original(), before);
     assert_eq!(
         std::fs::read(moved.join("audio.flac")).unwrap(),
@@ -459,12 +572,12 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
             &uuid::Uuid::new_v4().to_string(),
             &f.package,
             &f.review,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         let op = uuid::Uuid::new_v4().to_string();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         super::super::models::intent::prepare(
             &f.storage,
@@ -475,16 +588,32 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
             &p.census_hash,
             false,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         if completed {
-            super::super::models::intent::removal::start(&f.storage, &op, &lease, &|| false)
-                .unwrap();
-            super::super::models::intent::removal::run(&f.storage, &op, &lease, &|| false).unwrap();
+            super::super::models::intent::removal::start(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+            super::super::models::intent::removal::run(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         } else {
-            super::super::models::intent::keep_unstarted(&f.storage, &op, &lease, &|| false)
-                .unwrap();
+            super::super::models::intent::keep_unstarted(
+                &f.storage,
+                &op,
+                &lease,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
         }
         drop(lease);
         let source = capture(&f.storage);
@@ -504,8 +633,13 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
         assert_eq!(report.completed_records, usize::from(completed));
         let unapproved = tempfile::tempdir().unwrap();
         f.storage.native_models_root = unapproved.path().to_owned();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
-        assert!(Source::capture(&f.storage, &snapshot, &|| false).is_err());
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
+        assert!(
+            Source::capture(&f.storage, &snapshot, &crate::test_support::never_cancelled).is_err()
+        );
     }
 }
 

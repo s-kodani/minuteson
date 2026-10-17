@@ -28,7 +28,7 @@ fn audio_job(meeting: &str, operation: &str) -> JobSpec {
 
 fn owner() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn prepared(f: &Fixture, lease: &DataMaintenanceLease) -> String {
@@ -42,17 +42,28 @@ fn prepared(f: &Fixture, lease: &DataMaintenanceLease) -> String {
             retain_unclassified: true,
         },
         lease,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     op
 }
 fn removed(f: &Fixture, lease: &DataMaintenanceLease) -> String {
     let op = prepared(f, lease);
-    super::super::start(&f.storage, &op, lease, &|| false).unwrap();
-    assert!(super::super::run(&f.storage, &op, lease, &|| false)
-        .unwrap()
-        .files_removed());
+    super::super::start(
+        &f.storage,
+        &op,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(super::super::run(
+        &f.storage,
+        &op,
+        lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .files_removed());
     op
 }
 fn fixed(f: &Fixture, op: &str) -> String {
@@ -70,7 +81,13 @@ fn reopen(f: &mut Fixture) {
 }
 fn resume(f: &Fixture, op: &str) -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_audio_deletion_maintenance(&f.storage, op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn hint(f: &Fixture, op: &str) -> Option<String> {
@@ -111,17 +128,34 @@ fn native_raw_audio_deletion_cold_restart_removes_pcm_but_keeps_documents_and_ra
     let lease = owner();
     let op = prepared(&f, &lease);
     let original = fixed(&f, &op);
-    super::super::start(&f.storage, &op, &lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     // Stop after durable consent/start, not by recreating a deletion permit.
     drop(lease);
     reopen(&mut f);
     let lease = resume(&f, &op);
-    let receipt = super::super::run(&f.storage, &op, &lease, &|| false).unwrap();
+    let receipt = super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(receipt.files_removed());
     assert_eq!(receipt.processed_files(), 2);
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert_eq!(fixed(&f, &op), original);
     assert!(!raw.exists() && !f.path.exists());
     assert_eq!(std::fs::read(&metadata).unwrap(), before_metadata);
@@ -145,9 +179,14 @@ fn current_completed_audio_reopens_preserving_unavailable_source_and_original_ev
     f.documents();
     let lease = owner();
     let op = removed(&f, &lease);
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     drop(lease);
     let saved = fixed(&f, &op);
     reopen(&mut f);
@@ -187,17 +226,24 @@ fn completion_changes_only_availability_retains_every_history_and_releases_hot_f
         &f.storage.connection.lock().unwrap(),
         &f.meeting,
         &op,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let done = finish(&f.storage, &op, &lease, &|| false).unwrap();
+    let done = finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(done.completed());
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(phase(&f, &op), "completed");
     assert!(!f.storage.data_write_blocked());
     assert!(manifest.is_file() && text.is_file() && !f.path.exists());
     let db = f.storage.connection.lock().unwrap();
-    let after = Scope::capture(&db, &f.meeting, &op, &|| false).unwrap();
+    let after =
+        Scope::capture(&db, &f.meeting, &op, &crate::test_support::never_cancelled).unwrap();
     for (a, b) in before.tables.iter().zip(&after.tables) {
         assert_eq!(a.rows, b.rows);
         assert_eq!(a.name, b.name);
@@ -214,16 +260,21 @@ fn completion_changes_only_availability_retains_every_history_and_releases_hot_f
         ("missing".into(), "failed".into(), "missing".into())
     );
     assert!(deleted(&db, &f.meeting).unwrap());
-    verify_available_state(&db, &done, &|| false).unwrap();
+    verify_available_state(&db, &done, &crate::test_support::never_cancelled).unwrap();
     drop(db);
     assert!(f
         .storage
         .get_minutes_markdown(&f.meeting)
         .unwrap()
         .is_some());
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 #[test]
 fn mime_case_cannot_retain_audio_body_or_bypass_deleted_source_admission() {
@@ -231,7 +282,13 @@ fn mime_case_cannot_retain_audio_body_or_bypass_deleted_source_admission() {
     let audio = f.file("registered-upper.flac", Some("Audio/FLAC"));
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!audio.exists());
     let missing = std::path::PathBuf::from(format!("meetings/{}/unopened.flac", f.meeting));
     assert!(f
@@ -247,18 +304,48 @@ fn completion_requires_files_finished_and_live_actual_lease() {
     let f = Fixture::new();
     let controller = AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = prepared(&f, &lease);
-    assert!(finish(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.exists());
-    super::super::start(&f.storage, &op, &lease, &|| false).unwrap();
-    assert!(finish(&f.storage, &op, &lease, &|| false).is_err());
-    super::super::run(&f.storage, &op, &lease, &|| false).unwrap();
+    super::super::start(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    super::super::run(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(finish(&f.storage, &op, &lease, &|| true).is_err());
     controller.begin_exit().unwrap();
     controller.abort_shutdown();
-    assert!(finish(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(phase(&f, &op), "cleanup");
 }
 #[test]
@@ -287,9 +374,12 @@ fn each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_fi
         let f = Fixture::new();
         let lease = owner();
         let op = removed(&f, &lease);
-        let tables =
-            database::audio_tables(&f.storage.connection.lock().unwrap(), &f.meeting, &|| false)
-                .unwrap();
+        let tables = database::audio_tables(
+            &f.storage.connection.lock().unwrap(),
+            &f.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let cancel = Cell::new(false);
         assert!(
             finish_inner(
@@ -305,16 +395,25 @@ fn each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_fi
             "{boundary}"
         );
         assert_eq!(
-            database::audio_tables(&f.storage.connection.lock().unwrap(), &f.meeting, &|| false)
-                .unwrap(),
+            database::audio_tables(
+                &f.storage.connection.lock().unwrap(),
+                &f.meeting,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap(),
             tables
         );
         assert_eq!(phase(&f, &op), "cleanup");
         assert!(!f.path.exists());
         assert!(f.storage.data_write_blocked());
-        assert!(finish(&f.storage, &op, &lease, &|| false)
-            .unwrap()
-            .completed());
+        assert!(finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .completed());
     }
 }
 #[test]
@@ -323,11 +422,15 @@ fn last_boundary_rechecks_retained_text_and_rolls_back_if_changed() {
     let text = f.file("keep.txt", Some("text/plain"));
     let lease = owner();
     let op = removed(&f, &lease);
-    assert!(finish_inner(&f.storage, &op, &lease, &|| false, &|e| if e
-        == "beforeAudioCompletionCommit"
-    {
-        std::fs::write(&text, b"CHANGED").unwrap()
-    })
+    assert!(finish_inner(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+        &|e| if e == "beforeAudioCompletionCommit" {
+            std::fs::write(&text, b"CHANGED").unwrap()
+        }
+    )
     .is_err());
     assert_eq!(phase(&f, &op), "cleanup");
     assert!(f.storage.data_write_blocked());
@@ -349,9 +452,14 @@ fn late_cancel_cannot_turn_durable_completion_into_failure() {
         .completed()
     );
     assert!(!f.storage.data_write_blocked());
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 #[test]
 fn postcommit_panic_keeps_receipt_and_restores_fence_before_callback() {
@@ -363,7 +471,7 @@ fn postcommit_panic_keeps_receipt_and_restores_fence_before_callback() {
             &f.storage,
             &op,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|e| if e == "audioCompletionCommitted" {
                 assert!(!f.storage.data_write_blocked());
                 panic!("owned test postcommit")
@@ -384,7 +492,13 @@ fn completion_allows_later_text_edits_generation_and_nonaudio_assets_without_new
     f.documents();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let saved = fixed(&f, &op);
     let meeting = f
         .storage
@@ -400,9 +514,14 @@ fn completion_allows_later_text_edits_generation_and_nonaudio_assets_without_new
     let candidate = crate::storage::current_minutes_fixture::candidate(&f.storage, &f.meeting);
     assert!(!candidate.is_empty());
     assert!(new.is_file());
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert_eq!(fixed(&f, &op), saved);
     assert!(deleted(&f.storage.connection.lock().unwrap(), &f.meeting).unwrap());
     // Missing path makes it explicit that rejection precedes file open/hash.
@@ -420,7 +539,13 @@ fn playback_and_new_audio_plans_reject_before_using_history_or_reappeared_body()
     f.documents();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(&f.path, b"ALIEN AUDIO").unwrap();
     assert!(f
         .storage
@@ -452,7 +577,13 @@ fn old_queued_audio_job_cannot_acquire_but_fixed_input_stays_readable() {
     let job = f.storage.enqueue_job(spec.clone()).unwrap();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(f.storage.fixed_job_input(&job.id).unwrap().0, spec);
     assert!(f.storage.acquire_next_job().unwrap().is_none());
     assert_eq!(f.storage.list_jobs(&f.meeting).unwrap()[0].state, "queued");
@@ -467,7 +598,13 @@ fn deleted_queued_audio_never_starves_other_meeting_and_corrupt_history_is_not_s
             .unwrap();
         let lease = owner();
         let op = removed(&f, &lease);
-        finish(&f.storage, &op, &lease, &|| false).unwrap();
+        finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let other = f.storage.create_meeting("OTHER").unwrap();
         let next = f
             .storage
@@ -497,7 +634,13 @@ fn diarization_enqueue_and_cached_input_reject_before_configuring_or_reading_sna
     f.documents();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let request = crate::storage::MinutesJobRequest {
         meeting_id: f.meeting.clone(),
         operation_id: "new-diarization".into(),
@@ -533,7 +676,13 @@ fn retained_transcript_draft_can_save_after_completion_without_changing_audio_hi
     f.documents();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let draft = f
         .storage
         .load_transcript_draft(&f.meeting)
@@ -560,9 +709,14 @@ fn retained_transcript_draft_can_save_after_completion_without_changing_audio_hi
         changed.payload.utterances[0].effective_text,
         "AFTER AUDIO DELETION"
     );
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert!(deleted(&f.storage.connection.lock().unwrap(), &f.meeting).unwrap());
 }
 #[test]
@@ -584,7 +738,13 @@ fn paused_or_interrupted_audio_job_cannot_resume_without_mutating_its_history() 
             .unwrap();
         let lease = owner();
         let op = removed(&f, &lease);
-        finish(&f.storage, &op, &lease, &|| false).unwrap();
+        finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(f
             .storage
             .resume_job(&job.id)
@@ -611,7 +771,13 @@ fn failed_audio_retry_refuses_even_fixed_cached_input_and_preserves_original() {
     let source = f.storage.list_jobs(&f.meeting).unwrap().remove(0);
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(f
         .storage
         .enqueue_retry_job(&source, &spec, None, "new-retry")
@@ -629,9 +795,14 @@ fn cold_pending_completion_requires_restart_then_clean_startup_accepts_typed_aud
     reopen(&mut f);
     assert!(f.storage.data_write_blocked());
     let lease = resume(&f, &op);
-    assert!(finish(&f.storage, &op, &lease, &|| false)
-        .unwrap()
-        .completed());
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert!(f.storage.data_write_blocked());
     assert!(f.storage.create_meeting("WAIT RESTART").is_err());
     drop(lease);
@@ -646,7 +817,13 @@ fn completed_startup_reappearance_never_deletes_or_recovers_stale_jobs() {
         let mut f = Fixture::new();
         let lease = owner();
         let op = removed(&f, &lease);
-        let r = finish(&f.storage, &op, &lease, &|| false).unwrap();
+        let r = finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         let path = if reserved {
             f.path.parent().unwrap().join(r.reserved(0))
@@ -672,10 +849,22 @@ fn completed_startup_reappearance_never_deletes_or_recovers_stale_jobs() {
         );
         assert_eq!(f.storage.list_jobs(&f.meeting).unwrap()[0].state, "running");
         let lease = resume(&f, &op);
-        assert!(finish(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"NEW EXPLICIT REVIEW ONLY");
         std::fs::remove_file(&path).unwrap();
-        finish(&f.storage, &op, &lease, &|| false).unwrap();
+        finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(hint(&f, &op), None);
         assert!(f.storage.data_write_blocked());
         drop(lease);
@@ -692,11 +881,17 @@ fn completed_metadata_corruption_and_ready_resurrection_never_grant_audio_access
         let mut f = Fixture::new();
         let lease = owner();
         let op = removed(&f, &lease);
-        finish(&f.storage, &op, &lease, &|| false).unwrap();
+        finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         {
             let db = f.storage.connection.lock().unwrap();
-            let mut r = Receipt::load(&db, &op, &|| false).unwrap();
+            let mut r = Receipt::load(&db, &op, &crate::test_support::never_cancelled).unwrap();
             // Simulate disk corruption in this owned fixture only. Production
             // intent immutability remains enabled and unchanged.
             db.set_db_config(
@@ -749,7 +944,13 @@ fn completed_parent_replacement_or_symlink_is_attention_not_auto_cleanup() {
         let mut f = Fixture::new();
         let lease = owner();
         let op = removed(&f, &lease);
-        finish(&f.storage, &op, &lease, &|| false).unwrap();
+        finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(lease);
         let parent = f.path.parent().unwrap();
         let held = parent.with_extension("owned-held");
@@ -770,7 +971,13 @@ fn completed_parent_replacement_or_symlink_is_attention_not_auto_cleanup() {
         );
         assert!(f.storage.data_write_blocked());
         let lease = resume(&f, &op);
-        assert!(finish(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(finish(
+            &f.storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(keep).unwrap(), b"OUTSIDE");
     }
 }
@@ -780,7 +987,13 @@ fn availability_validation_is_independent_of_other_meeting_running_jobs() {
     let other = f.storage.create_meeting("OTHER").unwrap();
     let lease = owner();
     let op = removed(&f, &lease);
-    finish(&f.storage, &op, &lease, &|| false).unwrap();
+    finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let job = f
         .storage
         .enqueue_job(audio_job(&other.id, "other-job"))
@@ -839,9 +1052,15 @@ fn completion_sigkill_each_atomic_boundary_is_cleanup_or_fully_completed() {
             }
         );
         let lease = AnalysisController::default()
-            .begin_audio_deletion_maintenance(&storage, &op, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        finish(&storage, &op, &lease, &|| false).unwrap();
+        finish(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
         assert!(text.is_file());
         assert!(!f.path.exists());
         drop(lease);
@@ -867,16 +1086,28 @@ fn audio_completion_crash_child() {
     assert_eq!(marker, (root.to_str().unwrap().into(), meeting, op.clone()));
     let storage = Storage::open(root).unwrap();
     let lease = AnalysisController::default()
-        .begin_audio_deletion_maintenance(&storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    finish_inner(&storage, &op, &lease, &|| false, &|event| {
-        if event == boundary {
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
+    finish_inner(
+        &storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+        &|event| {
+            if event == boundary {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                panic!("SIGKILL failed")
             }
-            panic!("SIGKILL failed")
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("boundary was not reached");
 }

@@ -127,5 +127,10 @@ export function markdownAudioInterval(url: string): MarkdownAudioInterval | null
 }
 export function playableMarkdownInterval(url: string, durationUs: number | null): MarkdownAudioInterval | null {
   const interval = markdownAudioInterval(url);
-  return interval && durationUs !== null && Number.isSafeInteger(durationUs) && durationUs > 0 && interval.endUs <= durationUs ? interval : null;
+  if (!interval || durationUs === null || !Number.isSafeInteger(durationUs) || durationUs <= 0 || interval.startUs >= durationUs) return null;
+  if (interval.endUs <= durationUs) return interval;
+  // V3 rounds the recording's final interval outwards to whole seconds. Only
+  // that exact ceiling may exceed the recording; arbitrary links stay invalid.
+  return !url.includes(".") && interval.endUs % 1_000_000 === 0 && interval.endUs === Math.ceil(durationUs / 1_000_000) * 1_000_000
+    ? { ...interval, endUs: durationUs } : null;
 }

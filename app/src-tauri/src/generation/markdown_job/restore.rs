@@ -119,6 +119,9 @@ pub(in crate::generation) fn checkpoint(
     }
     if old_p.engine != engine
         || old_p.schema_version != new_p.schema_version
+        || old_p.prompt_version != new_p.prompt_version
+        || old_p.prompt_snapshot != new_p.prompt_snapshot
+        || old_p.acceleration_policy != new_p.acceleration_policy
         || old_p.capacity != new_p.capacity
         || old_p.prompt_budget != new_p.prompt_budget
         || old_p.plan != new_p.plan

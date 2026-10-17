@@ -3,6 +3,7 @@ use crate::local_engine::Fingerprint;
 use crate::model_inspection::{PackageFile, PackageManifest, Target};
 use std::os::unix::fs::PermissionsExt;
 
+mod diarization_threads;
 mod jobs;
 mod portable;
 
@@ -221,14 +222,16 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        let inspected = crate::model_inspection::inspect(source.path(), &|| false).unwrap();
+        let inspected =
+            crate::model_inspection::inspect(source.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         crate::model_placement::place(
             &self.storage,
             &models,
             source.path(),
             &id,
             &inspected.review_hash,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         let record = self
@@ -242,7 +245,7 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
                 &check,
                 &id,
                 &record.review_hash,
-                &|| false,
+                &crate::test_support::never_cancelled,
             )
             .unwrap();
             assert_eq!(
@@ -272,7 +275,7 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
             &p.id,
             &p.record.review_hash,
             &p.check,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
     }
@@ -282,7 +285,7 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
             &self.models(),
             &Uuid::new_v4().to_string(),
             &self.preview(index, name),
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap()
     }
@@ -324,7 +327,7 @@ fn profile_application_three_engines_keep_parameters_other_profiles_meetings_and
             &f.models(),
             &Uuid::new_v4().to_string(),
             &preview,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(
@@ -428,9 +431,14 @@ fn profile_application_high_accuracy_is_separate_and_exact_retry_does_not_duplic
     let standard = f.storage.minutes_preferences().unwrap().payload.standard;
     let preview = f.preview(index, ProfileName::HighAccuracy);
     let operation = Uuid::new_v4().to_string();
-    let first =
-        crate::model_application::apply(&f.storage, &f.models(), &operation, &preview, &|| false)
-            .unwrap();
+    let first = crate::model_application::apply(
+        &f.storage,
+        &f.models(),
+        &operation,
+        &preview,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(first.profile_version, 1);
     assert_eq!(f.storage.model_profiles().unwrap()[0].id, None);
     assert_eq!(
@@ -439,8 +447,14 @@ fn profile_application_high_accuracy_is_separate_and_exact_retry_does_not_duplic
     );
     let version = f.storage.minutes_preferences().unwrap().lock_version;
     assert_eq!(
-        crate::model_application::apply(&f.storage, &f.models(), &operation, &preview, &|| false)
-            .unwrap(),
+        crate::model_application::apply(
+            &f.storage,
+            &f.models(),
+            &operation,
+            &preview,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         first
     );
     assert_eq!(f.count("model_profiles"), 1);
@@ -460,7 +474,7 @@ fn profile_application_high_accuracy_is_separate_and_exact_retry_does_not_duplic
         &f.models(),
         &operation,
         &preview,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .unwrap_err()
     .contains("古い"));
@@ -580,7 +594,7 @@ fn profile_application_transaction_failure_and_late_cancellation_roll_back_prefe
                 &f.models(),
                 &Uuid::new_v4().to_string(),
                 &preview,
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .unwrap()
             .profile_version,
@@ -623,7 +637,7 @@ fn profile_application_missing_failed_or_nonlatest_compatibility_never_executes_
             &p.id,
             &p.record.review_hash,
             &p.check,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
         assert_eq!(std::fs::read(marker).ok(), before);
@@ -842,15 +856,23 @@ fn profile_application_current_reopen_and_backup_keep_host_binding_local_but_ret
         &package,
         &review,
         &check,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     let operation = Uuid::new_v4().to_string();
-    let view = crate::model_application::apply(&storage, &models, &operation, &preview, &|| false)
-        .unwrap();
+    let view = crate::model_application::apply(
+        &storage,
+        &models,
+        &operation,
+        &preview,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let output = tempfile::tempdir().unwrap();
     let archive = output.path().join("profiles.monbackup");
-    storage.create_backup_archive(&archive, &|| false).unwrap();
+    storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .unwrap();
     let bytes = std::fs::read(archive).unwrap();
     // The profile's operation ID is also its source profile ID. Preserve it
     // only as origin metadata; CPU trial operations and host bindings stay out.
@@ -878,13 +900,16 @@ fn profile_application_backup_maintenance_blocks_publication_and_later_applicati
     let preview = f.preview(index, ProfileName::Standard);
     let before = f.storage.analysis_preferences().unwrap();
     let old = f.storage.fixed_job_input(&f.baseline.id).unwrap();
-    let snapshot = f.storage.prepare_backup_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(crate::model_application::apply(
         &f.storage,
         &f.models(),
         &Uuid::new_v4().to_string(),
         &preview,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(f.count("model_profiles"), 0);
@@ -904,7 +929,7 @@ fn profile_application_backup_maintenance_blocks_publication_and_later_applicati
             &f.models(),
             &Uuid::new_v4().to_string(),
             &preview,
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .unwrap()
         .profile_version,

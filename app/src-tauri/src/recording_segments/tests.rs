@@ -107,8 +107,13 @@ impl Fixture {
         crate::input_levels::open_capture_directory(&path)
     }
     fn read(&self) -> Result<Prefix, String> {
-        Prefix::read_optional(self.directory()?, OWNER, self.lane, &|| false)?
-            .ok_or("test prefix absent".into())
+        Prefix::read_optional(
+            self.directory()?,
+            OWNER,
+            self.lane,
+            &crate::test_support::never_cancelled,
+        )?
+        .ok_or("test prefix absent".into())
     }
     fn status(&self) -> Status {
         let mut tip: Value = serde_json::from_slice(
@@ -333,11 +338,14 @@ fn missing_tip_is_distinct_from_invalid_tip_and_all_capacity_guards_are_bounded(
         .unwrap();
     assert!(fixture.read().is_err());
     std::fs::remove_file(path).unwrap();
-    assert!(
-        Prefix::read_optional(fixture.directory().unwrap(), OWNER, fixture.lane, &|| false)
-            .unwrap()
-            .is_none()
-    );
+    assert!(Prefix::read_optional(
+        fixture.directory().unwrap(),
+        OWNER,
+        fixture.lane,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .is_none());
 }
 
 #[test]
@@ -372,7 +380,12 @@ fn changed_leaf_link_permissions_or_fifo_cannot_be_replayed_or_block_reader() {
                 }
                 _ => unreachable!(),
             }
-            assert!(prefix.verify_unchanged(&|| false).is_err(), "{name} {kind}");
+            assert!(
+                prefix
+                    .verify_unchanged(&crate::test_support::never_cancelled)
+                    .is_err(),
+                "{name} {kind}"
+            );
             if matches!(kind, "symlink" | "hardlink" | "mode" | "fifo") {
                 assert!(fixture.read().is_err(), "{name} {kind}");
             } else {
@@ -648,7 +661,7 @@ fn swift_generated_recording_segments_bind_actual_storage_and_encode_flac_withou
         crate::input_levels::open_capture_directory(&audio_root).unwrap(),
         &session.id,
         Lane::Microphone,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap()
     .unwrap();

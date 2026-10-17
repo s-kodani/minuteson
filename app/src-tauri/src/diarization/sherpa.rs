@@ -343,6 +343,8 @@ fn run_track_inner(
         .create_new(true)
         .open(&stderr_path)
         .map_err(|e| e.to_string())?;
+    let _log_capture =
+        crate::internal_logs::watch_engine(&directory, &["stderr.log"], "diarization");
     let mut launch = OwnedCommand::new(&config.executable.path)?;
     let command = &mut launch.command;
     command

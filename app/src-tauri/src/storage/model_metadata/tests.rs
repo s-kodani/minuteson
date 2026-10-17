@@ -23,7 +23,10 @@ fn db() -> Connection {
 }
 fn save(db: &mut Connection, refs: &[ModelFileMetadata]) {
     let tx = db.transaction().unwrap();
-    retain(&tx, refs, &|| false, &|_| Ok(true)).unwrap();
+    retain(&tx, refs, &crate::test_support::never_cancelled, &|_| {
+        Ok(true)
+    })
+    .unwrap();
     tx.commit().unwrap();
 }
 #[test]
@@ -74,9 +77,17 @@ fn historical_model_metadata_requires_transaction_and_rollback_retains_no_partia
         reference("model.bin", 'a', "model"),
         reference("other.bin", 'b', "model"),
     ];
-    assert!(retain(&db, &refs, &|| false, &|_| Ok(true)).is_err());
+    assert!(
+        retain(&db, &refs, &crate::test_support::never_cancelled, &|_| Ok(
+            true
+        ))
+        .is_err()
+    );
     let tx = db.transaction().unwrap();
-    retain(&tx, &refs, &|| false, &|_| Ok(true)).unwrap();
+    retain(&tx, &refs, &crate::test_support::never_cancelled, &|_| {
+        Ok(true)
+    })
+    .unwrap();
     tx.rollback().unwrap();
     assert!(historical(&db).unwrap().is_empty());
     let tx = db.transaction().unwrap();

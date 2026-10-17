@@ -412,7 +412,7 @@ fn failed_initialization_reports_primary_error_without_accepting_unconfirmed_aud
         .starts_with("マイクの権限確認"));
     // The acceptance path still rejects a missing UID and failed state.
     assert!(failed.require_owner(&request).is_err());
-    assert!(files::verify(&directory, &request, &|| false).is_err());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err());
     for (key, value) in [
         ("microphoneDeviceUID", serde_json::json!("another-mic")),
         ("targetPIDs", serde_json::json!([123])),
@@ -496,7 +496,7 @@ fn read_all(mut audio: crate::playback::PreparedAudio, frames: u64, value: f32) 
 fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
     let (directory, request, _) = saved_fixture();
     let before = std::fs::read(directory.path.join("manifest.json")).unwrap();
-    let ready = files::verify(&directory, &request, &|| false).unwrap();
+    let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(ready.microphone.info.duration_ms, 5000);
     assert!(!ready.microphone.info.has_gaps);
     assert_eq!(ready.system.as_ref().unwrap().info.duration_ms, 1000);
@@ -504,7 +504,7 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
     read_all(
         ready
             .microphone
-            .playback(&directory, "mic", &|| false)
+            .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,
         0.125,
@@ -514,7 +514,7 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
             .system
             .as_ref()
             .unwrap()
-            .playback(&directory, "system", &|| false)
+            .playback(&directory, "system", &crate::test_support::never_cancelled)
             .unwrap(),
         8000,
         0.0,
@@ -535,13 +535,13 @@ fn completed_microphone_test_accepts_explicitly_unreceived_pc_without_inventing_
         "sampleRate":null,"channels":null,"clockFailure":null,"clockSegments":[]});
     write_manifest(&directory, &manifest);
     assert!(files::verify(&directory, &request, &|| true).is_err());
-    let ready = files::verify(&directory, &request, &|| false).unwrap();
+    let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert!(ready.system.is_none());
     assert_eq!(ready.microphone.info.duration_ms, 5000);
     read_all(
         ready
             .microphone
-            .playback(&directory, "mic", &|| false)
+            .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,
         0.125,
@@ -578,19 +578,21 @@ fn completed_microphone_test_accepts_explicitly_unreceived_pc_without_inventing_
             .unwrap_or_else(|| panic!("missing {pointer}")) = value;
         write_manifest(&directory, &changed);
         assert!(
-            files::verify(&directory, &request, &|| false).is_err(),
+            files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err(),
             "{pointer}"
         );
     }
     write_manifest(&directory, &manifest);
     std::fs::write(directory.path.join("system.caf"), b"corrupt or empty CAF").unwrap();
-    assert!(files::verify(&directory, &request, &|| false).is_err());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err());
     #[cfg(unix)]
     {
         std::fs::remove_file(directory.path.join("system.caf")).unwrap();
         std::os::unix::fs::symlink("missing-system.caf", directory.path.join("system.caf"))
             .unwrap();
-        assert!(files::verify(&directory, &request, &|| false).is_err());
+        assert!(
+            files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err()
+        );
     }
 }
 
@@ -665,14 +667,14 @@ fn test_private_verification_rejects_changed_owner_scope_clock_and_saved_conditi
         *changed.pointer_mut(pointer).unwrap() = value;
         write_manifest(&directory, &changed);
         assert!(
-            files::verify(&directory, &request, &|| false).is_err(),
+            files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err(),
             "accepted {pointer}"
         );
         assert!(directory.path.join("microphone.caf").exists());
         assert!(directory.path.join("system.caf").exists());
     }
     write_manifest(&directory, &original);
-    assert!(files::verify(&directory, &request, &|| false).is_ok());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_ok());
 }
 
 #[test]
@@ -687,7 +689,9 @@ fn test_private_manifest_rejects_duplicate_owner_and_oversize_or_invalid_records
         b"{}".to_vec(),
     ] {
         std::fs::write(directory.path.join("manifest.json"), &bytes).unwrap();
-        assert!(files::verify(&directory, &request, &|| false).is_err());
+        assert!(
+            files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err()
+        );
         assert_eq!(
             std::fs::read(directory.path.join("manifest.json")).unwrap(),
             bytes
@@ -700,7 +704,7 @@ fn test_private_manifest_rejects_duplicate_owner_and_oversize_or_invalid_records
 fn test_private_verification_and_preview_cancel_and_refuse_modified_same_format_audio() {
     let (directory, request, _) = saved_fixture();
     assert!(files::verify(&directory, &request, &|| true).is_err());
-    let ready = files::verify(&directory, &request, &|| false).unwrap();
+    let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert!(ready
         .microphone
         .playback(&directory, "mic", &|| true)
@@ -715,17 +719,17 @@ fn test_private_verification_and_preview_cancel_and_refuse_modified_same_format_
     .unwrap();
     assert!(ready
         .microphone
-        .playback(&directory, "mic", &|| false)
+        .playback(&directory, "mic", &crate::test_support::never_cancelled)
         .is_err());
     assert!(ready
         .system
         .as_ref()
         .unwrap()
-        .playback(&directory, "system", &|| false)
+        .playback(&directory, "system", &crate::test_support::never_cancelled)
         .is_ok());
     // A fresh proof may inspect a different file, but an existing result never
     // silently rebinds itself to it.
-    assert!(files::verify(&directory, &request, &|| false).is_ok());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_ok());
 }
 
 #[cfg(unix)]
@@ -738,7 +742,7 @@ fn test_private_directory_refuses_replaced_root_hardlinks_and_nonempty_stop() {
     std::fs::create_dir(&directory.path).unwrap();
     std::fs::write(directory.path.join("keep"), b"unrelated directory").unwrap();
     assert!(directory.cleanup().is_err());
-    assert!(files::verify(&directory, &request, &|| false).is_err());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err());
     assert_eq!(
         std::fs::read(directory.path.join("keep")).unwrap(),
         b"unrelated directory"
@@ -748,7 +752,7 @@ fn test_private_directory_refuses_replaced_root_hardlinks_and_nonempty_stop() {
     std::fs::rename(moved, &directory.path).unwrap();
     let external = parent.path().join("external-audio");
     std::fs::hard_link(directory.path.join("microphone.caf"), &external).unwrap();
-    assert!(files::verify(&directory, &request, &|| false).is_err());
+    assert!(files::verify(&directory, &request, &crate::test_support::never_cancelled).is_err());
     assert!(directory.cleanup().is_err());
     assert!(external.exists());
     std::fs::remove_file(external).unwrap();
@@ -807,7 +811,7 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
     let mut request = request();
     request.run_id = manifest["captureTest"]["ownerId"].as_str().unwrap().into();
     request.microphone_uid = "fixture-microphone".into();
-    let ready = files::verify(&directory, &request, &|| false).unwrap();
+    let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert!(!ready.microphone.info.has_gaps);
     assert!(ready.system.as_ref().unwrap().info.has_gaps);
     assert_eq!(ready.microphone.info.duration_ms, 5000);
@@ -815,7 +819,7 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
     read_all(
         ready
             .microphone
-            .playback(&directory, "mic", &|| false)
+            .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,
         0.125,
@@ -825,7 +829,7 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
             .system
             .as_ref()
             .unwrap()
-            .playback(&directory, "system", &|| false)
+            .playback(&directory, "system", &crate::test_support::never_cancelled)
             .unwrap(),
         31200,
         0.0,

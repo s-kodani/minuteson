@@ -52,15 +52,22 @@ pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) ->
 
 fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
     let path = output.join("source.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    archive::read(
+        &mut File::open(path).unwrap(),
+        output,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 #[test]
 fn relational_rules_cover_every_identifier_and_fk_in_the_trusted_schema() {
     let db = portable::schema(MIGRATIONS.len()).unwrap();
     let tables = portable::tables(&db).unwrap();
-    assert_eq!(tables.len(), 33);
+    assert_eq!(tables.len(), 37);
     for table in &tables {
         let bindings = rules(&db, table).unwrap();
         for column in &table.columns {
@@ -92,7 +99,13 @@ fn all_relational_ids_are_new_and_scoped_while_sources_and_live_data_stay_unchan
     let b = fixture(&storage, "import-b");
     let source = read(&storage, output.path());
     let batch = Uuid::new_v4().to_string();
-    let plan = RestoreIds::prepare(&source, output.path(), &batch, &|| false).unwrap();
+    let plan = RestoreIds::prepare(
+        &source,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(plan.batch_id, batch);
     assert_eq!(plan.archive_id, source.manifest.archive_id);
     let new_a = plan.get("meetings", "", &a).unwrap();
@@ -288,7 +301,13 @@ fn cancellation_and_invalid_batch_remove_only_owned_planning_files() {
     let unrelated = output.path().join("unrelated.txt");
     std::fs::write(&unrelated, b"keep").unwrap();
     let before = std::fs::read_dir(output.path()).unwrap().count();
-    assert!(RestoreIds::prepare(&source, output.path(), "not-a-batch", &|| false).is_err());
+    assert!(RestoreIds::prepare(
+        &source,
+        output.path(),
+        "not-a-batch",
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let calls = Cell::new(0);
     assert!(
         RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
@@ -498,7 +517,7 @@ fn preparation_rejects_a_cross_meeting_undo_reference_and_keeps_the_source_archi
     let b = fixture(&storage, "b");
     let source = read(&storage, output.path());
     let source_path = output.path().join("source.monbackup");
-    let original_hash = digest_file(&source_path, &|| false).unwrap();
+    let original_hash = digest_file(&source_path, &crate::test_support::never_cancelled).unwrap();
     let text:String=source.database.query_row("SELECT e.payload_json FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.meeting_id=?1 AND d.target_kind='transcript'",params![a],|r|r.get(0)).unwrap();
     let mut payload: TranscriptDraftPayload = serde_json::from_str(&text).unwrap();
     payload.utterances[0].utterance_id = storage
@@ -528,7 +547,10 @@ fn preparation_rejects_a_cross_meeting_undo_reference_and_keeps_the_source_archi
         .contains("別会議")
     );
     assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), before);
-    assert_eq!(digest_file(&source_path, &|| false).unwrap(), original_hash);
+    assert_eq!(
+        digest_file(&source_path, &crate::test_support::never_cancelled).unwrap(),
+        original_hash
+    );
     assert_eq!(storage.list_meetings().unwrap().len(), 2);
 }
 

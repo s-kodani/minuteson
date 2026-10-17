@@ -18,7 +18,7 @@ fn prepare(f: &Fixture, include_unknown: bool, owner: &DataMaintenanceLease) -> 
         &preview.census_hash,
         include_unknown,
         owner,
-        &|| false,
+        &crate::test_support::never_cancelled,
     )
     .unwrap();
     op
@@ -56,8 +56,20 @@ fn model_deletion_body_removes_only_fixed_package_and_preserves_cpu_profiles_job
     let owner = lease();
     let op = prepare(&f, false, &owner);
     let consent = receipt(&f, &op);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    let done = removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let done = removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(done.completed());
     assert!(!f.path("").exists());
     assert!(!f.storage.data_write_blocked());
@@ -94,10 +106,22 @@ fn model_deletion_body_removes_only_fixed_package_and_preserves_cpu_profiles_job
         .model_package_for_check(&f.package, &f.review)
         .is_err());
     assert_eq!(
-        removal::run(&f.storage, &op, &owner, &|| false).unwrap(),
+        removal::run(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         done
     );
-    assert!(intent::keep_unstarted(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(intent::keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -117,7 +141,13 @@ fn model_deletion_body_cancellation_and_cold_resume_at_every_journal_boundary() 
         let op = prepare(&f, false, &owner);
         let before = history(&f);
         let consent = receipt(&f, &op);
-        removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+        removal::start(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let stop = Cell::new(false);
         assert!(
             removal::run_observed(&f.storage, &op, &owner, &|| stop.get(), &|name| if name
@@ -130,18 +160,35 @@ fn model_deletion_body_cancellation_and_cold_resume_at_every_journal_boundary() 
         );
         assert!(f.storage.data_write_blocked());
         assert_eq!(before, history(&f));
-        assert!(intent::keep_unstarted(&f.storage, &op, &owner, &|| false).is_err());
+        assert!(intent::keep_unstarted(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         drop(owner);
         reopen(&mut f, |_| {});
         let controller = AnalysisController::default();
         controller.require_storage_restart();
         let owner = controller
-            .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+            .begin_model_deletion_maintenance(
+                &f.storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         assert!(
-            removal::run(&f.storage, &op, &owner, &|| false)
-                .unwrap()
-                .completed(),
+            removal::run(
+                &f.storage,
+                &op,
+                &owner,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .completed(),
             "{boundary}"
         );
         assert!(!f.path("").exists());
@@ -165,17 +212,40 @@ fn model_deletion_body_missing_and_changed_registered_files_need_fixed_consent_n
     std::fs::write(f.path("cli"), b"REVIEWED CHANGED CLI; DO NOT EXECUTE").unwrap();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false)
-        .unwrap()
-        .completed());
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert!(!f.path("").exists());
     let f = Fixture::new();
     std::fs::rename(f.path(""), f.root.join("held")).unwrap();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.path("").exists());
     assert!(f.root.join("held/cli").exists());
 }
@@ -187,15 +257,39 @@ fn model_deletion_body_explicit_unknowns_are_removed_but_new_contents_are_never_
     std::fs::write(f.path("unknown-dir/reviewed"), b"EXPLICITLY REVIEWED").unwrap();
     let owner = lease();
     let op = prepare(&f, true, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!f.path("").exists());
     let f = Fixture::new();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::write(f.path("added"), b"NEVER DELETE").unwrap();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(f.path("added")).unwrap(), b"NEVER DELETE");
     assert!(f.path("cli").exists() && f.path("weights/model.bin").exists());
 }
@@ -205,20 +299,24 @@ fn model_deletion_body_changed_tree_at_irreversible_boundary_blocks_unlink() {
     let f = Fixture::new();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let changed = Cell::new(false);
-    assert!(
-        removal::run_observed(
-            &f.storage,
-            &op,
-            &owner,
-            &|| false,
-            &|name| if name == "beforeUnlink" && !changed.replace(true) {
-                std::fs::write(f.path("added"), b"RACING KEEP").unwrap();
-            }
-        )
-        .is_err()
-    );
+    assert!(removal::run_observed(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+        &|name| if name == "beforeUnlink" && !changed.replace(true) {
+            std::fs::write(f.path("added"), b"RACING KEEP").unwrap();
+        }
+    )
+    .is_err());
     assert_eq!(std::fs::read(f.path("added")).unwrap(), b"RACING KEEP");
     assert!(f
         .path("weights/.mon-delete-model-")
@@ -261,7 +359,13 @@ fn model_deletion_body_reserved_name_collision_and_links_are_retained() {
             std::fs::create_dir(&f.root).unwrap();
         }
         assert!(
-            removal::start(&f.storage, &op, &owner, &|| false).is_err(),
+            removal::start(
+                &f.storage,
+                &op,
+                &owner,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{kind}"
         );
         if kind != "root-reservation" {
@@ -276,11 +380,29 @@ fn model_deletion_body_completed_record_does_not_authorize_reappeared_contents()
     let f = Fixture::new();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    removal::run(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     std::fs::create_dir(f.path("")).unwrap();
     std::fs::write(f.path("late"), b"REAPPEARED KEEP").unwrap();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(std::fs::read(f.path("late")).unwrap(), b"REAPPEARED KEEP");
     assert!(f.storage.list_model_placements().unwrap()[0].body_removed);
 }
@@ -290,12 +412,18 @@ fn model_deletion_body_panic_releases_writer_without_releasing_persistent_fence(
     let f = Fixture::new();
     let owner = lease();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(catch_unwind(AssertUnwindSafe(|| removal::run_observed(
         &f.storage,
         &op,
         &owner,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|name| if name == "renamed" {
             panic!("synthetic interruption")
         }
@@ -307,9 +435,14 @@ fn model_deletion_body_panic_releases_writer_without_releasing_persistent_fence(
     let mut f = f;
     drop(owner);
     reopen(&mut f, |_| {});
-    assert!(removal::run(&f.storage, &op, &lease(), &|| false)
-        .unwrap()
-        .completed());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 
 #[test]
@@ -317,21 +450,44 @@ fn model_deletion_body_cancelled_real_lease_rejects_resume_and_preserves_remaini
     let f = Fixture::new();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = prepare(&f, false, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     controller.begin_exit().unwrap();
     controller.abort_shutdown();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false).is_err());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path("cli").exists() && f.path("weights/model.bin").exists());
     drop(owner);
     let next = controller
-        .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    assert!(removal::run(&f.storage, &op, &next, &|| false)
-        .unwrap()
-        .completed());
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &next,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 
 #[test]
@@ -340,7 +496,13 @@ fn model_deletion_body_corrupt_progress_is_not_deletion_or_availability_authorit
         let mut f = Fixture::new();
         let owner = lease();
         let op = prepare(&f, false, &owner);
-        removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+        removal::start(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         reopen(&mut f, |db| {
             let json: String = db
                 .query_row(
@@ -363,7 +525,13 @@ fn model_deletion_body_corrupt_progress_is_not_deletion_or_availability_authorit
             .unwrap();
         });
         assert!(
-            removal::run(&f.storage, &op, &owner, &|| false).is_err(),
+            removal::run(
+                &f.storage,
+                &op,
+                &owner,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{case}"
         );
         assert!(f.path("cli").exists() && f.path("weights/model.bin").exists());
@@ -387,7 +555,13 @@ fn model_deletion_body_process_sigkill_resumes_every_persisted_boundary_without_
         let op = prepare(&f, false, &owner);
         let before = history(&f);
         let consent = receipt(&f, &op);
-        removal::start(&f.storage, &op, &owner, &|| false).unwrap();
+        removal::start(
+            &f.storage,
+            &op,
+            &owner,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         drop(owner);
         let root = f.storage.root().to_path_buf();
         let placeholder = tempfile::tempdir().unwrap();
@@ -410,12 +584,23 @@ fn model_deletion_body_process_sigkill_resumes_every_persisted_boundary_without_
         assert_eq!(consent, receipt(&f, &op));
         let controller = AnalysisController::default();
         let owner = controller
-            .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+            .begin_model_deletion_maintenance(
+                &f.storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         assert!(
-            removal::run(&f.storage, &op, &owner, &|| false)
-                .unwrap()
-                .completed(),
+            removal::run(
+                &f.storage,
+                &op,
+                &owner,
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .completed(),
             "{boundary}"
         );
         assert!(!f.path("").exists());
@@ -436,15 +621,27 @@ fn model_deletion_body_crash_child() {
     let storage = Storage::open_with_models(std::path::PathBuf::from(root), models.into()).unwrap();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_model_deletion_maintenance(&storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    removal::run_observed(&storage, &op, &owner, &|| false, &|name| {
-        if name == boundary {
-            unsafe {
-                libc::kill(std::process::id() as i32, libc::SIGKILL);
+    removal::run_observed(
+        &storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+        &|name| {
+            if name == boundary {
+                unsafe {
+                    libc::kill(std::process::id() as i32, libc::SIGKILL);
+                }
             }
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("synthetic crash boundary was not reached");
 }
@@ -458,10 +655,21 @@ fn model_deletion_body_full_256_object_limit_does_not_double_count_staged_missin
     assert_eq!(f.preview().unwrap().entries.len(), 256);
     let owner = lease();
     let op = prepare(&f, true, &owner);
-    removal::start(&f.storage, &op, &owner, &|| false).unwrap();
-    assert!(removal::run(&f.storage, &op, &owner, &|| false)
-        .unwrap()
-        .completed());
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
     assert!(!f.path("").exists());
     assert!(!f.storage.data_write_blocked());
 }

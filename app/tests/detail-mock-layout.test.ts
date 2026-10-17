@@ -77,7 +77,7 @@ test("minutes edit actions use the existing editor owner and generation stays gu
   const panel=source("minutes.tsx"), editor=source("minutes-markdown-editor.tsx");
   assert.match(panel,/actionsHost=\{actionsHost\}/);
   assert.match(editor,/actionsHost \? createPortal\(actions, actionsHost\) : actions/);
-  assert.match(panel,/recordingActive \|\| pending \|\| !source\?\.currentId \|\| !engine \|\| !minutesConfigured\(engine\)/);
+  assert.match(panel,/recordingActive \|\| pending \|\| preparing \|\| !source\?\.currentId \|\| !engine \|\| !minutesConfigured\(engine\)/);
   assert.match(panel,/start_markdown_minutes_generation/);
   assert.doesNotMatch(panel,/start_minutes_generation"|adopt_minutes_candidate|restore_minutes_version/);
 });
@@ -110,11 +110,11 @@ test("mixed action rows and select fields align without removing wrapping or che
   assert.match(css,/\.analysis-actions>span,[^{]*\{ align-self:center;/);
   assert.match(css,/\.card-actions \{ flex-wrap:wrap;/);
   assert.match(css,/\.meeting-form-row \{ align-items:center; flex-wrap:wrap;/);
-  assert.match(css,/\.theme-choice select,\.common-modal select,\.capture-input-selection select \{ min-height:40px;[^}]*border-radius:8px;/);
+  assert.match(css,/\.theme-choice select,\.common-modal select,\.capture-input-selection select(?:,\.active-microphone-selection select)?,\.voice-speaker select \{ min-height:40px;[^}]*border-radius:8px;/);
   assert.match(css,/\.audio-controls label \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px;/);
-  assert.match(css,/\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select,\.model-selection-row select \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
+  assert.match(css,/\.theme-choice select,\.common-modal select,\.audio-controls select,(?:\.internal-logs-filters select,)?\.capture-input-selection select,(?:\.active-microphone-selection select,)?\.model-selection-row select,\.voice-speaker select \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
   assert.match(css,/background-size:5px 5px; background-repeat:no-repeat;/);
-  assert.match(css,/@media\(forced-colors:active\) \{\s*\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select,\.model-selection-row select \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
+  assert.match(css,/@media\(forced-colors:active\) \{\s*\.theme-choice select,\.common-modal select,\.audio-controls select,(?:\.internal-logs-filters select,)?\.capture-input-selection select,(?:\.active-microphone-selection select,)?\.model-selection-row select,\.voice-speaker select \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
   assert.match(css,/\.action-error:has\(>button\) \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;/);
   assert.match(css,/\.vocabulary-list \.analysis-actions label \{ gap:8px;/);
   assert.match(css,/\.transcript-main>\.transcript-actions:first-child \{ min-height:32px;/);

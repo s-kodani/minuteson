@@ -1,7 +1,7 @@
 import type { AnalysisJob } from "./analysis-state.ts";
 import type { ToastLevel } from "./toast-state.ts";
 
-export type JobKind = "transcription" | "diarization" | "minutes_generation";
+export type JobKind = "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching";
 export interface NotificationJob extends AnalysisJob {
   kind: JobKind; meetingId: string; meetingTitle: string; operationId: string; inputHash: string;
   createdAt: number; updatedAt: number; outputMinutesId: string | null;
@@ -10,7 +10,7 @@ export interface JobNotice {
   job: NotificationJob; topic: "result" | "issue"; message: string;
   level: ToastLevel; important: boolean; eventId: string;
 }
-export const jobName = (kind: JobKind) => ({ transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成" })[kind];
+export const jobName = (kind: JobKind) => ({ transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合" })[kind];
 export const jobGroup = (job: NotificationJob) => JSON.stringify([job.meetingId, job.kind]);
 const active = new Set(["queued", "running", "pausing", "paused", "interrupted"]);
 const states = new Set([...active, "succeeded", "failed", "cancelled"]);
@@ -21,25 +21,30 @@ const notice = (job: NotificationJob, message: string, level: ToastLevel = "info
   job, message: `「${job.meetingTitle}」の${jobName(job.kind)}${message}`, level, topic,
   important: topic === "issue", eventId: JSON.stringify([job.id, job.updatedAt, transition(job)]),
 });
-export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded";
+export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded" | "voice";
 export function verifiedJobOutput(job: NotificationJob, value: unknown): VerifiedJobPublication {
-  const proof = value as { job?: NotificationJob; contentHash?: string; publicationState?: string } | null;
+  const proof = value as { job?: NotificationJob; contentHash?: string; publicationState?: string; warnings?: unknown } | null;
   const receipt = proof?.job && { ...proof.job, meetingTitle: job.meetingTitle };
   assertNotificationJobs(receipt ? [receipt] : null);
   if (!receipt || job.state !== "succeeded" || receipt.id !== job.id || identity(receipt) !== identity(job)
     || transition(receipt) !== transition(job)
     || !proof || typeof proof.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(proof.contentHash)
-    || !["candidate", "committed", "markdown", "superseded"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
+    || !["candidate", "committed", "markdown", "superseded", "voice"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
+  if (proof.publicationState==="voice") {
+    if (!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash) throw Error("声の処理の完了記録が一致しません。");
+    return "voice";
+  }
   const plain=proof.publicationState === "markdown" || proof.publicationState === "superseded";
   if (plain ? job.kind !== "minutes_generation" || job.outputMinutesId !== null || job.outputAnalysisId !== null
     || job.completedUnits < 1 || job.totalUnits !== job.completedUnits : !output(job)) throw Error("ジョブと保存結果の形式が一致しません。成功通知を保留しています。");
   return proof.publicationState as VerifiedJobPublication;
 }
+
 export function assertNotificationJobs(value: unknown): asserts value is NotificationJob[] {
   if (!Array.isArray(value)) throw Error("解析通知の状態を照合できません。");
   const ids = new Set<string>();
   for (const job of value) {
-    if (!job || typeof job.id !== "string" || !job.id || ids.has(job.id) || !["transcription", "diarization", "minutes_generation"].includes(job.kind)
+    if (!job || typeof job.id !== "string" || !job.id || ids.has(job.id) || !["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching"].includes(job.kind)
       || !states.has(job.state) || typeof job.meetingId !== "string" || !job.meetingId || typeof job.meetingTitle !== "string" || !job.meetingTitle
       || typeof job.operationId !== "string" || !job.operationId || typeof job.specHash !== "string" || !/^[a-f0-9]{64}$/.test(job.specHash)
       || typeof job.inputHash !== "string" || !/^[a-f0-9]{64}$/.test(job.inputHash)
@@ -96,16 +101,22 @@ export class JobNotificationTracker {
     }
     this.ready = true;
     const issueGroups = new Set(issues.map(jobGroup));
-    return { events, issues, pending: [...this.pending.values()], healthyGroups: [...latest.keys()].filter(group => !issueGroups.has(group)) };
+    return { jobs, events, issues, pending: [...this.pending.values()], healthyGroups: [...latest.keys()].filter(group => !issueGroups.has(group)) };
   }
   confirmOutput(job: NotificationJob, publication: VerifiedJobPublication) {
     const pending = this.pending.get(job.id), current = this.seen.get(job.id);
     if (!pending || !current || transition(current) !== transition(job) || identity(current) !== identity(job)) return null;
+    if(publication==="voice") {
+      if(!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1)throw Error("声の処理の完了状態が不正です。");
+      this.pending.delete(job.id);return notice(job,"が完了しました","success");
+    }
     const plain=publication==="markdown"||publication==="superseded";
     if (plain ? job.kind!=="minutes_generation"||job.outputMinutesId!==null||job.outputAnalysisId!==null||job.completedUnits<1||job.totalUnits!==job.completedUnits : !output(job)) throw Error("保存結果の版・形式が不正です。成功通知を保留しています。");
     this.pending.delete(job.id);
     if(publication==="superseded")return null; // Later human edits are current.
-    if(publication==="markdown")return {...notice(job,"が完了しました","success"),message:`「${job.meetingTitle}」の議事録を保存しました`};
+    if(publication==="markdown") {
+      return { ...notice(job, "が完了しました", "success"), message: `「${job.meetingTitle}」の議事録を保存しました` };
+    }
     return notice(job, publication === "candidate" ? "の処理が完了しました" : "の結果を保存しました", "success");
   }
 }

@@ -59,7 +59,32 @@ pub(crate) struct Request {
     pub speaker_counts: Vec<crate::diarization::TrackSettings>,
 }
 
-fn target(db: &Transaction<'_>, meeting: &str) -> Result<Option<Target>, String> {
+#[derive(Clone, Debug, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum Publication {
+    Published {
+        flow: AnalysisFlow,
+    },
+    ConfirmationRequired {
+        flow: AnalysisFlow,
+        target: Target,
+        meeting_title: String,
+    },
+}
+impl Publication {
+    pub(super) fn published(self) -> Result<AnalysisFlow, String> {
+        match self {
+            Self::Published { flow } => Ok(flow),
+            Self::ConfirmationRequired { .. } => Err("再生成の開始後に文字起こしが編集されました。生成結果への置き換えを確認してください。".into()),
+        }
+    }
+}
+
+pub(super) fn target(db: &Transaction<'_>, meeting: &str) -> Result<Option<Target>, String> {
     let (lifecycle, head): (String, Option<String>) = db
         .query_row(
             "SELECT lifecycle,current_analysis_id FROM meetings WHERE id=?1",
@@ -107,7 +132,7 @@ pub(super) fn require_target(
 ) -> Result<(), String> {
     expected.validate()?;
     if target(db, meeting)?.as_ref() != Some(expected) {
-        return Err("再生成の開始後に文字起こしが編集されました。現在の本文と話者の修正を保持し、置き換えを停止しました。".into());
+        return Err("確認後に文字起こしが編集されました。現在の修正を保持しています。置き換えの確認を開き直してください。".into());
     }
     Ok(())
 }
@@ -277,7 +302,8 @@ impl Storage {
         meeting: &str,
         id: &str,
         version: i64,
-    ) -> Result<AnalysisFlow, String> {
+        confirmed_target: Option<&Target>,
+    ) -> Result<Publication, String> {
         self.require_data_writable()?;
         let flow = self
             .analysis_flow(meeting)?
@@ -286,14 +312,19 @@ impl Storage {
             return Err("再生成の対象工程が変更されています".into());
         }
         if flow.stage == "review" {
-            return Ok(flow);
+            return Ok(Publication::Published { flow });
         } // Lost publication response: read-only replay.
-        if flow.lock_version != version || !flow.ready_to_publish {
+        if flow.lock_version != version || !flow.replacement_ready {
             return Err("再生成の完了状態が変更されています".into());
         }
-        match self.complete_analysis_flow(&flow) {
+        match self.complete_analysis_flow_with_confirmation(&flow, confirmed_target) {
             Ok(next) => Ok(next),
             Err(cause) => {
+                // A changed confirmation can be opened again against the latest
+                // draft. Keep the completed result available without rerunning AI.
+                if confirmed_target.is_some() {
+                    return Err(cause);
+                }
                 self.update_analysis_flow(
                     &flow,
                     "attention",

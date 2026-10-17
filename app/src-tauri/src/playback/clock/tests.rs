@@ -189,8 +189,15 @@ fn mapped_pcm_is_shared_by_streamed_track_and_asr_window_wav_writers() {
     let window = root.path().join("window.wav");
     let frames = source.total_frames();
     assert_eq!(
-        write_track(&mut source, &track, &|| false).unwrap(),
-        write_window(&mut source, 0, frames, &window, &|| false).unwrap()
+        write_track(&mut source, &track, &crate::test_support::never_cancelled).unwrap(),
+        write_window(
+            &mut source,
+            0,
+            frames,
+            &window,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
     );
     assert_eq!(
         std::fs::read(track).unwrap(),

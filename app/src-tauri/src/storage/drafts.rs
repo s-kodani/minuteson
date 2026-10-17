@@ -157,72 +157,9 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let existing: Option<(String, String, String, String, i64)> = transaction.query_row(
-            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript' AND active = 1",
-            params![draft_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        ).optional().map_err(|error| error.to_string())?;
-        let (meeting_id, base_analysis_id, old_json, old_hash, lock_version) =
-            existing.ok_or("下書きが見つかりません")?;
-        if lock_version != expected_lock_version {
-            return Err("別の画面で下書きが更新されました。再読込してください".into());
-        }
-        if draft_hash(&old_json) != old_hash {
-            return Err("保存済み下書きの内容が変化しています".into());
-        }
-        ensure_committed_analysis(&transaction, &meeting_id, &base_analysis_id)?;
-        let payload = validate_payload(&transaction, &base_analysis_id, payload)?;
-        let serialized = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
-        if serialized.len() > MAX_DRAFT_BYTES {
-            return Err("下書きが大きすぎます".into());
-        }
-        if serialized == old_json {
-            return Ok(TranscriptDraft {
-                id: draft_id.to_owned(),
-                meeting_id,
-                base_analysis_id,
-                payload,
-                content_hash: old_hash,
-                lock_version,
-                updated_at: transaction
-                    .query_row(
-                        "SELECT updated_at FROM working_drafts WHERE id = ?1",
-                        params![draft_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| error.to_string())?,
-            });
-        }
-        let new_hash = draft_hash(&serialized);
-        let sequence: i64 = transaction
-            .query_row(
-                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM edit_operations WHERE draft_id = ?1",
-                params![draft_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let now = now_ms()?;
-        transaction.execute(
-            "INSERT INTO edit_operations (id, draft_id, sequence, operation_kind, payload_json, inverse_json, before_hash, after_hash, created_at) VALUES (?1, ?2, ?3, 'replace_payload', ?4, ?5, ?6, ?7, ?8)",
-            params![Uuid::new_v4().to_string(), draft_id, sequence, serialized, old_json, old_hash, new_hash, now],
-        ).map_err(|error| error.to_string())?;
-        let changed = transaction.execute(
-            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3, schema_version = ?6 WHERE id = ?4 AND lock_version = ?5",
-            params![serialized, new_hash, now, draft_id, lock_version, payload.schema_version],
-        ).map_err(|error| error.to_string())?;
-        if changed != 1 {
-            return Err("下書きの更新競合が発生しました".into());
-        }
+        let result = save_in_transaction(&transaction, draft_id, expected_lock_version, payload)?;
         transaction.commit().map_err(|error| error.to_string())?;
-        Ok(TranscriptDraft {
-            id: draft_id.to_owned(),
-            meeting_id,
-            base_analysis_id,
-            payload,
-            content_hash: new_hash,
-            lock_version: lock_version + 1,
-            updated_at: now,
-        })
+        Ok(result)
     }
 
     #[allow(dead_code)]
@@ -837,4 +774,78 @@ mod tests {
             Some(redone)
         );
     }
+}
+
+// Shared by ordinary editing and atomic voice-name application.
+pub(super) fn save_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    draft_id: &str,
+    expected_lock_version: i64,
+    payload: TranscriptDraftPayload,
+) -> Result<TranscriptDraft, String> {
+    let existing: Option<(String, String, String, String, i64)> = transaction.query_row(
+            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript' AND active = 1",
+            params![draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional().map_err(|error| error.to_string())?;
+    let (meeting_id, base_analysis_id, old_json, old_hash, lock_version) =
+        existing.ok_or("下書きが見つかりません")?;
+    if lock_version != expected_lock_version {
+        return Err("別の画面で下書きが更新されました。再読込してください".into());
+    }
+    if draft_hash(&old_json) != old_hash {
+        return Err("保存済み下書きの内容が変化しています".into());
+    }
+    ensure_committed_analysis(&transaction, &meeting_id, &base_analysis_id)?;
+    let payload = validate_payload(&transaction, &base_analysis_id, payload)?;
+    let serialized = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+    if serialized.len() > MAX_DRAFT_BYTES {
+        return Err("下書きが大きすぎます".into());
+    }
+    if serialized == old_json {
+        return Ok(TranscriptDraft {
+            id: draft_id.to_owned(),
+            meeting_id,
+            base_analysis_id,
+            payload,
+            content_hash: old_hash,
+            lock_version,
+            updated_at: transaction
+                .query_row(
+                    "SELECT updated_at FROM working_drafts WHERE id = ?1",
+                    params![draft_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?,
+        });
+    }
+    let new_hash = draft_hash(&serialized);
+    let sequence: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM edit_operations WHERE draft_id = ?1",
+            params![draft_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let now = now_ms()?;
+    transaction.execute(
+            "INSERT INTO edit_operations (id, draft_id, sequence, operation_kind, payload_json, inverse_json, before_hash, after_hash, created_at) VALUES (?1, ?2, ?3, 'replace_payload', ?4, ?5, ?6, ?7, ?8)",
+            params![Uuid::new_v4().to_string(), draft_id, sequence, serialized, old_json, old_hash, new_hash, now],
+        ).map_err(|error| error.to_string())?;
+    let changed = transaction.execute(
+            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3, schema_version = ?6 WHERE id = ?4 AND lock_version = ?5",
+            params![serialized, new_hash, now, draft_id, lock_version, payload.schema_version],
+        ).map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err("下書きの更新競合が発生しました".into());
+    }
+    Ok(TranscriptDraft {
+        id: draft_id.to_owned(),
+        meeting_id,
+        base_analysis_id,
+        payload,
+        content_hash: new_hash,
+        lock_version: lock_version + 1,
+        updated_at: now,
+    })
 }

@@ -1660,9 +1660,11 @@ pub(in crate::storage) mod tests {
             ("system.caf", 31200_u64, 0.0_f32),
         ] {
             let source = fixture.join(name);
-            let (format, size, hash) =
-                crate::audio::inspect_recorded_caf(File::open(&source).unwrap(), &|| false)
-                    .unwrap();
+            let (format, size, hash) = crate::audio::inspect_recorded_caf(
+                File::open(&source).unwrap(),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             assert_eq!(format.sample_rate, 8000);
             assert_eq!(format.channels, 2);
             assert_eq!(format.frames, frames);

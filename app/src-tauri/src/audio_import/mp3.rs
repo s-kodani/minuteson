@@ -380,10 +380,16 @@ mod tests {
             b"ID3\x04\0\0\0\0\0\x7f".as_slice(),
         ] {
             std::fs::write(&path, bytes).unwrap();
-            assert!(decode(&path, None, &|| false).is_err());
+            assert!(decode(&path, None, &crate::test_support::never_cancelled).is_err());
         }
         std::fs::write(&path, [255, 251, 144, 0, 0]).unwrap();
-        assert!(scan(File::open(&path).unwrap(), 0, 5, &|| false).is_err());
+        assert!(scan(
+            File::open(&path).unwrap(),
+            0,
+            5,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(caf_header(384000, 8, u64::MAX).is_err());
         assert!(decode(&path, None, &|| true).is_err());
     }
@@ -426,12 +432,15 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&result.stderr)
             );
-            let inspected = decode(&mp3, None, &|| false).unwrap();
+            let inspected = decode(&mp3, None, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(inspected.frames, u64::from(rate) * 2);
             assert_eq!(inspected.channels, channels);
             let caf = root.path().join(format!("{rate}.caf"));
-            assert_eq!(decode(&mp3, Some(&caf), &|| false).unwrap(), inspected);
-            assert!(decode(&mp3, Some(&caf), &|| false).is_err());
+            assert_eq!(
+                decode(&mp3, Some(&caf), &crate::test_support::never_cancelled).unwrap(),
+                inspected
+            );
+            assert!(decode(&mp3, Some(&caf), &crate::test_support::never_cancelled).is_err());
             let raw = root.path().join(format!("{rate}.raw"));
             let result = Command::new(&ffmpeg)
                 .args(["-nostdin", "-v", "error", "-i"])
@@ -446,7 +455,7 @@ mod tests {
                 expected.len() as u64,
                 inspected.frames * u64::from(channels) * 4
             );
-            let proof = Fingerprint::capture(&caf, &|| false).unwrap();
+            let proof = Fingerprint::capture(&caf, &crate::test_support::never_cancelled).unwrap();
             let mut audio =
                 VerifiedAudio::open(File::open(&caf).unwrap(), proof.size, &proof.sha256).unwrap();
             let mut offset = 0;
@@ -467,7 +476,7 @@ mod tests {
             }
             let bytes = std::fs::read(&mp3).unwrap();
             std::fs::write(&mp3, &bytes[..bytes.len() - 1]).unwrap();
-            assert!(decode(&mp3, None, &|| false).is_err());
+            assert!(decode(&mp3, None, &crate::test_support::never_cancelled).is_err());
         }
     }
 }

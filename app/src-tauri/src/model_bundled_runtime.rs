@@ -133,7 +133,7 @@ impl Bundle {
             || !crate::model_download_ipc::hash(&index.archive.sha256)
             || index.files.len() != MEMBERS.len()
         {
-            return Err("同梱情報が固定されたCPU実行ファイルの定義と一致しません".into());
+            return Err("同梱情報が固定されたCPU・Metal実行ファイルの定義と一致しません".into());
         }
         for (i, member) in index.files.iter().enumerate() {
             let limit = if i == 0 { MAX_PACKAGE } else { 65_536 };
@@ -226,7 +226,7 @@ impl Bundle {
             schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
             model_name: format!("Whisper {name}（多言語）"), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
             quantization: None, target: Target::MacosAarch64,
-            license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt; model card: notices/whisper-model-card.md; app-built CPU provenance: build-info.json".into(),
+            license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt; model card: notices/whisper-model-card.md; app-built CPU/Metal provenance: build-info.json".into(),
             files,
         }, sources };
         recipe.review()?;

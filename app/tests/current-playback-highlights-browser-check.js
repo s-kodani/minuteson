@@ -37,19 +37,33 @@ async page => {
   await nav.getByRole("button", {name:"会議一覧",exact:true}).click();
   await page.evaluate(() => window.monBrowserFixture.setUtterances(Array.from({length:103}, (_,i) => ({
     id:`synthetic-${i}`,trackId:"microphone",startUs:i*1_000_000,endUs:(i+1)*1_000_000,
-    recognizedText:`発言${i}`,effectiveText:`発言${i}`,attributionState:"assigned",speakerIds:["speaker-a"]
+    recognizedText:`発言${i}`,effectiveText:`発言${i}`,attributionState:"assigned",speakerIds:[i%2?"speaker-b":"speaker-a"]
   }))));
   await page.getByRole("button", {name:"会議A",exact:true}).click();
-  await editor.getByRole("button", {name:"次へ",exact:true}).click();
-  await editor.locator('[data-utterance-id="synthetic-50"]').waitFor();
-  await page.evaluate(async () => {
-    (await import("/src/playback-follow.ts")).playbackTimeline.publish({owner:"synthetic-check",session:"check",meetingId:"meeting-0",analysisId:"analysis",utteranceId:"synthetic-0",scope:"utterance",timeUs:500_000,playing:true,trackKind:"mic"});
-  });
-  check(await editor.locator('[data-utterance-id="synthetic-50"]').count() === 1
-    && await editor.locator('[data-utterance-id="synthetic-0"]').count() === 0, "playback changed the manually selected page");
-  await editor.getByRole("button", {name:"前へ",exact:true}).click();
-  await editor.locator('[data-utterance-id="synthetic-0"].utterance-playing').waitFor();
-  await page.evaluate(async () => { (await import("/src/playback-follow.ts")).playbackTimeline.release("synthetic-check"); });
-  results.push("playback never changes pages and manual pagination remains available");
+  check(await editor.locator('[data-utterance-id]').count()===103&&await editor.locator('.transcript-pages').count()===0,"utterances remain paginated");
+  const jump=editor.getByRole('button',{name:'再生位置へ移動',exact:true});
+  check(await jump.isDisabled(),'jump enabled without a timeline');
+  const heading=await editor.getByRole('heading',{name:'発言一覧',exact:true}).boundingBox(),button=await jump.boundingBox();
+  check(button.x>=heading.x+heading.width,'jump is not to the right of the heading');
+  await editor.getByRole('button',{name:'00:00:00の発言を編集',exact:true}).click();
+  const pending=editor.getByRole('textbox',{name:'00:00:00の発言',exact:true});await pending.fill('ジャンプ中も保持する本文');
+  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('発言0');
+  const saved=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:'analysis',utteranceId:'synthetic-102',scope:'utterance',timeUs:102_500_000,playing:true,trackKind:'mic'});});
+  await page.waitForFunction(()=>!document.querySelector('.transcript-list-heading button')?.disabled);
+  check(await editor.locator('[data-utterance-id="synthetic-102"]').count()===0,'timeline automatically cleared the filter');
+  await jump.click();await editor.locator('[data-utterance-id="synthetic-102"]').waitFor();
+  check(await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).inputValue()===''&&await editor.locator('[data-utterance-id]').count()===103,'explicit jump did not reveal all matching rows');
+  const target=editor.locator('[data-utterance-id="synthetic-102"]');
+  check(await target.evaluate(el=>{const r=el.getBoundingClientRect();return !el.classList.contains('utterance-group-fragment')&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;}),'jump did not scroll to the target');
+  check(await pending.inputValue()==='ジャンプ中も保持する本文'&&await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length)===saved,'jump saved or lost pending input');
+  results.push('heading-right jump reveals a filtered playback target without saving or losing pending text');
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:'analysis',utteranceId:'synthetic-50',scope:'utterance',timeUs:50_500_000,playing:false,trackKind:'mic'});});
+  await jump.click();check(await editor.locator('[data-utterance-id="synthetic-50"]').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),'paused timeline cannot be jumped to');
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'foreign',meetingId:'another-meeting',analysisId:'analysis',utteranceId:'synthetic-50',scope:'utterance',timeUs:50_500_000,playing:true,trackKind:'mic'});});
+  check(await jump.isDisabled(),'another meeting enabled jump');
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.release('synthetic-check');});
+  check(await jump.isDisabled(),'released timeline left jump enabled');
+  results.push('jump supports paused positions and rejects other meetings or released playback');
   return results;
 }

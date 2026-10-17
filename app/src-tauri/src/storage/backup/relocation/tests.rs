@@ -35,10 +35,12 @@ impl Fixture {
     }
 }
 fn snapshot(f: &Fixture) -> NativeSnapshot<'_> {
-    f.storage.prepare_relocation_snapshot(&|| false).unwrap()
+    f.storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap()
 }
 fn native_tables(db: &Connection) -> (String, Vec<Table>) {
-    census(db, &|| false).unwrap()
+    census(db, &crate::test_support::never_cancelled).unwrap()
 }
 
 #[test]
@@ -46,7 +48,7 @@ fn placed_current_database_is_validated_without_migration_and_keeps_cancellation
     let f = Fixture::new();
     let mut db = f.storage.connection.lock().unwrap();
     let before = native_tables(&db);
-    validate_database(&mut db, &|| false).unwrap();
+    validate_database(&mut db, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(native_tables(&db), before);
     assert_eq!(verify_migration_history(&db).unwrap(), MIGRATIONS.len());
     assert!(validate_database(&mut db, &|| true).is_err());
@@ -69,7 +71,7 @@ fn placed_old_database_schemas_are_rejected_without_mutation() {
             .unwrap();
         }
         let before = native_tables(&db);
-        assert!(validate_database(&mut db, &|| false).is_err());
+        assert!(validate_database(&mut db, &crate::test_support::never_cancelled).is_err());
         assert_eq!(native_tables(&db), before);
         assert_eq!(verify_migration_history(&db).unwrap(), version);
     }
@@ -153,8 +155,10 @@ fn native_image_preserves_wal_ids_all_tables_settings_and_unregistered_audio() {
         saved.manifest_hash(),
         digest(&serde_json::to_vec(saved.manifest()).unwrap())
     );
-    saved.verify(&|| false).unwrap();
-    saved.verify_source(&|| false).unwrap();
+    saved.verify(&crate::test_support::never_cancelled).unwrap();
+    saved
+        .verify_source(&crate::test_support::never_cancelled)
+        .unwrap();
 }
 
 #[test]
@@ -188,7 +192,9 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
     storage
         .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
-    let saved = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let saved = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         native_tables(&storage.connection.lock().unwrap()),
         native_tables(&read_only(&saved.image.join("meetings.sqlite3")).unwrap())
@@ -223,8 +229,10 @@ fn copied_image_can_open_same_meeting_after_old_managed_tree_is_unavailable() {
     );
     // Opening Storage changes only the temporary destination (WAL/registry).
     // It is not allowed to substitute for the sealed pre-cutover image.
-    assert!(saved.verify(&|| false).is_err());
-    assert!(saved.verify_source(&|| false).is_err());
+    assert!(saved.verify(&crate::test_support::never_cancelled).is_err());
+    assert!(saved
+        .verify_source(&crate::test_support::never_cancelled)
+        .is_err());
     drop(copy);
     std::fs::rename(&hidden, &old).unwrap();
 }
@@ -234,9 +242,17 @@ fn write_fence_lasts_through_verification_and_releases_only_on_drop() {
     let f = Fixture::new();
     let saved = snapshot(&f);
     assert!(f.storage.create_meeting("拒否する書込").is_err());
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
-    assert!(f.storage.prepare_relocation_snapshot(&|| false).is_err());
-    saved.verify_source(&|| false).unwrap();
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
+    assert!(f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
+    saved
+        .verify_source(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
     let stage = saved.stage.path().to_owned();
     drop(saved);
@@ -285,7 +301,10 @@ fn ready_mismatch_or_missing_body_refuses_without_changing_source_or_fence() {
             Some(bytes) => std::fs::write(f.path(), bytes).unwrap(),
             None => std::fs::remove_file(f.path()).unwrap(),
         }
-        assert!(f.storage.prepare_relocation_snapshot(&|| false).is_err());
+        assert!(f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .is_err());
         assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
         f.storage.create_meeting("元DBは利用可能").unwrap();
         assert_eq!(std::fs::read(f.path()).ok(), body.map(Vec::from));
@@ -307,7 +326,10 @@ fn missing_and_corrupt_states_keep_native_metadata_without_portable_cache_except
     assert!(!saved.image.join(&f.relative).exists());
     drop(saved);
     std::fs::write(f.path(), b"broken retained audio").unwrap();
-    assert!(f.storage.prepare_relocation_snapshot(&|| false).is_err());
+    assert!(f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     f.storage
         .connection
         .lock()
@@ -345,7 +367,9 @@ fn links_and_special_files_refuse_without_following_them() {
             _ => unreachable!(),
         }
         assert!(
-            f.storage.prepare_relocation_snapshot(&|| false).is_err(),
+            f.storage
+                .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+                .is_err(),
             "{kind}"
         );
         assert_eq!(std::fs::read(outside).unwrap(), b"not meeting data");
@@ -369,8 +393,13 @@ fn exact_path_inventory_rejects_added_removed_modified_and_replaced_source_files
             }
             _ => unreachable!(),
         }
-        assert!(saved.verify_source(&|| false).is_err(), "{kind}");
-        saved.verify(&|| false).unwrap();
+        assert!(
+            saved
+                .verify_source(&crate::test_support::never_cancelled)
+                .is_err(),
+            "{kind}"
+        );
+        saved.verify(&crate::test_support::never_cancelled).unwrap();
     }
 }
 
@@ -395,8 +424,13 @@ fn sealed_image_rejects_payload_manifest_db_and_extra_root_changes() {
             "extra" => std::fs::write(saved.image.join("unconfirmed"), b"keep").unwrap(),
             _ => unreachable!(),
         }
-        assert!(saved.verify(&|| false).is_err(), "{kind}");
-        saved.verify_source(&|| false).unwrap();
+        assert!(
+            saved.verify(&crate::test_support::never_cancelled).is_err(),
+            "{kind}"
+        );
+        saved
+            .verify_source(&crate::test_support::never_cancelled)
+            .unwrap();
         assert_eq!(std::fs::read(f.path()).unwrap(), b"original audio");
     }
 }
@@ -495,7 +529,9 @@ fn root_escaping_registered_paths_are_rejected_without_reading_external_payloads
             .execute("UPDATE file_assets SET relative_path=?1", params![relative])
             .unwrap();
         assert!(
-            f.storage.prepare_relocation_snapshot(&|| false).is_err(),
+            f.storage
+                .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+                .is_err(),
             "{relative}"
         );
         assert_eq!(std::fs::read(f.path()).unwrap(), b"original audio");
@@ -520,7 +556,7 @@ fn active_recording_refuses_before_allocating_any_native_copy() {
         .unwrap();
     assert!(f
         .storage
-        .prepare_relocation_snapshot(&|| false)
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
         .err()
         .expect("active recording must be refused")
         .contains("停止"));
@@ -539,8 +575,10 @@ fn source_database_path_substitution_cannot_hide_behind_the_old_open_connection(
     let hidden = f.storage.root.join("retained-original-db");
     std::fs::rename(&db, &hidden).unwrap();
     std::fs::copy(saved.image.join("meetings.sqlite3"), &db).unwrap();
-    assert!(saved.verify_source(&|| false).is_err());
-    saved.verify(&|| false).unwrap();
+    assert!(saved
+        .verify_source(&crate::test_support::never_cancelled)
+        .is_err());
+    saved.verify(&crate::test_support::never_cancelled).unwrap();
     assert!(hidden.exists());
 }
 
@@ -569,8 +607,13 @@ fn source_database_same_inode_rewrite_link_and_permissions_are_rejected() {
             _ => unreachable!(),
         }
         assert_eq!(Identity::read(&path.metadata().unwrap()).unwrap(), identity);
-        assert!(saved.verify_source(&|| false).is_err(), "{kind}");
-        saved.verify(&|| false).unwrap();
+        assert!(
+            saved
+                .verify_source(&crate::test_support::never_cancelled)
+                .is_err(),
+            "{kind}"
+        );
+        saved.verify(&crate::test_support::never_cancelled).unwrap();
         drop(saved);
         assert!(f
             .storage
@@ -596,8 +639,13 @@ fn staged_root_identity_and_private_permissions_are_part_of_the_seal() {
                 std::fs::rename(child.path(), saved.image.join(child.file_name())).unwrap();
             }
         }
-        assert!(saved.verify(&|| false).is_err(), "{kind}");
-        saved.verify_source(&|| false).unwrap();
+        assert!(
+            saved.verify(&crate::test_support::never_cancelled).is_err(),
+            "{kind}"
+        );
+        saved
+            .verify_source(&crate::test_support::never_cancelled)
+            .unwrap();
     }
 }
 

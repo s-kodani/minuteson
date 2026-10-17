@@ -89,6 +89,8 @@ impl Admission {
             let _ = (deletion_operation, lane);
             analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
         };
+        app.state::<crate::playback::mix_cache::MixCache>()
+            .suspend();
         Ok(Self {
             app: app.clone(),
             lease: Some(lease),
@@ -107,6 +109,9 @@ impl Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         drop(self.lease.take());
+        self.app
+            .state::<crate::playback::mix_cache::MixCache>()
+            .resume();
         if !self.app.state::<Storage>().restart_required() {
             let _ = AnalysisController::kick(&self.app);
         }

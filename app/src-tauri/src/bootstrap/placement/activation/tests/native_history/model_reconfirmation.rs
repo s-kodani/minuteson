@@ -30,7 +30,13 @@ fn owner(
     op: &str,
 ) -> crate::analysis_worker::data_maintenance::DataMaintenanceLease {
     AnalysisController::default()
-        .begin_model_deletion_maintenance(storage, op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            storage,
+            op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn review(
@@ -39,11 +45,23 @@ fn review(
     op: &str,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> models::operations::Prepared {
-    let mut p = models::operations::Prepared::pending(storage, root, op, lease, &|| false).unwrap();
+    let mut p = models::operations::Prepared::pending(
+        storage,
+        root,
+        op,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let v = p.preview();
     assert!(!v.execute_allowed && v.reconfirmation_allowed);
-    p.review_remaining(storage, lease, &v.confirmation_id, &|| false)
-        .unwrap();
+    p.review_remaining(
+        storage,
+        lease,
+        &v.confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(p.preview().execute_allowed);
     p
 }
@@ -67,7 +85,7 @@ fn model_relocated_consent_requires_current_review_and_unknown_choice_without_re
     let old = synthetic_consent_record(&storage, &op);
     let audio = f.live_record(&storage);
     let lease = owner(&storage, &op);
-    assert!(removal::run(&storage, &op, &lease, &|| false).is_err());
+    assert!(removal::run(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());
     assert!(file.exists());
     let mut p = review(&storage, &b.models_root, &op, &lease);
     assert!(p.preview().unregistered_count > 0);
@@ -77,22 +95,28 @@ fn model_relocated_consent_requires_current_review_and_unknown_choice_without_re
             &lease,
             &p.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
     assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
     assert!(file.exists() && unknown.exists());
-    p.refresh(&storage, &lease, &|| false).unwrap();
-    p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
+    p.refresh(&storage, &lease, &crate::test_support::never_cancelled)
         .unwrap();
+    p.review_remaining(
+        &storage,
+        &lease,
+        &p.preview().confirmation_id,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let done = p
         .execute(
             &storage,
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -169,9 +193,14 @@ fn model_relocated_consent_saved_policy_resumes_after_cold_cancel_and_supports_n
     let (b, storage) = f.open();
     assert!(storage.data_write_blocked());
     let lease = owner(&storage, &op);
-    let mut p =
-        models::operations::Prepared::pending(&storage, &b.models_root, &op, &lease, &|| false)
-            .unwrap();
+    let mut p = models::operations::Prepared::pending(
+        &storage,
+        &b.models_root,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(p.preview().execute_allowed);
     assert_eq!(p.preview().include_unregistered_recorded, Some(true));
     assert!(
@@ -180,7 +209,7 @@ fn model_relocated_consent_saved_policy_resumes_after_cold_cancel_and_supports_n
             &lease,
             &p.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -201,7 +230,7 @@ fn model_relocated_consent_saved_policy_resumes_after_cold_cancel_and_supports_n
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -224,7 +253,8 @@ fn model_relocated_consent_all_precommit_boundaries_roll_back_both_audit_and_pro
         let (b, storage) = f.open();
         let old = synthetic_consent_record(&storage, &op);
         let lease = owner(&storage, &op);
-        let v = renewal::review(&storage, &op, &lease, &|| false).unwrap();
+        let v =
+            renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
         let stop = Cell::new(false);
         assert!(
             renewal::accept_observed(&storage, &v, true, &lease, &|| stop.get(), &|event| {
@@ -239,7 +269,9 @@ fn model_relocated_consent_all_precommit_boundaries_roll_back_both_audit_and_pro
         assert_eq!(synthetic_consent_record(&storage, &op), old);
         assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
         // The old-root execution remains refused after every rollback.
-        assert!(removal::run(&storage, &op, &lease, &|| false).is_err());
+        assert!(
+            removal::run(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err()
+        );
         drop(lease);
         drop(storage);
         drop(b);
@@ -258,9 +290,17 @@ fn model_relocated_consent_cancel_or_inventory_change_does_not_publish_audit() {
     let old = synthetic_consent_record(&storage, &op);
     let lease = owner(&storage, &op);
     assert!(renewal::review(&storage, &op, &lease, &|| true).is_err());
-    let v = renewal::review(&storage, &op, &lease, &|| false).unwrap();
+    let v = renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
     std::fs::write(&file, b"CHANGED AFTER CURRENT ROOT REVIEW").unwrap();
-    assert!(renewal::accept(&storage, &v, v.census_hash(), true, &lease, &|| false).is_err());
+    assert!(renewal::accept(
+        &storage,
+        &v,
+        v.census_hash(),
+        true,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
     assert_eq!(synthetic_consent_record(&storage, &op), old);
     assert_eq!(
@@ -289,13 +329,19 @@ fn model_relocated_consent_unowned_database_copy_never_gets_review_or_execution(
     assert!(storage.data_write_blocked());
     let old = synthetic_consent_record(&storage, &op);
     assert!(AnalysisController::default()
-        .begin_model_deletion_maintenance(&storage, &op, false, false, &|| false)
+        .begin_model_deletion_maintenance(
+            &storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(renewal::review(&storage, &op, &lease, &|| false).is_err());
-    assert!(removal::run(&storage, &op, &lease, &|| false).is_err());
+    assert!(renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());
+    assert!(removal::run(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());
     assert_eq!(synthetic_consent_record(&storage, &op), old);
     assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
     assert!(file.exists());
@@ -316,10 +362,16 @@ fn model_relocated_consent_linked_model_never_adopts_external_body() {
     let (b, storage) = f.open();
     let old = synthetic_consent_record(&storage, &op);
     let lease = owner(&storage, &op);
-    let p = models::operations::Prepared::pending(&storage, &b.models_root, &op, &lease, &|| false)
-        .unwrap();
+    let p = models::operations::Prepared::pending(
+        &storage,
+        &b.models_root,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!p.preview().execute_allowed && !p.preview().reconfirmation_allowed);
-    assert!(renewal::review(&storage, &op, &lease, &|| false).is_err());
+    assert!(renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());
     assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
     assert_eq!(synthetic_consent_record(&storage, &op), old);
     assert_eq!(std::fs::read(&external).unwrap(), b"EXTERNAL KEEP");
@@ -334,15 +386,22 @@ fn model_relocated_consent_crash_child() {
     let b = Bootstrap::open(&config, &legacy).unwrap();
     let storage = b.open_storage().unwrap();
     let lease = owner(&storage, &op);
-    let v = renewal::review(&storage, &op, &lease, &|| false).unwrap();
-    renewal::accept_observed(&storage, &v, true, &lease, &|| false, &|event| {
-        if event == "committed" {
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
+    let v = renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
+    renewal::accept_observed(
+        &storage,
+        &v,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+        &|event| {
+            if event == "committed" {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                panic!("synthetic child kill failed");
             }
-            panic!("synthetic child kill failed");
-        }
-    })
+        },
+    )
     .unwrap();
     panic!("synthetic child did not reach committed boundary");
 }
@@ -365,9 +424,14 @@ fn model_relocated_consent_sigkill_after_commit_restores_wal_and_keeps_saved_pol
     let audits = synthetic_model_reconfirmation_records(&storage);
     assert_eq!(audits.len(), 1);
     let lease = owner(&storage, &op);
-    let mut p =
-        models::operations::Prepared::pending(&storage, &b.models_root, &op, &lease, &|| false)
-            .unwrap();
+    let mut p = models::operations::Prepared::pending(
+        &storage,
+        &b.models_root,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(p.preview().execute_allowed);
     assert_eq!(p.preview().include_unregistered_recorded, Some(true));
     assert!(
@@ -376,7 +440,7 @@ fn model_relocated_consent_sigkill_after_commit_restores_wal_and_keeps_saved_pol
             &lease,
             &p.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -407,7 +471,7 @@ fn model_relocated_consent_repeat_moves_retain_all_native_anchors_and_original_m
         &lease,
         &p.preview().confirmation_id,
         true,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     )
     .unwrap();
@@ -443,7 +507,7 @@ fn model_relocated_consent_repeat_moves_retain_all_native_anchors_and_original_m
                 &lease,
                 &p.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()

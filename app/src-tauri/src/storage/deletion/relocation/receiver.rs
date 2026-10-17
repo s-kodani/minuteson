@@ -544,8 +544,11 @@ pub(crate) fn synthetic_reconfirmation_cancel_at(
     checkpoint: &str,
 ) {
     use super::super::{completion, renewal};
-    let receipt = completion::read(storage, operation, &|| false).unwrap();
-    let review = renewal::Review::capture_database(storage, &receipt, &|| false).unwrap();
+    let receipt =
+        completion::read(storage, operation, &crate::test_support::never_cancelled).unwrap();
+    let review =
+        renewal::Review::capture_database(storage, &receipt, &crate::test_support::never_cancelled)
+            .unwrap();
     let stop = std::cell::Cell::new(false);
     assert!(renewal::accept_database_observed(
         storage,
@@ -563,7 +566,10 @@ pub(crate) fn synthetic_reconfirmation_cancel_at(
     .is_err());
     assert!(stop.get());
     receipt
-        .verify_saved(&storage.connection.lock().unwrap(), &|| false)
+        .verify_saved(
+            &storage.connection.lock().unwrap(),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
 }
 
@@ -590,7 +596,9 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let operation = uuid::Uuid::new_v4().to_string();
     bootstrap
         .begin_move(
@@ -602,13 +610,19 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
         )
         .unwrap();
     let mut placement = bootstrap.pending_placement(&operation, &snapshot).unwrap();
-    placement.copy(&snapshot, &|| false).unwrap();
-    let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
-    placement.install_history(&handoff, &|| false).unwrap();
+    placement
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
+    let handoff = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
+    placement
+        .install_history(&handoff, &crate::test_support::never_cancelled)
+        .unwrap();
     let before = std::fs::read(target.join("meetings.sqlite3")).unwrap();
     let registry_before = std::fs::read(target.join(".mon-scratch.sqlite3")).unwrap();
     let report = placement
-        .inspect_deletion_handoff(&handoff, &|| false)
+        .inspect_deletion_handoff(&handoff, &crate::test_support::never_cancelled)
         .unwrap();
     report.require_clean().unwrap();
     assert_eq!(
@@ -626,13 +640,28 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
 #[cfg(test)]
 pub(crate) fn synthetic_keep_meeting(storage: &crate::storage::Storage, meeting: &str) -> String {
     let lease = crate::analysis_worker::AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let census = super::super::files::Census::capture(storage, meeting, &|| false).unwrap();
+    let census = super::super::files::Census::capture(
+        storage,
+        meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let operation = uuid::Uuid::new_v4().to_string();
-    super::super::intent::prepare(storage, &operation, &census, &|| false).unwrap();
-    let mut pending =
-        super::super::operations::Prepared::pending(storage, &operation, &|| false).unwrap();
+    super::super::intent::prepare(
+        storage,
+        &operation,
+        &census,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut pending = super::super::operations::Prepared::pending(
+        storage,
+        &operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(
         pending
             .keep(storage, &lease, &pending.preview().confirmation_id, &|| {
@@ -661,7 +690,12 @@ pub(crate) fn synthetic_restored_audio_paths(
     operation: &str,
 ) -> Vec<std::path::PathBuf> {
     let db = storage.connection.lock().unwrap();
-    let source = super::super::audio::restored::Source::load(&db, operation, &|| false).unwrap();
+    let source = super::super::audio::restored::Source::load(
+        &db,
+        operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     source.verify_anchor(&db, &storage.managed_anchor).unwrap();
     source
         .paths()

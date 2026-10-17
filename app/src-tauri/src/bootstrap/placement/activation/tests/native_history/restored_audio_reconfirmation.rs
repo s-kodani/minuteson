@@ -18,15 +18,17 @@ impl Restored {
         let mut fixture = NativeFixture::new(false, false);
         let storage = fixture.storage.as_ref().unwrap();
         let archive = fixture._base.path().join("restored-input.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let selected = storage
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let meeting = selected
             .publish(
                 storage,
                 &selected.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap()
@@ -261,14 +263,20 @@ fn restored_audio_reconfirmation_owned_move_crash_child() {
     let c = Synthetic::new(&storage);
     let baseline = c.pending(&storage, &original).unwrap();
     let reviewed = c.run(&storage, &baseline, Action::ReviewRemaining);
-    c.run_observed(&storage, &reviewed, Action::Publish, &|| false, &|phase| {
-        if phase == "audio_delete_scope_fixed" {
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
+    c.run_observed(
+        &storage,
+        &reviewed,
+        Action::Publish,
+        &crate::test_support::never_cancelled,
+        &|phase| {
+            if phase == "audio_delete_scope_fixed" {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                panic!("synthetic child kill failed");
             }
-            panic!("synthetic child kill failed");
-        }
-    });
+        },
+    );
     panic!("synthetic child did not reach saved-consent boundary");
 }
 

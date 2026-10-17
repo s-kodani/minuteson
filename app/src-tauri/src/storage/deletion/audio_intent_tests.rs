@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn policy() -> Policy {
@@ -26,7 +26,15 @@ fn count(f: &Fixture) -> i64 {
         .unwrap()
 }
 fn save(f: &Fixture, op: &str, census: &Census, owner: &DataMaintenanceLease) -> Prepared {
-    prepare(&f.storage, op, census, policy(), owner, &|| false).unwrap()
+    prepare(
+        &f.storage,
+        op,
+        census,
+        policy(),
+        owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn reopen(f: &mut Fixture, mutate: impl FnOnce(&Connection)) {
     let root = f.storage.root().to_path_buf();
@@ -52,7 +60,15 @@ fn native_raw_audio_requires_distinct_unregistered_consent_and_blocks_changed_re
     let census = f.census();
     let owner = lease();
     let op = uuid::Uuid::new_v4().to_string();
-    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(count(&f), 0);
     assert!(raw.is_file());
     assert!(!f.storage.data_write_blocked());
@@ -66,7 +82,7 @@ fn native_raw_audio_requires_distinct_unregistered_consent_and_blocks_changed_re
             retain_unclassified: true,
         },
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(count(&f), 0);
@@ -85,8 +101,18 @@ fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_
     let op = uuid::Uuid::new_v4().to_string();
     let saved = save(&f, &op, &census, &owner);
     let db = f.storage.connection.lock().unwrap();
-    assert_eq!(read(&db, &op, &|| false).unwrap(), saved);
-    let current = Census::capture_locked(&f.storage, &db, &f.meeting, &op, &|| false).unwrap();
+    assert_eq!(
+        read(&db, &op, &crate::test_support::never_cancelled).unwrap(),
+        saved
+    );
+    let current = Census::capture_locked(
+        &f.storage,
+        &db,
+        &f.meeting,
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert_eq!(current.snapshot(), snapshot);
     let (json,max_json,paths):(String,i64,i64)=db.query_row("SELECT o.target_manifest_json,max(length(CAST(p.identity_json AS BLOB))),count(*) FROM maintenance_operations o JOIN maintenance_paths p ON p.operation_id=o.id WHERE o.id=?1",params![op],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
     assert!(json.contains("audioOnlyDeletion"));
@@ -114,8 +140,15 @@ fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_
         .is_err());
     assert!(super::super::super::models::intent::read(&db, &op).is_err());
     drop(db);
-    assert!(super::super::super::intent::read(&f.storage, &op, &|| false).is_err());
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
+    assert!(super::super::super::intent::read(
+        &f.storage,
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(f.storage.data_write_blocked());
     assert_eq!(std::fs::read(&f.path).unwrap(), b"PRIVATE AUDIO BODY");
     assert_eq!(
@@ -135,7 +168,15 @@ fn audio_consent_replay_preserves_consent_and_rejects_changed_policy_scope_or_ot
     let op = uuid::Uuid::new_v4().to_string();
     let saved = save(&f, &op, &census, &owner);
     assert_eq!(
-        prepare(&f.storage, &op, &census, policy(), &owner, &|| false).unwrap(),
+        prepare(
+            &f.storage,
+            &op,
+            &census,
+            policy(),
+            &owner,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         saved
     );
     assert!(prepare(
@@ -147,7 +188,7 @@ fn audio_consent_replay_preserves_consent_and_rejects_changed_policy_scope_or_ot
             retain_unclassified: false
         },
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(prepare(
@@ -156,14 +197,27 @@ fn audio_consent_replay_preserves_consent_and_rejects_changed_policy_scope_or_ot
         &census,
         policy(),
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     std::fs::write(&f.path, b"CHANGED AUDIO").unwrap();
-    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert_eq!(count(&f), 1);
     assert_eq!(
-        read(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap(),
+        read(
+            &f.storage.connection.lock().unwrap(),
+            &op,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap(),
         saved
     );
 }
@@ -180,7 +234,15 @@ fn audio_consent_requires_distinct_unregistered_audio_and_unclassified_retention
     let census = f.census();
     let owner = lease();
     let op = uuid::Uuid::new_v4().to_string();
-    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(prepare(
         &f.storage,
         &op,
@@ -190,7 +252,7 @@ fn audio_consent_requires_distinct_unregistered_audio_and_unclassified_retention
             retain_unclassified: false
         },
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert!(prepare(
@@ -202,7 +264,7 @@ fn audio_consent_requires_distinct_unregistered_audio_and_unclassified_retention
             retain_unclassified: true
         },
         &owner,
-        &|| false
+        &crate::test_support::never_cancelled
     )
     .is_err());
     assert_eq!(count(&f), 0);
@@ -216,7 +278,13 @@ fn audio_consent_requires_distinct_unregistered_audio_and_unclassified_retention
     .unwrap();
     assert_eq!(saved.header.policy, selected);
     assert!(unknown.is_file());
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(unknown.is_file());
 }
 
@@ -233,7 +301,7 @@ fn audio_consent_rejects_stale_audio_and_retained_document_before_any_durable_wr
             &census,
             policy(),
             &lease(),
-            &|| false
+            &crate::test_support::never_cancelled
         )
         .is_err());
         assert_eq!(count(&f), 0);
@@ -322,7 +390,7 @@ fn audio_consent_commit_wins_late_cancel_and_panic_keeps_durable_fence() {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()),
             &op,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert!(f.path.is_file());
@@ -339,7 +407,7 @@ fn audio_consent_detects_scope_mutation_at_final_commit_boundary_without_adoptin
         &census,
         policy(),
         &lease(),
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|event| {
             if event == "beforeAudioConsentCommit" {
                 std::fs::write(&f.path, b"NEW UNCONFIRMED AUDIO").unwrap();
@@ -361,14 +429,41 @@ fn audio_consent_keep_is_idempotent_preserves_changed_missing_and_new_files_with
     let saved = save(&f, &op, &census, &owner);
     std::fs::remove_file(&f.path).unwrap();
     let new = f.file("new-unregistered.wav", None);
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
-    let kept = read(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let kept = read(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(kept.kept());
     assert_eq!(kept.header, saved.header);
     assert_eq!(kept.consent, saved.consent);
-    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(!f.path.exists() && new.is_file());
     assert!(!f.storage.data_write_blocked());
     f.storage
@@ -404,7 +499,10 @@ fn audio_consent_keep_cancel_and_panic_roll_back_progress_and_restore_writer_pro
             .connection
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        assert_eq!(read(&db, &op, &|| false).unwrap(), saved);
+        assert_eq!(
+            read(&db, &op, &crate::test_support::never_cancelled).unwrap(),
+            saved
+        );
         assert!(db.execute("DELETE FROM meetings", []).is_err());
         drop(db);
         assert!(f.storage.data_write_blocked() && f.path.is_file());
@@ -438,12 +536,24 @@ fn audio_consent_cold_keep_preserves_stale_jobs_and_requires_restart_before_ordi
     let controller = AnalysisController::default();
     controller.require_storage_restart();
     assert!(controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
     let owner = controller
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(f
         .storage
         .require_data_writable()
@@ -463,14 +573,30 @@ fn audio_consent_requires_active_real_lease_for_save_verify_keep_and_cold_admiss
     let op = uuid::Uuid::new_v4().to_string();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let saved = save(&f, &op, &census, &owner);
     controller.begin_exit().unwrap();
     controller.abort_shutdown();
-    assert!(saved.verify_current(&f.storage, &owner, &|| false).is_err());
-    assert!(keep_unstarted(&f.storage, &op, &owner, &|| false).is_err());
-    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert!(saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        policy(),
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     drop(owner);
     for (recording, importing, cancel) in [
         (true, false, false),
@@ -483,16 +609,40 @@ fn audio_consent_requires_active_real_lease_for_save_verify_keep_and_cold_admiss
     }
     let export = controller.begin_export().unwrap();
     assert!(controller
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     drop(export);
     let owner = controller
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert!(controller
-        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &f.storage,
+            &op,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -551,7 +701,13 @@ fn audio_consent_corrupt_subtype_proofs_progress_and_null_meeting_never_grant_ke
         assert!(f.storage.data_write_blocked(), "{mode}");
         assert!(authorize_review(&f.storage, &op).is_err(), "{mode}");
         assert!(
-            keep_unstarted(&f.storage, &op, &lease(), &|| false).is_err(),
+            keep_unstarted(
+                &f.storage,
+                &op,
+                &lease(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{mode}"
         );
         assert!(f.path.is_file());
@@ -569,7 +725,13 @@ fn audio_consent_does_not_clear_other_pending_intents_or_use_replaced_storage() 
         db.execute("INSERT INTO maintenance_operations VALUES(?1,?2,'delete_meeting','prepared',NULL,'{}',?3,1,'{}',NULL,1,1)",params![uuid::Uuid::new_v4().to_string(),meeting,"a".repeat(64)]).unwrap();
     });
     assert!(authorize_review(&f.storage, &op).is_err());
-    assert!(keep_unstarted(&f.storage, &op, &lease(), &|| false).is_err());
+    assert!(keep_unstarted(
+        &f.storage,
+        &op,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let f = Fixture::new();
     let census = f.census();
     let op = uuid::Uuid::new_v4().to_string();
@@ -577,7 +739,13 @@ fn audio_consent_does_not_clear_other_pending_intents_or_use_replaced_storage() 
     std::fs::rename(f.storage.root(), f.base.path().join("held-root")).unwrap();
     std::fs::create_dir(f.storage.root()).unwrap();
     assert!(authorize_review(&f.storage, &op).is_err());
-    assert!(keep_unstarted(&f.storage, &op, &lease(), &|| false).is_err());
+    assert!(keep_unstarted(
+        &f.storage,
+        &op,
+        &lease(),
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f
         .base
         .path()
@@ -633,8 +801,16 @@ fn audio_consent_preserves_unicode_paths_missing_audio_and_non_audio_registratio
     let op = uuid::Uuid::new_v4().to_string();
     let saved = save(&f, &op, &census, &owner);
     assert_eq!(saved.snapshot, census.snapshot());
-    saved.verify_current(&f.storage, &owner, &|| false).unwrap();
-    keep_unstarted(&f.storage, &op, &owner, &|| false).unwrap();
+    saved
+        .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
+        .unwrap();
+    keep_unstarted(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(!path.exists() && manifest.is_file() && f.path.is_file());
 }
 
@@ -654,9 +830,13 @@ fn audio_consent_keep_commit_wins_late_cancel_without_claiming_audio_was_restore
     .unwrap();
     assert!(cancelled.get());
     assert!(!f.storage.data_write_blocked());
-    assert!(read(&f.storage.connection.lock().unwrap(), &op, &|| false)
-        .unwrap()
-        .kept());
+    assert!(read(
+        &f.storage.connection.lock().unwrap(),
+        &op,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .kept());
     assert!(f.path.is_file());
 }
 
@@ -687,7 +867,7 @@ fn audio_consent_rejects_disabled_reference_guards_and_unknown_schema_without_ch
                 &census,
                 policy(),
                 &lease(),
-                &|| false
+                &crate::test_support::never_cancelled
             )
             .is_err(),
             "{mode}"
@@ -753,7 +933,7 @@ fn audio_consent_and_keep_sigkill_boundaries_preserve_atomic_receipts_and_origin
             "{mode}/{boundary}"
         );
         if committed {
-            let saved = read(&db, &op, &|| false).unwrap();
+            let saved = read(&db, &op, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(saved.kept(), boundary == "audioKeepCommitted");
             assert_eq!(storage.data_write_blocked(), !saved.kept());
         } else {
@@ -814,9 +994,10 @@ fn audio_consent_crash_child() {
             "audioConsentCommitted"
         ]
         .contains(&boundary.as_str()));
-        let census = Census::capture(&storage, &meeting, &|| false).unwrap();
+        let census =
+            Census::capture(&storage, &meeting, &crate::test_support::never_cancelled).unwrap();
         let owner = controller
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         prepare_inner(
             &storage,
@@ -824,7 +1005,7 @@ fn audio_consent_crash_child() {
             &census,
             policy(),
             &owner,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &event,
         )
         .unwrap();
@@ -832,9 +1013,22 @@ fn audio_consent_crash_child() {
         assert_eq!(mode, "keep");
         assert!(["audioKeepStored", "audioKeepCommitted"].contains(&boundary.as_str()));
         let owner = controller
-            .begin_audio_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                &storage,
+                &operation,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
-        keep_inner(&storage, &operation, &owner, &|| false, &event).unwrap();
+        keep_inner(
+            &storage,
+            &operation,
+            &owner,
+            &crate::test_support::never_cancelled,
+            &event,
+        )
+        .unwrap();
     }
     panic!("parent-requested crash boundary was not reached");
 }

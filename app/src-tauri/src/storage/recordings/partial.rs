@@ -205,7 +205,7 @@ impl Storage {
 
     #[cfg(test)]
     pub(crate) fn review_partial_recording(&self, session_id: &str) -> Result<Review, String> {
-        self.review_partial_recording_checked(session_id, &|| false)
+        self.review_partial_recording_checked(session_id, &crate::test_support::never_cancelled)
     }
 
     pub(crate) fn review_partial_recording_checked(
@@ -374,7 +374,11 @@ impl Storage {
         reviewed: &Review,
         confirmed: bool,
     ) -> Result<RecordingSession, String> {
-        self.recover_partial_recording_checked(reviewed, confirmed, &|| false)
+        self.recover_partial_recording_checked(
+            reviewed,
+            confirmed,
+            &crate::test_support::never_cancelled,
+        )
     }
 
     pub(crate) fn recover_partial_recording_checked(

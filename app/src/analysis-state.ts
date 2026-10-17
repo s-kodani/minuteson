@@ -31,6 +31,7 @@ export interface VersionState {
 }
 
 export interface AnalysisJob {
+  createdAt?: number;
   id: string;
   kind: string;
   state: string;

@@ -20,24 +20,46 @@ fn recovery_keep_is_explicit_immutable_terminal_and_survives_startup_without_cla
     let (root, storage, id, path) = fixture();
     let before = storage.list_meetings().unwrap();
     let mut review = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     let confirmation = review.preview().confirmation_id;
-    assert!(review.resolve(&storage, "wrong", true, &|| false).is_err());
+    assert!(review
+        .resolve(
+            &storage,
+            "wrong",
+            true,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     let receipt = review
-        .resolve(&storage, &confirmation, true, &|| false)
+        .resolve(
+            &storage,
+            &confirmation,
+            true,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert_eq!(receipt.outcome, Outcome::Retained);
     assert!(storage.recovery_listing().unwrap().items[0].retained);
     assert_eq!(
         review
-            .resolve(&storage, &confirmation, true, &|| false)
+            .resolve(
+                &storage,
+                &confirmation,
+                true,
+                &crate::test_support::never_cancelled
+            )
             .unwrap()
             .outcome,
         Outcome::Retained
     );
     assert!(review
-        .resolve(&storage, &confirmation, false, &|| false)
+        .resolve(
+            &storage,
+            &confirmation,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     drop(review);
     drop(storage);
@@ -45,7 +67,7 @@ fn recovery_keep_is_explicit_immutable_terminal_and_survives_startup_without_cla
     assert_eq!(std::fs::read(path.join("unknown")).unwrap(), b"unknown");
     assert_eq!(reopened.list_meetings().unwrap(), before);
     assert!(reopened
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .is_err());
 }
 #[test]
@@ -53,24 +75,29 @@ fn recovery_changes_after_confirmation_stop_all_actions_and_retry_can_finish_aft
 ) {
     let (_root, storage, id, path) = fixture();
     let mut review = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     std::fs::write(path.join("new"), b"new").unwrap();
     assert!(review
-        .resolve(&storage, &review.preview().confirmation_id, true, &|| false)
+        .resolve(
+            &storage,
+            &review.preview().confirmation_id,
+            true,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(path.join("unknown").exists());
     std::fs::remove_file(path.join("new")).unwrap();
     std::fs::remove_file(path.join("unknown")).unwrap();
     let mut refreshed = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     let receipt = refreshed
         .resolve(
             &storage,
             &refreshed.preview().confirmation_id,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )
         .unwrap();
     assert_eq!(receipt.outcome, Outcome::Recovered);
@@ -81,7 +108,7 @@ fn recovery_changes_after_confirmation_stop_all_actions_and_retry_can_finish_aft
 fn recovery_incomplete_retry_is_attention_not_success_and_keeps_unknown_files() {
     let (_root, storage, id, path) = fixture();
     let mut review = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     let receipt = review
         .resolve(&storage, &review.preview().confirmation_id, false, &|| {
@@ -122,10 +149,15 @@ fn recovery_old_ownership_schema_is_rejected_without_adopting_or_losing_areas() 
 fn recovery_missing_keep_table_is_not_mistaken_for_legacy_schema_or_used_to_delete_kept_files() {
     let (root, storage, id, path) = fixture();
     let mut review = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     review
-        .resolve(&storage, &review.preview().confirmation_id, true, &|| false)
+        .resolve(
+            &storage,
+            &review.preview().confirmation_id,
+            true,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     drop(review);
     drop(storage);
@@ -148,7 +180,7 @@ fn recovery_preview_and_cancel_are_read_only_and_live_copies_are_never_offered()
         .unwrap();
     assert_eq!(storage.recovery_listing().unwrap().items.len(), 1);
     let review = storage
-        .prepare_recovery(Source::Scratch, &id, &|| false)
+        .prepare_recovery(Source::Scratch, &id, &crate::test_support::never_cancelled)
         .unwrap();
     drop(review);
     assert!(path.join("unknown").exists());

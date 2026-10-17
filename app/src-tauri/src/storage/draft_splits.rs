@@ -20,8 +20,70 @@ impl Storage {
         &self,
         request: &DraftUtteranceAudioRequest,
     ) -> Result<crate::playback::PreparedAudio, String> {
-        self.prepare_draft_utterance_audio_cancellable(request, &|| false)
+        self.prepare_draft_utterance_audio_cancellable(
+            request,
+            &crate::test_support::never_cancelled,
+        )
     }
+    pub(in crate::storage) fn resolve_draft_utterance_audio_reference(
+        &self,
+        request: &DraftUtteranceAudioRequest,
+    ) -> Result<String, String> {
+        let mut db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions a JOIN meetings m ON m.id=a.meeting_id WHERE a.id=?1 AND a.meeting_id=?2 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))))",params![request.analysis_id,request.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !visible {
+            return Err("この解析版は分割音声の参照対象ではありません".into());
+        }
+        let hash: String = tx
+            .query_row(
+                "SELECT content_hash FROM analysis_revisions WHERE id=?1",
+                params![request.analysis_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if super::revisions::analysis_content_hash(&tx, &request.analysis_id)? != hash {
+            return Err("解析版の内容が変更されています".into());
+        }
+        let mut view = super::analysis::read_analysis_content(
+            &tx,
+            &request.meeting_id,
+            &request.analysis_id,
+            &hash,
+        )?;
+        let mut draft = super::drafts::load_draft_for_base(
+            &tx,
+            &request.meeting_id,
+            Some(&request.analysis_id),
+        )?
+        .ok_or("保存済み下書きがありません")?;
+        draft.payload = super::drafts::validate_payload(&tx, &request.analysis_id, draft.payload)?;
+        if view.id != request.analysis_id
+            || view.content_hash != request.expected_content_hash
+            || draft.id != request.expected_draft.id
+            || draft.lock_version != request.expected_draft.lock_version
+        {
+            return Err(
+                "再生前に現在版または分割下書きが変化しています。保存後に確認してください".into(),
+            );
+        }
+        super::minutes_input::apply_edits(&mut view, &draft.payload);
+        let u = view
+            .utterances
+            .iter()
+            .find(|u| u.id == request.utterance_id)
+            .ok_or("この下書きの発言がありません")?;
+        if u.start_us != request.expected_start_us || u.end_us != request.expected_end_us {
+            return Err("確認した分割時刻と再生区間が一致しません".into());
+        }
+        Ok(u.track_id.clone())
+    }
+
     pub(crate) fn prepare_draft_utterance_audio_cancellable(
         &self,
         request: &DraftUtteranceAudioRequest,
@@ -30,65 +92,9 @@ impl Storage {
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
         }
-        let resolve = || -> Result<String, String> {
-            let mut db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            let tx = db
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
-                .map_err(|e| e.to_string())?;
-            let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions a JOIN meetings m ON m.id=a.meeting_id WHERE a.id=?1 AND a.meeting_id=?2 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))))",params![request.analysis_id,request.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
-            if !visible {
-                return Err("この解析版は分割音声の参照対象ではありません".into());
-            }
-            let hash: String = tx
-                .query_row(
-                    "SELECT content_hash FROM analysis_revisions WHERE id=?1",
-                    params![request.analysis_id],
-                    |r| r.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if super::revisions::analysis_content_hash(&tx, &request.analysis_id)? != hash {
-                return Err("解析版の内容が変更されています".into());
-            }
-            let mut view = super::analysis::read_analysis_content(
-                &tx,
-                &request.meeting_id,
-                &request.analysis_id,
-                &hash,
-            )?;
-            let mut draft = super::drafts::load_draft_for_base(
-                &tx,
-                &request.meeting_id,
-                Some(&request.analysis_id),
-            )?
-            .ok_or("保存済み下書きがありません")?;
-            draft.payload =
-                super::drafts::validate_payload(&tx, &request.analysis_id, draft.payload)?;
-            if view.id != request.analysis_id
-                || view.content_hash != request.expected_content_hash
-                || draft.id != request.expected_draft.id
-                || draft.lock_version != request.expected_draft.lock_version
-            {
-                return Err(
-                    "再生前に現在版または分割下書きが変化しています。保存後に確認してください"
-                        .into(),
-                );
-            }
-            super::minutes_input::apply_edits(&mut view, &draft.payload);
-            let u = view
-                .utterances
-                .iter()
-                .find(|u| u.id == request.utterance_id)
-                .ok_or("この下書きの発言がありません")?;
-            if u.start_us != request.expected_start_us || u.end_us != request.expected_end_us {
-                return Err("確認した分割時刻と再生区間が一致しません".into());
-            }
-            Ok(u.track_id.clone())
-        };
+        let resolve = || self.resolve_draft_utterance_audio_reference(request);
         let track = resolve()?;
-        let audio = self.prepare_track_audio_cancellable(
+        let audio = self.prepare_preview_track_audio_cancellable(
             &request.meeting_id,
             &track,
             request.expected_start_us,
@@ -403,5 +409,70 @@ mod tests {
             .unwrap();
         assert_eq!(undone.content_hash, draft.content_hash);
         assert!(storage.prepare_draft_utterance_audio(&request).is_err());
+    }
+    #[test]
+    fn split_playback_start_uses_full_meeting_and_rejects_draft_changes_during_preparation() {
+        for mutate in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let storage = Storage::open(root.path().into()).unwrap();
+            let (meeting, analysis, _) = fixture(&storage);
+            let (draft, p) = payload(&storage, &meeting);
+            let part = p.utterance_splits[0].parts[1].clone();
+            let saved = storage.save_transcript_draft(&draft.id, 0, p).unwrap();
+            let view = storage.load_current_analysis(&meeting).unwrap().unwrap();
+            {
+                let db = storage.connection.lock().unwrap();
+                db.execute(
+                    "UPDATE meetings SET duration_us=1000000 WHERE id=?1",
+                    params![meeting],
+                )
+                .unwrap();
+                db.execute(
+                    "UPDATE recording_sessions SET duration_us=1000000 WHERE meeting_id=?1",
+                    params![meeting],
+                )
+                .unwrap();
+            }
+            let request = super::super::meeting_playback::MeetingPlaybackRequest {
+                meeting_id: meeting.clone(),
+                mode: super::super::meeting_playback::MeetingPlaybackMode::Mic,
+                start_reference: Some(
+                    super::super::meeting_playback::MeetingPlaybackStartReference::DraftUtterance {
+                        request: DraftUtteranceAudioRequest {
+                            meeting_id: meeting.clone(),
+                            analysis_id: analysis,
+                            expected_content_hash: view.content_hash,
+                            expected_draft: DraftStamp {
+                                id: saved.id.clone(),
+                                lock_version: saved.lock_version,
+                            },
+                            utterance_id: part.id,
+                            expected_start_us: part.start_us,
+                            expected_end_us: part.end_us,
+                        },
+                    },
+                ),
+            };
+            let count = Cell::new(0);
+            let audio = storage.prepare_meeting_audio_cancellable(&request, &|| {
+                count.set(count.get() + 1);
+                if mutate && count.get() == 3 {
+                    storage
+                        .undo_last_transcript_edit(&draft.id, saved.lock_version)
+                        .unwrap();
+                }
+                false
+            });
+            if mutate {
+                assert!(audio.is_err());
+            } else {
+                let info = PlaybackStore::default()
+                    .insert_meeting(audio.unwrap())
+                    .unwrap();
+                assert_eq!(info.start_us, 0);
+                assert_eq!(info.end_us, 1000000);
+                assert_eq!(info.total_frames, 48000);
+            }
+        }
     }
 }

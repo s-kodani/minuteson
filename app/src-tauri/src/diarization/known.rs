@@ -30,7 +30,7 @@ pub(super) struct SavedFeature {
     output: embedding::Output,
 }
 
-fn helper_path() -> Result<PathBuf, String> {
+pub(crate) fn helper_path() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     // Tests inject an owned signed binary, without changing production lookup.

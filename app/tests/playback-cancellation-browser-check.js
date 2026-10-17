@@ -92,7 +92,7 @@ async (page, capturePath, detailUI) => {
   const field=row.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("取消でも未確定本文を保持します。");
   await field.evaluate(e=>{window.cancelInput=e;e.setSelectionRange(2,5);});const saves=await count("save_transcript_draft");
   await page.evaluate(()=>window.monBrowserFixture.holdPlayback=true);await row.getByRole("button",{name:"音声を再生",exact:true}).click();
-  const utterance=dock.getByRole("group",{name:"発言の音声再生",exact:true});await page.waitForFunction(()=>typeof window.monBrowserFixture.releasePlayback==="function");
+  const utterance=dock.getByRole("group",{name:"会議全体の音声再生",exact:true});await page.waitForFunction(()=>typeof window.monBrowserFixture.releasePlayback==="function");
   await utterance.getByRole("button",{name:"再生準備を取り消す",exact:true}).click();await barrier();await settled();await released();
   check(await field.inputValue()==="取消でも未確定本文を保持します。"&&await field.evaluate(e=>e===window.cancelInput&&e.selectionStart===2&&e.selectionEnd===5)&&await count("save_transcript_draft")===saves&&await count("read_playback_chunk")===0,"utterance cancellation altered input, selection, publication or audio");
   results.push("utterance preparation exposes native cancellation too, preserving unconfirmed text, selection and publication state");

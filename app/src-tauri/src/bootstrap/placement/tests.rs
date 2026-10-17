@@ -62,7 +62,10 @@ impl Fixture {
 #[test]
 fn placement_preserves_native_rows_audio_and_current_root_without_cutover_or_deletion() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let config = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
     let mut p = f
@@ -70,7 +73,9 @@ fn placement_preserves_native_rows_audio_and_current_root_without_cutover_or_del
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
     assert_eq!(p.progress().unwrap().state, "copying");
-    let result = p.copy(&snapshot, &|| false).unwrap();
+    let result = p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(result.state, "ready");
     assert_eq!(result.expected_paths, result.verified_paths);
     assert_eq!(result.owned_paths, result.verified_paths);
@@ -117,14 +122,22 @@ fn placement_preserves_native_rows_audio_and_current_root_without_cutover_or_del
             0
         );
     }
-    p.verify(&snapshot, &|| false).unwrap();
-    assert_eq!(p.copy(&snapshot, &|| false).unwrap(), result);
+    p.verify(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
+    assert_eq!(
+        p.copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap(),
+        result
+    );
 }
 
 #[test]
 fn placement_cancel_after_owned_file_record_can_continue_without_adopting_unknown_data() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
@@ -149,7 +162,12 @@ fn placement_cancel_after_owned_file_record_can_continue_without_adopting_unknow
         .bootstrap
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
-    assert_eq!(p.copy(&snapshot, &|| false).unwrap().state, "ready");
+    assert_eq!(
+        p.copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap()
+            .state,
+        "ready"
+    );
     assert_eq!(
         std::fs::read(f.target.join(&f.relative)).unwrap(),
         b"original audio"
@@ -159,20 +177,26 @@ fn placement_cancel_after_owned_file_record_can_continue_without_adopting_unknow
 #[test]
 fn placement_resumption_refuses_copied_content_change_without_overwrite() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
-    p.copy(&snapshot, &|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     drop(p);
     std::fs::write(f.target.join(&f.relative), b"external edit").unwrap();
     let mut p = f
         .bootstrap
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
-    assert!(p.copy(&snapshot, &|| false).is_err());
+    assert!(p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(
         std::fs::read(f.target.join(&f.relative)).unwrap(),
         b"external edit"
@@ -183,7 +207,10 @@ fn placement_resumption_refuses_copied_content_change_without_overwrite() {
 #[test]
 fn placement_new_journal_refuses_foreign_existing_target_before_claiming_anything() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     std::fs::write(f.target.join("foreign"), b"retain").unwrap();
     assert!(f
@@ -198,7 +225,10 @@ fn placement_new_journal_refuses_foreign_existing_target_before_claiming_anythin
 fn placement_target_and_control_links_or_replacements_are_not_adopted() {
     for kind in ["target", "control-link", "control-empty"] {
         let f = Fixture::new();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&snapshot);
         match kind {
             "target" => {
@@ -232,7 +262,10 @@ fn placement_target_and_control_links_or_replacements_are_not_adopted() {
 #[test]
 fn placement_creation_gap_and_added_foreign_files_are_retained_not_adopted_or_removed() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
@@ -241,14 +274,18 @@ fn placement_creation_gap_and_added_foreign_files_are_retained_not_adopted_or_re
     let file = f.target.join("meetings.sqlite3");
     std::fs::write(&file, b"unowned creation gap").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(p.copy(&snapshot, &|| false).is_err());
+    assert!(p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(p.progress().unwrap().owned_paths, 0);
     drop(p);
     let mut p = f
         .bootstrap
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
-    assert!(p.copy(&snapshot, &|| false).is_err());
+    assert!(p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(file).unwrap(), b"unowned creation gap");
     assert!(f.bootstrap.cancel_move(&f.operation).is_err());
     assert!(f.bootstrap.view().unwrap().pending_operation_id.is_some());
@@ -258,7 +295,10 @@ fn placement_creation_gap_and_added_foreign_files_are_retained_not_adopted_or_re
 fn placement_owned_partial_file_replacement_or_links_refuse_before_payload_write() {
     for kind in ["replacement", "symlink", "hardlink"] {
         let f = Fixture::new();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&snapshot);
         let mut p = f
             .bootstrap
@@ -280,7 +320,11 @@ fn placement_owned_partial_file_replacement_or_links_refuse_before_payload_write
             .bootstrap
             .pending_placement(&f.operation, &snapshot)
             .unwrap();
-        assert!(p.copy(&snapshot, &|| false).is_err(), "{kind}");
+        assert!(
+            p.copy(&snapshot, &crate::test_support::never_cancelled)
+                .is_err(),
+            "{kind}"
+        );
         assert_eq!(std::fs::read(db).unwrap(), b"foreign payload");
         assert_eq!(std::fs::read(foreign).unwrap(), b"foreign payload");
         assert_eq!(
@@ -294,7 +338,10 @@ fn placement_owned_partial_file_replacement_or_links_refuse_before_payload_write
 fn placement_runtime_and_reopen_refuse_changed_control_shape_or_identity() {
     for kind in ["shape", "metadata", "file", "lock", "missing-lock"] {
         let f = Fixture::new();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&snapshot);
         let p = f
             .bootstrap
@@ -332,17 +379,25 @@ fn placement_runtime_and_reopen_refuse_changed_control_shape_or_identity() {
 #[test]
 fn placement_unknown_extra_destination_file_is_kept_and_verification_refuses_it() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
         .pending_placement(&f.operation, &snapshot)
         .unwrap();
-    p.copy(&snapshot, &|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     let extra = f.target.join("meetings/foreign.part");
     std::fs::write(&extra, b"retain foreign").unwrap();
-    assert!(p.verify(&snapshot, &|| false).is_err());
-    assert!(p.copy(&snapshot, &|| false).is_err());
+    assert!(p
+        .verify(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(std::fs::read(extra).unwrap(), b"retain foreign");
     assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
 }
@@ -350,7 +405,10 @@ fn placement_unknown_extra_destination_file_is_kept_and_verification_refuses_it(
 #[test]
 fn placement_same_operation_is_locked_and_wrong_operation_or_changed_source_cannot_resume() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
@@ -364,13 +422,17 @@ fn placement_same_operation_is_locked_and_wrong_operation_or_changed_source_cann
         .bootstrap
         .pending_placement(&Uuid::new_v4().to_string(), &snapshot)
         .is_err());
-    p.copy(&snapshot, &|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     drop(p);
     drop(snapshot);
     f.storage
         .rename_meeting(&f.meeting, "元DBの新しい編集", 0)
         .unwrap();
-    let next = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let next = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert!(f.bootstrap.pending_placement(&f.operation, &next).is_err());
     assert_eq!(
         std::fs::read(f.target.join(&f.relative)).unwrap(),
@@ -385,7 +447,10 @@ fn placement_same_operation_is_locked_and_wrong_operation_or_changed_source_cann
 #[test]
 fn placement_owner_drop_releases_only_its_lock_with_a_retained_duplicate_descriptor() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let p = f
         .bootstrap
@@ -422,7 +487,10 @@ fn placement_owner_drop_releases_only_its_lock_with_a_retained_duplicate_descrip
 fn placement_cannot_select_models_root_or_nested_model_directory() {
     for nested in [false, true] {
         let f = Fixture::new();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         let target = if nested {
             f.bootstrap.models_root.join("meeting-data")
         } else {
@@ -452,7 +520,10 @@ fn placement_cannot_select_models_root_or_nested_model_directory() {
 #[test]
 fn placement_source_database_substitution_keeps_write_stop_after_failed_copy_is_dropped() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
@@ -461,7 +532,9 @@ fn placement_source_database_substitution_keeps_write_stop_after_failed_copy_is_
     let db = f.storage.root().join("meetings.sqlite3");
     std::fs::rename(&db, db.with_extension("retained")).unwrap();
     std::fs::write(&db, b"unknown replacement").unwrap();
-    assert!(p.copy(&snapshot, &|| false).is_err());
+    assert!(p
+        .copy(&snapshot, &crate::test_support::never_cancelled)
+        .is_err());
     drop(p);
     drop(snapshot);
     assert!(f
@@ -475,7 +548,10 @@ fn placement_source_database_substitution_keeps_write_stop_after_failed_copy_is_
 #[test]
 fn placement_restart_reopens_owned_partial_copy_and_preserves_current_old_root() {
     let f = Fixture::new();
-    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = f
+        .storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     f.intent(&snapshot);
     let mut p = f
         .bootstrap
@@ -496,7 +572,9 @@ fn placement_restart_reopens_owned_partial_copy_and_preserves_current_old_root()
     assert_eq!(b.root(), old);
     let storage = Storage::open(b.root().into()).unwrap();
     b.initialize(&storage).unwrap();
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         snapshot.manifest_hash(),
         expected,
@@ -504,7 +582,12 @@ fn placement_restart_reopens_owned_partial_copy_and_preserves_current_old_root()
     );
     let mut p = b.pending_placement(&f.operation, &snapshot).unwrap();
     assert_eq!(p.progress().unwrap().owned_paths, 1);
-    assert_eq!(p.copy(&snapshot, &|| false).unwrap().state, "ready");
+    assert_eq!(
+        p.copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap()
+            .state,
+        "ready"
+    );
     assert_eq!(b.root(), old);
     assert_eq!(
         std::fs::read(f.target.join(&f.relative)).unwrap(),
@@ -529,7 +612,9 @@ fn placement_current_shared_app_parent_keeps_models_control_and_meeting() {
     std::fs::create_dir_all(old.join("models/package")).unwrap();
     std::fs::write(old.join("models/package/model.bin"), b"retain model").unwrap();
     let storage = seed;
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let target = base.join("target");
     std::fs::DirBuilder::new()
         .mode(0o700)
@@ -545,7 +630,8 @@ fn placement_current_shared_app_parent_keeps_models_control_and_meeting() {
     )
     .unwrap();
     let mut p = b.pending_placement(&operation, &snapshot).unwrap();
-    p.copy(&snapshot, &|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         std::fs::read(old.join("models/package/model.bin")).unwrap(),
         b"retain model"
@@ -570,7 +656,9 @@ fn placement_crash_child() {
     let b = Bootstrap::open(&config, &legacy).unwrap();
     let storage = Storage::open(b.root().into()).unwrap();
     b.initialize(&storage).unwrap();
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let mut p = b.pending_placement(&operation, &snapshot).unwrap();
     let target = p.pending.target.clone();
     let ready = || -> ! {
@@ -604,7 +692,10 @@ fn placement_sigkill_reopen_preserves_old_data_and_resumes_only_journal_owned_co
     }
     for mode in ["partial", "ready"] {
         let f = Fixture::new();
-        let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         f.intent(&snapshot);
         let config = f.bootstrap.config.clone();
         let legacy = f.bootstrap.models_root.parent().unwrap().to_owned();
@@ -649,14 +740,18 @@ fn placement_sigkill_reopen_preserves_old_data_and_resumes_only_journal_owned_co
         assert_eq!(b.root(), old);
         let storage = Storage::open(b.root().into()).unwrap();
         b.initialize(&storage).unwrap();
-        let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+        let snapshot = storage
+            .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         let mut p = b.pending_placement(&f.operation, &snapshot).unwrap();
         let before = p.progress().unwrap();
         assert_eq!(
             before.state,
             if mode == "ready" { "ready" } else { "copying" }
         );
-        let after = p.copy(&snapshot, &|| false).unwrap();
+        let after = p
+            .copy(&snapshot, &crate::test_support::never_cancelled)
+            .unwrap();
         assert_eq!(after.state, "ready");
         assert_eq!(after.expected_paths, after.verified_paths);
         assert_eq!(

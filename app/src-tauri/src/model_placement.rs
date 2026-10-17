@@ -128,6 +128,8 @@ pub(crate) struct CatalogEntry {
     pub download: Option<DownloadIdentity>,
     pub model_name: String,
     pub model_version: String,
+    pub quantization: Option<String>,
+    pub model_files: Vec<ModelFileIdentity>,
     pub engine: String,
     pub engine_version: String,
     pub total_bytes: u64,
@@ -136,6 +138,13 @@ pub(crate) struct CatalogEntry {
     pub ready: bool,
     pub review_hash: String,
     pub compatibility: Option<crate::model_compatibility::CheckSummary>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModelFileIdentity {
+    pub role: crate::model_inspection::Role,
+    pub size: u64,
+    pub sha256: String,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -241,7 +241,7 @@ impl Storage {
     }
     #[cfg(test)]
     pub(crate) fn finalize_audio_import(&self, id: &str) -> Result<ImportSnapshot, String> {
-        self.finalize_audio_import_cancellable(id, &|| false)
+        self.finalize_audio_import_cancellable(id, &crate::test_support::never_cancelled)
     }
     pub(crate) fn finalize_audio_import_cancellable(
         &self,
@@ -451,7 +451,7 @@ impl Storage {
     }
     #[cfg(test)]
     pub(crate) fn recover_audio_imports(&self) -> Result<Vec<ImportSnapshot>, String> {
-        self.recover_audio_imports_cancellable(&|| false)
+        self.recover_audio_imports_cancellable(&crate::test_support::never_cancelled)
     }
     pub(crate) fn recover_audio_imports_cancellable(
         &self,

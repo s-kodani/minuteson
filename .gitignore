@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.cache/
+logs/
+*.log
+*.log.[0-9]*
 **/.build/
 probes/windows-capture/build/
 evaluation/data/
@@ -14,8 +18,6 @@ app/src-tauri/gen/
 app/src-tauri/icons/android/
 app/src-tauri/icons/ios/
 .playwright-cli/
-output/playwright/
-.cache/rust-tests/
-.cache/rust-tests.lock
-.cache/third-party-notices/
-.cache/whisper-runtime/
+/output/
+/plain-minutes-interval.png
+/simple-models.png

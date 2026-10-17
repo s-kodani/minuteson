@@ -15,7 +15,9 @@ fn target(f: &NativeFixture) -> PathBuf {
 }
 
 pub(super) fn select_current(b: &Bootstrap, storage: &Storage, target: &Path) -> serde_json::Value {
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let operation = Uuid::new_v4().to_string();
     b.begin_move(
         &operation,
@@ -26,17 +28,26 @@ pub(super) fn select_current(b: &Bootstrap, storage: &Storage, target: &Path) ->
     )
     .unwrap();
     let mut p = b.pending_placement(&operation, &snapshot).unwrap();
-    p.copy(&snapshot, &|| false).unwrap();
-    let h = snapshot.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
+    let h = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let control: serde_json::Value = serde_json::from_slice(h.bytes()).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.inspect_deletion_handoff(&h, &|| false)
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.inspect_deletion_handoff(&h, &crate::test_support::never_cancelled)
         .unwrap()
         .require_clean()
         .unwrap();
     let confirmation = p.pending.confirmation_id.clone();
     let selected = p
-        .activate_for_restart(&h, &confirmation, b.view().unwrap().revision, &|| false)
+        .activate_for_restart(
+            &h,
+            &confirmation,
+            b.view().unwrap().revision,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     assert_eq!(selected.meeting_root, target);
     assert!(selected.restart_required && storage.restart_required());
@@ -73,10 +84,12 @@ fn flat(control: &serde_json::Value, original_operation: &str, prior_moves: usiz
 
 fn delete_current(storage: &Storage) -> String {
     let meeting = storage.create_meeting("CURRENT ROOT ONLY").unwrap();
-    let mut p = operations::Prepared::fresh(storage, &meeting.id, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::fresh(storage, &meeting.id, &crate::test_support::never_cancelled)
+            .unwrap();
     let operation = p.preview().operation_id;
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(
         p.execute(
@@ -84,7 +97,7 @@ fn delete_current(storage: &Storage) -> String {
             &lease,
             &p.preview().confirmation_id,
             true,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .unwrap()
@@ -143,7 +156,7 @@ fn deletion_repeat_moves_completed_audio_mixed_current_receipts_and_flat_origins
         let backup = f._base.path().join(format!("{}.monbackup", Uuid::new_v4()));
         assert_eq!(
             storage
-                .create_backup_archive(&backup, &|| false)
+                .create_backup_archive(&backup, &crate::test_support::never_cancelled)
                 .unwrap()
                 .deleted_audio_meeting_count,
             1
@@ -188,11 +201,19 @@ fn deletion_repeat_moves_kept_audio_and_whole_meeting_never_become_current_conse
             b"SYNTHETIC AUDIO"
         );
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
-        assert!(audio::intent::removal::start(&storage, &f.deletion, &lease, &|| false).is_err());
+        assert!(audio::intent::removal::start(
+            &storage,
+            &f.deletion,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         if let Some(op) = kept {
-            let mut p = operations::Prepared::pending(&storage, &op, &|| false).unwrap();
+            let mut p =
+                operations::Prepared::pending(&storage, &op, &crate::test_support::never_cancelled)
+                    .unwrap();
             assert!(!p.preview().execute_allowed);
             assert!(p
                 .execute(
@@ -200,7 +221,7 @@ fn deletion_repeat_moves_kept_audio_and_whole_meeting_never_become_current_conse
                     &lease,
                     &p.preview().confirmation_id,
                     true,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .is_err());
@@ -254,9 +275,17 @@ fn deletion_repeat_moves_full_supersession_and_new_current_consent_preserve_all_
         assert!(storage.data_write_blocked());
         assert_eq!(synthetic_meeting_reconfirmation_records(&storage), recorded);
         let controller = AnalysisController::default();
-        let mut p = operations::Prepared::pending(&storage, &op, &|| false).unwrap();
+        let mut p =
+            operations::Prepared::pending(&storage, &op, &crate::test_support::never_cancelled)
+                .unwrap();
         let lease = controller
-            .begin_deletion_maintenance(&storage, &op, false, false, &|| false)
+            .begin_deletion_maintenance(
+                &storage,
+                &op,
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         assert!(!p.preview().execute_allowed && p.preview().reconfirmation_allowed);
         assert!(p
@@ -265,20 +294,25 @@ fn deletion_repeat_moves_full_supersession_and_new_current_consent_preserve_all_
                 &lease,
                 &p.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .is_err());
         assert!(body.exists());
-        p.review_remaining(&storage, &lease, &p.preview().confirmation_id, &|| false)
-            .unwrap();
+        p.review_remaining(
+            &storage,
+            &lease,
+            &p.preview().confirmation_id,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert!(
             p.execute(
                 &storage,
                 &lease,
                 &p.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -324,15 +358,17 @@ fn deletion_repeat_moves_restored_unavailable_audio_and_supersession_survive_reb
         let mut f = NativeFixture::new(false, false);
         let storage = f.storage.as_ref().unwrap();
         let archive = f._base.path().join("restore-input.monbackup");
-        storage.create_backup_archive(&archive, &|| false).unwrap();
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
         let selected = storage
-            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .prepare_additive_restore(&archive, &crate::test_support::never_cancelled, &|_| {})
             .unwrap();
         let restored = selected
             .publish(
                 storage,
                 &selected.preview().confirmation_id,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             )
             .unwrap()
@@ -342,9 +378,14 @@ fn deletion_repeat_moves_restored_unavailable_audio_and_supersession_survive_reb
         let op = synthetic_restored_audio_operation(storage, &restored);
         let old = synthetic_consent_record(storage, &op);
         if full {
-            let mut p = operations::Prepared::fresh(storage, &restored, &|| false).unwrap();
+            let mut p = operations::Prepared::fresh(
+                storage,
+                &restored,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &|| false)
+                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(
                 p.execute(
@@ -352,7 +393,7 @@ fn deletion_repeat_moves_restored_unavailable_audio_and_supersession_survive_reb
                     &lease,
                     &p.preview().confirmation_id,
                     true,
-                    &|| false,
+                    &crate::test_support::never_cancelled,
                     &|_| {}
                 )
                 .unwrap()
@@ -376,7 +417,7 @@ fn deletion_repeat_moves_restored_unavailable_audio_and_supersession_survive_reb
         let archive = f._base.path().join("rebackup.monbackup");
         assert_eq!(
             storage
-                .create_backup_archive(&archive, &|| false)
+                .create_backup_archive(&archive, &crate::test_support::never_cancelled)
                 .unwrap()
                 .deleted_audio_meeting_count,
             if full { 1 } else { 2 }
@@ -411,9 +452,15 @@ fn deletion_repeat_moves_models_keep_native_root_and_never_reuse_moved_consent()
             assert_eq!(std::fs::read(&file).unwrap(), b"SYNTHETIC MODEL");
         }
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
-        assert!(models::intent::removal::start(&storage, &op, &lease, &|| false).is_err());
+        assert!(models::intent::removal::start(
+            &storage,
+            &op,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(storage
             .create_meeting("CURRENT DB, ORIGINAL MODEL ROOT")
             .is_ok());
@@ -459,7 +506,9 @@ fn deletion_repeat_moves_cancel_never_retire_source_or_publish_selection() {
     f.select();
     let (b, storage) = f.open();
     let next = target(&f);
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let operation = Uuid::new_v4().to_string();
     b.begin_move(
         &operation,
@@ -470,12 +519,16 @@ fn deletion_repeat_moves_cancel_never_retire_source_or_publish_selection() {
     )
     .unwrap();
     let mut p = b.pending_placement(&operation, &snapshot).unwrap();
-    p.copy(&snapshot, &|| false).unwrap();
+    p.copy(&snapshot, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(snapshot.prepare_control_handoff(&|| true).is_err());
-    let h = snapshot.prepare_control_handoff(&|| false).unwrap();
+    let h = snapshot
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     flat(&serde_json::from_slice(h.bytes()).unwrap(), &f.deletion, 1);
     assert!(p.install_history(&h, &|| true).is_err());
-    p.install_history(&h, &|| false).unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
     let registry = next.join(".mon-scratch.sqlite3");
     let before = std::fs::read(&registry).unwrap();
     assert!(p.inspect_deletion_handoff(&h, &|| true).is_err());
@@ -587,8 +640,10 @@ fn deletion_repeat_moves_missing_all_predecessor_records_never_become_no_history
         &storage,
         &f.deletion,
     );
-    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
-    let result = snapshot.prepare_control_handoff(&|| false);
+    let snapshot = storage
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
+    let result = snapshot.prepare_control_handoff(&crate::test_support::never_cancelled);
     assert!(matches!(result, Err(ref error) if error.contains("元の操作が欠落")));
     assert_eq!(b.view().unwrap().meeting_root, f.target);
     assert_eq!(

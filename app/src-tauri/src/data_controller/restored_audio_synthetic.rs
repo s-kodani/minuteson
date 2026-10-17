@@ -23,7 +23,7 @@ impl Synthetic {
             operation,
             false,
             false,
-            &|| false,
+            &crate::test_support::never_cancelled,
         )?;
         let (s, _, previous) = self.controller.begin(Kind::AudioDeletion)?;
         Ok(self.finish(
@@ -31,14 +31,14 @@ impl Synthetic {
             Work::AudioDeletion(AudioTarget::Pending(operation.into()), previous),
             &s,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         ))
     }
     pub(crate) fn fresh(&self, storage: &Storage, meeting: &str) -> Snapshot {
         let lease = self
             .analysis
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let (s, _, previous) = self.controller.begin(Kind::AudioDeletion).unwrap();
         self.finish(
@@ -46,7 +46,7 @@ impl Synthetic {
             Work::AudioDeletion(AudioTarget::Fresh(meeting.into()), previous),
             &s,
             &lease,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
     }
@@ -126,7 +126,13 @@ impl Synthetic {
     ) -> Snapshot {
         let lease = self
             .analysis
-            .begin_audio_deletion_maintenance(storage, &self.admission(), false, false, &|| false)
+            .begin_audio_deletion_maintenance(
+                storage,
+                &self.admission(),
+                false,
+                false,
+                &crate::test_support::never_cancelled,
+            )
             .unwrap();
         let (work, _, started) = self
             .controller

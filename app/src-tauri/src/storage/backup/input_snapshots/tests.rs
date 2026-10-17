@@ -90,18 +90,28 @@ fn restore(
     meeting: &str,
     session: &str,
 ) -> (Storage, String, String) {
-    let ids =
-        restore_ids::RestoreIds::prepare(source, parent, &Uuid::new_v4().to_string(), &|| false)
-            .unwrap();
+    let ids = restore_ids::RestoreIds::prepare(
+        source,
+        parent,
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let new_meeting = ids.get("meetings", "", meeting).unwrap();
     let new_session = ids.get("recording_sessions", meeting, session).unwrap();
-    let fixed = restore_fixed::FixedData::new(&ids, parent, &|| false).unwrap();
-    let sealed =
-        restore_fixed::workspace::seal::SealedWorkspace::prepare(&fixed, parent, &|| false)
-            .unwrap();
+    let fixed =
+        restore_fixed::FixedData::new(&ids, parent, &crate::test_support::never_cancelled).unwrap();
+    let sealed = restore_fixed::workspace::seal::SealedWorkspace::prepare(
+        &fixed,
+        parent,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target = Storage::open(root.into()).unwrap();
     let existing = target.create_meeting("EXISTING MEETING UNCHANGED").unwrap();
-    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    target
+        .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(target.get_meeting(&existing.id).unwrap().unwrap(), existing);
     (target, new_meeting, new_session)
 }
@@ -133,13 +143,19 @@ fn failed_recording_actual_backup_additive_restore_rebackup_second_restore_prese
         let original_ledger = std::fs::read(f.directory.join("input-notices.json")).unwrap();
         drop(lease);
         let maintenance = admission
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let output = tempfile::tempdir().unwrap();
         let path = output.path().join("inputs.monbackup");
-        f.storage.create_backup_archive(&path, &|| false).unwrap();
-        let source =
-            archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+        f.storage
+            .create_backup_archive(&path, &crate::test_support::never_cancelled)
+            .unwrap();
+        let source = archive::read(
+            &mut File::open(&path).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         let text = payload(&source.database, &f.session);
         let original: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(original["sessionId"], f.session);
@@ -221,9 +237,15 @@ fn failed_recording_actual_backup_additive_restore_rebackup_second_restore_prese
             .is_err());
         assert_imported_reads(&target, &new_meeting, &new_session, &f.session, &f.journal);
         let path2 = output.path().join("rebackup.monbackup");
-        target.create_backup_archive(&path2, &|| false).unwrap();
-        let again =
-            archive::read(&mut File::open(path2).unwrap(), output.path(), &|| false).unwrap();
+        target
+            .create_backup_archive(&path2, &crate::test_support::never_cancelled)
+            .unwrap();
+        let again = archive::read(
+            &mut File::open(path2).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&payload(&again.database, &new_session)).unwrap(),
             restored
@@ -351,8 +373,15 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
     storage.finalize_recording(&session).unwrap();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("saved-inputs.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    let archive = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let archive = archive::read(
+        &mut File::open(&path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let (target, new_meeting, new_session) = restore(
         &archive,
@@ -368,9 +397,12 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
     assert_eq!(assets.len(), 3); // Actual registered synthetic CAFs and manifest.
     for (relative, hash) in &assets {
         assert_eq!(
-            digest_file(&target.root().join(relative), &|| false)
-                .unwrap()
-                .1,
+            digest_file(
+                &target.root().join(relative),
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .1,
             *hash
         );
     }
@@ -457,9 +489,12 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
     );
     for (relative, hash) in &assets {
         assert_eq!(
-            digest_file(&target.root().join(relative), &|| false)
-                .unwrap()
-                .1,
+            digest_file(
+                &target.root().join(relative),
+                &crate::test_support::never_cancelled
+            )
+            .unwrap()
+            .1,
             *hash
         );
     }
@@ -491,8 +526,15 @@ fn diagnostic_only_and_corrupt_imports_never_fall_back_to_destination_looking_hi
     std::fs::remove_file(f.directory.join("input-events.json")).unwrap();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("diagnostic-only.monbackup");
-    f.storage.create_backup_archive(&path, &|| false).unwrap();
-    let archive = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+    f.storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    let archive = archive::read(
+        &mut File::open(&path).unwrap(),
+        output.path(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let (target, meeting, session) = restore(
         &archive,
@@ -604,7 +646,10 @@ fn pinned_snapshot_rejects_leaf_changes_equal_byte_replacement_new_files_and_anc
 ) {
     for change in ["bytes", "replacement", "new_leaf", "ancestor"] {
         let f = fixture();
-        let snapshot = f.storage.prepare_backup_snapshot(&|| false).unwrap();
+        let snapshot = f
+            .storage
+            .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+            .unwrap();
         match change {
             "bytes" => {
                 std::fs::write(f.directory.join("manifest.json"), br#"{"state":"failed"}"#).unwrap()
@@ -634,7 +679,12 @@ fn pinned_snapshot_rejects_leaf_changes_equal_byte_replacement_new_files_and_anc
             }
             _ => unreachable!(),
         }
-        assert!(snapshot.verify(&|| false).is_err(), "accepted {change}");
+        assert!(
+            snapshot
+                .verify(&crate::test_support::never_cancelled)
+                .is_err(),
+            "accepted {change}"
+        );
         drop(snapshot);
         assert!(f.storage.create_meeting("MAINTENANCE RELEASED").is_ok());
         assert_eq!(
@@ -686,7 +736,9 @@ fn corrupt_or_foreign_companions_and_symlink_or_shared_link_never_publish_a_part
         let output = tempfile::tempdir().unwrap();
         let path = output.path().join("refused.monbackup");
         assert!(
-            f.storage.create_backup_archive(&path, &|| false).is_err(),
+            f.storage
+                .create_backup_archive(&path, &crate::test_support::never_cancelled)
+                .is_err(),
             "accepted {change}"
         );
         assert!(!path.exists());
@@ -701,7 +753,13 @@ fn corrupt_or_foreign_companions_and_symlink_or_shared_link_never_publish_a_part
 fn restored_binding_is_immutable_and_owner_mismatch_duplicate_and_active_rows_are_rejected() {
     let f = fixture();
     let root = f.storage.managed_anchor.backup_input_root().unwrap();
-    let (_, snapshot) = source::capture(&root, &f.meeting, &f.session, &|| false).unwrap();
+    let (_, snapshot) = source::capture(
+        &root,
+        &f.meeting,
+        &f.session,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let bound = Bound {
         schema_version: 1,
         meeting_id: f.meeting.clone(),
@@ -782,5 +840,5 @@ fn restored_binding_is_immutable_and_owner_mismatch_duplicate_and_active_rows_ar
             params![session]
         )
         .is_err());
-    validate_database(&db, &|| false).unwrap();
+    validate_database(&db, &crate::test_support::never_cancelled).unwrap();
 }

@@ -170,7 +170,12 @@ impl Fixture {
         id
     }
     pub(super) fn census(&self) -> Census {
-        Census::capture(&self.storage, &self.meeting, &|| false).unwrap()
+        Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     pub(super) fn preview(&self) -> Preview {
         self.census()
@@ -267,7 +272,9 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
     ] {
         assert!(!encoded.contains(secret));
     }
-    census.verify(&f.storage, &|| false).unwrap();
+    census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(f.preview().census_hash, preview.census_hash);
     for file in [&f.path, &manifest, &external, &original, &other_file] {
         assert!(file.is_file());
@@ -434,7 +441,7 @@ fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded
             params![import, original.id],
         )
         .unwrap();
-    let preview = Census::capture(&f.storage, &meeting, &|| false)
+    let preview = Census::capture(&f.storage, &meeting, &crate::test_support::never_cancelled)
         .unwrap()
         .preview(&uuid::Uuid::new_v4().to_string())
         .unwrap();
@@ -605,9 +612,13 @@ fn audio_only_census_rejects_audio_reference_to_non_audio_asset() {
             params![f.asset],
         )
         .unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false)
-        .unwrap_err_string()
-        .contains("種類"));
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err_string()
+    .contains("種類"));
     assert!(f.path.is_file());
 }
 
@@ -649,9 +660,13 @@ fn audio_only_census_rejects_manifest_misclassification_instead_of_erasing_prove
             params![id],
         )
         .unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false)
-        .unwrap_err_string()
-        .contains("manifest"));
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err_string()
+    .contains("manifest"));
     assert!(manifest.is_file() && f.path.is_file());
 }
 
@@ -663,7 +678,9 @@ fn audio_only_census_makes_no_sql_changes_even_with_saved_document_edits_and_fai
     let changes = f.storage.connection.lock().unwrap().total_changes();
     let census = f.census();
     let preview = census.preview(&uuid::Uuid::new_v4().to_string()).unwrap();
-    census.verify(&f.storage, &|| false).unwrap();
+    census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         f.storage.connection.lock().unwrap().total_changes(),
         changes
@@ -696,7 +713,9 @@ fn audio_only_census_invalidates_changed_audio_retained_document_unknown_file_an
                     .unwrap();
             }
         }
-        assert!(census.verify(&f.storage, &|| false).is_err());
+        assert!(census
+            .verify(&f.storage, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(f.path.is_file() && retained.is_file());
     }
 }
@@ -727,7 +746,9 @@ fn audio_only_census_requires_new_review_after_edits_to_retained_text() {
     f.storage
         .save_transcript_draft(&draft.id, draft.lock_version, payload)
         .unwrap();
-    assert!(census.verify(&f.storage, &|| false).is_err());
+    assert!(census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .is_err());
 }
 
 #[test]
@@ -761,7 +782,12 @@ fn audio_only_census_rejects_links_aliases_special_objects_and_registered_path_e
                     .unwrap();
             }
         }
-        assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+        assert!(Census::capture(
+            &f.storage,
+            &f.meeting,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert_eq!(std::fs::read(&external).unwrap(), b"EXTERNAL AUDIO");
     }
 }
@@ -778,7 +804,12 @@ fn audio_only_census_rejects_replaced_root_and_database_without_adopting_them() 
             std::fs::rename(f.storage.root(), f.base.path().join("old-root")).unwrap();
             std::fs::create_dir(f.storage.root()).unwrap();
         }
-        assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+        assert!(Census::capture(
+            &f.storage,
+            &f.meeting,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
     }
 }
 
@@ -795,7 +826,12 @@ fn audio_only_census_blocks_active_work_pending_maintenance_and_invalid_ids() {
             params![job],
         )
         .unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     f.storage
         .connection
         .lock()
@@ -807,9 +843,19 @@ fn audio_only_census_blocks_active_work_pending_maintenance_and_invalid_ids() {
         .unwrap();
     let census = f.census();
     assert!(census.preview("inspection").is_err());
-    assert!(Census::capture(&f.storage, "../meeting", &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        "../meeting",
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     f.storage.connection.lock().unwrap().execute("INSERT INTO maintenance_operations VALUES(?1,?2,'delete_meeting','prepared',NULL,'{}',?3,1,'{}',NULL,1,1)",params![uuid::Uuid::new_v4().to_string(),f.meeting,"a".repeat(64)]).unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     assert!(f.path.is_file());
 }
 

@@ -96,6 +96,10 @@ impl AnalysisController {
                 false
             };
             if result.is_err() {
+                crate::internal_logs::report_error(
+                    "analysis",
+                    "解析ワーカーが予期せず停止しました",
+                );
                 let _ = app.emit(
                     "analysis-worker-error",
                     "解析ワーカーが予期せず停止しました。再起動後に再開状態を確認してください",
@@ -129,10 +133,17 @@ impl AnalysisController {
                 crate::analysis_flow::advance(&app.state::<Storage>(), &stopping, &|flow| {
                     if flow.stage == "review" {
                         let _ = app.emit("analysis-version-changed", &flow.meeting_id);
+                        if let Err(error) = crate::voice::enqueue_automatic(
+                            &app.state::<Storage>(),
+                            &flow.meeting_id,
+                        ) {
+                            crate::internal_logs::report_error("voice_matching", &error);
+                        }
                     }
                     let _ = app.emit("analysis-flow-changed", flow);
                 })
             {
+                crate::internal_logs::report_error("analysis", &error);
                 let _ = app.emit("analysis-worker-error", error);
             }
             let claimed = {
@@ -147,6 +158,13 @@ impl AnalysisController {
             };
             match claimed {
                 Ok(Some(job)) => {
+                    let _log_scope =
+                        crate::internal_logs::Scope::enter(crate::internal_logs::Context {
+                            category: job.kind.clone(),
+                            meeting_id: Some(job.meeting_id.clone()),
+                            job_id: Some(job.id.clone()),
+                            operation_id: Some(job.operation_id.clone()),
+                        });
                     emit(app, job.clone());
                     let stopping = || controller.shutdown.load(Ordering::SeqCst);
                     let result = match job.kind.as_str() {
@@ -156,7 +174,17 @@ impl AnalysisController {
                             &stopping,
                             &|job| emit(app, job),
                         ),
-                        "minutes_generation" => crate::generation::process(
+                        "minutes_generation" => crate::generation::process_observed(
+                            &app.state::<Storage>(),
+                            &job.id,
+                            &stopping,
+                            &|job| emit(app, job),
+                            &|runtime| {
+                                crate::internal_logs::runtime(&runtime);
+                                let _ = app.emit("minutes-runtime-progress", runtime);
+                            },
+                        ),
+                        "voice_registration" | "voice_matching" => crate::voice::process(
                             &app.state::<Storage>(),
                             &job.id,
                             &stopping,
@@ -170,6 +198,15 @@ impl AnalysisController {
                         ),
                         _ => Err("未対応の解析工程です".into()),
                     };
+                    if result.is_ok()
+                        && matches!(job.kind.as_str(), "voice_registration" | "voice_matching")
+                        && app
+                            .state::<Storage>()
+                            .get_job(&job.id)
+                            .is_ok_and(|j| j.state == "succeeded")
+                    {
+                        let _ = app.emit("voice-identity-changed", &job.meeting_id);
+                    }
                     if let Err(error) = result {
                         let storage = app.state::<Storage>();
                         if let Ok(current) = storage.get_job(&job.id) {
@@ -180,6 +217,9 @@ impl AnalysisController {
                                 Some(match job.kind.as_str() {
                                     "minutes_generation" => "minutes_generation_failed",
                                     "diarization" => "diarization_failed",
+                                    "voice_registration" | "voice_matching" => {
+                                        "voice_processing_failed"
+                                    }
                                     _ => "transcription_failed",
                                 }),
                             ) {
@@ -187,6 +227,7 @@ impl AnalysisController {
                             }
                         }
                         // Retain detailed diagnostics locally, without transcript text.
+                        crate::internal_logs::report_error("analysis", &error);
                         let _ = app.emit("analysis-worker-error", error);
                     }
                     let resume = controller.state.lock().is_ok_and(|state| {
@@ -208,6 +249,7 @@ impl AnalysisController {
                     return;
                 }
                 Err(error) => {
+                    crate::internal_logs::report_error("analysis", &error);
                     let _ = app.emit("analysis-worker-error", error);
                     return;
                 }
@@ -245,6 +287,7 @@ impl AnalysisController {
     pub fn recording_finished(app: &AppHandle) {
         let controller = app.state::<Self>();
         if let Err(error) = app.state::<Storage>().resume_recording_jobs() {
+            crate::internal_logs::report_error("analysis", &error);
             let _ = app.emit("analysis-worker-error", error);
         }
         if let Ok(mut state) = controller.state.lock() {
@@ -297,6 +340,7 @@ impl AnalysisController {
             state.import_intent = false;
         }
         if let Err(error) = app.state::<Storage>().resume_recording_jobs() {
+            crate::internal_logs::report_error("analysis", &error);
             let _ = app.emit("analysis-worker-error", error);
         }
         let _ = Self::kick(app);
@@ -409,5 +453,6 @@ impl AnalysisController {
 }
 
 fn emit(app: &AppHandle, job: JobSnapshot) {
+    crate::internal_logs::job(&job);
     let _ = app.emit("analysis-job-changed", job);
 }

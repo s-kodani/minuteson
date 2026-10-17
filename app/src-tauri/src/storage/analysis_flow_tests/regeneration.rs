@@ -37,7 +37,9 @@ fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
         track_id: track,
         num_speakers: Some(5),
     }];
-    let flow = s.regenerate_analysis(&r, &|| false).unwrap();
+    let flow = s
+        .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         flow.plan.as_ref().unwrap()["speakerCounts"][0]["numSpeakers"],
         5
@@ -66,7 +68,9 @@ fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
         s.diarization_preferences().unwrap().lock_version,
         before.lock_version
     );
-    let next = s.regenerate_analysis(&request(&s, &m), &|| false).unwrap();
+    let next = s
+        .regenerate_analysis(&request(&s, &m), &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(next.plan.as_ref().unwrap().get("speakerCounts").is_none());
 }
 
@@ -93,7 +97,9 @@ fn regeneration_invalid_speaker_counts_and_foreign_tracks_never_start_a_flow() {
                 },
             )
             .collect();
-        assert!(s.regenerate_analysis(&r, &|| false).is_err());
+        assert!(s
+            .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(s.analysis_flow(&m).unwrap().is_none());
     }
 }
@@ -117,10 +123,17 @@ fn failed_first_transcription_starts_a_new_global_settings_flow_without_retrying
     s.save_analysis_preferences(1, preferences).unwrap();
     let r = request(&s, &m);
     assert!(r.expected.target.is_none());
-    let next = s.regenerate_analysis(&r, &|| false).unwrap();
+    let next = s
+        .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(next.id, r.operation_id);
     assert_eq!(next.plan.as_ref().unwrap()["whisper"]["threads"], 2);
-    assert_eq!(s.regenerate_analysis(&r, &|| false).unwrap().id, next.id);
+    assert_eq!(
+        s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+            .unwrap()
+            .id,
+        next.id
+    );
     advance(&s);
     let job = s
         .analysis_flow(&m)
@@ -174,7 +187,9 @@ fn regeneration_uses_start_time_global_models_and_waits_for_edit_barrier() {
     preferences.standard.threads = 2;
     s.save_analysis_preferences(1, preferences).unwrap();
     let r = request(&s, &m);
-    let accepted = s.regenerate_analysis(&r, &|| false).unwrap();
+    let accepted = s
+        .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(accepted.id, r.operation_id);
     assert_eq!(accepted.plan.as_ref().unwrap()["whisper"]["threads"], 2);
     let plan = accepted.plan.clone();
@@ -187,8 +202,9 @@ fn regeneration_uses_start_time_global_models_and_waits_for_edit_barrier() {
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), saved);
     assert_eq!(s.ready_analysis_flows().unwrap().len(), 1);
     let published = s
-        .publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
         .unwrap();
+    let published = published.published().unwrap();
     assert_eq!(published.stage, "review");
     assert!(!published.ready_to_publish);
     let new = s.load_current_analysis(&m).unwrap().unwrap();
@@ -196,11 +212,15 @@ fn regeneration_uses_start_time_global_models_and_waits_for_edit_barrier() {
     assert!(s.load_transcript_draft(&m).unwrap().is_none());
     assert_eq!(s.list_jobs(&m).unwrap().len(), 4);
     assert_eq!(
-        s.regenerate_analysis(&r, &|| false).unwrap().id,
+        s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+            .unwrap()
+            .id,
         r.operation_id
     );
     assert_eq!(
-        s.publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+        s.publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
+            .unwrap()
+            .published()
             .unwrap()
             .stage,
         "review"
@@ -209,14 +229,15 @@ fn regeneration_uses_start_time_global_models_and_waits_for_edit_barrier() {
 }
 
 #[test]
-fn regeneration_later_human_text_and_speaker_edits_win_and_are_not_rebased() {
+fn regeneration_later_edits_require_confirmation_and_publish_existing_output() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
     complete_initial(&s, &m);
     edit(&s, &m, "開始前の修正");
     let prior = s.load_current_analysis(&m).unwrap().unwrap();
     let r = request(&s, &m);
-    s.regenerate_analysis(&r, &|| false).unwrap();
+    s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     let later = edit(&s, &m, "処理中に保存した修正");
     let mut payload = later.payload.clone();
     payload
@@ -230,22 +251,39 @@ fn regeneration_later_human_text_and_speaker_edits_win_and_are_not_rebased() {
         .save_transcript_draft(&later.id, later.lock_version, payload)
         .unwrap();
     let flow = finish(&s, &m);
-    let error = s
-        .publish_regenerated_flow(&m, &flow.id, flow.lock_version)
-        .unwrap_err();
-    assert!(error.contains("編集されました"), "{error}");
+    let pending = s
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
+        .unwrap();
+    let super::super::super::analysis_flows::regeneration::Publication::ConfirmationRequired {
+        target,
+        meeting_title,
+        ..
+    } = pending
+    else {
+        panic!("expected confirmation");
+    };
+    assert!(!meeting_title.is_empty());
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), prior);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), later);
-    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "attention");
-    assert!(s.ready_analysis_flows().unwrap().is_empty());
-    // A new explicit confirmation can replace the newly edited target.
-    let next = request(&s, &m);
-    s.regenerate_analysis(&next, &|| false).unwrap();
-    assert!(s.regenerate_analysis(&r, &|| false).is_err());
-    let flow = finish(&s, &m);
-    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "diarization");
+    assert_eq!(s.ready_analysis_flows().unwrap().len(), 1);
+    let jobs = s.list_jobs(&m).unwrap();
+    let plan = flow.plan.clone();
+    // Cancel/no response retains both the public draft and the generated output,
+    // including across restart. Acceptance publishes those exact existing jobs.
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version, Some(&target))
+        .unwrap()
+        .published()
         .unwrap();
-    assert_ne!(s.load_current_analysis(&m).unwrap().unwrap().id, prior.id);
+    assert_eq!(s.list_jobs(&m).unwrap(), jobs);
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().plan, plan);
+    assert_eq!(
+        s.load_current_analysis(&m).unwrap().unwrap().id,
+        flow.diarization_job.unwrap().output_analysis_id.unwrap()
+    );
+    assert!(s.load_transcript_draft(&m).unwrap().is_none());
 }
 
 #[test]
@@ -258,10 +296,14 @@ fn regeneration_missing_models_cancel_and_stale_confirmation_leave_public_text_a
     let prior = s.load_current_analysis(&m).unwrap().unwrap();
     assert!(s.regenerate_analysis(&r, &|| true).is_err());
     let later = edit(&s, &m, "確認後に変更した本文");
-    assert!(s.regenerate_analysis(&r, &|| false).is_err());
+    assert!(s
+        .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .is_err());
     let current = request(&s, &m);
     std::fs::remove_file(root.path().join("model.bin")).unwrap();
-    assert!(s.regenerate_analysis(&current, &|| false).is_err());
+    assert!(s
+        .regenerate_analysis(&current, &crate::test_support::never_cancelled)
+        .is_err());
     assert_eq!(s.analysis_flow(&m).unwrap().unwrap().id, flow.id);
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), prior);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), later);
@@ -275,14 +317,20 @@ fn regeneration_operation_identity_replay_and_competing_starts_are_checked() {
     complete_initial(&s, &m);
     let r = request(&s, &m);
     let competing = request(&s, &m);
-    let first = s.regenerate_analysis(&r, &|| false).unwrap();
-    assert!(s.regenerate_analysis(&competing, &|| false).is_err());
+    let first = s
+        .regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(s
+        .regenerate_analysis(&competing, &crate::test_support::never_cancelled)
+        .is_err());
     let mut changed = r.clone();
     changed.expected.target.as_mut().unwrap().content_hash = "0".repeat(64);
     assert!(s.regeneration_replay(&changed).is_err());
     let mut invalid = r.clone();
     invalid.operation_id = "not-a-uuid".into();
-    assert!(s.regenerate_analysis(&invalid, &|| false).is_err());
+    assert!(s
+        .regenerate_analysis(&invalid, &crate::test_support::never_cancelled)
+        .is_err());
     advance(&s);
     // Read-only replay needs neither model availability nor idle inference.
     std::fs::remove_file(root.path().join("model.bin")).unwrap();
@@ -297,19 +345,20 @@ fn regeneration_restart_preserves_pending_publication_and_wrong_flow_cannot_publ
     complete_initial(&s, &m);
     let r = request(&s, &m);
     let before = s.load_current_analysis(&m).unwrap().unwrap();
-    s.regenerate_analysis(&r, &|| false).unwrap();
+    s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     let flow = finish(&s, &m);
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();
     assert_eq!(s.ready_analysis_flows().unwrap().len(), 1);
     assert!(s
-        .publish_regenerated_flow(&m, &Uuid::new_v4().to_string(), flow.lock_version)
+        .publish_regenerated_flow(&m, &Uuid::new_v4().to_string(), flow.lock_version, None)
         .is_err());
     assert!(s
-        .publish_regenerated_flow(&m, &flow.id, flow.lock_version + 1)
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version + 1, None)
         .is_err());
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), before);
-    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
         .unwrap();
     assert!(s.ready_analysis_flows().unwrap().is_empty());
 }
@@ -322,11 +371,12 @@ fn regeneration_publication_failure_rolls_back_head_and_draft_then_stops_automat
     let saved = edit(&s, &m, "上書き失敗でも残す");
     let prior = s.load_current_analysis(&m).unwrap().unwrap();
     let r = request(&s, &m);
-    s.regenerate_analysis(&r, &|| false).unwrap();
+    s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     let flow = finish(&s, &m);
     s.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_regeneration_head BEFORE UPDATE OF current_analysis_id ON meetings BEGIN SELECT RAISE(ABORT,'synthetic publication failure'); END;").unwrap();
     assert!(s
-        .publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
         .is_err());
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), prior);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), saved);
@@ -358,13 +408,16 @@ fn regeneration_failed_worker_and_success_never_change_human_minutes() {
         })
         .unwrap();
     let r = request(&s, &m);
-    s.regenerate_analysis(&r, &|| false).unwrap();
+    s.regenerate_analysis(&r, &crate::test_support::never_cancelled)
+        .unwrap();
     advance(&s);
     transcribe(&s);
     advance(&s);
     std::fs::write(root.path().join("fail-diarization"), b"fail").unwrap();
     let job = s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {}).is_err());
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {}).is_err()
+    );
     s.finish_job(&job.id, 0, "failed", Some("synthetic diarization failure"))
         .unwrap();
     advance(&s);
@@ -374,9 +427,10 @@ fn regeneration_failed_worker_and_success_never_change_human_minutes() {
     assert_eq!(s.get_minutes_markdown(&m).unwrap(), Some(minutes.clone()));
     std::fs::remove_file(root.path().join("fail-diarization")).unwrap();
     let next = request(&s, &m);
-    s.regenerate_analysis(&next, &|| false).unwrap();
+    s.regenerate_analysis(&next, &crate::test_support::never_cancelled)
+        .unwrap();
     let flow = finish(&s, &m);
-    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version)
+    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
         .unwrap();
     assert_ne!(s.load_current_analysis(&m).unwrap().unwrap().id, prior.id);
     assert_eq!(s.get_minutes_markdown(&m).unwrap(), Some(minutes.clone()));
@@ -391,4 +445,98 @@ fn regeneration_failed_worker_and_success_never_change_human_minutes() {
     drop(s);
     let reopened = Storage::open(root.path().into()).unwrap();
     assert_eq!(reopened.get_minutes_markdown(&m).unwrap(), Some(minutes));
+}
+
+#[test]
+fn regeneration_stale_replacement_consent_preserves_newer_edits_and_can_be_confirmed_again() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    complete_initial(&s, &m);
+    let prior = s.load_current_analysis(&m).unwrap().unwrap();
+    s.regenerate_analysis(&request(&s, &m), &crate::test_support::never_cancelled)
+        .unwrap();
+    edit(&s, &m, "確認対象の本文");
+    let flow = finish(&s, &m);
+    let pending = s
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
+        .unwrap();
+    let crate::storage::analysis_flows::regeneration::Publication::ConfirmationRequired {
+        target,
+        ..
+    } = pending
+    else {
+        panic!("expected confirmation");
+    };
+    let newer = edit(&s, &m, "確認後に保存した本文");
+    assert!(s
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, Some(&target))
+        .is_err());
+    assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), prior);
+    assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), newer);
+    assert!(s.analysis_flow(&m).unwrap().unwrap().replacement_ready);
+    let mut wrong_head = target;
+    wrong_head.analysis_id = Uuid::new_v4().to_string();
+    assert!(s
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, Some(&wrong_head))
+        .is_err());
+    let pending = s
+        .publish_regenerated_flow(&m, &flow.id, flow.lock_version, None)
+        .unwrap();
+    let crate::storage::analysis_flows::regeneration::Publication::ConfirmationRequired {
+        target,
+        ..
+    } = pending
+    else {
+        panic!("expected confirmation");
+    };
+    s.publish_regenerated_flow(&m, &flow.id, flow.lock_version, Some(&target))
+        .unwrap()
+        .published()
+        .unwrap();
+    assert_ne!(s.load_current_analysis(&m).unwrap().unwrap().id, prior.id);
+    assert_eq!(s.list_jobs(&m).unwrap().len(), 4);
+}
+
+#[test]
+fn regeneration_previously_stopped_replacement_can_publish_without_new_jobs() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    complete_initial(&s, &m);
+    s.regenerate_analysis(&request(&s, &m), &crate::test_support::never_cancelled)
+        .unwrap();
+    edit(&s, &m, "旧バージョンで保持された修正");
+    let flow = finish(&s, &m);
+    let stopped = s
+        .update_analysis_flow(
+            &flow,
+            "attention",
+            flow.plan.clone(),
+            flow.transcription_job.as_ref(),
+            flow.diarization_job.as_ref(),
+            Some("再生成の開始後に文字起こしが編集されました"),
+        )
+        .unwrap();
+    assert!(stopped.replacement_ready);
+    assert!(!stopped.ready_to_publish);
+    let pending = s
+        .publish_regenerated_flow(&m, &stopped.id, stopped.lock_version, None)
+        .unwrap();
+    let crate::storage::analysis_flows::regeneration::Publication::ConfirmationRequired {
+        target,
+        ..
+    } = pending
+    else {
+        panic!("expected confirmation");
+    };
+    s.publish_regenerated_flow(&m, &stopped.id, stopped.lock_version, Some(&target))
+        .unwrap()
+        .published()
+        .unwrap();
+    assert_eq!(s.list_jobs(&m).unwrap().len(), 4);
+    assert!(s
+        .analysis_flow(&m)
+        .unwrap()
+        .unwrap()
+        .error_message
+        .is_none());
 }

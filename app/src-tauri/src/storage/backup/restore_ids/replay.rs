@@ -19,7 +19,12 @@ fn valid_map(map: &IdentityMap) -> bool {
         || (map.scope.is_empty()
             && !matches!(
                 map.domain.as_str(),
-                "meetings" | "vocabulary_entries" | "restore_provenance"
+                "meetings"
+                    | "vocabulary_entries"
+                    | "restore_provenance"
+                    | "voice_people"
+                    | "voice_samples"
+                    | "voice_policies"
             ))
     {
         return false;

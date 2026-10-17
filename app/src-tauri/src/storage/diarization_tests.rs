@@ -66,9 +66,10 @@ fn manual_split_ranges_text_original_scope_and_explicit_unknown_survive_reinfere
         .iter()
         .all(|u| fixed.manual_utterances.contains(&u.id)));
     s.acquire_local_inference_job().unwrap().unwrap();
-    let candidate = diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate =
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap()
+            .unwrap();
     let result = s.load_visible_analysis(&m, &candidate).unwrap().unwrap();
     let parts: Vec<_> = result
         .utterances
@@ -135,9 +136,14 @@ fn merging_into_added_speaker_survives_fixed_diarization_and_manual_preservation
     assert_eq!(utterance.speaker_ids, vec![added.id.clone()]);
     assert!(input.manual_utterances.contains(&utterance.id));
     storage.acquire_local_inference_job().unwrap().unwrap();
-    let candidate = diarization::process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = diarization::process(
+        &storage,
+        &job.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let result = storage
         .load_visible_analysis(&meeting, &candidate)
         .unwrap()
@@ -279,9 +285,14 @@ pub(in crate::storage) fn fixture(
     std::fs::write(&embedding, b"embedding").unwrap();
     std::fs::write(&cli, b"fixture").unwrap();
     let mut config = SherpaConfig {
-        executable: Fingerprint::capture(&cli, &|| false).unwrap(),
-        segmentation_model: Fingerprint::capture(&segmentation, &|| false).unwrap(),
-        embedding_model: Fingerprint::capture(&embedding, &|| false).unwrap(),
+        executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
+        segmentation_model: Fingerprint::capture(
+            &segmentation,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap(),
+        embedding_model: Fingerprint::capture(&embedding, &crate::test_support::never_cancelled)
+            .unwrap(),
         runtime_libraries: vec![],
         threads: 1,
         cluster_threshold_milli: 500,
@@ -294,7 +305,7 @@ pub(in crate::storage) fn fixture(
     let fixed = format!("{}\nStarted\n{rows}", config.expected_header(Some(3)));
     std::fs::write(&cli,format!("#!/bin/sh\nprintf x >> {}\ncase \"$PWD\" in */unit-1-*) if test -f {}; then exit 42; fi;; esac\nfor arg in \"$@\"; do if test \"$arg\" = '--clustering.num-clusters=3'; then printf '%s' {};exit 0;fi;done\nprintf '%s' {}\n",quote(root.join("cli-calls").to_str().unwrap()),quote(root.join("fail-second").to_str().unwrap()),quote(&fixed),quote(&auto))).unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
-    config.executable = Fingerprint::capture(&cli, &|| false).unwrap();
+    config.executable = Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap();
     (storage, meeting, config, request)
 }
 
@@ -342,7 +353,12 @@ fn corrected_diarization_reads_meeting_time_and_rejects_changed_sealed_map() {
             .unwrap();
         }
         storage.acquire_local_inference_job().unwrap().unwrap();
-        let result = diarization::process(&storage, &job.id, &|| false, &|_| {});
+        let result = diarization::process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        );
         if change {
             let error = result.err().unwrap();
             assert!(error.contains("固定した録音入力"), "{error}");
@@ -386,7 +402,7 @@ pub(in crate::storage) fn pause_after_first(storage: &Storage, job: &str) {
         job
     );
     assert_eq!(
-        diarization::process(storage, job, &|| false, &|j| {
+        diarization::process(storage, job, &crate::test_support::never_cancelled, &|j| {
             if j.completed_units == 1 && j.state == "running" {
                 storage.request_job_pause(&j.id, "user").unwrap();
             }
@@ -407,7 +423,7 @@ fn fixed_speaker_count_is_applied_to_each_explicit_track_without_a_quality_claim
     }
     let job = diarization::enqueue(&s, r, c, "high_accuracy", settings.clone()).unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     assert_eq!(calls(root.path()), 2);
@@ -437,9 +453,10 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
     assert_ne!(fixed.analysis.id, original.id);
     assert_eq!(fixed.manual_utterances.len(), 2);
     s.acquire_local_inference_job().unwrap().unwrap();
-    let candidate = diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate =
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap()
+            .unwrap();
     let view = s.load_visible_analysis(&m, &candidate).unwrap().unwrap();
     assert_eq!(view.utterances.len(), original.utterances.len());
     for (new, old) in view.utterances.iter().zip(&original.utterances) {
@@ -523,9 +540,11 @@ fn whole_track_checkpoint_reopens_and_runs_only_the_remaining_track() {
     assert_eq!(s.load_diarization_input(&job.id).unwrap().analysis, fixed);
     s.resume_job(&job.id).unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .is_some());
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(calls(root.path()), 2);
     assert_eq!(s.get_job(&job.id).unwrap().completed_units, 2);
     assert_eq!(
@@ -542,7 +561,8 @@ fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
     let job = enqueue(&s, r, c);
     std::fs::write(root.path().join("fail-second"), b"fail").unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    let failure = diarization::process(&s, &job.id, &|| false, &|_| {}).unwrap_err();
+    let failure = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap_err();
     assert!(failure.contains("sherpa-onnxが失敗"), "{failure}");
     let failed = s
         .finish_job(&job.id, 1, "failed", Some("engine_failed"))
@@ -566,9 +586,14 @@ fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
     assert_eq!(s.load_diarization_input(&retry.id).unwrap().analysis, fixed);
     assert_eq!(calls(root.path()), 2);
     s.acquire_local_inference_job().unwrap().unwrap();
-    let id = diarization::process(&s, &retry.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let id = diarization::process(
+        &s,
+        &retry.id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(calls(root.path()), 3);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), edited);
     let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
@@ -619,7 +644,8 @@ fn source_models_and_saved_artifacts_are_checked_before_more_inference_or_retry(
         s.resume_job(&job.id).unwrap();
         s.acquire_local_inference_job().unwrap().unwrap();
         assert!(
-            diarization::process(&s, &job.id, &|| false, &|_| {}).is_err(),
+            diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+                .is_err(),
             "accepted {target}"
         );
         assert_eq!(calls(root.path()), 1);
@@ -656,7 +682,8 @@ fn fixed_snapshot_enqueue_and_candidate_success_are_atomic() {
     s.connection.lock().unwrap().execute_batch("DROP TRIGGER fail_diarization_enqueue; CREATE TRIGGER fail_diarization_finish BEFORE UPDATE ON processing_jobs WHEN NEW.kind='diarization' AND NEW.state='succeeded' BEGIN SELECT RAISE(ABORT,'finish failed');END;").unwrap();
     let job = enqueue(&s, r, c);
     s.acquire_local_inference_job().unwrap().unwrap();
-    let failure = diarization::process(&s, &job.id, &|| false, &|_| {}).unwrap_err();
+    let failure = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap_err();
     assert!(failure.contains("finish failed"), "{failure}");
     assert_eq!(s.get_job(&job.id).unwrap().state, "running");
     assert_eq!(s.get_job(&job.id).unwrap().output_analysis_id, None);
@@ -679,9 +706,11 @@ fn fixed_snapshot_enqueue_and_candidate_success_are_atomic() {
         .unwrap()
         .execute_batch("DROP TRIGGER fail_diarization_finish;")
         .unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .is_some());
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(calls(root.path()), count);
 }
 
@@ -796,7 +825,7 @@ fn candidate_playback_rejects_changed_speaker_segments() {
     let (s, m, c, r) = fixture(root.path(), true);
     let job = enqueue(&s, r, c);
     s.acquire_local_inference_job().unwrap().unwrap();
-    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
@@ -838,13 +867,13 @@ fn playback_rejects_internal_or_no_longer_visible_revisions() {
         .prepare_utterance_audio(&m, &fixed.id, &fixed.utterances[0].id)
         .is_err());
     s.acquire_local_inference_job().unwrap().unwrap();
-    let first = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let first = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     adopt(&s, &m, &first).unwrap();
     let next = enqueue(&s, current_request(&s, &m, "next"), c);
     s.acquire_local_inference_job().unwrap().unwrap();
-    let second = diarization::process(&s, &next.id, &|| false, &|_| {})
+    let second = diarization::process(&s, &next.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     adopt(&s, &m, &second).unwrap();
@@ -872,7 +901,7 @@ fn explicit_unknown_assignment_and_names_survive_adoption_and_next_diarization()
     let original = r.expected_analysis_id.clone();
     let job = enqueue(&s, r, c.clone());
     s.acquire_local_inference_job().unwrap().unwrap();
-    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     adopt(&s, &m, &id).unwrap();
@@ -891,9 +920,10 @@ fn explicit_unknown_assignment_and_names_survive_adoption_and_next_diarization()
         2
     );
     s.acquire_local_inference_job().unwrap().unwrap();
-    let candidate = diarization::process(&s, &next.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate =
+        diarization::process(&s, &next.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap()
+            .unwrap();
     let view = s.load_visible_analysis(&m, &candidate).unwrap().unwrap();
     let unknown = view
         .utterances
@@ -952,7 +982,7 @@ fn a_changed_current_head_does_not_reparent_or_silently_adopt_the_old_input_resu
         .unwrap();
     adopt(&s, &m, &replacement).unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1002,9 +1032,11 @@ fn a_validly_hashed_but_wrong_result_origin_is_rejected_before_more_inference() 
     s.resume_job(&job.id).unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
     s.save_job_checkpoint(&job.id, 1, 1, checkpoint).unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap_err()
-        .contains("由来"));
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap_err()
+            .contains("由来")
+    );
     assert_eq!(calls(root.path()), 1);
 }
 
@@ -1021,7 +1053,9 @@ fn recording_and_exit_pause_kill_and_reap_unfinished_whole_track_without_a_check
             ),
         )
         .unwrap();
-        c.executable = Fingerprint::capture(&c.executable.path, &|| false).unwrap();
+        c.executable =
+            Fingerprint::capture(&c.executable.path, &crate::test_support::never_cancelled)
+                .unwrap();
         let job = enqueue(&s, r, c);
         s.acquire_local_inference_job().unwrap().unwrap();
         let started = std::time::Instant::now();
@@ -1082,9 +1116,11 @@ fn failed_checkpoint_commit_does_not_reuse_an_uncommitted_native_result() {
     let job = enqueue(&s, r, c);
     s.connection.lock().unwrap().execute_batch("CREATE TRIGGER fail_diarization_checkpoint BEFORE INSERT ON job_checkpoints WHEN NEW.completed_units>0 BEGIN SELECT RAISE(ABORT,'checkpoint failed');END;").unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(diarization::process(&s, &job.id, &|| false, &|_| {})
-        .unwrap_err()
-        .contains("checkpoint failed"));
+    assert!(
+        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
+            .unwrap_err()
+            .contains("checkpoint failed")
+    );
     assert_eq!(s.get_job(&job.id).unwrap().completed_units, 0);
     assert_eq!(calls(root.path()), 1);
     let failed = s
@@ -1104,9 +1140,14 @@ fn failed_checkpoint_commit_does_not_reuse_an_uncommitted_native_result() {
     .enqueue(&s)
     .unwrap();
     s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(diarization::process(&s, &retry.id, &|| false, &|_| {})
-        .unwrap()
-        .is_some());
+    assert!(diarization::process(
+        &s,
+        &retry.id,
+        &crate::test_support::never_cancelled,
+        &|_| {}
+    )
+    .unwrap()
+    .is_some());
     assert_eq!(calls(root.path()), 2);
 }
 
@@ -1167,7 +1208,7 @@ fn real_sherpa_worker_commits_checked_tracks_and_a_candidate_without_replacing_e
     let fixed = s.load_diarization_input(&job.id).unwrap().analysis;
     s.acquire_local_inference_job().unwrap().unwrap();
     let started = std::time::Instant::now();
-    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+    let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     assert_eq!(s.get_job(&job.id).unwrap().state, "succeeded");

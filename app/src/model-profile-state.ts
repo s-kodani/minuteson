@@ -20,6 +20,7 @@ export interface ModelApplicationPreview {
   expectedProfileId: string | null; expectedProfileHash: string | null;
   expectedProfileVersion: number; expectedPreferencesVersion: number;
   before: ModelSettings; after: ModelSettings; reviewDigest: string;
+  diarizationThreads?: number;
 }
 const id = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const sha = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
@@ -77,16 +78,20 @@ export function applicationChanges(preview: ModelApplicationPreview) {
   const before = new Map(settingsEntries(preview.before));
   return settingsEntries(preview.after).map(([key, after]) => ({ key, before: before.get(key), after, file: fileKeys.includes(key) }));
 }
-export function assertApplicationPreview(preview: ModelApplicationPreview, entry: ModelPlacementEntry, name: ModelProfileName, current: ModelProfileView) {
+export function assertApplicationPreview(preview: ModelApplicationPreview, entry: ModelPlacementEntry, name: ModelProfileName, current: ModelProfileView, diarizationThreads?: number) {
   if (!canReviewApplication(entry) || !preview || preview.schemaVersion !== 1 || preview.profile !== name || current.name !== name
     || preview.packageId !== entry.packageId || preview.reviewHash !== entry.reviewHash || preview.checkOperationId !== entry.compatibility?.operationId
     || !sha(preview.reviewDigest) || !version(preview.expectedPreferencesVersion) || !version(preview.expectedProfileVersion)
     || preview.expectedProfileId !== current.id || preview.expectedProfileVersion !== current.profileVersion
     || (current.id === null ? preview.expectedProfileHash !== null : !sha(preview.expectedProfileHash))
-    || preview.before.engine !== entry.engine || preview.after.engine !== entry.engine) fail();
+    || preview.before.engine !== entry.engine || preview.after.engine !== entry.engine
+    || preview.diarizationThreads !== diarizationThreads
+    || diarizationThreads !== undefined && (entry.engine !== "sherpa-onnx" || !Number.isInteger(diarizationThreads) || diarizationThreads < 1 || diarizationThreads > 64 || preview.after.settings.threads !== diarizationThreads)) fail();
   assertProfileView(current);
+  if (diarizationThreads !== undefined && !current.components.some(component => component.engine === "sherpa-onnx" && component.packageId === entry.packageId && component.checkOperationId === preview.checkOperationId && component.settingsMatch && component.compatibilityCurrent)) fail();
   for (const change of applicationChanges(preview)) {
-    if (!change.file && change.before !== change.after) fail();
+    if (!change.file && change.before !== change.after && !(change.key === "threads" && diarizationThreads !== undefined)) fail();
+    if (diarizationThreads !== undefined && change.file && JSON.stringify(change.before) !== JSON.stringify(change.after)) fail();
     if (change.file) for (const path of Array.isArray(change.after) ? change.after : change.after === null ? [] : [change.after]) {
       if (typeof path !== "string" || path.length > 4096 || path.includes("\0") || !(/^\//.test(path) || /^[a-z]:[\\/]/i.test(path) || /^\\\\/.test(path))) fail();
     }

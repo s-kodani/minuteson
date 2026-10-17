@@ -39,6 +39,7 @@ enum Rule {
     Operation,
     VocabularyScope,
     ProvenanceEntity,
+    VoiceSource(&'static str),
 }
 
 fn entity_table(table: &str, column: &str) -> Result<&'static str, String> {
@@ -68,6 +69,11 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
     let mut result = BTreeMap::new();
     for c in &table.columns {
         let rule = match (table.name.as_str(), c.name.as_str()) {
+            ("voice_samples", "source_meeting_id") => Some(Rule::VoiceSource("meetings")),
+            ("voice_samples", "source_analysis_id") => {
+                Some(Rule::VoiceSource("analysis_revisions"))
+            }
+            ("voice_samples", "source_track_id") => Some(Rule::VoiceSource("audio_tracks")),
             ("vocabulary_scopes", "id") => Some(Rule::VocabularyScope),
             ("restore_provenance", "entity_key") => Some(Rule::ProvenanceEntity),
             (_, "id") => Some(Rule::Entity(entity_table(&table.name, "id")?)),
@@ -117,6 +123,7 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
 
 pub(super) fn owners_sql(table: &str) -> Result<String, String> {
     let sql = match table {
+        "voice_people" | "voice_samples" | "voice_policies" => format!("SELECT rowid,NULL AS meeting_id FROM {table}"),
         "meetings" => "SELECT rowid,id FROM meetings".into(),
         "speakers" | "utterance_speakers" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
         "minutes_items" | "evidence_links" => format!("SELECT c.rowid,m.meeting_id FROM {table} c JOIN minutes_revisions m ON m.id=c.minutes_revision_id"),
@@ -134,7 +141,10 @@ pub(super) fn owners_sql(table: &str) -> Result<String, String> {
 }
 
 fn scope<'a>(domain: &str, meeting: &'a str) -> &'a str {
-    if domain == "meetings" {
+    if matches!(
+        domain,
+        "meetings" | "voice_people" | "voice_samples" | "voice_policies"
+    ) {
         ""
     } else {
         meeting
@@ -673,6 +683,26 @@ impl<'a> RestoreIds<'a> {
                 let Some(rule) = bindings.get(&column.name) else {
                     return Ok(value);
                 };
+                if let Rule::VoiceSource(domain) = rule {
+                    let source_meeting: Option<String> = source
+                        .query_row(
+                            "SELECT source_meeting_id FROM voice_samples WHERE rowid=?1",
+                            [rowid],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    return match value {
+                        Value::Null => Ok(Value::Null),
+                        Value::Text(old) => Ok(self
+                            .lookup(
+                                domain,
+                                scope(domain, source_meeting.as_deref().unwrap_or("")),
+                                &old,
+                            )?
+                            .map_or(Value::Null, Value::Text)),
+                        _ => Err("登録元の参照列が不正です".into()),
+                    };
+                }
                 match value {
                     Value::Null => Ok(Value::Null),
                     Value::Text(old) => Ok(Value::Text(match rule {
@@ -689,7 +719,7 @@ impl<'a> RestoreIds<'a> {
                         }
                         _ => self.get(
                             rule.domain().ok_or("復元ID領域がありません")?,
-                            meeting,
+                            scope(rule.domain().ok_or("復元ID領域がありません")?, meeting),
                             &old,
                         )?,
                     })),
@@ -784,7 +814,7 @@ impl Rule {
             Self::UtteranceLineage => Some("utterance_lineage"),
             Self::Overlap => Some("overlap_group"),
             Self::Operation => Some("operation"),
-            Self::VocabularyScope | Self::ProvenanceEntity => None,
+            Self::VocabularyScope | Self::ProvenanceEntity | Self::VoiceSource(_) => None,
         }
     }
 }

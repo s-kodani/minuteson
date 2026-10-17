@@ -75,7 +75,9 @@ fn move_storage(source: &Storage) -> (tempfile::TempDir, PathBuf) {
         .mode(0o700)
         .create(&target)
         .unwrap();
-    let native = source.prepare_relocation_snapshot(&|| false).unwrap();
+    let native = source
+        .prepare_relocation_snapshot(&crate::test_support::never_cancelled)
+        .unwrap();
     let op = Uuid::new_v4().to_string();
     b.begin_move(
         &op,
@@ -86,11 +88,16 @@ fn move_storage(source: &Storage) -> (tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     let mut p = b.pending_placement(&op, &native).unwrap();
-    p.copy(&native, &|| false).unwrap();
-    let h = native.prepare_control_handoff(&|| false).unwrap();
+    p.copy(&native, &crate::test_support::never_cancelled)
+        .unwrap();
+    let h = native
+        .prepare_control_handoff(&crate::test_support::never_cancelled)
+        .unwrap();
     let before = std::fs::read(target.join("meetings.sqlite3")).unwrap();
-    p.install_history(&h, &|| false).unwrap();
-    p.verify(&native, &|| false).unwrap();
+    p.install_history(&h, &crate::test_support::never_cancelled)
+        .unwrap();
+    p.verify(&native, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         std::fs::read(target.join("meetings.sqlite3")).unwrap(),
         before

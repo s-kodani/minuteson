@@ -62,8 +62,14 @@ impl FixedData<'_, '_> {
             }
             Ok((new, hash))
         };
-        let value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let rebased = match job.kind.as_str() {
+            "voice_registration" | "voice_matching" => {
+                if value.get("voiceResult").and_then(Value::as_bool).is_none() {
+                    return Err("声の処理の再開情報が不正です".into());
+                }
+                value
+            }
             "transcription" => crate::transcription::restore_checkpoint_references(
                 &checkpoint_job,
                 value,

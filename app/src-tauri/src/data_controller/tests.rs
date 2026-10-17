@@ -25,7 +25,7 @@ fn finish_work(
     work: Work,
 ) -> Snapshot {
     let token = snapshot.token.as_deref().unwrap();
-    let result = work.run(storage, &|| false, &|phase| {
+    let result = work.run(storage, &crate::test_support::never_cancelled, &|phase| {
         controller.progress(token, phase);
     });
     controller.finish(token, result).unwrap()
@@ -77,7 +77,7 @@ fn cancelled_selection_cannot_become_ready_in_the_gap_before_terminal_snapshot()
         Ok(Some(output.path().join("keep.monbackup"))),
         previous,
     )
-    .run(&storage, &|| false, &|_| {});
+    .run(&storage, &crate::test_support::never_cancelled, &|_| {});
     assert!(completion.selection.is_some());
     cancel.store(true, Ordering::Release);
     let done = controller
@@ -97,7 +97,12 @@ fn cancelled_selection_cannot_become_ready_in_the_gap_before_terminal_snapshot()
         bootstrap.initialize(&storage).unwrap();
         let (choosing, cancel, previous) = controller.begin(Kind::Relocation).unwrap();
         let completion = Work::Select(Kind::Relocation, Ok(Some(parent)), previous)
-            .run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+            .run_with_bootstrap(
+                &storage,
+                &bootstrap,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            );
         assert!(completion.selection.is_some());
         cancel.store(true, Ordering::Release);
         let done = controller
@@ -135,7 +140,7 @@ fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operatio
     let done = Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
         &storage,
         &bootstrap,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     );
     let ready = controller
@@ -148,7 +153,12 @@ fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operatio
     let publish = request(&ready, Action::Publish);
     let (work, cancel, started) = controller.begin_request(publish.clone()).unwrap().unwrap();
     assert!(controller.begin_request(publish.clone()).unwrap().is_none());
-    let completion = work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    let completion = work.run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     cancel.store(true, Ordering::Release);
     let done = controller
         .finish(started.token.as_deref().unwrap(), completion)
@@ -178,7 +188,7 @@ fn pending_move_controller_keeps_changed_source_and_replays_receipt_without_rest
     let done = Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
         &storage,
         &bootstrap,
-        &|| false,
+        &crate::test_support::never_cancelled,
         &|_| {},
     );
     let ready = controller
@@ -203,8 +213,12 @@ fn pending_move_controller_keeps_changed_source_and_replays_receipt_without_rest
     assert!(attention.attention_required && !attention.restart_required);
     storage.create_meeting("newer edits").unwrap();
     let (reviewing, _, previous) = controller.begin(Kind::Relocation).unwrap();
-    let done =
-        Work::PendingMove(previous).run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    let done = Work::PendingMove(previous).run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     let ready = controller
         .finish(reviewing.token.as_deref().unwrap(), done)
         .unwrap();
@@ -214,7 +228,12 @@ fn pending_move_controller_keeps_changed_source_and_replays_receipt_without_rest
         .is_err());
     let keep = request(&ready, Action::Keep);
     let (work, _, running) = controller.begin_request(keep.clone()).unwrap().unwrap();
-    let done = work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    let done = work.run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    );
     let kept = controller
         .finish(running.token.as_deref().unwrap(), done)
         .unwrap();
@@ -243,7 +262,7 @@ fn relocation_controller_refresh_loss_keeps_selection_and_cancelled_copy_require
             Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
                 &storage,
                 &bootstrap,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {},
             ),
         )
@@ -253,7 +272,12 @@ fn relocation_controller_refresh_loss_keeps_selection_and_cancelled_copy_require
     let ready = controller
         .finish(
             started.token.as_deref().unwrap(),
-            work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {}),
+            work.run_with_bootstrap(
+                &storage,
+                &bootstrap,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            ),
         )
         .unwrap();
     assert_ne!(
@@ -331,7 +355,9 @@ fn restore_controller_refresh_response_loss_and_publication_do_not_duplicate_mee
     let source = Storage::open(source_root.path().to_path_buf()).unwrap();
     source.create_meeting("restored").unwrap();
     let path = output.path().join("backup.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target = Storage::open(target_root.path().to_path_buf()).unwrap();
     let existing = target.create_meeting("existing").unwrap();
     assert!(target.restored_meeting_ids().unwrap().is_empty());
@@ -413,7 +439,7 @@ fn terminal_completion_wins_over_late_cancel_and_uncertain_backup_never_retries(
     );
     let publish = request(&selected, Action::Publish);
     let (work, cancel, started) = controller.begin_request(publish.clone()).unwrap().unwrap();
-    let mut completion = work.run(&storage, &|| false, &|_| {});
+    let mut completion = work.run(&storage, &crate::test_support::never_cancelled, &|_| {});
     cancel.store(true, Ordering::Release);
     completion.cancelled = true;
     let done = controller
@@ -485,7 +511,9 @@ fn restore_panic_retains_same_batch_for_recovery_instead_of_selecting_another_ar
     let source = Storage::open(root.path().to_path_buf()).unwrap();
     source.create_meeting("restored").unwrap();
     let path = output.path().join("backup.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().to_path_buf()).unwrap();
     let controller = DataController::default();
@@ -495,7 +523,7 @@ fn restore_panic_retains_same_batch_for_recovery_instead_of_selecting_another_ar
     let failed = controller
         .finish(
             started.token.as_deref().unwrap(),
-            work.run(&target, &|| false, &|_| {
+            work.run(&target, &crate::test_support::never_cancelled, &|_| {
                 panic!("synthetic reconstruction panic")
             }),
         )
@@ -522,7 +550,9 @@ fn controller_restore_recovers_a_committed_batch_even_without_an_in_memory_recei
     let source = Storage::open(source_root.path().to_path_buf()).unwrap();
     source.create_meeting("restored").unwrap();
     let path = output.path().join("backup.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().to_path_buf()).unwrap();
     let controller = DataController::default();
@@ -536,7 +566,12 @@ fn controller_restore_recovers_a_committed_batch_even_without_an_in_memory_recei
         panic!("restore")
     };
     let receipt = prepared
-        .publish(&target, &publish.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &target,
+            &publish.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     // Fault-inject the gap after durable commit but before controller receipt
     // delivery. This is not a real process-kill/crash recovery measurement.

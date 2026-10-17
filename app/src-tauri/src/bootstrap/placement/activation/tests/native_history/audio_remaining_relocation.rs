@@ -7,7 +7,13 @@ use audio::intent::{self, reconfirmation, removal::renewal};
 
 fn owner(storage: &Storage, operation: &str) -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_audio_deletion_maintenance(storage, operation, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            storage,
+            operation,
+            false,
+            false,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap()
 }
 fn policy(include: bool) -> intent::Policy {
@@ -17,12 +23,21 @@ fn policy(include: bool) -> intent::Policy {
     }
 }
 fn complete(storage: &Storage, operation: &str, lease: &DataMaintenanceLease) {
-    intent::removal::run(storage, operation, lease, &|| false).unwrap();
-    assert!(
-        intent::removal::completion::finish(storage, operation, lease, &|| false)
-            .unwrap()
-            .completed()
-    );
+    intent::removal::run(
+        storage,
+        operation,
+        lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(intent::removal::completion::finish(
+        storage,
+        operation,
+        lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 fn reservation(f: &NativeFixture, operation: &str, generation: u32) -> String {
     let parent = f.audio.rsplit_once('/').unwrap().0;
@@ -62,16 +77,55 @@ fn fixture() -> (NativeFixture, String, Vec<(String, String)>) {
     let storage = f.storage.as_ref().unwrap();
     let lease = owner(storage, &f.deletion);
     std::fs::write(storage.root().join(&f.audio), b"CHILD ORIGINAL AUDIO").unwrap();
-    let reviewed =
-        reconfirmation::Review::capture(storage, &f.deletion, &lease, &|| false).unwrap();
+    let reviewed = reconfirmation::Review::capture(
+        storage,
+        &f.deletion,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let child = Uuid::new_v4().to_string();
-    reconfirmation::accept(storage, &child, &reviewed, policy(false), &lease, &|| false).unwrap();
-    intent::removal::start(storage, &child, &lease, &|| false).unwrap();
+    reconfirmation::accept(
+        storage,
+        &child,
+        &reviewed,
+        policy(false),
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::start(
+        storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let late = storage.root().join(reservation(&f, &f.deletion, 0));
     std::fs::write(&late, b"ANCESTOR RETURNED AFTER CHILD START").unwrap();
-    let remaining = renewal::Review::capture(storage, &child, &lease, &|| false).unwrap();
-    assert!(renewal::accept(storage, &remaining, false, &lease, &|| false).is_err());
-    renewal::accept(storage, &remaining, true, &lease, &|| false).unwrap();
+    let remaining = renewal::Review::capture(
+        storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(renewal::accept(
+        storage,
+        &remaining,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    renewal::accept(
+        storage,
+        &remaining,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     complete(storage, &child, &lease);
     assert!(!late.exists() && !storage.root().join(&f.audio).exists());
     let records = vec![
@@ -166,7 +220,10 @@ fn audio_remaining_relocation_long_ancestral_history_reconsents_cold_resumes_and
     assert!(!storage.data_write_blocked());
     assert_eq!(
         storage
-            .create_backup_archive(&f._base.path().join("first.monbackup"), &|| false)
+            .create_backup_archive(
+                &f._base.path().join("first.monbackup"),
+                &crate::test_support::never_cancelled
+            )
             .unwrap()
             .deleted_audio_meeting_count,
         1
@@ -180,8 +237,20 @@ fn audio_remaining_relocation_long_ancestral_history_reconsents_cold_resumes_and
     let (b, storage) = f.open();
     assert!(storage.data_write_blocked());
     let lease = owner(&storage, &child);
-    assert!(intent::removal::run(&storage, &child, &lease, &|| false).is_err());
-    let review = reconfirmation::Review::capture(&storage, &child, &lease, &|| false).unwrap();
+    assert!(intent::removal::run(
+        &storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = reconfirmation::Review::capture(
+        &storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let current = Uuid::new_v4().to_string();
     assert!(
         reconfirmation::accept(&storage, &current, &review, policy(false), &lease, &|| {
@@ -189,8 +258,22 @@ fn audio_remaining_relocation_long_ancestral_history_reconsents_cold_resumes_and
         })
         .is_err()
     );
-    reconfirmation::accept(&storage, &current, &review, policy(true), &lease, &|| false).unwrap();
-    intent::removal::start(&storage, &current, &lease, &|| false).unwrap();
+    reconfirmation::accept(
+        &storage,
+        &current,
+        &review,
+        policy(true),
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    intent::removal::start(
+        &storage,
+        &current,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let original = crate::storage::deletion::relocation::receiver::synthetic_consent_record(
         &storage, &current,
     );
@@ -201,10 +284,36 @@ fn audio_remaining_relocation_long_ancestral_history_reconsents_cold_resumes_and
     let (b, storage) = f.open();
     let lease = owner(&storage, &current);
     std::fs::write(&returned, b"CURRENT SCOPE CHANGED AFTER COLD START").unwrap();
-    assert!(intent::removal::run(&storage, &current, &lease, &|| false).is_err());
-    let review = renewal::Review::capture(&storage, &current, &lease, &|| false).unwrap();
-    assert!(renewal::accept(&storage, &review, false, &lease, &|| false).is_err());
-    renewal::accept(&storage, &review, true, &lease, &|| false).unwrap();
+    assert!(intent::removal::run(
+        &storage,
+        &current,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    let review = renewal::Review::capture(
+        &storage,
+        &current,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(renewal::accept(
+        &storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    renewal::accept(
+        &storage,
+        &review,
+        true,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     complete(&storage, &current, &lease);
     assert_eq!(
         crate::storage::deletion::relocation::receiver::synthetic_consent_record(
@@ -235,13 +344,19 @@ fn audio_remaining_relocation_long_ancestral_history_reconsents_cold_resumes_and
         assert!(!storage.data_write_blocked());
         unchanged(&storage, &records);
         let lease = owner(&storage, &current);
-        assert!(intent::removal::run(&storage, &current, &lease, &|| false).is_err());
+        assert!(intent::removal::run(
+            &storage,
+            &current,
+            &lease,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         drop(lease);
         assert_eq!(
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,
@@ -272,9 +387,11 @@ fn audio_remaining_relocation_long_history_survives_full_purge_and_two_owned_mov
         })
         .collect();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    let mut prepared = operations::Prepared::fresh(storage, &f.meeting, &|| false).unwrap();
+    let mut prepared =
+        operations::Prepared::fresh(storage, &f.meeting, &crate::test_support::never_cancelled)
+            .unwrap();
     assert!(
         prepared
             .execute(
@@ -282,7 +399,7 @@ fn audio_remaining_relocation_long_history_survives_full_purge_and_two_owned_mov
                 &lease,
                 &prepared.preview().confirmation_id,
                 true,
-                &|| false,
+                &crate::test_support::never_cancelled,
                 &|_| {}
             )
             .unwrap()
@@ -315,7 +432,7 @@ fn audio_remaining_relocation_long_history_survives_full_purge_and_two_owned_mov
             storage
                 .create_backup_archive(
                     &f._base.path().join(format!("{}.monbackup", Uuid::new_v4())),
-                    &|| false
+                    &crate::test_support::never_cancelled
                 )
                 .unwrap()
                 .deleted_audio_meeting_count,
@@ -359,16 +476,36 @@ fn audio_remaining_relocation_fences_changed_audit_progress_without_native_recor
         .iter()
         .any(|i| i.operation_id == child && !i.review_allowed && i.error_message.is_some()));
     assert!(AnalysisController::default()
-        .begin_audio_deletion_maintenance(&storage, &child, false, false, &|| false)
+        .begin_audio_deletion_maintenance(
+            &storage,
+            &child,
+            false,
+            false,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();
-    assert!(audio::operations::Prepared::pending(&storage, &child, &lease, &|| false).is_err());
-    assert!(reconfirmation::Review::capture(&storage, &child, &lease, &|| false).is_err());
+    assert!(audio::operations::Prepared::pending(
+        &storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(reconfirmation::Review::capture(
+        &storage,
+        &child,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     drop(lease);
     let archive = f._base.path().join("must-not-export.monbackup");
-    assert!(storage.create_backup_archive(&archive, &|| false).is_err());
+    assert!(storage
+        .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+        .is_err());
     assert!(!archive.exists());
     drop(storage);
     drop(b);

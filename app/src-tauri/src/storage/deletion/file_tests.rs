@@ -45,7 +45,12 @@ impl Fixture {
         full
     }
     fn census(&self) -> Census {
-        Census::capture(&self.storage, &self.meeting, &|| false).unwrap()
+        Census::capture(
+            &self.storage,
+            &self.meeting,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
     }
     fn job(&self, kind: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
@@ -80,7 +85,9 @@ fn deletion_file_census_is_fixed_read_only_and_contains_no_payload_or_other_meet
     let decoded: Manifest = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded, *census.manifest());
     assert_eq!(f.census().hash().unwrap(), census.hash().unwrap());
-    census.verify(&f.storage, &|| false).unwrap();
+    census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert_eq!(
         std::fs::read(path).unwrap(),
         b"PRIVATE AUDIO AND TRANSCRIPT BODY"
@@ -137,7 +144,9 @@ fn deletion_file_census_records_missing_corrupt_and_unknown_without_adopting_the
     assert!(unknown.stage_hint.is_none());
     assert!(unknown.proof.is_some());
     assert!(unknown.sha256.is_some());
-    census.verify(&f.storage, &|| false).unwrap();
+    census
+        .verify(&f.storage, &crate::test_support::never_cancelled)
+        .unwrap();
     assert!(changed.path.ends_with("changed.flac"));
 }
 
@@ -270,7 +279,12 @@ fn deletion_file_census_reverification_rejects_title_file_inode_contents_additio
             }
             _ => unreachable!(),
         }
-        assert!(census.verify(&f.storage, &|| false).is_err(), "{change}");
+        assert!(
+            census
+                .verify(&f.storage, &crate::test_support::never_cancelled)
+                .is_err(),
+            "{change}"
+        );
         assert!(f.storage.get_meeting(&f.other).unwrap().is_some());
     }
 }
@@ -302,7 +316,12 @@ fn deletion_file_census_refuses_leaf_parent_symlinks_hardlinks_and_registered_di
             _ => unreachable!(),
         }
         assert!(
-            Census::capture(&f.storage, &f.meeting, &|| false).is_err(),
+            Census::capture(
+                &f.storage,
+                &f.meeting,
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
             "{change}"
         );
         assert_eq!(std::fs::read(keep).unwrap(), b"EXTERNAL");
@@ -317,9 +336,13 @@ fn deletion_file_census_refuses_fifo_without_opening_a_blocking_stream() {
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     let start = std::time::Instant::now();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false)
-        .unwrap_err()
-        .contains("特殊ファイル"));
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap_err()
+    .contains("特殊ファイル"));
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
 }
 
@@ -341,8 +364,16 @@ fn deletion_file_census_root_and_cached_database_replacements_are_not_adopted_by
             )
             .unwrap();
         }
-        assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
-        assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
+        assert!(Census::capture(
+            &f.storage,
+            &f.meeting,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
+        assert!(f
+            .storage
+            .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+            .is_err());
         assert!(f.storage.create_meeting("must stay write blocked").is_err());
         assert!(f
             .storage
@@ -400,14 +431,24 @@ fn deletion_file_census_rejects_malformed_asset_paths_and_bounded_deep_trees() {
         )
         .unwrap();
     }
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
     let f = Fixture::new();
     let mut path = f.directory.clone();
     for _ in 0..34 {
         path = path.join("d");
         std::fs::create_dir(&path).unwrap();
     }
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -425,7 +466,12 @@ fn deletion_file_census_handles_a_draft_without_directory_and_detects_active_wor
             params![id],
         )
         .unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
 }
 
 #[test]
@@ -460,8 +506,16 @@ fn storage_anchor_rejects_late_wal_substitution_and_keeps_maintenance_write_bloc
     assert!(wal.exists());
     std::fs::rename(&wal, wal.with_extension("old-wal")).unwrap();
     std::fs::write(&wal, b"not the cached WAL inode").unwrap();
-    assert!(Census::capture(&f.storage, &f.meeting, &|| false).is_err());
-    assert!(f.storage.prepare_backup_snapshot(&|| false).is_err());
+    assert!(Census::capture(
+        &f.storage,
+        &f.meeting,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+        .is_err());
     assert!(f
         .storage
         .create_meeting("must not write cached old WAL")

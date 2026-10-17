@@ -10,22 +10,27 @@ fn restore_operation_changed_validation_database_is_rejected_before_reconstructi
     let f = fixture();
     let mut selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let preview = selected.preview();
     let before = rows(&f.target);
     selected.archive.database.execute_batch("PRAGMA query_only=OFF; UPDATE meetings SET title='changed source'; PRAGMA query_only=ON;").unwrap();
     assert!(selected
-        .publish(&f.target, &preview.confirmation_id, &|| false, &|_| panic!(
-            "must reject before rebuilding"
-        ))
+        .publish(
+            &f.target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| panic!("must reject before rebuilding")
+        )
         .err()
         .unwrap()
         .contains("確認用DB"));
     assert!(selected
-        .refresh(&f.target, &|| false, &|_| panic!(
-            "must reject before rebuilding"
-        ))
+        .refresh(
+            &f.target,
+            &crate::test_support::never_cancelled,
+            &|_| panic!("must reject before rebuilding")
+        )
         .is_err());
     assert_eq!(selected.preview(), preview);
     assert_eq!(rows(&f.target), before);
@@ -50,7 +55,7 @@ fn restore_operation_capacity_confirmation_is_rechecked_before_durable_reservati
     let f = fixture();
     let mut selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     // Fault-inject the confirmation bound, not the disk's actual free capacity.
     selected.preview.required_bytes = 0;
@@ -59,17 +64,24 @@ fn restore_operation_capacity_confirmation_is_rechecked_before_durable_reservati
         .publish(
             &f.target,
             &selected.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .err()
         .unwrap()
         .contains("必要容量"));
     assert_eq!(rows(&f.target), before);
-    let refreshed = selected.refresh(&f.target, &|| false, &|_| {}).unwrap();
+    let refreshed = selected
+        .refresh(&f.target, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     assert!(refreshed.required_bytes > CAPACITY_RESERVE);
     selected
-        .publish(&f.target, &refreshed.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &refreshed.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert_eq!(f.target.list_meetings().unwrap().len(), 3);
 }
@@ -104,7 +116,9 @@ fn fixture() -> Fixture {
         .unwrap();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("selected.monbackup");
-    source.create_backup_archive(&path, &|| false).unwrap();
+    source
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     archive::tests::meeting(&target, "existing");
@@ -136,7 +150,7 @@ fn restore_operation_preview_fully_reconstructs_read_only_reports_capacity_terms
     let phases = RefCell::new(vec![]);
     let selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|p| {
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|p| {
             phases.borrow_mut().push(p.to_owned());
             assert!(f.target.create_meeting("確認中の書込みを拒否").is_err());
             assert!(f
@@ -179,16 +193,24 @@ fn backup_operation_confirmed_publication_is_terminal_on_lost_response_and_never
     let path = f.output.path().join("new.monbackup");
     let mut selected = f
         .target
-        .prepare_backup_destination(&path, &|| false)
+        .prepare_backup_destination(&path, &crate::test_support::never_cancelled)
         .unwrap();
     let preview = selected.preview();
     assert!(!preview.replaces_existing);
     assert!(selected
-        .publish(&f.target, &Uuid::new_v4().to_string(), &|| false)
+        .publish(
+            &f.target,
+            &Uuid::new_v4().to_string(),
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert!(!path.exists());
     let receipt = selected
-        .publish(&f.target, &preview.confirmation_id, &|| false)
+        .publish(
+            &f.target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     std::fs::write(&path, b"external edit after publication").unwrap();
     assert_eq!(
@@ -204,11 +226,15 @@ fn backup_operation_confirmed_publication_is_terminal_on_lost_response_and_never
     let path = f.output.path().join("race.monbackup");
     let mut selected = f
         .target
-        .prepare_backup_destination(&path, &|| false)
+        .prepare_backup_destination(&path, &crate::test_support::never_cancelled)
         .unwrap();
     std::fs::write(&path, b"created after selection").unwrap();
     assert!(selected
-        .publish(&f.target, &selected.preview().confirmation_id, &|| false)
+        .publish(
+            &f.target,
+            &selected.preview().confirmation_id,
+            &crate::test_support::never_cancelled
+        )
         .is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"created after selection");
 }
@@ -219,7 +245,7 @@ fn restore_operation_partial_publication_cancel_keeps_existing_and_reconfirms_sa
     let f = fixture();
     let mut selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let preview = selected.preview();
     let before = f.target.list_meetings().unwrap();
@@ -264,16 +290,28 @@ fn restore_operation_partial_publication_cancel_keeps_existing_and_reconfirms_sa
             }
         }
     }
-    let refreshed = selected.refresh(&f.target, &|| false, &|_| {}).unwrap();
+    let refreshed = selected
+        .refresh(&f.target, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     assert_eq!(refreshed.batch_id, preview.batch_id);
     let receipt = selected
-        .publish(&f.target, &refreshed.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &refreshed.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert!(!receipt.already_published);
     assert_eq!(f.target.list_meetings().unwrap().len(), 3);
     assert!(
         selected
-            .publish(&f.target, &refreshed.confirmation_id, &|| false, &|_| {})
+            .publish(
+                &f.target,
+                &refreshed.confirmation_id,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
             .unwrap()
             .already_published
     );
@@ -287,17 +325,27 @@ fn restore_operation_exact_confirm_adds_and_replays_same_batch_after_source_move
     let keep = f.target.list_meetings().unwrap();
     let selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let preview = selected.preview();
     std::fs::rename(&f.path, f.output.path().join("moved.monbackup")).unwrap();
     let before = rows(&f.target);
     assert!(selected
-        .publish(&f.target, &Uuid::new_v4().to_string(), &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &Uuid::new_v4().to_string(),
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     assert_eq!(rows(&f.target), before);
     let receipt = selected
-        .publish(&f.target, &preview.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert!(!receipt.already_published);
     assert_eq!(receipt.meeting_ids.len(), 2);
@@ -311,9 +359,12 @@ fn restore_operation_exact_confirm_adds_and_replays_same_batch_after_source_move
     }
     let before = rows(&f.target);
     let replay = selected
-        .publish(&f.target, &preview.confirmation_id, &|| false, &|_| {
-            panic!("terminal replay must not reconstruct")
-        })
+        .publish(
+            &f.target,
+            &preview.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| panic!("terminal replay must not reconstruct"),
+        )
         .unwrap();
     assert!(replay.already_published);
     assert_eq!(replay.vocabulary_added, None);
@@ -327,14 +378,18 @@ fn restore_operation_exact_confirm_adds_and_replays_same_batch_after_source_move
     );
     let another = f
         .target
-        .prepare_additive_restore(&f.output.path().join("moved.monbackup"), &|| false, &|_| {})
+        .prepare_additive_restore(
+            &f.output.path().join("moved.monbackup"),
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert_ne!(another.preview().batch_id, preview.batch_id);
     let next = another
         .publish(
             &f.target,
             &another.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {},
         )
         .unwrap();
@@ -351,7 +406,7 @@ fn restore_operation_rejects_changed_global_confirmation_before_reservation_and_
     let f = fixture();
     let mut selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let old = selected.preview();
     let book = f.target.vocabulary_book(None).unwrap();
@@ -362,19 +417,36 @@ fn restore_operation_rejects_changed_global_confirmation_before_reservation_and_
         .unwrap();
     let before = rows(&f.target);
     assert!(selected
-        .publish(&f.target, &old.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &old.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .err()
         .unwrap()
         .contains("再確認"));
     assert_eq!(rows(&f.target), before);
-    let refreshed = selected.refresh(&f.target, &|| false, &|_| {}).unwrap();
+    let refreshed = selected
+        .refresh(&f.target, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
     assert_eq!(refreshed.batch_id, old.batch_id);
     assert_ne!(refreshed.confirmation_id, old.confirmation_id);
     assert!(selected
-        .publish(&f.target, &old.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &old.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     selected
-        .publish(&f.target, &refreshed.confirmation_id, &|| false, &|_| {})
+        .publish(
+            &f.target,
+            &refreshed.confirmation_id,
+            &crate::test_support::never_cancelled,
+            &|_| {},
+        )
         .unwrap();
     assert_eq!(f.target.list_meetings().unwrap().len(), 3);
 }
@@ -401,7 +473,7 @@ fn restore_operation_cancelled_preview_and_changed_private_audio_are_read_only_f
     );
     let selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let asset = selected.archive.assets.values().next().unwrap();
     std::fs::write(asset, b"changed").unwrap();
@@ -409,7 +481,7 @@ fn restore_operation_cancelled_preview_and_changed_private_audio_are_read_only_f
         .publish(
             &f.target,
             &selected.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -423,17 +495,27 @@ fn backup_operation_retains_selected_overwrite_proof_denies_changed_target_wrong
     let f = fixture();
     let path = f.output.path().join("destination.monbackup");
     std::fs::write(&path, b"original").unwrap();
-    let selected = Destination::selected_backup(f.target_root.path(), &path, &|| false).unwrap();
+    let selected = Destination::selected_backup(
+        f.target_root.path(),
+        &path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     assert!(selected.replaces_existing());
     std::fs::write(&path, b"changed elsewhere").unwrap();
     let error = f
         .target
-        .create_backup_selected(&selected, &|| false)
+        .create_backup_selected(&selected, &crate::test_support::never_cancelled)
         .err()
         .unwrap();
     assert!(!error.published);
     assert_eq!(std::fs::read(&path).unwrap(), b"changed elsewhere");
-    let selected = Destination::selected_backup(f.target_root.path(), &path, &|| false).unwrap();
+    let selected = Destination::selected_backup(
+        f.target_root.path(),
+        &path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let error = f
         .target
         .create_backup_selected(&selected, &|| true)
@@ -443,13 +525,21 @@ fn backup_operation_retains_selected_overwrite_proof_denies_changed_target_wrong
     assert_eq!(std::fs::read(&path).unwrap(), b"changed elsewhere");
     let wrong =
         Destination::selected(f.target_root.path(), &f.output.path().join("other.md")).unwrap();
-    assert!(f.target.create_backup_selected(&wrong, &|| false).is_err());
+    assert!(f
+        .target
+        .create_backup_selected(&wrong, &crate::test_support::never_cancelled)
+        .is_err());
     let root = tempfile::tempdir().unwrap();
-    let wrong = Destination::selected_backup(root.path(), &path, &|| false).unwrap();
-    assert!(f.target.create_backup_selected(&wrong, &|| false).is_err());
+    let wrong =
+        Destination::selected_backup(root.path(), &path, &crate::test_support::never_cancelled)
+            .unwrap();
+    assert!(f
+        .target
+        .create_backup_selected(&wrong, &crate::test_support::never_cancelled)
+        .is_err());
     let receipt = f
         .target
-        .create_backup_selected(&selected, &|| false)
+        .create_backup_selected(&selected, &crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(receipt.meeting_count, 1);
     assert!(receipt.size > 0);
@@ -466,30 +556,36 @@ fn restore_operation_rejects_links_wrong_extension_and_cross_destination_capabil
     std::os::unix::fs::symlink(&f.path, &link).unwrap();
     assert!(f
         .target
-        .prepare_additive_restore(&link, &|| false, &|_| {})
+        .prepare_additive_restore(&link, &crate::test_support::never_cancelled, &|_| {})
         .is_err());
     assert!(f
         .target
-        .prepare_additive_restore(Path::new("relative.monbackup"), &|| false, &|_| {})
+        .prepare_additive_restore(
+            Path::new("relative.monbackup"),
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
         .is_err());
     let wrong = f.output.path().join("wrong.txt");
     std::fs::copy(&f.path, &wrong).unwrap();
     assert!(f
         .target
-        .prepare_additive_restore(&wrong, &|| false, &|_| {})
+        .prepare_additive_restore(&wrong, &crate::test_support::never_cancelled, &|_| {})
         .is_err());
     let mut selected = f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     let root = tempfile::tempdir().unwrap();
     let other = Storage::open(root.path().into()).unwrap();
-    assert!(selected.refresh(&other, &|| false, &|_| {}).is_err());
+    assert!(selected
+        .refresh(&other, &crate::test_support::never_cancelled, &|_| {})
+        .is_err());
     assert!(selected
         .publish(
             &other,
             &selected.preview().confirmation_id,
-            &|| false,
+            &crate::test_support::never_cancelled,
             &|_| {}
         )
         .is_err());
@@ -498,6 +594,6 @@ fn restore_operation_rejects_links_wrong_extension_and_cross_destination_capabil
     std::fs::hard_link(&f.path, &hard).unwrap();
     assert!(f
         .target
-        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .is_err());
 }

@@ -83,5 +83,14 @@ test("strict interval notation supports exact microseconds and long hours withou
 test("audio interval is inactive when audio missing, duration invalid or range outside saved audio",()=>{
   const url="audio:00:00:01-00:00:02";
   assert.deepEqual(playableMarkdownInterval(url,2_000_000),{startUs:1_000_000,endUs:2_000_000});
-  for(const duration of [null,0,-1,1_999_999,NaN,Infinity,2_000_000.5])assert.equal(playableMarkdownInterval(url,duration),null);
+  for(const duration of [null,0,-1,1_000_000,NaN,Infinity,2_000_000.5])assert.equal(playableMarkdownInterval(url,duration),null);
+});
+
+test("whole-second final references clamp only to the exact recorded end ceiling",()=>{
+  assert.deepEqual(playableMarkdownInterval("audio:00:00:01-00:00:02",1_999_999),{startUs:1_000_000,endUs:1_999_999});
+  assert.equal(playableMarkdownInterval("audio:00:00:01-00:00:03",1_999_999),null);
+  assert.equal(playableMarkdownInterval("audio:00:00:01-00:00:02.000001",1_999_999),null);
+  assert.equal(playableMarkdownInterval("audio:00:00:01-00:00:02.000000",1_999_999),null);
+  assert.equal(playableMarkdownInterval("audio:00:00:01.500000-00:00:02",1_999_999),null);
+  assert.equal(playableMarkdownInterval("audio:00:00:02-00:00:03",1_999_999),null);
 });

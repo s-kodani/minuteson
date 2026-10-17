@@ -4,8 +4,15 @@ use std::cell::Cell;
 
 fn read(storage: &Storage, output: &Path) -> archive::VerifiedArchive {
     let path = output.join("ledger.monbackup");
-    storage.create_backup_archive(&path, &|| false).unwrap();
-    archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
+    storage
+        .create_backup_archive(&path, &crate::test_support::never_cancelled)
+        .unwrap();
+    archive::read(
+        &mut File::open(path).unwrap(),
+        output,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -17,8 +24,14 @@ fn restore_ledger_reservation_survives_reopen_and_same_plan_never_duplicates_or_
     fixture(&source_storage, "reserve");
     let source = read(&source_storage, output.path());
     let batch = Uuid::new_v4().to_string();
-    let ids = RestoreIds::prepare(&source, output.path(), &batch, &|| false).unwrap();
-    let plan = BatchPlan::new(&ids, &|| false).unwrap();
+    let ids = RestoreIds::prepare(
+        &source,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let plan = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     let existing = target.create_meeting("既存会議").unwrap();
@@ -26,11 +39,13 @@ fn restore_ledger_reservation_survives_reopen_and_same_plan_never_duplicates_or_
         let mut db = target.connection.lock().unwrap();
         let mut tx = db.transaction().unwrap();
         assert_eq!(
-            plan.reserve(&mut tx, &|| false).unwrap(),
+            plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+                .unwrap(),
             BatchState::Prepared
         );
         assert_eq!(
-            plan.reserve(&mut tx, &|| false).unwrap(),
+            plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+                .unwrap(),
             BatchState::Prepared
         );
         tx.commit().unwrap();
@@ -41,7 +56,8 @@ fn restore_ledger_reservation_survives_reopen_and_same_plan_never_duplicates_or_
     let mut db = target.connection.lock().unwrap();
     let mut tx = db.transaction().unwrap();
     assert_eq!(
-        plan.reserve(&mut tx, &|| false).unwrap(),
+        plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+            .unwrap(),
         BatchState::Prepared
     );
     assert_eq!(
@@ -70,7 +86,8 @@ fn restore_ledger_reservation_survives_reopen_and_same_plan_never_duplicates_or_
     )
     .unwrap();
     assert_eq!(
-        plan.reserve(&mut tx, &|| false).unwrap(),
+        plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+            .unwrap(),
         BatchState::Published
     );
     assert!(tx
@@ -96,26 +113,41 @@ fn restore_ledger_rejects_same_batch_with_changed_mapping_archive_or_corrupted_p
     fixture(&storage, "different");
     let mut source = read(&storage, output.path());
     let batch = Uuid::new_v4().to_string();
-    let ids = RestoreIds::prepare(&source, output.path(), &batch, &|| false).unwrap();
-    let plan = BatchPlan::new(&ids, &|| false).unwrap();
+    let ids = RestoreIds::prepare(
+        &source,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let plan = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
     let mut target = portable::schema(MIGRATIONS.len()).unwrap();
     {
         let mut tx = target.transaction().unwrap();
-        plan.reserve(&mut tx, &|| false).unwrap();
+        plan.reserve(&mut tx, &crate::test_support::never_cancelled)
+            .unwrap();
         tx.commit().unwrap();
     }
-    let alternative = RestoreIds::prepare(&source, output.path(), &batch, &|| false).unwrap();
-    let other = BatchPlan::new(&alternative, &|| false).unwrap();
+    let alternative = RestoreIds::prepare(
+        &source,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let other = BatchPlan::new(&alternative, &crate::test_support::never_cancelled).unwrap();
     {
         let mut tx = target.transaction().unwrap();
-        assert!(other.reserve(&mut tx, &|| false).is_err());
+        assert!(other
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
+            .is_err());
         tx.commit().unwrap();
     }
     target.execute_batch("DROP TRIGGER restore_map_fixed; UPDATE restore_identity_maps SET target_key='changed' WHERE rowid=(SELECT min(rowid) FROM restore_identity_maps);").unwrap();
     {
         let mut tx = target.transaction().unwrap();
         assert!(plan
-            .reserve(&mut tx, &|| false)
+            .reserve(&mut tx, &crate::test_support::never_cancelled)
             .unwrap_err()
             .contains("変更"));
         tx.commit().unwrap();
@@ -125,10 +157,18 @@ fn restore_ledger_rejects_same_batch_with_changed_mapping_archive_or_corrupted_p
     drop(plan);
     drop(ids);
     source.manifest.created_at += 1;
-    let ids = RestoreIds::prepare(&source, output.path(), &batch, &|| false).unwrap();
-    let changed = BatchPlan::new(&ids, &|| false).unwrap();
+    let ids = RestoreIds::prepare(
+        &source,
+        output.path(),
+        &batch,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let changed = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
     let mut tx = target.transaction().unwrap();
-    assert!(changed.reserve(&mut tx, &|| false).is_err());
+    assert!(changed
+        .reserve(&mut tx, &crate::test_support::never_cancelled)
+        .is_err());
     tx.commit().unwrap();
 }
 
@@ -143,7 +183,7 @@ fn restore_ledger_cancellation_rolls_back_its_savepoint_even_if_outer_transactio
         false
     })
     .unwrap();
-    let plan = BatchPlan::new(&ids, &|| false).unwrap();
+    let plan = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
     let mut target = portable::schema(MIGRATIONS.len()).unwrap();
     let mut tx = target.transaction().unwrap();
     let calls = Cell::new(0);

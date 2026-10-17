@@ -250,7 +250,7 @@ fn corrupted_payload_hash_future_version_and_unknown_fields_fail_closed() {
                 .unwrap();
             }
         }
-        assert!(verify_all(&db, &|| false).is_err());
+        assert!(verify_all(&db, &crate::test_support::never_cancelled).is_err());
         drop(db);
         assert!(storage
             .transcript_edit_recovery(&meeting, &draft.id, &base)
@@ -408,5 +408,7 @@ fn verification_rejects_orphan_records_even_when_foreign_key_checks_were_bypasse
     db.execute("UPDATE transcript_edit_recovery SET draft_id='orphan'", [])
         .unwrap();
     db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-    assert!(verify_all(&db, &|| false).unwrap_err().contains("所有"));
+    assert!(verify_all(&db, &crate::test_support::never_cancelled)
+        .unwrap_err()
+        .contains("所有"));
 }

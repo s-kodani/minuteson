@@ -18,6 +18,32 @@ pub(crate) enum MeetingPlaybackMode {
 pub(crate) struct MeetingPlaybackRequest {
     pub(crate) meeting_id: String,
     pub(crate) mode: MeetingPlaybackMode,
+    pub(crate) start_reference: Option<MeetingPlaybackStartReference>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum MeetingPlaybackStartReference {
+    Utterance {
+        analysis_id: String,
+        utterance_id: String,
+        expected_content_hash: String,
+        start_us: i64,
+        end_us: i64,
+    },
+    DraftUtterance {
+        request: DraftUtteranceAudioRequest,
+    },
+    Interval {
+        start_us: i64,
+        end_us: i64,
+        expected_duration_us: i64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +124,67 @@ struct Census {
 }
 
 impl Storage {
+    fn resolve_meeting_playback_start(
+        &self,
+        request: &MeetingPlaybackRequest,
+        duration: i64,
+    ) -> Result<Option<(String, i64, i64, String)>, String> {
+        let Some(reference) = &request.start_reference else {
+            return Ok(None);
+        };
+        let stamp = match reference {
+            MeetingPlaybackStartReference::Utterance {
+                analysis_id,
+                utterance_id,
+                expected_content_hash,
+                start_us,
+                end_us,
+            } => {
+                let stamp = self.resolve_utterance_audio_reference(
+                    &request.meeting_id,
+                    analysis_id,
+                    utterance_id,
+                )?;
+                if stamp.1 != *start_us || stamp.2 != *end_us || stamp.3 != *expected_content_hash {
+                    return Err("確認した発言と再生開始位置が一致しません".into());
+                }
+                stamp
+            }
+            MeetingPlaybackStartReference::DraftUtterance { request: draft } => {
+                if draft.meeting_id != request.meeting_id {
+                    return Err("分割発言と再生する会議が一致しません".into());
+                }
+                let track = self.resolve_draft_utterance_audio_reference(draft)?;
+                (
+                    track,
+                    draft.expected_start_us,
+                    draft.expected_end_us,
+                    draft.expected_content_hash.clone(),
+                )
+            }
+            MeetingPlaybackStartReference::Interval {
+                start_us,
+                end_us,
+                expected_duration_us,
+            } => {
+                if *expected_duration_us != duration {
+                    return Err(
+                        "確認後に会議音声の時間が変更されました。区間を確認し直してください".into(),
+                    );
+                }
+                (String::new(), *start_us, *end_us, String::new())
+            }
+        };
+        if stamp.1 < 0
+            || stamp.2 <= stamp.1
+            || stamp.2 > duration
+            || duration > 9_007_199_254_740_991
+        {
+            return Err("再生開始位置と会議音声の時間が一致しません".into());
+        }
+        Ok(Some(stamp))
+    }
+
     // Metadata only, not a token, file hash check or permission request. Native
     // preparation still verifies every managed source and rechecks the census.
     pub(crate) fn meeting_audio_summary(
@@ -150,6 +237,7 @@ impl Storage {
         }
         let audio = self.prepare_meeting_audio_cancellable(
             &MeetingPlaybackRequest {
+                start_reference: None,
                 meeting_id: request.meeting_id.clone(),
                 mode: request.mode,
             },
@@ -170,7 +258,7 @@ impl Storage {
         &self,
         request: &MeetingPlaybackRequest,
     ) -> Result<MeetingAudio, String> {
-        self.prepare_meeting_audio_cancellable(request, &|| false)
+        self.prepare_meeting_audio_cancellable(request, &crate::test_support::never_cancelled)
     }
 
     pub(crate) fn prepare_meeting_audio_cancellable(
@@ -182,6 +270,7 @@ impl Storage {
             return Err("会議音声の準備を中止しました".into());
         }
         let before = self.meeting_audio_census(&request.meeting_id)?;
+        let start_reference = self.resolve_meeting_playback_start(request, before.end)?;
         let kinds: &[&str] = match request.mode {
             MeetingPlaybackMode::Mic => &["mic"],
             MeetingPlaybackMode::System => &["system"],
@@ -214,9 +303,9 @@ impl Storage {
                 .min()
                 .ok_or("トラックの保存音声がありません")?;
             let last = track.chunks.iter().map(|chunk| chunk.end).max().unwrap();
-            // Uses the existing managed-path, content-hash, format, contiguous
-            // coverage, deletion and clock-map admission checks over the WHOLE
-            // source, including missing/corrupt chunks outside an utterance.
+            // Verify managed paths, formats, coverage, deletion and clock maps.
+            // Ready FLAC playback reads packets on demand; full content hashes
+            // and PCM/MD5 are checked at ingestion/publication and for AI input.
             let audio = self.prepare_meeting_track_audio_cancellable(
                 &request.meeting_id,
                 &track.id,
@@ -257,10 +346,17 @@ impl Storage {
         if self.meeting_audio_census(&request.meeting_id)? != before {
             return Err("準備中に会議音声の保存記録が変わりました。選び直してください".into());
         }
+        if self.resolve_meeting_playback_start(request, before.end)? != start_reference {
+            return Err("準備中に再生開始位置の参照が変わりました。選び直してください".into());
+        }
         if cancelled() {
             return Err("会議音声の準備を中止しました".into());
         }
-        MeetingAudio::with_missing_ranges(sources, end, missing_ranges)
+        let mut audio = MeetingAudio::with_missing_ranges(sources, end, missing_ranges)?;
+        if matches!(request.mode, MeetingPlaybackMode::Both) {
+            audio.set_cache_key(&format!("{:?}:{before:?}", self.root))?;
+        }
+        Ok(audio)
     }
 
     fn meeting_audio_census(&self, meeting: &str) -> Result<Census, String> {

@@ -21,18 +21,26 @@ fn transcription(partial: bool, queued: bool) -> Fixture {
         ),
     )
     .unwrap();
-    engine.executable =
-        crate::local_engine::Fingerprint::capture(&engine.executable.path, &|| false).unwrap();
+    engine.executable = crate::local_engine::Fingerprint::capture(
+        &engine.executable.path,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let job =
         crate::transcription::enqueue(&storage, &meeting, "speech-restore", engine, "standard")
             .unwrap();
     if !queued {
         storage.acquire_local_inference_job().unwrap().unwrap();
-        let candidate = crate::transcription::process(&storage, &job.id, &|| false, &|j| {
-            if partial && j.completed_units == 1 && j.state == "running" {
-                storage.request_job_pause(&j.id, "user").unwrap();
-            }
-        })
+        let candidate = crate::transcription::process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|j| {
+                if partial && j.completed_units == 1 && j.state == "running" {
+                    storage.request_job_pause(&j.id, "user").unwrap();
+                }
+            },
+        )
         .unwrap();
         assert_eq!(candidate.is_none(), partial);
     }
@@ -54,9 +62,14 @@ fn diarization(partial: bool, queued: bool) -> Fixture {
             crate::storage::diarization::tests::pause_after_first(&storage, &job.id);
         } else {
             storage.acquire_local_inference_job().unwrap().unwrap();
-            crate::diarization::process(&storage, &job.id, &|| false, &|_| {})
-                .unwrap()
-                .unwrap();
+            crate::diarization::process(
+                &storage,
+                &job.id,
+                &crate::test_support::never_cancelled,
+                &|_| {},
+            )
+            .unwrap()
+            .unwrap();
         }
     }
     let job = storage.get_job(&job.id).unwrap();
@@ -74,7 +87,13 @@ fn read(f: &Fixture, output: &Path) -> archive::VerifiedArchive {
     crate::storage::backup::restore_fixed::tests::read(&f.storage, output)
 }
 fn ids<'a>(source: &'a archive::VerifiedArchive, output: &Path) -> RestoreIds<'a> {
-    RestoreIds::prepare(source, output, &Uuid::new_v4().to_string(), &|| false).unwrap()
+    RestoreIds::prepare(
+        source,
+        output,
+        &Uuid::new_v4().to_string(),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap()
 }
 fn result_id(f: &Fixture) -> String {
     let checkpoint = f.storage.fixed_job_input(&f.job.id).unwrap().1.unwrap();
@@ -106,7 +125,10 @@ fn ready_files_and_missing_rows(
         let hash: String = row.get(4).unwrap();
         let path = work.stage.path().join(relative);
         match state.as_str() {
-            "ready" => assert_eq!(digest_file(&path, &|| false).unwrap(), (size as u64, hash)),
+            "ready" => assert_eq!(
+                digest_file(&path, &crate::test_support::never_cancelled).unwrap(),
+                (size as u64, hash)
+            ),
             "missing" => {
                 assert!(!path.exists());
                 missing.insert(id);
@@ -132,7 +154,8 @@ fn speech_workspace_rebuilds_native_results_and_hashes_without_engines_or_missin
         let draft = f.storage.load_transcript_draft(&f.meeting).unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
         // Only fake fixture engines/models are removed, never user resources.
         let names: &[&str] = if f.job.kind == "transcription" {
             &["fake-cli", "model.bin"]
@@ -142,12 +165,13 @@ fn speech_workspace_rebuilds_native_results_and_hashes_without_engines_or_missin
         for name in names {
             std::fs::remove_file(f.root.path().join(name)).unwrap();
         }
-        let mut work = FixedWorkspace::prepare(&fixed, output.path(), &|| false)
-            .unwrap()
-            .with_speech_artifacts(&fixed, &|| false)
-            .unwrap()
-            .with_generation_artifacts(&fixed, &|| false)
-            .unwrap();
+        let mut work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap()
+                .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+                .unwrap()
+                .with_generation_artifacts(&fixed, &crate::test_support::never_cancelled)
+                .unwrap();
         let stage = work.stage.path().to_path_buf();
         let job = ids.get("processing_jobs", &f.meeting, &f.job.id).unwrap();
         let (spec, checkpoint) =
@@ -204,7 +228,11 @@ fn speech_workspace_rebuilds_native_results_and_hashes_without_engines_or_missin
             tx.commit().unwrap();
         }
         ready_files_and_missing_rows(&work, &source, &ids);
-        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+        crate::storage::backup::validate_database(
+            &mut work.database,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(calls(&f), before);
         assert_eq!(f.storage.get_job(&f.job.id).unwrap(), f.job);
         assert_eq!(f.storage.load_transcript_draft(&f.meeting).unwrap(), draft);
@@ -243,11 +271,13 @@ fn speech_workspace_rebuilds_partial_history_and_shared_retry_without_reexecutin
         let before = calls(&f);
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let mut work = FixedWorkspace::prepare(&fixed, output.path(), &|| false)
-            .unwrap()
-            .with_speech_artifacts(&fixed, &|| false)
-            .unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let mut work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap()
+                .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+                .unwrap();
         let mapped = ids.get("processing_jobs", &f.meeting, &child.id).unwrap();
         let (_, checkpoint) =
             crate::storage::jobs::read_fixed_input(&work.database, &mapped).unwrap();
@@ -267,7 +297,11 @@ fn speech_workspace_rebuilds_partial_history_and_shared_retry_without_reexecutin
             .unwrap();
         assert!(count >= 3);
         ready_files_and_missing_rows(&work, &source, &ids);
-        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+        crate::storage::backup::validate_database(
+            &mut work.database,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         assert_eq!(calls(&f), before);
         assert_eq!(f.storage.get_job(&parent.id).unwrap(), parent);
     }
@@ -279,11 +313,13 @@ fn speech_workspace_checks_unstarted_jobs_without_creating_results_or_checkpoint
         let output = tempfile::tempdir().unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false)
-            .unwrap()
-            .with_speech_artifacts(&fixed, &|| false)
-            .unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap()
+                .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+                .unwrap();
         let mapped = ids.get("processing_jobs", &f.meeting, &f.job.id).unwrap();
         assert!(
             crate::storage::jobs::read_fixed_input(&work.database, &mapped)
@@ -309,13 +345,18 @@ fn speech_workspace_rejects_changed_verified_payload_and_preserves_original_data
         let output = tempfile::tempdir().unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         let stage = work.stage.path().to_path_buf();
         let before = calls(&f);
         let asset = result_id(&f);
         std::fs::write(&source.assets[&asset], b"{}").unwrap();
-        assert!(work.with_speech_artifacts(&fixed, &|| false).is_err());
+        assert!(work
+            .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(!stage.exists());
         assert!(source.assets[&asset].is_file());
         assert_eq!(calls(&f), before);
@@ -378,12 +419,15 @@ fn speech_workspace_rejects_semantically_invalid_native_results_even_with_valid_
         entry.size = bytes.len() as u64;
         entry.sha256 = format!("{:x}", Sha256::digest(&bytes));
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         let stage = work.stage.path().to_path_buf();
         let before = calls(&f);
         let error = work
-            .with_speech_artifacts(&fixed, &|| false)
+            .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
             .err()
             .unwrap_or_else(|| panic!("invalid {change} was accepted"));
         if change == "diarization-track" {
@@ -414,8 +458,14 @@ fn speech_workspace_cancellation_at_entry_and_after_write_removes_only_its_stage
         std::fs::write(&marker, b"keep").unwrap();
         for after_write in [false, true] {
             let ids = ids(&source, output.path());
-            let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-            let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+            let fixed =
+                FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+            let work = FixedWorkspace::prepare(
+                &fixed,
+                output.path(),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             let stage = work.stage.path().to_path_buf();
             let asset = ids.get("file_assets", &f.meeting, &result_id(&f)).unwrap();
             let file = stage.join(format!(
@@ -450,8 +500,11 @@ fn speech_workspace_rejects_source_and_destination_symlinks_without_following_th
         std::fs::write(&keep, b"keep").unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         let stage = work.stage.path().to_path_buf();
         if source_link {
             let result = &source.assets[&result_id(&f)];
@@ -469,7 +522,9 @@ fn speech_workspace_rejects_source_and_destination_symlinks_without_following_th
                 .unwrap();
             symlink(&keep, stage.join(relative)).unwrap();
         }
-        assert!(work.with_speech_artifacts(&fixed, &|| false).is_err());
+        assert!(work
+            .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(!stage.exists());
         assert_eq!(std::fs::read(&keep).unwrap(), b"keep");
         assert_eq!(
@@ -487,8 +542,11 @@ fn speech_workspace_rejects_source_and_target_fixed_settings_mutations() {
         let output = tempfile::tempdir().unwrap();
         let source = read(&f, output.path());
         let ids = ids(&source, output.path());
-        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        let fixed =
+            FixedData::new(&ids, output.path(), &crate::test_support::never_cancelled).unwrap();
+        let work =
+            FixedWorkspace::prepare(&fixed, output.path(), &crate::test_support::never_cancelled)
+                .unwrap();
         let stage = work.stage.path().to_path_buf();
         let writer;
         let (db, job) = if source_settings {
@@ -510,7 +568,9 @@ fn speech_workspace_rejects_source_and_target_fixed_settings_mutations() {
             )
         };
         db.execute("UPDATE processing_jobs SET parameters_json=json_set(parameters_json,'$.engine.threads',2) WHERE id=?1", params![job]).unwrap();
-        assert!(work.with_speech_artifacts(&fixed, &|| false).is_err());
+        assert!(work
+            .with_speech_artifacts(&fixed, &crate::test_support::never_cancelled)
+            .is_err());
         assert!(!stage.exists());
         assert_eq!(f.storage.get_job(&f.job.id).unwrap(), f.job);
     }

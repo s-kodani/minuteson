@@ -281,13 +281,15 @@ fn scratch_crash_child() {
     }
     match mode.as_str() {
         "snapshot" => {
-            let _snapshot = storage.prepare_backup_snapshot(&|| false).unwrap();
+            let _snapshot = storage
+                .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+                .unwrap();
             ready(&storage);
         }
         "restore" => {
             let source = PathBuf::from(std::env::var_os("MON_SCRATCH_TEST_SOURCE").unwrap());
             let _selected = storage
-                .prepare_additive_restore(&source, &|| false, &|_| {})
+                .prepare_additive_restore(&source, &crate::test_support::never_cancelled, &|_| {})
                 .unwrap();
             ready(&storage);
         }
@@ -324,7 +326,7 @@ fn scratch_sigkill_reopen_recovers_real_snapshot_restore_and_partial_copies_but_
     let output = tempfile::tempdir().unwrap();
     let archive_path = output.path().join("source.monbackup");
     source
-        .create_backup_archive(&archive_path, &|| false)
+        .create_backup_archive(&archive_path, &crate::test_support::never_cancelled)
         .unwrap();
     let pending: i64 = source
         .scratch
@@ -343,7 +345,7 @@ fn scratch_sigkill_reopen_recovers_real_snapshot_restore_and_partial_copies_but_
         pending, 0,
         "normal backup leaves no unresolved construction area"
     );
-    let archive_digest = digest_file(&archive_path, &|| false).unwrap();
+    let archive_digest = digest_file(&archive_path, &crate::test_support::never_cancelled).unwrap();
     for mode in ["snapshot", "restore", "partial", "gap"] {
         let (root, target) = fixture();
         let existing = archive::tests::meeting(&target, "existing fixture");
@@ -412,7 +414,7 @@ fn scratch_sigkill_reopen_recovers_real_snapshot_restore_and_partial_copies_but_
             assert_eq!(statuses, vec!["recovered"]);
         }
         assert_eq!(
-            digest_file(&archive_path, &|| false).unwrap(),
+            digest_file(&archive_path, &crate::test_support::never_cancelled).unwrap(),
             archive_digest
         );
     }
