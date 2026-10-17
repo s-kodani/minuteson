@@ -407,6 +407,13 @@ fn renewal_internal_staged_file_requires_unknown_consent_and_new_generation_rese
 
 #[test]
 fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_together() {
+    let f = Fixture::new();
+    let mut r = f.begin(false);
+    std::fs::write(&f.file, b"CHANGED BUT KEPT").unwrap();
+    let v = review(&f, &r);
+    let original = snapshot(&f);
+    let before = r.progress_json().unwrap();
+    // A successful rollback leaves the same input for every fault boundary.
     for point in [
         "reviewIntentStored",
         "reviewPathStored",
@@ -414,13 +421,8 @@ fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_toget
         "beforeReviewCommit",
     ] {
         for unwind in [false, true] {
-            let f = Fixture::new();
-            let mut r = f.begin(false);
-            std::fs::write(&f.file, b"CHANGED BUT KEPT").unwrap();
-            let v = review(&f, &r);
-            let original = snapshot(&f);
-            let before = r.progress_json().unwrap();
             let stop = Cell::new(false);
+            let reached = Cell::new(false);
             let admitted = lease();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 renewal::accept_observed(
@@ -432,6 +434,7 @@ fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_toget
                     &|| stop.get(),
                     &|p| {
                         if p == point {
+                            reached.set(true);
                             if unwind {
                                 panic!("test interrupted renewal");
                             } else {
@@ -441,6 +444,7 @@ fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_toget
                     },
                 )
             }));
+            assert!(reached.get(), "{point}, unwind={unwind}");
             if unwind {
                 assert!(outcome.is_err());
                 // A panic poisons the outer mutex, not the on-disk transaction.

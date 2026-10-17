@@ -2,7 +2,10 @@
 use super::*;
 use crate::storage::deletion::{
     models,
-    relocation::receiver::{synthetic_consent_record, synthetic_model_reconfirmation_records},
+    relocation::receiver::{
+        synthetic_audio_operation_record as operation_record, synthetic_consent_record,
+        synthetic_model_reconfirmation_records,
+    },
 };
 use models::intent::removal::{self, renewal};
 use std::{
@@ -242,16 +245,26 @@ fn model_relocated_consent_saved_policy_resumes_after_cold_cancel_and_supports_n
 
 #[test]
 fn model_relocated_consent_all_precommit_boundaries_roll_back_both_audit_and_progress() {
+    // All attempts roll back to the same moved, durably admitted database.
+    let (f, op, file) = fixture();
+    reappear(&file);
+    let (old, original_progress) = {
+        let (_b, storage) = f.open();
+        let old = synthetic_consent_record(&storage, &op);
+        let record: serde_json::Value =
+            serde_json::from_str(&operation_record(&storage, &op)).unwrap();
+        let progress = record[8].clone();
+        assert!(progress.is_string());
+        (old, progress)
+    };
     for boundary in [
         "auditStored",
         "proofStored",
         "auditCompleted",
         "beforeCommit",
     ] {
-        let (f, op, file) = fixture();
-        reappear(&file);
         let (b, storage) = f.open();
-        let old = synthetic_consent_record(&storage, &op);
+        assert_eq!(synthetic_consent_record(&storage, &op), old);
         let lease = owner(&storage, &op);
         let v =
             renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
@@ -267,6 +280,9 @@ fn model_relocated_consent_all_precommit_boundaries_roll_back_both_audit_and_pro
         assert!(stop.get());
         assert!(file.exists());
         assert_eq!(synthetic_consent_record(&storage, &op), old);
+        let record: serde_json::Value =
+            serde_json::from_str(&operation_record(&storage, &op)).unwrap();
+        assert_eq!(record[8], original_progress, "{boundary}");
         assert!(synthetic_model_reconfirmation_records(&storage).is_empty());
         // The old-root execution remains refused after every rollback.
         assert!(

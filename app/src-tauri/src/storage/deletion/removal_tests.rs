@@ -98,7 +98,7 @@ impl Fixture {
     }
 }
 #[test]
-fn file_removal_erases_fixed_tree_keeps_database_observations_and_other_data_and_replays() {
+fn file_removal_erases_fixed_tree_replays_and_refuses_recreated_content() {
     let f = Fixture::new();
     let mut receipt = f.begin(false);
     let db = f.storage.connection.lock().unwrap();
@@ -132,6 +132,17 @@ fn file_removal_erases_fixed_tree_keeps_database_observations_and_other_data_and
         &crate::test_support::never_cancelled,
     )
     .unwrap();
+    f.unaffected();
+    // Reuse the completed receipt rather than repeat the same deletion setup.
+    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+    std::fs::write(&f.file, b"KEEP RECREATED").unwrap();
+    assert!(run(
+        &f.storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP RECREATED");
     f.unaffected();
 }
 #[test]
@@ -551,18 +562,6 @@ fn file_removal_progress_corruption_and_skipped_cursor_never_grant_removal() {
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE SOURCE");
     f.unaffected();
 }
-#[test]
-fn file_removal_completed_receipt_refuses_recreated_meeting_tree() {
-    let f = Fixture::new();
-    let mut r = f.begin(false);
-    run(&f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
-    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
-    std::fs::write(&f.file, b"KEEP RECREATED").unwrap();
-    assert!(run(&f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
-    assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP RECREATED");
-    f.unaffected();
-}
-
 #[test]
 fn file_removal_database_replacement_between_checkpoints_stops_before_next_filesystem_mutation() {
     for phase in ["beforeRename", "beforeUnlink"] {

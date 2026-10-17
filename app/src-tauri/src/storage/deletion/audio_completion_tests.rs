@@ -365,21 +365,22 @@ fn missing_journal_in_current_schema_never_grants_source_admission() {
 }
 #[test]
 fn each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_files() {
+    let f = Fixture::new();
+    let lease = owner();
+    let op = removed(&f, &lease);
+    let tables = database::audio_tables(
+        &f.storage.connection.lock().unwrap(),
+        &f.meeting,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let original = fixed(&f, &op);
     for boundary in [
         "audioAssetsUnavailable",
         "audioChunksUnavailable",
         "audioTracksUnavailable",
         "beforeAudioCompletionCommit",
     ] {
-        let f = Fixture::new();
-        let lease = owner();
-        let op = removed(&f, &lease);
-        let tables = database::audio_tables(
-            &f.storage.connection.lock().unwrap(),
-            &f.meeting,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
         let cancel = Cell::new(false);
         assert!(
             finish_inner(
@@ -394,6 +395,7 @@ fn each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_fi
             .is_err(),
             "{boundary}"
         );
+        assert!(cancel.get(), "{boundary}");
         assert_eq!(
             database::audio_tables(
                 &f.storage.connection.lock().unwrap(),
@@ -404,17 +406,18 @@ fn each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_fi
             tables
         );
         assert_eq!(phase(&f, &op), "cleanup");
+        assert_eq!(fixed(&f, &op), original);
         assert!(!f.path.exists());
         assert!(f.storage.data_write_blocked());
-        assert!(finish(
-            &f.storage,
-            &op,
-            &lease,
-            &crate::test_support::never_cancelled
-        )
-        .unwrap()
-        .completed());
     }
+    assert!(finish(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 #[test]
 fn last_boundary_rechecks_retained_text_and_rolls_back_if_changed() {

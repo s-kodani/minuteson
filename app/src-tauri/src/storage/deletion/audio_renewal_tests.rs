@@ -636,22 +636,23 @@ fn new_unregistered_audio_and_stale_review_never_borrow_old_consent() {
 }
 #[test]
 fn cancellation_at_each_transaction_boundary_rolls_back_audit_and_cursor() {
+    let f = Fixture::new();
+    let lease = owner();
+    let op = started(&f, &lease);
+    std::fs::write(&f.path, b"NEW").unwrap();
+    let review = Review::capture(
+        &f.storage,
+        &op,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    // Each attempt must return to this same receipt before the next boundary.
     for point in [
         "audioRenewalAuditStored",
         "audioRenewalProofStored",
         "beforeAudioRenewalCommit",
     ] {
-        let f = Fixture::new();
-        let lease = owner();
-        let op = started(&f, &lease);
-        std::fs::write(&f.path, b"NEW").unwrap();
-        let review = Review::capture(
-            &f.storage,
-            &op,
-            &lease,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
         let cancelled = Cell::new(false);
         assert!(accept_inner(
             &f.storage,
@@ -666,6 +667,7 @@ fn cancellation_at_each_transaction_boundary_rolls_back_audit_and_cursor() {
             }
         )
         .is_err());
+        assert!(cancelled.get(), "{point}");
         assert_eq!(f.operation_count(), 1);
         assert_eq!(
             Receipt::load(
@@ -677,16 +679,16 @@ fn cancellation_at_each_transaction_boundary_rolls_back_audit_and_cursor() {
             review.receipt
         );
         assert!(f.storage.data_write_blocked() && f.path.exists());
-        accept(
-            &f.storage,
-            &review,
-            false,
-            &lease,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        finish(&f, &op, &lease);
     }
+    accept(
+        &f.storage,
+        &review,
+        false,
+        &lease,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    finish(&f, &op, &lease);
 }
 #[test]
 fn real_lease_and_unchanged_database_metadata_are_required() {

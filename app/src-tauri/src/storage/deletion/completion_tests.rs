@@ -492,18 +492,21 @@ impl Fixture {
     }
 }
 #[test]
-fn compound_deletion_requires_completed_file_phase_and_keeps_all_rows_when_refused() {
+fn compound_deletion_requires_files_then_purges_fixed_rows_replays_and_refuses_recreated_content() {
     let f = Fixture::new();
-    let files = f.files();
+    let mut files = f.files();
     assert!(start(&f.f.storage, &files, &crate::test_support::never_cancelled).is_err());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"DELETE TARGET AUDIO");
-}
-#[test]
-fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_observations_and_other_data(
-) {
-    let f = Fixture::new();
-    let mut r = f.begin();
+    removal::run(
+        &f.f.storage,
+        &mut files,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut r = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    assert_eq!(r.progress, replay.progress);
     let db = f.f.storage.connection.lock().unwrap();
     let original:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     let other =
@@ -539,6 +542,8 @@ fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_obs
         }
     }
     assert_free_pages_zero(&std::fs::read(f.f.storage.root().join("meetings.sqlite3")).unwrap());
+    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
+    assert!(replay.completed());
     let mut replay = read(
         &f.f.storage,
         &f.operation,
@@ -553,12 +558,18 @@ fn compound_deletion_removes_all_fixed_rows_purges_text_and_retains_original_obs
     .unwrap();
     assert!(!f.f.storage.data_write_blocked());
     f.unaffected();
+    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+    std::fs::write(&f.file, b"KEEP NEW CONTENT").unwrap();
+    assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
+    assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP NEW CONTENT");
+    f.unaffected();
 }
 #[test]
 fn compound_deletion_cancel_before_row_commit_rolls_back_rows_and_progress_together() {
+    let f = Fixture::new();
+    let mut r = f.begin();
+    let original = r.progress_json().unwrap();
     for phase in ["rowsErased", "beforeRowsCommit"] {
-        let f = Fixture::new();
-        let mut r = f.begin();
         let stop = Cell::new(false);
         assert!(
             run_inner(&f.f.storage, &mut r, &|| stop.get(), &|p| if p == phase {
@@ -566,25 +577,35 @@ fn compound_deletion_cancel_before_row_commit_rolls_back_rows_and_progress_toget
             })
             .is_err()
         );
+        assert!(stop.get(), "{phase}");
         assert_eq!(r.progress.database_phase, Phase::RowsPending);
+        assert_eq!(r.progress_json().unwrap(), original);
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
         assert!(!f.file.exists());
-        let mut saved = read(
+        let saved = read(
             &f.f.storage,
             &f.operation,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
         assert_eq!(saved.progress.database_phase, Phase::RowsPending);
+        assert_eq!(saved.progress_json().unwrap(), original);
         assert!(f.f.storage.data_write_blocked());
-        run(
-            &f.f.storage,
-            &mut saved,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
         f.unaffected();
     }
+    let mut saved = read(
+        &f.f.storage,
+        &f.operation,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    run(
+        &f.f.storage,
+        &mut saved,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    f.unaffected();
 }
 #[test]
 fn compound_deletion_after_row_commit_cancel_retains_partial_state_and_finishes_without_redeleting()
@@ -688,37 +709,6 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
         .is_err());
         assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
     }
-}
-#[test]
-fn compound_deletion_finished_retry_refuses_recreated_target_without_erasing_it() {
-    let f = Fixture::new();
-    let mut r = f.begin();
-    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
-    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
-    std::fs::write(&f.file, b"KEEP NEW CONTENT").unwrap();
-    assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
-    assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP NEW CONTENT");
-    f.unaffected();
-}
-
-#[test]
-fn compound_deletion_start_acknowledgement_replays_the_same_progress_without_reconfirming_or_redeleting(
-) {
-    let f = Fixture::new();
-    let mut files = f.files();
-    removal::run(
-        &f.f.storage,
-        &mut files,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
-    let mut r = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
-    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
-    assert_eq!(r.progress, replay.progress);
-    run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).unwrap();
-    let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
-    assert!(replay.completed());
-    f.unaffected();
 }
 #[test]
 fn compound_deletion_foreign_connection_and_other_pending_operation_cannot_mutate_rows() {

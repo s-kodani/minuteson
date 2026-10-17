@@ -166,6 +166,51 @@ fn deletion_repeat_moves_completed_audio_mixed_current_receipts_and_flat_origins
     }
 }
 
+// Check the first cold admission and later moves in the same owned chain.
+fn assert_kept_current(
+    f: &NativeFixture,
+    storage: &Storage,
+    current: &Path,
+    old_audio: &str,
+    whole: Option<(&str, &str)>,
+) {
+    assert!(!storage.data_write_blocked());
+    assert_eq!(f.live_record(storage), old_audio);
+    assert!(storage.get_meeting(&f.meeting).unwrap().is_some());
+    assert_eq!(
+        std::fs::read(current.join(&f.audio)).unwrap(),
+        b"SYNTHETIC AUDIO"
+    );
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .unwrap();
+    assert!(audio::intent::removal::start(
+        storage,
+        &f.deletion,
+        &lease,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+    if let Some((op, before)) = whole {
+        let mut p =
+            operations::Prepared::pending(storage, op, &crate::test_support::never_cancelled)
+                .unwrap();
+        assert!(!p.preview().execute_allowed);
+        assert!(p
+            .execute(
+                storage,
+                &lease,
+                &p.preview().confirmation_id,
+                true,
+                &crate::test_support::never_cancelled,
+                &|_| {}
+            )
+            .is_err());
+        assert_eq!(synthetic_consent_record(storage, op), before);
+    }
+    assert_eq!(f.live_record(storage), old_audio);
+}
+
 #[test]
 fn deletion_repeat_moves_kept_audio_and_whole_meeting_never_become_current_consent() {
     for whole in [false, true] {
@@ -178,10 +223,32 @@ fn deletion_repeat_moves_kept_audio_and_whole_meeting_never_become_current_conse
             .map(|op| synthetic_consent_record(f.storage.as_ref().unwrap(), op));
         f.select();
         let mut current = f.target.clone();
+        // Keep both first admission and a second cold open of the same root.
+        if whole {
+            let (_b, storage) = f.open();
+            assert_kept_current(
+                &f,
+                &storage,
+                &current,
+                &old,
+                kept.as_deref().zip(old_whole.as_deref()),
+            );
+        }
         for prior_moves in 1..=2 {
             let (b, storage) = f.open();
             assert_eq!(storage.root(), current);
-            assert!(!storage.data_write_blocked());
+            assert_kept_current(
+                &f,
+                &storage,
+                &current,
+                &old,
+                kept.as_deref().zip(old_whole.as_deref()),
+            );
+            if prior_moves == 1 && !whole {
+                assert!(storage
+                    .create_meeting("KEEP DOES NOT BECOME CONSENT")
+                    .is_ok());
+            }
             let next = target(&f);
             flat(
                 &select_current(&b, &storage, &next),
@@ -194,39 +261,13 @@ fn deletion_repeat_moves_kept_audio_and_whole_meeting_never_become_current_conse
             current = next;
         }
         let (_b, storage) = f.open();
-        assert!(!storage.data_write_blocked());
-        assert_eq!(f.live_record(&storage), old);
-        assert_eq!(
-            std::fs::read(current.join(&f.audio)).unwrap(),
-            b"SYNTHETIC AUDIO"
-        );
-        let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-            .unwrap();
-        assert!(audio::intent::removal::start(
+        assert_kept_current(
+            &f,
             &storage,
-            &f.deletion,
-            &lease,
-            &crate::test_support::never_cancelled
-        )
-        .is_err());
-        if let Some(op) = kept {
-            let mut p =
-                operations::Prepared::pending(&storage, &op, &crate::test_support::never_cancelled)
-                    .unwrap();
-            assert!(!p.preview().execute_allowed);
-            assert!(p
-                .execute(
-                    &storage,
-                    &lease,
-                    &p.preview().confirmation_id,
-                    true,
-                    &crate::test_support::never_cancelled,
-                    &|_| {}
-                )
-                .is_err());
-            assert_eq!(synthetic_consent_record(&storage, &op), old_whole.unwrap());
-        }
+            &current,
+            &old,
+            kept.as_deref().zip(old_whole.as_deref()),
+        );
         assert!(storage.create_meeting("UNCHANGED KEEP").is_ok());
         // Every former root's retained body remains untouched as well.
         for root in former_roots {

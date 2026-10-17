@@ -398,32 +398,32 @@ fn model_deletion_renewal_rejects_changes_after_review_and_retains_all_evidence(
 }
 #[test]
 fn model_deletion_renewal_cancel_rolls_back_all_audit_proofs_and_cursor_at_each_boundary() {
+    let f = Fixture::new();
+    let owner = lease();
+    let op = prepare(&f, false, &owner);
+    removal::start(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    pause(&f, &op, &owner, "advanced");
+    let view = renewal::review(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let old = progress(&f, &op);
+    let evidence = f.evidence();
     for boundary in [
         "auditStored",
         "proofStored",
         "auditCompleted",
         "beforeCommit",
     ] {
-        let f = Fixture::new();
-        let owner = lease();
-        let op = prepare(&f, false, &owner);
-        removal::start(
-            &f.storage,
-            &op,
-            &owner,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        pause(&f, &op, &owner, "advanced");
-        let view = renewal::review(
-            &f.storage,
-            &op,
-            &owner,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        let old = progress(&f, &op);
-        let evidence = f.evidence();
         let stop = Cell::new(false);
         assert!(
             renewal::accept_observed(&f.storage, &view, false, &owner, &|| stop.get(), &|event| {
@@ -434,28 +434,29 @@ fn model_deletion_renewal_cancel_rolls_back_all_audit_proofs_and_cursor_at_each_
             .is_err(),
             "{boundary}"
         );
+        assert!(stop.get(), "{boundary}");
         assert!(audits(&f).is_empty());
         assert_eq!(old, progress(&f, &op));
         assert_eq!(evidence, f.evidence());
         assert!(f.storage.data_write_blocked());
-        renewal::accept(
-            &f.storage,
-            &view,
-            view.census_hash(),
-            false,
-            &owner,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        assert!(removal::run(
-            &f.storage,
-            &op,
-            &owner,
-            &crate::test_support::never_cancelled
-        )
-        .unwrap()
-        .completed());
     }
+    renewal::accept(
+        &f.storage,
+        &view,
+        view.census_hash(),
+        false,
+        &owner,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert!(removal::run(
+        &f.storage,
+        &op,
+        &owner,
+        &crate::test_support::never_cancelled
+    )
+    .unwrap()
+    .completed());
 }
 #[test]
 fn model_deletion_renewal_multiple_generations_and_partial_resume_keep_previous_audits() {
