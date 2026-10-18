@@ -1,4 +1,4 @@
-// Production settings with browser-fixture.js IPC; no user data or native model.
+// Production prompt screen with browser-fixture.js IPC; no user data or native model.
 async page => {
   const panel = page.getByRole("region", {name:"議事録生成プロンプト",exact:true});
   const extract = panel.getByRole("textbox", {name:"作成用プロンプト",exact:true});
@@ -7,7 +7,15 @@ async page => {
   const results = [];
   const saved = () => panel.getByRole("status").filter({hasText:"保存済み"}).waitFor();
   const payload = () => page.evaluate(() => window.monBrowserFixture.promptPreferences.payload);
-  await page.reload(); await page.locator(".sidebar").getByRole("button",{name:"設定",exact:true}).click(); await saved();
+  await page.reload(); await page.locator(".sidebar").getByRole("button",{name:"プロンプト",exact:true}).click(); await saved();
+  check(await page.getByRole("heading",{name:"プロンプト",exact:true}).isVisible(), "prompt page heading absent");
+  check(await page.locator('.sidebar button[aria-current="page"]').getAttribute("aria-label")==="プロンプト", "prompt navigation not selected");
+  check(await page.getByRole("navigation",{name:"画面の移動"}).locator('[aria-current="page"]').innerText()==="プロンプト", "prompt breadcrumb absent");
+  check(!await page.getByRole("region",{name:"保存済み会議",exact:true}).isVisible(), "meeting list leaked into prompts");
+  await page.locator(".sidebar").getByRole("button",{name:"設定",exact:true}).click();
+  check(!await panel.isVisible(), "prompt editor still visible in settings");
+  await page.getByRole("button",{name:"前の画面へ戻る",exact:true}).click(); await saved();
+  results.push("standalone prompt navigation, breadcrumb and back; editor absent from settings");
   check(await extract.inputValue()==="既定の作成用プロンプト", "default extract absent");
   await extract.fill("表形式で自由にまとめる"); await merge.fill("表を統合する"); await saved();
   check((await payload()).extractPrompt==="表形式で自由にまとめる", "extract not saved");
@@ -20,6 +28,8 @@ async page => {
   await extract.fill("失敗しても保持する入力");
   await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"模擬プロンプト保存失敗"}).waitFor();
   check(await extract.inputValue()==="失敗しても保持する入力", "save failure discarded input");
+  await page.locator(".sidebar").getByRole("button",{name:"設定",exact:true}).click();
+  check(await panel.isVisible() && await extract.inputValue()==="失敗しても保持する入力", "failed save allowed navigation or discarded input");
   await page.evaluate(() => window.monBrowserFixture.failPromptSave=false);
   await panel.getByRole("button",{name:"保存を再試行",exact:true}).click();await saved();
   await page.evaluate(() => window.monBrowserFixture.losePromptResponse=true);
@@ -54,9 +64,27 @@ async page => {
   await page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true}).click();
   await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();
   check((await payload()).extractPrompt==="画面移動の直前に保存する入力", "navigation did not await save");
-  await page.locator(".sidebar").getByRole("button",{name:"設定",exact:true}).click(); await saved();
+  await page.locator(".sidebar").getByRole("button",{name:"プロンプト",exact:true}).click(); await saved();
   check(await extract.inputValue()==="画面移動の直前に保存する入力", "navigation lost saved setting");
-  await panel.screenshot({path:"output/playwright/minutes-prompt-settings.png"});
+
   results.push("navigation flushes pending prompt settings and preserves them on return");
+  await page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true}).click();
+  await page.locator(".meeting-name").first().click();
+  await page.getByRole("tab",{name:"文字起こし",exact:true}).waitFor();
+  const meetingTitle = await page.locator(".meeting-detail-status h1").innerText();
+  await page.locator(".sidebar").getByRole("button",{name:"プロンプト",exact:true}).click(); await saved();
+  check(await page.getByRole("tab",{name:"文字起こし",exact:true}).count()===0, "meeting details leaked into prompts");
+  check(!await page.getByRole("region",{name:"会議の共通音声プレーヤー",exact:true}).isVisible(), "meeting audio leaked into prompts");
+  check(await page.locator(".meeting-name").count()===0, "meeting list rendered behind prompt editor");
+  await page.getByRole("button",{name:"前の画面へ戻る",exact:true}).click();
+  await page.getByRole("tab",{name:"文字起こし",exact:true}).waitFor();
+  check(await page.locator(".meeting-detail-status h1").innerText()===meetingTitle, "back lost selected meeting");
+  results.push("meeting detail to prompts hides meeting content and player; back restores selected meeting");
+  await page.locator(".sidebar").getByRole("button",{name:"プロンプト",exact:true}).click(); await saved();
+  await page.screenshot({path:"output/playwright/minutes-prompt-screen.png",fullPage:true,animations:"disabled"});
+  await page.setViewportSize({width:360,height:740});
+  check(await extract.isVisible() && await merge.isVisible(), "prompt editor unavailable on narrow screen");
+  check(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth), "prompt screen overflows narrow viewport");
+  results.push("narrow prompt screen remains usable without horizontal overflow");
   return results;
 }

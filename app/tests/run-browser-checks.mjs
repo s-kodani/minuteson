@@ -92,6 +92,7 @@ const suites = [
   // Plain-body saving, generation and leaving are covered above instead.
   ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
   ["toast-dedup", "toast-browser-fixture.tsx", "toast-dedup-browser-check.js"],
+  ["minutes-prompt", "browser-fixture.js", "minutes-prompt-browser-check.js"],
   ["navigation-menu", null, "navigation-menu-browser-check.js"],
   ["row-menu-confirmation", "audio-deletion-browser-fixture.js", "row-menu-confirmation-browser-check.js"],
   ["row-menu-activation", "deletion-browser-fixture.js", "row-menu-activation-browser-check.js"],
