@@ -186,38 +186,31 @@ fn placement(
     )
 }
 #[test]
-fn manual_v1_record_keeps_legacy_serialized_bytes_hash_and_no_download_origin() {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Legacy<'a> {
-        schema_version: u32,
-        package_id: &'a str,
-        manifest: &'a PackageManifest,
-        source_manifest_hash: &'a str,
-        review_hash: &'a str,
-        files: &'a [FileReport],
-    }
+fn placement_records_use_one_current_shape_and_reject_old_versions() {
     let f = fixture();
-    let token = uuid::Uuid::new_v4().to_string();
-    let record = PlacementRecord::from_report(&token, &f.report);
-    let old = serde_json::to_vec(&Legacy {
-        schema_version: 1,
-        package_id: &token,
-        manifest: &f.report.manifest,
-        source_manifest_hash: &f.report.manifest_hash,
-        review_hash: &f.report.review_hash,
-        files: &f.report.files,
-    })
-    .unwrap();
-    let new = serde_json::to_vec(&record).unwrap();
-    assert_eq!(new, old);
-    assert_eq!(Sha256::digest(&new), Sha256::digest(&old));
-    assert!(record.download.is_none());
-    assert_eq!(record.source_type(), "manual_import");
-    let decoded: PlacementRecord = serde_json::from_slice(&old).unwrap();
-    decoded.validate().unwrap();
-    assert_eq!(decoded, record);
+    let record = PlacementRecord::from_report(&uuid::Uuid::new_v4().to_string(), &f.report);
+    record.validate().unwrap();
+    let value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["schemaVersion"], 3);
+    assert!(value.as_object().unwrap().contains_key("download"));
+    assert!(value["download"].is_null());
+    assert_eq!(
+        serde_json::from_value::<PlacementRecord>(value.clone()).unwrap(),
+        record
+    );
+    for version in [0, 1, 2, 4] {
+        let mut old = value.clone();
+        old["schemaVersion"] = serde_json::json!(version);
+        assert!(serde_json::from_value::<PlacementRecord>(old)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+    let mut missing = value;
+    missing.as_object_mut().unwrap().remove("download");
+    assert!(serde_json::from_value::<PlacementRecord>(missing).is_err());
 }
+
 #[test]
 fn verified_copy_is_separate_private_persistent_idempotent_and_not_ai_ready() {
     let f = fixture();

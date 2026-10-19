@@ -333,7 +333,7 @@ struct TrackStats: Encodable {
 }
 
 struct Manifest: Encodable {
-  var schemaVersion = 1
+  var schemaVersion = 4
   let scenario: String
   let captureMode: String
   let backend: String
@@ -366,7 +366,7 @@ struct Manifest: Encodable {
   var microphoneSelectionError: String? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
-    guard schemaVersion == 2,
+    guard schemaVersion == 4,
       let micStart = microphone.firstCaptureNanoseconds,
       let systemStart = system.firstCaptureNanoseconds
     else { throw ProbeError.capture("both capture clocks are required for schema 2") }
@@ -385,7 +385,7 @@ struct Manifest: Encodable {
       previous.windowStartNs == completed.windowStartNs,
       previous.windowEndNs == completed.windowEndNs
     else { throw ProbeError.capture("capture test completion does not match its starting window") }
-    guard schemaVersion == 2, completed.completed == true,
+    guard schemaVersion == 4, completed.completed == true,
       let micStart = microphone.firstCaptureNanoseconds
     else { throw ProbeError.capture("completed test and microphone capture clock are required") }
     captureTest = completed
@@ -406,7 +406,7 @@ struct Manifest: Encodable {
   mutating func finalizeStoppedClock(
     _ clock: CaptureClockDomain, microphoneClosure: CaptureClosure?, systemClosure: CaptureClosure?
   ) throws {
-    guard schemaVersion == 2, captureTest == nil,
+    guard schemaVersion == 4, captureTest == nil,
       let owner = recordingOwnerId, InputLevelReport.validOwner(owner),
       let micStart = microphone.firstCaptureNanoseconds,
       let microphoneClosure, let systemClosure
@@ -438,7 +438,7 @@ struct Manifest: Encodable {
     else { throw ProbeError.capture("saved PCM extends beyond its acquisition closure") }
     captureClock = metadata
     captureEnd = ending
-    schemaVersion = 3
+    schemaVersion = 4
   }
 
   func encodedData() throws -> Data {
@@ -449,10 +449,17 @@ struct Manifest: Encodable {
           && microphone.rawSegments?.lane == "microphone"
           && system.rawSegments?.ownerId == owner && system.rawSegments?.lane == "system"
       } ?? false
-    let extended = segmented && (2...3).contains(schemaVersion)
+    let extended = segmented && schemaVersion == 4
     let encoder = JSONEncoder()
     encoder.outputFormatting = extended ? [.sortedKeys] : [.prettyPrinted, .sortedKeys]
-    let data = try encoder.encode(self)
+    let original = try encoder.encode(self)
+    var object = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+    for key in ["captureClock", "captureEnd", "recordingOwnerId", "microphoneDeviceUID", "targetApplicationIdentity", "inputEventJournalError", "inputEventJournalPersistence", "microphoneSelectionError"] {
+      if object[key] == nil { object[key] = NSNull() }
+    }
+    object["systemAudioUnreceived"] = systemAudioUnreceived ?? false
+    object["inputDiagnosticsState"] = inputEventJournalError != nil ? "unavailable" : (inputEventJournalPersistence == nil ? "unconfirmed" : "reported")
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     let limit = extended ? 32 * 1024 * 1024 : 256 * 1024
     guard data.count <= limit else {
       throw ProbeError.capture("capture manifest exceeds the bounded reader capacity")
@@ -1918,7 +1925,7 @@ public enum CaptureCommand {
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil, rawSegments: rawSystem)
       var manifest = Manifest(
-        schemaVersion: clock == nil ? 1 : 2,
+        schemaVersion: 4,
         scenario: options.scenario,
         captureMode: options.mode,
         backend: options.backend,

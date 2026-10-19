@@ -82,7 +82,7 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
     let micClosure = try clock.close(.microphone)
     let pcClosure = try clock.close(.system)
     let original = Manifest(
-      schemaVersion: 2, scenario: "quiet-ordinary", captureMode: "system", backend: "coreaudio",
+      schemaVersion: 4, scenario: "quiet-ordinary", captureMode: "system", backend: "coreaudio",
       targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic", requestedDurationSeconds: nil,
       osVersion: "synthetic", architecture: "arm64", state: "saved", microphone: mic, system: pc,
       errors: [], recordingOwnerId: owner)
@@ -107,7 +107,7 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
     }
     var saved = original
     try saved.finalizeStoppedClock(clock, microphoneClosure: micClosure, systemClosure: pcClosure)
-    XCTAssertEqual(saved.schemaVersion, 3)
+    XCTAssertEqual(saved.schemaVersion, 4)
     XCTAssertEqual(saved.systemAudioUnreceived, true)
     XCTAssertEqual(saved.system.clockSegments?.count, 0)
     XCTAssertEqual(saved.microphone.clockSegments?.last?.timelineEndUs, 1_000_000)
@@ -127,7 +127,7 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
     var mic = TrackStats(callbackCount: 1, frames: 8000, sampleRate: 8000, channels: 2)
     mic.recordSavedClock(.timestamp(1_000_000_000), frames: 8000, sourceFrame: 0)
     let original = Manifest(
-      schemaVersion: 2, scenario: "synthetic-unreceived-test", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-unreceived-test", captureMode: "system",
       backend: "coreaudio", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
       requestedDurationSeconds: 5, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: mic, system: TrackStats(), errors: [], captureTest: starting)

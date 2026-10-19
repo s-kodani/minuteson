@@ -60,7 +60,7 @@ fn audit(storage: &Storage, operation: &str) -> String {
     let raw: serde_json::Value =
         serde_json::from_str(&synthetic_audio_operation_record(storage, operation)).unwrap();
     let progress: serde_json::Value = serde_json::from_str(raw[8].as_str().unwrap()).unwrap();
-    assert_eq!(progress["version"], 3);
+    assert_eq!(progress["version"], 4);
     assert_eq!(progress["confirmation"]["generation"], 1);
     progress["confirmation"]["operationId"]
         .as_str()

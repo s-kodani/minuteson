@@ -453,7 +453,7 @@ fn model_deletion_consent_cold_keep_requires_restart_before_deferred_recovery() 
         let meeting: String = db
             .query_row("SELECT id FROM meetings LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
+        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
     });
     assert!(f.storage.data_write_blocked());
     let state = || {
@@ -584,7 +584,7 @@ fn model_deletion_consent_rejects_running_sql_work_but_allows_stale_partial_pack
     let meeting: String = db
         .query_row("SELECT id FROM meetings LIMIT 1", [], |r| r.get(0))
         .unwrap();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active',?1,'transcription','running','active',?2,'{}','{}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active',?1,'transcription','running','active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
     drop(db);
     let p = f.preview().unwrap();
     assert!(consent(

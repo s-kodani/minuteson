@@ -268,7 +268,7 @@ impl Record {
 }
 pub(in crate::storage::deletion::models) fn audit_source(json: &str) -> Result<String, String> {
     let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2)
+    if record.version != 3
         || record.subtype != "modelDeletionReconfirmation"
         || record.encode()? != json
         || !uuid::Uuid::parse_str(&record.source_operation)
@@ -338,7 +338,7 @@ fn read_record(
         return Err("モデル再同意の固定記録を検証できません".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2)
+    if record.version != 3
         || record.subtype != "modelDeletionReconfirmation"
         || record.source_operation != saved.header.operation_id
         || record.source_hash != source_hash(saved)?
@@ -400,7 +400,6 @@ fn read_record(
     }
     let plan: Plan = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if serde_json::to_vec(&plan).map_err(|e| e.to_string())? != bytes
-        || (record.version == 2) != plan.current_root.is_some()
         || plan.observations.iter().any(|o| !o.entry.present)
         || (!record.include_unregistered && plan.observations.iter().any(|o| !o.entry.registered))
     {
@@ -442,7 +441,6 @@ pub(super) fn active_plan(
         record.previous_progress.validate(saved, &plan)?;
         if (next.current_root != plan.current_root
             && (next.current_root.is_none() || record.previous_progress.phase != Phase::Completed))
-            || (record.version == 1 && next.current_root.is_some())
         {
             return Err(
                 "モデル再同意の保存先変更は完了済み範囲からの新しい同意に限定します".into(),
@@ -615,11 +613,7 @@ fn accept_inner(
         return Err("モデル再同意の対象証拠が容量上限を超えています".into());
     }
     let record = Record {
-        version: if review.plan.current_root.is_some() {
-            2
-        } else {
-            1
-        },
+        version: 3,
         subtype: "modelDeletionReconfirmation".into(),
         source_operation: old.saved.header.operation_id.clone(),
         source_hash: source_hash(&old.saved)?,
@@ -636,7 +630,7 @@ fn accept_inner(
         generation,
     };
     let next = Progress {
-        version: 3,
+        version: 4,
         phase: Phase::Removing,
         census_hash: old.saved.header.census_hash.clone(),
         next: 0,

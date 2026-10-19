@@ -363,7 +363,7 @@ fn saved_fixture() -> (files::TestDirectory, Request, serde_json::Value) {
     let directory = files::TestDirectory::new().unwrap();
     let request = request();
     let manifest = serde_json::json!({
-        "schemaVersion":2,"captureMode":"system","backend":"coreaudio",
+        "schemaVersion":4,"captureMode":"system","backend":"coreaudio",
         "targetPIDs":[],"microphoneDeviceUID":request.microphone_uid,
         "targetApplicationIdentity":null,"state":"saved","errors":[],
         "captureTest":{"ownerId":request.run_id,"durationSeconds":5,

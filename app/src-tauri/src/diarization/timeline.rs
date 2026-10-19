@@ -97,6 +97,17 @@ impl Timeline {
         })
     }
 
+    pub(crate) fn attribute_with_policy(
+        &self,
+        start: i64,
+        end: i64,
+        all: bool,
+    ) -> Result<Attribution, String> {
+        Ok(match self.attribute(start, end)? {
+            Attribution::NeedsSplit { speakers, .. } if all => Attribution::Overlap { speakers },
+            result => result,
+        })
+    }
     pub(crate) fn attribute(&self, start_us: i64, end_us: i64) -> Result<Attribution, String> {
         if start_us < 0 || end_us <= start_us || end_us > self.duration_us {
             return Err("発言と話者区間の照合範囲が不正です".into());
@@ -144,6 +155,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn all_detected_includes_sequential_and_mixed_turns_but_not_touching_boundaries() {
+        let t = Timeline::build(
+            &[
+                segment(0, 400, 0),
+                segment(200, 500, 1),
+                segment(500, 900, 2),
+            ],
+            1000,
+        )
+        .unwrap();
+        assert_eq!(
+            t.attribute_with_policy(100, 800, true).unwrap(),
+            Attribution::Overlap {
+                speakers: vec![0, 1, 2]
+            }
+        );
+        assert_eq!(
+            t.attribute_with_policy(500, 900, true).unwrap(),
+            Attribution::Assigned { speaker: 2 }
+        );
+        assert_eq!(
+            t.attribute_with_policy(900, 1000, true).unwrap(),
+            Attribution::Unknown
+        );
+        assert!(matches!(
+            t.attribute_with_policy(100, 800, false).unwrap(),
+            Attribution::NeedsSplit { .. }
+        ));
+    }
     #[test]
     fn touching_turns_are_not_overlap_and_text_boundary_is_not_guessed() {
         let timeline =

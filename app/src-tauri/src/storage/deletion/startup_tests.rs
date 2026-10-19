@@ -221,7 +221,7 @@ fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_
             );
             db.execute_batch(&format!("DROP TABLE {table};")).unwrap();
         }
-        db.execute("DELETE FROM schema_migrations WHERE version=32", [])
+        db.execute("DELETE FROM schema_migrations WHERE version>=32", [])
             .unwrap();
         crate::storage::edit_recovery::remove_schema_for_test(&db);
     }
@@ -297,7 +297,7 @@ fn deletion_startup_canonical_file_completion_keeps_existing_pending_fence_witho
     let second_root = f.storage().root().join(format!("meetings/{second}"));
     std::fs::create_dir_all(&second_root).unwrap();
     std::fs::write(second_root.join("late"), b"SECOND UNKNOWN").unwrap();
-    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
+    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
     f.reappear(true);
     f.cold();
     let controller = AnalysisController::default();
@@ -428,7 +428,7 @@ fn deletion_startup_canonical_file_completion_keeps_existing_pending_fence_witho
 fn deletion_startup_clean_completed_history_and_unrelated_stale_jobs_allow_ordinary_recovery() {
     let mut f = Fixture::new();
     let before = evidence(f.storage());
-    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
+    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
     f.cold();
     assert!(!f.storage().data_write_blocked());
     assert!(operations::listing(f.storage()).unwrap().items.is_empty());
@@ -926,7 +926,7 @@ fn deletion_startup_attention_schema_does_not_admit_shadow_tables_or_same_name_s
 fn deletion_startup_reappearance_defers_mutable_recovery_and_never_relabels_unrelated_running_jobs()
 {
     let mut f = Fixture::new();
-    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
+    f.storage().connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
     f.reappear(true);
     f.cold();
     assert_eq!(

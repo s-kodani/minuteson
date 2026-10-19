@@ -42,14 +42,14 @@ fn historical_model_metadata_keeps_names_roles_and_distinct_hashes_without_claim
     save(&mut db, &refs);
     save(&mut db, &[refs[0].clone(), refs[0].clone()]);
     assert_eq!(
-        historical(&db)
+        retained_files(&db)
             .unwrap()
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>(),
         refs.into_iter().collect()
     );
     assert_eq!(
-        db.query_row("SELECT count(*) FROM model_packages", [], |r| r
+        db.query_row("SELECT count(*) FROM model_reference_files", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
         4
@@ -89,7 +89,7 @@ fn historical_model_metadata_requires_transaction_and_rollback_retains_no_partia
     })
     .unwrap();
     tx.rollback().unwrap();
-    assert!(historical(&db).unwrap().is_empty());
+    assert!(retained_files(&db).unwrap().is_empty());
     let tx = db.transaction().unwrap();
     let calls = std::cell::Cell::new(0);
     assert!(retain(
@@ -97,38 +97,36 @@ fn historical_model_metadata_requires_transaction_and_rollback_retains_no_partia
         &refs,
         &|| {
             calls.set(calls.get() + 1);
-            calls.get() > 3
+            calls.get() > 1
         },
         &|_| Ok(true)
     )
     .is_err());
     tx.rollback().unwrap();
-    assert!(historical(&db).unwrap().is_empty());
+    assert!(retained_files(&db).unwrap().is_empty());
 }
 #[test]
 fn historical_model_metadata_cannot_promote_availability_or_mutate_fingerprint() {
     let mut db = db();
     save(&mut db, &[reference("model.bin", 'a', "model")]);
     for sql in [
-        "UPDATE model_packages SET state='ready'",
-        "UPDATE model_packages SET model_name='other'",
-        "UPDATE model_files SET state='ready'",
-        "UPDATE model_files SET actual_hash=replace(actual_hash,'a','b')",
+        "UPDATE model_reference_files SET metadata_json='{}'",
+        "UPDATE model_reference_files SET metadata_hash=printf('%064d',0)",
+        "DELETE FROM model_reference_files",
     ] {
         assert!(db.execute_batch(sql).is_err());
     }
     assert_eq!(
-        historical(&db).unwrap(),
+        retained_files(&db).unwrap(),
         vec![reference("model.bin", 'a', "model")]
     );
 }
 #[test]
 fn historical_model_metadata_rejects_corrupt_or_missing_records_before_name_reuse() {
     for sql in [
-        "UPDATE model_packages SET manifest_hash=replace(manifest_hash,'a','b')",
-        "UPDATE model_files SET actual_hash=replace(actual_hash,'a','b')",
-        "UPDATE model_packages SET engine='guessed'",
-        "DELETE FROM model_files",
+        "UPDATE model_reference_files SET metadata_hash=printf('%064d',0)",
+        "UPDATE model_reference_files SET metadata_json='{}'",
+        "UPDATE model_reference_files SET metadata_json=replace(metadata_json,'model.bin','other.bin')",
     ] {
         let mut db = db();
         save(&mut db, &[reference("model.bin", 'a', "model")]);
@@ -144,7 +142,7 @@ fn historical_model_metadata_rejects_corrupt_or_missing_records_before_name_reus
             sql
         };
         db.execute_batch(sql).unwrap();
-        assert!(historical(&db).is_err(), "accepted {sql}");
+        assert!(retained_files(&db).is_err(), "accepted {sql}");
     }
 }
 #[test]
@@ -164,7 +162,7 @@ fn historical_model_metadata_current_reopen_preserves_existing_data_and_empty_hi
         verify_migration_history(&storage.connection.lock().unwrap()).unwrap(),
         MIGRATIONS.len()
     );
-    assert!(historical(&storage.connection.lock().unwrap())
+    assert!(retained_files(&storage.connection.lock().unwrap())
         .unwrap()
         .is_empty());
 }

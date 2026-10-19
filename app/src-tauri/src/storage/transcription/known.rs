@@ -39,15 +39,6 @@ impl KnownInput {
         }
         Ok(())
     }
-
-    pub(crate) fn needed(&self, source: &RecordedAudioPlan) -> bool {
-        self.runs.len() != source.tracks.len()
-            || self
-                .runs
-                .iter()
-                .zip(&source.tracks)
-                .any(|(run, track)| run.start_us != track.start_us || run.end_us != track.end_us)
-    }
 }
 
 fn covers(gaps: &[&Gap], start: i64, end: i64) -> bool {
@@ -314,13 +305,6 @@ impl Storage {
         let tx = db.transaction().map_err(|e| e.to_string())?;
         let source = read_analysis_audio_plan(&tx, meeting, None)?;
         let known = read(&tx, meeting, &source)?;
-        let needed = known.needed(&source);
-        // Keep the immutable JSON shape and admission of legacy continuous jobs.
-        if !needed {
-            for track in &source.tracks {
-                track.total_frames()?;
-            }
-        }
-        Ok((source, needed.then_some(known)))
+        Ok((source, Some(known)))
     }
 }

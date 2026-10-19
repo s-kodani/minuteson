@@ -27,19 +27,6 @@ pub(super) struct Plan {
     pub nodes: Vec<Node>,
 }
 
-fn timestamp(value: i64) -> Result<String, String> {
-    if value < 0 {
-        return Err("議事録入力の時刻が不正です".into());
-    }
-    let seconds = value / 1_000_000;
-    Ok(format!(
-        "{:02}:{:02}:{:02}.{:06}",
-        seconds / 3600,
-        seconds / 60 % 60,
-        seconds % 60,
-        value % 1_000_000
-    ))
-}
 fn interval(start: i64, end: i64, version: PromptVersion) -> Result<(String, String), String> {
     if start < 0 || end <= start {
         return Err("議事録入力の再生区間が不正です".into());
@@ -59,7 +46,7 @@ fn interval(start: i64, end: i64, version: PromptVersion) -> Result<(String, Str
             seconds(end / 1_000_000 + i64::from(end % 1_000_000 != 0)),
         ))
     } else {
-        Ok((timestamp(start)?, timestamp(end)?))
+        unreachable!("current prompts always use compact intervals")
     }
 }
 // Validate against the fixed prompt revision, never against generated drafts.
@@ -81,7 +68,7 @@ pub(super) fn audio_links_with_version(
 
 #[cfg(test)]
 pub(super) fn extract_prompt(input: &MinutesInput, slices: &[Slice]) -> Result<String, String> {
-    extract_prompt_with_version(input, slices, PromptVersion::Legacy)
+    extract_prompt_with_version(input, slices, PromptVersion::CustomPromptsV5)
 }
 pub(super) fn extract_prompt_with_version(
     input: &MinutesInput,
@@ -92,9 +79,9 @@ pub(super) fn extract_prompt_with_version(
         let utterance=input.analysis.utterances.get(s.utterance_index).ok_or("生成区間の発言がありません")?;
         let text=utterance.effective_text.get(s.first_byte..s.end_byte).filter(|s|!s.is_empty()).ok_or("生成区間のUTF-8境界が不正です")?;
         let names:Vec<_>=utterance.speaker_ids.iter().map(|id|input.analysis.speakers.iter().find(|s|&s.id==id).map(|s|s.display_name.as_deref().unwrap_or(&s.label)).unwrap_or("話者不明")).collect();
-        let (start,end)=if version.is_legacy() { (timestamp(utterance.start_us)?,timestamp(utterance.end_us)?) } else { interval(utterance.start_us,utterance.end_us,version)? };
+        let (start,end)=interval(utterance.start_us,utterance.end_us,version)?;
         let mut value=json!({"start":start,"end":end,"speakers":names,"text":text,"partial":s.first_byte!=0||s.end_byte!=utterance.effective_text.len()});
-        if !version.is_legacy() {
+        {
             if utterance.end_us <= utterance.start_us {
                 return Err("議事録入力の再生区間が不正です".into());
             }
@@ -110,11 +97,66 @@ pub(super) fn extract_prompt_with_version(
     serde_json::to_string(&json!({"meetingTitle":input.meeting_title,"startedAtUtcMs":input.meeting_started_at_utc_ms,"utterances":utterances})).map_err(|e|e.to_string())
 }
 pub(super) fn fits(system: &str, prompt: &str, limit: usize) -> bool {
+    if let Some(result) = super::optimization::fits(system, prompt) {
+        return result;
+    }
     system
         .len()
         .saturating_add(prompt.len())
         .saturating_add(256)
         <= limit
+}
+
+fn task_fits(system: &str, prompt: &str, limit: usize, version: PromptVersion) -> bool {
+    if super::optimization::packing() {
+        fits(
+            &super::markdown_job::task_system(system, version),
+            prompt,
+            limit,
+        )
+    } else {
+        fits(system, prompt, limit)
+    }
+}
+pub(super) fn validate_coverage(input: &MinutesInput, plan: &Plan) -> Result<(), String> {
+    if plan.nodes.is_empty() || plan.nodes.len() > MAX_UNITS {
+        return Err("トークン分割の工程数が不正です".into());
+    }
+    let mut groups = Vec::new();
+    let mut actual = Vec::new();
+    for n in &plan.nodes {
+        if let Node::Extract { slices } = n {
+            if slices.is_empty() {
+                return Err("空の抽出区間です".into());
+            }
+            groups.push(slices.clone());
+            actual.extend(slices.iter());
+        }
+    }
+    let mut next = 0;
+    for (i, u) in input.analysis.utterances.iter().enumerate() {
+        if u.effective_text.trim().is_empty() {
+            continue;
+        }
+        let mut byte = 0;
+        while byte < u.effective_text.len() {
+            let s = actual.get(next).ok_or("抽出区間が不足しています")?;
+            if s.utterance_index != i
+                || s.first_byte != byte
+                || s.end_byte <= byte
+                || s.end_byte > u.effective_text.len()
+                || !u.effective_text.is_char_boundary(s.end_byte)
+            {
+                return Err("抽出区間に欠損・重複・不正な境界があります".into());
+            }
+            byte = s.end_byte;
+            next += 1;
+        }
+    }
+    if next != actual.len() || finish(groups)? != *plan {
+        return Err("抽出・統合の順序が不正です".into());
+    }
+    Ok(())
 }
 
 // Returns an exact UTF-8 prefix. The caller must subsequently process all of
@@ -143,7 +185,7 @@ fn prefix(
 }
 #[cfg(test)]
 pub(super) fn build(input: &MinutesInput, limit: usize) -> Result<Plan, String> {
-    build_with_version(input, limit, PromptVersion::Legacy)
+    build_with_version(input, limit, PromptVersion::CustomPromptsV5)
 }
 pub(super) fn build_with_version(
     input: &MinutesInput,
@@ -175,11 +217,12 @@ pub(super) fn build_with_system(
                 end_byte: utterance.effective_text.len(),
             };
             current.push(slice.clone());
-            if current.len() <= 100
-                && fits(
+            if (super::optimization::packing() || current.len() <= 100)
+                && task_fits(
                     system,
                     &extract_prompt_with_version(input, &current, version)?,
                     limit,
+                    version,
                 )
             {
                 first = slice.end_byte;
@@ -194,7 +237,7 @@ pub(super) fn build_with_system(
                 continue;
             }
             let count = prefix(&utterance.effective_text[first..], |text| {
-                Ok(fits(
+                Ok(task_fits(
                     system,
                     &extract_prompt_with_version(
                         input,
@@ -205,6 +248,7 @@ pub(super) fn build_with_system(
                         version,
                     )?,
                     limit,
+                    version,
                 ))
             })?;
             groups.push(vec![Slice {
@@ -228,6 +272,9 @@ pub(super) fn build_with_system(
     if groups.len() > MAX_UNITS / 2 {
         return Err("議事録の分割数が上限を超えています".into());
     }
+    finish(groups)
+}
+fn finish(groups: Vec<Vec<Slice>>) -> Result<Plan, String> {
     let mut nodes: Vec<_> = groups
         .into_iter()
         .map(|slices| Node::Extract { slices })
@@ -271,7 +318,7 @@ impl Batch {
     ) -> Result<Self, String> {
         let mut next = self.clone();
         next.parts.push(text[first..end].to_owned());
-        if !version.is_legacy() {
+        {
             for link in markdown::format::fragment_links(text, first, end)? {
                 if !next.source_links.contains(&link) {
                     next.source_links.push(link);
@@ -305,7 +352,7 @@ pub(super) struct Cursor {
 impl Cursor {
     #[cfg(test)]
     pub(super) fn new(parts: Vec<String>, limit: usize) -> Result<Self, String> {
-        Self::with_version(parts, limit, PromptVersion::Legacy)
+        Self::with_version(parts, limit, PromptVersion::CustomPromptsV5)
     }
     pub(super) fn with_version(
         parts: Vec<String>,
@@ -345,7 +392,7 @@ impl Cursor {
             let mut first = 0;
             while first < part.len() {
                 let candidate = current.with_fragment(&part, first, part.len(), version)?;
-                if fits(system, &candidate.prompt()?, limit) {
+                if task_fits(system, &candidate.prompt()?, limit, version) {
                     current = candidate;
                     first = part.len();
                     continue;
@@ -356,7 +403,7 @@ impl Cursor {
                     let count = prefix(&part[first..], |text| {
                         let candidate =
                             current.with_fragment(&part, first, first + text.len(), version)?;
-                        Ok(fits(system, &candidate.prompt()?, limit))
+                        Ok(task_fits(system, &candidate.prompt()?, limit, version))
                     })?;
                     batches.push(current.with_fragment(&part, first, first + count, version)?);
                     first += count;

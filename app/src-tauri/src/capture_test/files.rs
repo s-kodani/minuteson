@@ -331,7 +331,7 @@ impl Manifest {
         if self.state != "failed" {
             return Ok(None);
         }
-        if self.schema_version != 2
+        if u32::from(self.schema_version) != crate::current_formats::CAPTURE
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
@@ -376,7 +376,7 @@ impl Manifest {
     }
 
     pub(super) fn require_owner(&self, request: &super::Request) -> Result<(), String> {
-        if self.schema_version != 2
+        if u32::from(self.schema_version) != crate::current_formats::CAPTURE
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode

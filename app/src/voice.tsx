@@ -10,6 +10,8 @@ import {voiceMatchLabel,voiceStartRequest,voiceWindowKey,initialVoiceSelection,t
 import type {Speaker} from "./transcript-state";
 import type {AnalysisJob} from "./analysis-state";
 import "./voice.css";
+import {OperationProgressBar} from "./operation-progress";
+import {jobProgress} from "./operation-progress-state";
 
 type VoiceJob=AnalysisJob&{operationId:string};
 export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,onChanged,onPlay}:{meetingId:string;speakers:Speaker[];revision:string;locked:boolean;beforeOperation:()=>Promise<void>;onChanged:()=>Promise<void>;onPlay:(window:VoiceWindow)=>Promise<void>}){
@@ -29,7 +31,7 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
       const [next,all]=await Promise.all([invoke<VoiceContext>("get_voice_context",{meetingId}),invoke<VoiceJob[]>("get_analysis_jobs",{meetingId})]);
       if(active.current&&sequence===refreshSequence.current){
         if(!pending.current)setContext(next);
-        setJobs(all.filter(j=>j.kind==="voice_registration"||j.kind==="voice_matching"));
+        setJobs(all.filter(j=>j.kind==="voice_registration"||j.kind==="voice_matching"||j.kind==="speaker_completion"));
         const valid=new Set((next.registrationCandidates??[]).filter(w=>w.speakerId===enrollingRef.current).map(voiceWindowKey));
         if(!pending.current&&enrollingRef.current&&selection.current.some(key=>!valid.has(key))){setSelected(keys=>keys.filter(key=>valid.has(key)));setNeedsReview(true);setPage(0);}
       }
@@ -43,7 +45,7 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
   useEffect(()=>{
     if(!open||!isTauri())return;
     let stopped=false,timer:ReturnType<typeof setTimeout>;
-    const poll=async()=>{try{const all=await invoke<VoiceJob[]>("get_analysis_jobs",{meetingId});if(!stopped)setJobs(all.filter(j=>j.kind==="voice_registration"||j.kind==="voice_matching"));}catch(cause){if(!stopped)setError(String(cause));}if(!stopped)timer=setTimeout(()=>void poll(),1500);};
+    const poll=async()=>{try{const all=await invoke<VoiceJob[]>("get_analysis_jobs",{meetingId});if(!stopped)setJobs(all.filter(j=>j.kind==="voice_registration"||j.kind==="voice_matching"||j.kind==="speaker_completion"));}catch(cause){if(!stopped)setError(String(cause));}if(!stopped)timer=setTimeout(()=>void poll(),1500);};
     void poll();return()=>{stopped=true;clearTimeout(timer);};
   },[open,meetingId]);
   useEffect(()=>{
@@ -96,7 +98,8 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
           </div>;
         })}
       </>}
-      {jobs.filter(job=>job.state!=="succeeded").slice(0,8).map(job=><div className="voice-job" key={job.id}><span>{job.kind==="voice_registration"?"声の登録":"声の照合"}：{({queued:"待機中",running:"処理中",pausing:"停止中",paused:"一時停止",interrupted:"中断",succeeded:"完了",failed:"失敗",cancelled:"取消済み"} as Record<string,string>)[job.state]??job.state}</span>
+      {jobs.filter(job=>job.state!=="succeeded").slice(0,8).map(job=><div className="voice-job" key={job.id}><span>{job.kind==="speaker_completion"?"話者補完":job.kind==="voice_registration"?"声の登録":"声の照合"}：{({queued:"待機中",running:"処理中",pausing:"停止中",paused:"一時停止",interrupted:"中断",succeeded:"完了",failed:"失敗",cancelled:"取消済み"} as Record<string,string>)[job.state]??job.state}</span>
+        {job.kind==="speaker_completion"&&jobProgress(job, "", meetingId)&&<OperationProgressBar progress={jobProgress(job, "", meetingId)!}/>}
         {["queued","running","paused","interrupted"].includes(job.state)&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(async()=>{await invoke("cancel_analysis_job",{jobId:job.id});await refresh();})}>取り消す</button>}
         {["paused","interrupted"].includes(job.state)&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(async()=>{await invoke("resume_analysis_job",{jobId:job.id});await refresh();})}>再開</button>}
         {["failed","cancelled"].includes(job.state)&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(async()=>{await beforeOperation();await invoke("retry_voice_job",{jobId:job.id,operationId:crypto.randomUUID()});await refresh();})}>同じ条件で再試行</button>}

@@ -6,7 +6,7 @@ const base:Analysis={id:"base",meetingId:"m",contentHash:"h",speakers:["a","b","
   {id:"u",startUs:0,endUs:10,recognizedText:"原文",effectiveText:"原文",attributionState:"overlap",speakerIds:["a","b"]},
   {id:"v",startUs:10,endUs:20,recognizedText:"未確認",effectiveText:"未確認",attributionState:"unknown",speakerIds:[]},
 ]};
-const empty=():DraftPayload=>({schema_version:1,speaker_names:[],utterances:[]});
+const empty=():DraftPayload=>({schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_names:[],utterances:[]});
 const manual="manual:eb3f25d0-b461-4623-86cc-649a0a3a150a";
 const children:[string,string]=["split:97869d35-27c6-405b-89b2-31b759ef5e66","split:5a81a30b-b6e2-420a-a3b0-94851a97c03d"];
 test("projection preserves stored order without splits and uses native track tie breaking with splits",()=>{
@@ -20,7 +20,7 @@ test("split preserves every grapheme, times, source original, explicit assignmen
   const b=structuredClone(base);b.utterances[0].effectiveText="はい👨‍👩‍👧‍👦。いいえ。";
   const before=structuredClone(b),p=splitUtterance(b,empty(),"u",5,4,children,[["a"],[]]);
   const view=projectTranscript(b,p),parts=view.utterances.filter(u=>u.sourceUtteranceId==="u");
-  assert.deepEqual(b,before);assert.equal(p.schema_version,3);
+  assert.deepEqual(b,before);assert.equal(p.schema_version,4);
   assert.equal(parts.map(u=>u.effectiveText).join(""),b.utterances[0].effectiveText);
   assert.equal(parts[0].effectiveText,"はい👨‍👩‍👧‍👦。");
   assert.deepEqual(parts.map(u=>[u.startUs,u.endUs]),[[0,5],[5,10]]);
@@ -35,8 +35,8 @@ test("splitting an edited child flattens the same base operation without losing 
   assert.equal(next.utterance_splits?.[0].source_effective_text,"原後半の編集");
   assert.equal(next.utterance_splits?.[0].parts[0].id,children[0]);
   assert.deepEqual(projectTranscript(base,next).utterances.filter(u=>u.sourceUtteranceId).map(u=>u.speakerIds),[["a","b"],["c"],["c"]]);
-  assert.equal(mergeSpeaker(base,next,"b","a").schema_version,3);
-  assert.equal(addSpeaker(base,next,manual,"新しい話者").schema_version,3);
+  assert.equal(mergeSpeaker(base,next,"b","a").schema_version,4);
+  assert.equal(addSpeaker(base,next,manual,"新しい話者").schema_version,4);
 });
 test("split rejects endpoints, duplicate IDs, empty portions and unknown assignments",()=>{
   for(const at of [0,10,5.5,NaN])assert.throws(()=>splitUtterance(base,empty(),"u",at,1,children));
@@ -57,7 +57,7 @@ test("search and speaker filter combine over all effective split portions",()=>{
   assert.equal(filterUtterances(view,"a","未確認").length,0);
   assert.equal(filterUtterances(view,""," 文 ").length,1);
 });
-test("v1 serialization remains exact and optional empty arrays omitted",()=>{
+test("current serialization includes explicit empty arrays",()=>{
   assert.equal(JSON.stringify(canonicalPayload({...empty(),manual_speakers:[],speaker_merges:[]})),JSON.stringify(empty()));
 });
 test("merge keeps text time originals and deduplicates overlap; unknown stays unknown",()=>{
@@ -77,9 +77,9 @@ test("successive merges flatten provenance and reject hidden/cyclic targets",()=
 test("new speaker assignment replaces only chosen effective assignments and keeps edits",()=>{
   const p=empty();p.utterances.push({utterance_id:"u",effective_text:"修正済み",speaker_ids:["a","b"]});
   const added=addSpeaker(base,p,manual,"田中","u"),view=projectTranscript(base,added);
-  assert.equal(added.schema_version,2); assert.equal(view.speakers[3].displayName,"田中");
+  assert.equal(added.schema_version,4); assert.equal(view.speakers[3].displayName,"田中");
   assert.deepEqual(view.utterances[0].speakerIds,[manual]); assert.equal(view.utterances[0].effectiveText,"修正済み");
-  assert.deepEqual(view.utterances[1],base.utterances[1]); assert.equal(p.schema_version,1);
+  assert.deepEqual(view.utterances[1],base.utterances[1]); assert.equal(p.schema_version,4);
   assert.throws(()=>addSpeaker(base,p,manual,"田中","bad"));
   assert.throws(()=>addSpeaker(base,added,manual,"重複"));
 });
@@ -90,4 +90,15 @@ test("bulk assignments cover all selected pages and preserve every text",()=>{
   assert.deepEqual(projectTranscript(base,changed).utterances.map(u=>u.effectiveText),["原文","未確認"]);
   assert.deepEqual(projectTranscript(base,assignSpeakers(base,changed,["u"],[])).utterances[0].speakerIds,[]);
   assert.throws(()=>assignSpeakers(base,p,["bad"],[])); assert.throws(()=>assignSpeakers(base,p,["u"],["foreign"]));
+});
+
+test('identification evidence follows its original assignment and window, preserving text-only edits',()=>{
+  const b=structuredClone(base);b.utterances[0].speakerIds=['a'];b.utterances[0].attributionState='assigned';
+  b.utterances[0].speakerIdentification={similarityMilli:530,runnerUpMilli:200,needsReview:true,reason:'nearest_below_threshold'};
+  const text=empty();text.utterances=[{utterance_id:'u',effective_text:'本文の修正',speaker_ids:['a']}];
+  assert.deepEqual(projectTranscript(b,text).utterances[0].speakerIdentification,b.utterances[0].speakerIdentification);
+  text.utterances[0].speaker_ids=['b'];assert.equal(projectTranscript(b,text).utterances[0].speakerIdentification,undefined);
+  text.utterances[0].speaker_ids=[];assert.equal(projectTranscript(b,text).utterances[0].speakerIdentification,undefined);
+  const split=splitUtterance(b,empty(),'u',5,1,children,[['a'],['a']]);
+  assert.ok(projectTranscript(b,split).utterances.filter(u=>u.sourceUtteranceId).every(u=>!u.speakerIdentification));
 });

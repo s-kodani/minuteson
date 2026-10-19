@@ -121,12 +121,13 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
     let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
     let mut versions = (0..MIGRATIONS.len())
         .chain([MIGRATIONS.len() + 1])
-        .map(|schema| (2, schema))
+        .map(|schema| (4, schema))
         .collect::<Vec<_>>();
     versions.extend([
         (1, MIGRATIONS.len()),
         (0, MIGRATIONS.len()),
-        (4, MIGRATIONS.len()),
+        (3, MIGRATIONS.len()),
+        (5, MIGRATIONS.len()),
     ]);
     for (format, schema) in versions {
         let mut manifest = source.manifest.clone();
@@ -316,7 +317,7 @@ fn registered_recreatable_pcm_is_omitted_but_durable_source_wav_is_kept() {
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: json!({}),
-            parameters: json!({}),
+            parameters: json!({"schemaVersion":4}),
             total_units: Some(1),
         })
         .unwrap();
@@ -377,7 +378,7 @@ fn native_logs_are_omitted_without_dropping_prompts_or_reusing_the_pcm_reason() 
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: json!({}),
-            parameters: json!({}),
+            parameters: json!({"schemaVersion":4}),
             total_units: Some(1),
         })
         .unwrap();
@@ -448,7 +449,7 @@ fn native_completion_marker_is_canonicalized_without_repairing_invalid_output_or
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: json!({}),
-            parameters: json!({}),
+            parameters: json!({"schemaVersion":4}),
             total_units: Some(1),
         })
         .unwrap();
@@ -501,7 +502,7 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
     let relative = format!("meetings/{}/audio/manifest.json", meeting.id);
     let manifest_path = storage.root.join(&relative);
     let application_identity = json!({"pid":777,"bundleIdentifier":"com.example.private-app","launchTimeUs":1791100000000001_i64});
-    std::fs::write(&manifest_path,serde_json::to_vec(&json!({"schemaVersion":1,"captureMode":"application","backend":"screencapturekit","targetPID":777,"targetPIDs":[777],"targetApplicationName":"Meeting App","targetApplicationIdentity":application_identity,"microphoneDeviceUID":"private-device-123","state":"saved","microphone":{"frames":48000,"sampleRate":48000,"channels":1,"appendFailures":0},"system":{"frames":48000,"sampleRate":48000,"channels":2,"appendFailures":0},"errors":["file error /Users/source-machine/recording"],"power":{"assertionId":123}})).unwrap()).unwrap();
+    std::fs::write(&manifest_path,serde_json::to_vec(&json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","recordingOwnerId":Uuid::new_v4().to_string(),"captureMode":"application","backend":"screencapturekit","targetPID":777,"targetPIDs":[777],"targetApplicationName":"Meeting App","targetApplicationIdentity":application_identity,"microphoneDeviceUID":"private-device-123","state":"saved","microphone":{"frames":48000,"sampleRate":48000,"channels":1,"appendFailures":0},"system":{"frames":48000,"sampleRate":48000,"channels":2,"appendFailures":0},"errors":["file error /Users/source-machine/recording"],"power":{"assertionId":123}})).unwrap()).unwrap();
     let asset = storage
         .register_ready_meeting_asset(&meeting.id, Path::new(&relative), "application/json")
         .unwrap();
@@ -575,6 +576,7 @@ fn capture_journal_diagnostics_survive_verified_backup_additive_restore_and_reba
         json!({"requestedRevision":3,"committedRevision":3,"state":"confirmed","closed":true});
     manifest["recordingOwnerId"] = json!(owner);
     manifest["inputEventJournalPersistence"] = persistence.clone();
+    manifest["inputDiagnosticsState"] = json!("unconfirmed");
     // A timeout followed by a confirmed snapshot is still unconfirmed at stop.
     manifest["inputEventJournalError"] = json!("sync timed out: /Users/source/private/recording");
     let original = serde_json::to_vec(&manifest).unwrap();

@@ -303,7 +303,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(values[1][frame], -expected)
     }
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-clock-recovery", captureMode: "application",
+      schemaVersion: 4, scenario: "synthetic-clock-recovery", captureMode: "application",
       backend: "screencapturekit", targetPID: identity.pid, targetPIDs: [identity.pid],
       startedAtUTC: "2023-11-14T22:13:20Z", requestedDurationSeconds: nil,
       osVersion: "synthetic", architecture: "arm64", state: "saved",
@@ -584,7 +584,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       ProcessInfo.processInfo.environment["MON_CAPTURE_END_FIXTURE_OWNER"]
       ?? "539640c5-f04c-4d91-96f2-36e37008fe1d"
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-acquisition-end", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-acquisition-end", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
       requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: mic, system: system, errors: [], recordingOwnerId: owner)
@@ -598,7 +598,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
         try rejected.finalizeStoppedClock(
           clock, microphoneClosure: micClosure, systemClosure: pcClosure))
       XCTAssertNil(rejected.captureEnd)
-      XCTAssertEqual(rejected.schemaVersion, 2)
+      XCTAssertEqual(rejected.schemaVersion, 4)
     }
     for (micProof, systemProof) in [(nil, pcClosure), (micClosure, nil), (pcClosure, micClosure)]
       as [(CaptureClosure?, CaptureClosure?)]
@@ -608,7 +608,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
         try rejected.finalizeStoppedClock(
           clock, microphoneClosure: micProof, systemClosure: systemProof))
       XCTAssertNil(rejected.captureEnd)
-      XCTAssertEqual(rejected.schemaVersion, 2)
+      XCTAssertEqual(rejected.schemaVersion, 4)
     }
     let foreignClock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
       box.read()
@@ -631,7 +631,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
         utcMs: 1_900_000_000_000, hostAfterNs: 30_000_000_020))
     try manifest.finalizeStoppedClock(
       clock, microphoneClosure: micClosure, systemClosure: pcClosure)
-    XCTAssertEqual(manifest.schemaVersion, 3)
+    XCTAssertEqual(manifest.schemaVersion, 4)
     XCTAssertEqual(manifest.captureEnd?.microphoneClosedUs, 20000)
     XCTAssertEqual(manifest.captureEnd?.systemClosedUs, 50000)
     XCTAssertEqual(manifest.captureEnd?.endUs, 50000)
@@ -1039,7 +1039,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     var mic = TrackStats(frames: 1920, sampleRate: 48000, channels: 2)
     mic.recordSavedClock(.timestamp(1_000_000_000), frames: 1920, sourceFrame: nil)
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-system-recovery", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-system-recovery", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [],
       startedAtUTC: "2023-11-14T22:13:20Z",
       requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",

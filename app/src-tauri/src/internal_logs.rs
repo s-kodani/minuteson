@@ -199,6 +199,18 @@ impl LogService {
             status.storage_error = Some(message);
         }
     }
+    fn detail(
+        &self,
+        context: &Context,
+        state: &str,
+        level: &str,
+        elapsed: Duration,
+        message: &str,
+    ) {
+        let mut entry = Entry::new(context, "process", level, state, message);
+        entry.elapsed_ms = Some(elapsed.as_millis().min(u64::MAX as u128) as u64);
+        self.record(entry);
+    }
     fn record(&self, entry: Entry) {
         // Keep every raw byte of valid UTF-8 even for abnormally long lines.
         let mut remaining = entry.message.as_str();
@@ -269,6 +281,20 @@ pub(crate) fn initialize(root: Result<PathBuf, String>) -> LogService {
 pub(crate) fn transition(context: Context, state: &str, level: &str, message: &str) {
     if let Some(service) = GLOBAL.get() {
         service.transition(&context, state, level, message);
+    }
+}
+/// Per-unit diagnostics bypass phase deduplication; never block inference on I/O.
+pub(crate) fn current_context(category: &str) -> Context {
+    CONTEXT
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(|| Context {
+            category: category.into(),
+            ..Context::default()
+        })
+}
+pub(crate) fn detail(context: Context, state: &str, level: &str, elapsed: Duration, message: &str) {
+    if let Some(service) = GLOBAL.get() {
+        service.detail(&context, state, level, elapsed, message);
     }
 }
 pub(crate) fn failure(context: Context, message: &str) {

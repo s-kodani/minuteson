@@ -81,14 +81,13 @@ struct Record {
     source_operation: String,
     source_intent_hash: String,
     previous_progress: Progress,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     previous_database_phase: Option<completion::Phase>,
     observations: intent::Intent,
 }
 impl Record {
     fn decode(json: &str) -> Result<Self, String> {
         let record: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        if !matches!(record.version, 3 | 4) || record.encode()? != json {
+        if record.version != 5 || record.encode()? != json {
             return Err("再確認記録が現行形式と一致しません".into());
         }
         Ok(record)
@@ -208,13 +207,9 @@ fn active_plan(
         // v4 records a genuinely NEW consent for the current-root census.
         // It cannot move an unfinished cursor or restore any deleted DB row.
         // Every preceding plan and policy remains in the append-only chain.
-        let transition_valid = if record.version == 4 {
-            relocated
-                && record.previous_database_phase == Some(completion::Phase::Finished)
-                && record.previous_progress.removed()
-        } else {
-            !relocated
-        };
+        let transition_valid = !relocated
+            || (record.previous_database_phase == Some(completion::Phase::Finished)
+                && record.previous_progress.removed());
         if observations.scope() != original.scope()
             || observations.manifest.meeting_id != original.manifest().meeting_id
             || !transition_valid
@@ -489,17 +484,7 @@ fn accept_inner(
     let original = source.confirmed();
     let observations = Observations::capture(&review.census)?;
     let record = Record {
-        version: if (
-            source.manifest().root.clone(),
-            source.manifest().database.clone(),
-        ) != (
-            review.manifest().root.clone(),
-            review.manifest().database.clone(),
-        ) {
-            4
-        } else {
-            3
-        },
+        version: 5,
         source_operation: original.operation().into(),
         source_intent_hash: original.intent_hash()?,
         previous_progress: source.files().clone(),

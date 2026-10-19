@@ -92,6 +92,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
     let embedding = root.path().join("embedding.onnx");
     std::fs::write(&segmentation, b"owned segmentation").unwrap();
     std::fs::write(&embedding, b"owned embedding").unwrap();
+    let library = crate::storage::diarization::tests::extraction_fixture(root.path());
     let diarization_engine = crate::diarization::sherpa::SherpaConfig {
         executable: crate::local_engine::Fingerprint::capture(
             &root.path().join("llama-completion"),
@@ -108,7 +109,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
             &crate::test_support::never_cancelled,
         )
         .unwrap(),
-        runtime_libraries: vec![],
+        runtime_libraries: vec![library],
         threads: 1,
         cluster_threshold_milli: 500,
         window_shift_milli: 500,

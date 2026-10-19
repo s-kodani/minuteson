@@ -153,7 +153,7 @@ fn deleted_audio_historical_recording_plan_keeps_caf_metadata_without_reopening_
         crate::audio::tests::caf_fixture(16_000, 1, 3, 32, 4, &pcm),
     )
     .unwrap();
-    std::fs::write(directory.join("manifest.json"), b"{\"state\":\"saved\"}").unwrap();
+    std::fs::write(directory.join("manifest.json"),serde_json::to_vec(&json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","recordingOwnerId":session,"state":"saved"})).unwrap()).unwrap();
     let audio = storage
         .register_ready_meeting_asset(&meeting, &relative.join("mic.caf"), "audio/x-caf")
         .unwrap();
@@ -282,7 +282,7 @@ fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_wit
     let markdown = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     deleted(&storage, &meeting);
     let (archive, receipt) = write(&storage, output.path());
-    assert_eq!(archive.manifest.format_version, 3);
+    assert_eq!(archive.manifest.format_version, 4);
     assert_eq!(receipt.deleted_audio_meeting_count, 1);
     assert_eq!(receipt.deleted_audio_asset_count, asset_ids.len());
     assert_eq!(receipt.omitted_pcm_count, 0);
@@ -350,11 +350,11 @@ fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_wit
 }
 
 #[test]
-fn deleted_audio_normal_export_keeps_format_two_and_no_deletion_claim() {
+fn deleted_audio_normal_export_keeps_current_format_and_no_deletion_claim() {
     let (_root, storage, _meeting) = fixture();
     let output = tempfile::tempdir().unwrap();
     let (archive, receipt) = write(&storage, output.path());
-    assert_eq!(archive.manifest.format_version, 2);
+    assert_eq!(archive.manifest.format_version, 4);
     assert!(archive.deleted_audio.is_empty());
     assert_eq!(
         (

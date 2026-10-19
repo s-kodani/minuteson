@@ -54,7 +54,18 @@ pub struct AnalysisSpeaker {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SpeakerIdentification {
+    pub similarity_milli: i32,
+    pub runner_up_milli: Option<i32>,
+    pub needs_review: bool,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalysisUtterance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_identification: Option<SpeakerIdentification>,
     pub id: String,
     pub track_id: String,
     pub start_us: i64,
@@ -121,6 +132,7 @@ pub(super) fn read_analysis_content(
         let rows = statement
             .query_map(params![id], |row| {
                 Ok(AnalysisUtterance {
+                    speaker_identification: None,
                     id: row.get(0)?,
                     track_id: row.get(1)?,
                     start_us: row.get(2)?,
@@ -155,11 +167,52 @@ pub(super) fn read_analysis_content(
         }
         assignments
     };
+    let has_identifications = config["speakerIdentification"].is_object();
+    let lineage_map = if has_identifications {
+        super::minutes_input::lineage_map(connection, "utterances", id)?
+    } else {
+        HashMap::new()
+    };
+    let speaker_lineages = if has_identifications {
+        super::minutes_input::lineage_map(connection, "speakers", id)?
+    } else {
+        HashMap::new()
+    };
     for utterance in &mut utterances {
         utterance.speaker_ids = assignment_map
             .get(&utterance.id)
             .cloned()
             .unwrap_or_default();
+        if has_identifications && utterance.speaker_ids.len() == 1 {
+            let lineage = lineage_map.get(&utterance.id).unwrap_or(&utterance.id);
+            let info = &config["speakerIdentification"][lineage];
+            let speaker = &utterance.speaker_ids[0];
+            let owner = speaker_lineages.get(speaker).unwrap_or(speaker);
+            if info["speakerLineage"].as_str() == Some(owner.as_str())
+                && info["trackId"].as_str() == Some(utterance.track_id.as_str())
+                && info["startUs"].as_i64() == Some(utterance.start_us)
+                && info["endUs"].as_i64() == Some(utterance.end_us)
+            {
+                if let (Some(score), Some(review), Some(reason)) = (
+                    info["similarity"].as_f64(),
+                    info["needsReview"].as_bool(),
+                    info["reason"].as_str(),
+                ) {
+                    let next = info["runnerUp"].as_f64();
+                    if score.is_finite()
+                        && (-1.0..=1.0).contains(&score)
+                        && next.is_none_or(|v| v.is_finite() && (-1.0..=score).contains(&v))
+                    {
+                        utterance.speaker_identification = Some(SpeakerIdentification {
+                            similarity_milli: (score * 1000.).round() as i32,
+                            runner_up_milli: next.map(|v| (v * 1000.).round() as i32),
+                            needs_review: review,
+                            reason: reason.into(),
+                        });
+                    }
+                }
+            }
+        }
     }
     Ok(AnalysisView {
         id: id.to_owned(),
@@ -271,7 +324,7 @@ impl Storage {
         if let Some((job_id, completed_units)) = job {
             let (spec, _) = super::jobs::read_fixed_input(&transaction, job_id)?;
             if spec.kind == JobKind::Diarization {
-                if spec.parameters["schemaVersion"] == 2 {
+                if spec.parameters["schemaVersion"] == crate::current_formats::DIARIZATION {
                     let known: super::transcription::known::KnownInput = serde_json::from_value(
                         spec.parameters["diarization"]["knownInput"].clone(),
                     )
@@ -342,7 +395,7 @@ impl Storage {
                 fixed_source = Some(source);
             } else if spec.kind != JobKind::Transcription {
                 return Err("未対応の解析候補ジョブです".into());
-            } else if spec.parameters["schemaVersion"] == 3 {
+            } else if spec.parameters["schemaVersion"] == crate::current_formats::TRANSCRIPTION {
                 let known: super::transcription::known::KnownInput =
                     serde_json::from_value(spec.parameters["knownInput"].clone())
                         .map_err(|e| e.to_string())?;

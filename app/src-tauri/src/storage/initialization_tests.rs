@@ -39,7 +39,7 @@ fn old(db: &Connection, version: usize) {
 
 #[test]
 fn all_old_versions_are_rejected_without_updating_schema_history_or_meetings() {
-    for version in 1..31 {
+    for version in 1..MIGRATIONS.len() {
         let mut db = Connection::open_in_memory().unwrap();
         old(&db, version);
         let before = schema(&db);
@@ -313,92 +313,4 @@ fn actual_sigkill_during_new_initialization_never_leaves_partial_schema_and_cold
             MIGRATIONS.len()
         );
     }
-}
-
-#[test]
-fn voice_upgrade_preserves_previous_current_data_and_restores_foreign_keys() {
-    let mut db = Connection::open_in_memory().unwrap();
-    old(&db, 31);
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('job','unsupported','transcription','queued','operation',?1,'{}','{}',?2,1,1)",params!["a".repeat(64),"b".repeat(64)]).unwrap();
-    db.execute(
-        "INSERT INTO job_checkpoints VALUES('checkpoint','job',1,0,'{}',?1,1)",
-        ["c".repeat(64)],
-    )
-    .unwrap();
-    let jobs = rows(&db, "SELECT * FROM processing_jobs");
-    let checkpoints = rows(&db, "SELECT * FROM job_checkpoints");
-    let before = rows(&db, "SELECT * FROM meetings ORDER BY id");
-    initialize_database(&mut db).unwrap();
-    assert_eq!(rows(&db, "SELECT * FROM meetings ORDER BY id"), before);
-    assert_eq!(rows(&db, "SELECT * FROM processing_jobs"), jobs);
-    assert_eq!(rows(&db, "SELECT * FROM job_checkpoints"), checkpoints);
-    assert_eq!(verify_migration_history(&db).unwrap(), 32);
-    assert_eq!(
-        db.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    assert!(db
-        .prepare("PRAGMA foreign_key_check")
-        .unwrap()
-        .query([])
-        .unwrap()
-        .next()
-        .unwrap()
-        .is_none());
-    let trusted = Connection::open_in_memory().unwrap();
-    let mut fresh = trusted;
-    initialize_database(&mut fresh).unwrap();
-    let without_history = |db: &Connection| {
-        schema(db)
-            .into_iter()
-            .filter(|row| row[1] != Value::Text("schema_migrations".into()))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(without_history(&db), without_history(&fresh));
-}
-
-#[test]
-fn failed_voice_upgrade_rolls_back_meetings_jobs_schema_and_history() {
-    let mut db = Connection::open_in_memory().unwrap();
-    old(&db, 31);
-    let before = schema(&db);
-    let meetings = rows(&db, "SELECT * FROM meetings");
-    let history = rows(&db, "SELECT * FROM schema_migrations");
-    db.authorizer(Some(|c: AuthContext<'_>| match c.action {
-        AuthAction::CreateIndex {
-            index_name: "processing_jobs_state_created",
-            ..
-        } => Authorization::Deny,
-        _ => Authorization::Allow,
-    }))
-    .unwrap();
-    assert!(initialize_database(&mut db).is_err());
-    db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-        .unwrap();
-    assert_eq!(schema(&db), before);
-    assert_eq!(rows(&db, "SELECT * FROM meetings"), meetings);
-    assert_eq!(rows(&db, "SELECT * FROM schema_migrations"), history);
-    assert_eq!(
-        db.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    initialize_database(&mut db).unwrap();
-}
-
-#[test]
-fn voice_upgrade_refuses_pending_maintenance_without_changing_its_target() {
-    let mut db = Connection::open_in_memory().unwrap();
-    old(&db, 31);
-    db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES('pending','move_storage','prepared','{}',?1,'{}',0,0)",["a".repeat(64)]).unwrap();
-    let before = schema(&db);
-    let operation = rows(&db, "SELECT * FROM maintenance_operations");
-    assert!(initialize_database(&mut db)
-        .unwrap_err()
-        .to_string()
-        .contains("未完了"));
-    assert_eq!(schema(&db), before);
-    assert_eq!(rows(&db, "SELECT * FROM maintenance_operations"), operation);
-    assert_eq!(verify_migration_history(&db).unwrap(), 31);
 }

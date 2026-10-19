@@ -110,13 +110,13 @@ impl Prepared {
         let bytes = self.snapshot.encode()?;
         let h = &self.header;
         let entries = self.snapshot.entries()?;
-        if !matches!((h.version, h.origin.is_some()), (1, false) | (2, true))
+        if h.version != 3
             || h.origin.as_ref().is_some_and(|origin| {
                 !super::uuid(&origin.operation_id)
                     || origin.operation_id == h.operation_id
                     || !hash_valid(&origin.receipt_hash)
             })
-            || (h.version == 1 && !self.snapshot.historical_audio.is_empty())
+            || (h.origin.is_none() && !self.snapshot.historical_audio.is_empty())
             || h.subtype != "audioOnlyDeletion"
             || !super::uuid(&h.operation_id)
             || !super::uuid(&h.meeting_id)
@@ -356,10 +356,7 @@ fn read_frame(
         || created < 0
         || updated < created
         || header.operation_id != operation
-        || !matches!(
-            (header.version, header.origin.is_some()),
-            (1, false) | (2, true)
-        )
+        || header.version != 3
         || header.subtype != "audioOnlyDeletion"
         || serde_json::to_string(&header).map_err(|e| e.to_string())? != json
         || hash(json.as_bytes()) != digest
@@ -551,7 +548,7 @@ fn prepare_inner(
     let bytes = snapshot.encode()?;
     let saved = Prepared {
         header: Header {
-            version: 1,
+            version: 3,
             subtype: "audioOnlyDeletion".into(),
             operation_id: operation.into(),
             meeting_id: snapshot.scope.meeting_id.clone(),

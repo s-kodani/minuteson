@@ -92,7 +92,7 @@ fn preflight(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     match spec.kind {
-        JobKind::VoiceRegistration | JobKind::VoiceMatching => {
+        JobKind::VoiceRegistration | JobKind::VoiceMatching | JobKind::SpeakerCompletion => {
             Err("声の登録・照合はモデル設定を確認して新しく実行してください".into())
         }
         JobKind::Transcription => {

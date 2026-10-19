@@ -885,7 +885,7 @@ mod tests {
             serde_json::json!({"schemaVersion":2,"ownerId":SESSION,"lane":lane,
             "sealedSegments":0,"sealedFrames":0,"lastEntrySHA256":null,"producerClosed":false,"failure":null})
         };
-        let mut value = serde_json::json!({"schemaVersion":2,"recordingOwnerId":SESSION,"state":"failed",
+        let mut value = serde_json::json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","recordingOwnerId":SESSION,"state":"failed",
             "errors":["storage failed"],"microphone":{"rawSegments":status("microphone")},
             "system":{"rawSegments":status("system")},"padding":"x".repeat(256*1024)});
         std::fs::write(root.path().join("manifest.json"), value.to_string()).unwrap();

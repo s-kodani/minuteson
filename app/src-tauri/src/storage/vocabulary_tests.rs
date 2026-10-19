@@ -125,7 +125,7 @@ fn enqueue_terms(
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: serde_json::json!({"qualityStatus":"unverified"}),
-            parameters: serde_json::json!({"vocabulary":snapshot}),
+            parameters: serde_json::json!({"schemaVersion":4,"vocabulary":snapshot}),
             total_units: Some(1),
         })
     })
@@ -322,7 +322,7 @@ fn vocabulary_snapshot_integrity_and_original_job_lineage_are_required() {
 }
 
 #[test]
-fn vocabulary_v2_renders_terms_and_readings_while_legacy_snapshots_still_validate() {
+fn current_vocabulary_renders_terms_and_readings_and_rejects_old_snapshots() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let m = storage.create_meeting("用語方式の互換性").unwrap().id;
@@ -338,14 +338,8 @@ fn vocabulary_v2_renders_terms_and_readings_while_legacy_snapshots_still_validat
     assert!(!snapshot.actual_prompt.contains("補足"));
     snapshot.validate().unwrap();
     snapshot.method = "whisper-initial-prompt-v1".into();
-    snapshot.actual_prompt =
-        super::vocabulary::compile(&snapshot.entries, &snapshot.extra_prompt).unwrap();
     snapshot.content_hash = snapshot.digest().unwrap();
-    assert!(snapshot
-        .actual_prompt
-        .contains("無条件な本文置換ではありません"));
-    assert!(snapshot.actual_prompt.contains("本文に混入させない補足"));
-    snapshot.validate().unwrap();
+    assert!(snapshot.validate().is_err());
     snapshot.method = "unknown".into();
     snapshot.content_hash = snapshot.digest().unwrap();
     assert!(snapshot.validate().is_err());

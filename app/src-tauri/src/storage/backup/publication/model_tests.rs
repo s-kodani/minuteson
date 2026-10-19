@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::model_metadata::{historical, ModelFileMetadata};
+use crate::storage::model_metadata::{retained_files, ModelFileMetadata};
 
 #[test]
 fn exact_minutes_markdown_survives_archive_additive_restore_reopen_and_rebackup() {
@@ -549,7 +549,7 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
                 .is_err());
         }
         assert_eq!(
-            historical(&target.connection.lock().unwrap())
+            retained_files(&target.connection.lock().unwrap())
                 .unwrap()
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>(),

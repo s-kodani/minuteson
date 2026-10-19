@@ -128,7 +128,7 @@ fn deletion_relocated_reconfirmation_uses_new_current_root_consent_and_preserves
     let recorded = audits(&storage);
     assert_eq!(recorded.len(), 1);
     let audit: serde_json::Value = serde_json::from_str(&recorded[0].1).unwrap();
-    assert_eq!(audit["version"], 4);
+    assert_eq!(audit["version"], 5);
     assert_eq!(audit["sourceOperation"], operation);
     assert_eq!(audit["previousDatabasePhase"], "finished");
     let original_record: serde_json::Value = serde_json::from_str(&old).unwrap();
@@ -284,7 +284,7 @@ fn deletion_relocated_reconfirmation_saved_consent_survives_cold_stop_and_repeat
     let recorded = audits(&storage);
     assert_eq!(recorded.len(), 2);
     assert!(recorded.iter().any(
-        |(_, json, _)| serde_json::from_str::<serde_json::Value>(json).unwrap()["version"] == 4
+        |(_, json, _)| serde_json::from_str::<serde_json::Value>(json).unwrap()["version"] == 5
     ));
     assert_eq!(immutable(&storage, operation), old);
     assert_eq!(

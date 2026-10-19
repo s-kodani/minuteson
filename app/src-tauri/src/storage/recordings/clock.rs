@@ -38,7 +38,7 @@ impl CaptureManifest {
         });
         #[cfg(not(unix))]
         let empty_raw = false;
-        if self.schema_version != 3
+        if self.schema_version != crate::current_formats::CAPTURE
             || self.state != "saved"
             || !self.errors.is_empty()
             || self.recording_owner_id.as_deref() != Some(owner)
@@ -61,8 +61,7 @@ impl CaptureManifest {
     }
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
         match (self.schema_version, &self.capture_clock) {
-            (1, None) => Ok(None),
-            (2 | 3, Some(clock))
+            (crate::current_formats::CAPTURE, Some(clock))
                 if clock.domain == "mach_continuous_time"
                     && (0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
                     && (0..=9_007_199_254_740_991).contains(&clock.uncertainty_ns) =>
@@ -80,8 +79,7 @@ impl CaptureManifest {
         system: &CaptureTimeline<'_>,
     ) -> Result<Option<&CaptureEnd>, String> {
         match (self.schema_version, &self.capture_end) {
-            (1 | 2, None) => Ok(None),
-            (3, Some(end))
+            (crate::current_formats::CAPTURE, Some(end))
                 if self.recording_owner_id.as_deref() == Some(owner)
                     && crate::input_levels::valid_owner(owner)
                     && end.method == "acquisition_closed"
@@ -110,16 +108,7 @@ impl CaptureTrack {
     ) -> Result<CaptureTimeline<'_>, String> {
         let (rate, _, nominal_end) = self.validated_format()?;
         if !corrected {
-            // Never silently ignore supplied maps on an old manifest or upgrade
-            // old zero-origin nominal audio into verified capture timestamps.
-            if self.clock_segments.is_some() {
-                return Err("旧録音形式に時刻補正区間を混在させることはできません".into());
-            }
-            return Ok(CaptureTimeline {
-                start_us: 0,
-                end_us: nominal_end,
-                segments: &[],
-            });
+            return Err("非対応の旧録音時計です".into());
         }
         let segments = self
             .clock_segments

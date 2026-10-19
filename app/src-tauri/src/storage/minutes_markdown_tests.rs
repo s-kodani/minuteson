@@ -30,7 +30,12 @@ fn generation_job(
                 schema_version: 1,
                 expected,
             },
-            |_| Ok((serde_json::json!({"format":"markdown"}), Some(1))),
+            |_| {
+                Ok((
+                    serde_json::json!({"schemaVersion":9,"format":"markdown"}),
+                    Some(1),
+                ))
+            },
         )
         .unwrap()
 }

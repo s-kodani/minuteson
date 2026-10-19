@@ -46,8 +46,7 @@ export function planConflictInput(base: Analysis,before: DraftPayload,local: Dra
 // Frontend dependency preflight, not a replacement for native lineage/DB/CAS
 // validation. No publishing occurs here or when selecting input to resume.
 export function validateConflictPayload(base: Analysis,payload: DraftPayload) {
-  if(![1,2,3].includes(payload.schema_version) || payload.schema_version === 1 && ((payload.manual_speakers?.length ?? 0) || (payload.speaker_merges?.length ?? 0))
-    || payload.schema_version < 3 && payload.utterance_splits?.length) throw Error("下書き形式と構造の選択が一致しません");
+  if(payload.schema_version !== 4) throw Error("未対応の下書き形式です");
   const speakers = new Set(base.speakers.map(s => s.id));
   if(speakers.size + (payload.manual_speakers?.length ?? 0) > 100) throw Error("話者は推定元を含め100件までです");
   for(const s of payload.manual_speakers ?? []) {

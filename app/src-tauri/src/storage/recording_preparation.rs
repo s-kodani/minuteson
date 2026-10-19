@@ -120,6 +120,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path().to_owned()).unwrap();
         let id = Uuid::new_v4().to_string();
+        storage.clear_analysis_pcm();
         storage.retired.store(true, Ordering::Release);
         assert!(storage
             .create_recording_draft(&id, "停止済み保存先")

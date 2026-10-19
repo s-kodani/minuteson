@@ -431,7 +431,7 @@ fn speech_workspace_rejects_semantically_invalid_native_results_even_with_valid_
             .err()
             .unwrap_or_else(|| panic!("invalid {change} was accepted"));
         if change == "diarization-track" {
-            assert!(error.contains("チェックポイントのトラック"), "{error}");
+            assert!(error.contains("保存区間の話者結果"), "{error}");
         }
         if change == "model-name" {
             assert!(error.contains("モデル名"), "{error}");

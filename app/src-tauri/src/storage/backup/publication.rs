@@ -300,6 +300,12 @@ impl Storage {
                 .manifest
                 .model_catalog
                 .retain(&tx, check, &|id| ids.unused_identity(id))?;
+            if let Some(p) = ids.source().manifest.speaker_completion_preferences {
+                crate::storage::completion_preferences::restore(&tx, p)?;
+            }
+            if let Some(p) = ids.source().manifest.voice_matching_preferences {
+                crate::storage::voice_preferences::restore(&tx, p)?;
+            }
             #[cfg(unix)]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::verify_retained(
@@ -385,8 +391,13 @@ pub(super) fn required_bytes(
 // Model metadata capacity is not included in the meeting-only sealed image.
 fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
     let manifest = &ids.source().manifest;
-    let json = serde_json::to_vec(&(&manifest.model_catalog, &manifest.file_references))
-        .map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec(&(
+        &manifest.model_catalog,
+        &manifest.file_references,
+        &manifest.voice_matching_preferences,
+        &manifest.speaker_completion_preferences,
+    ))
+    .map_err(|e| e.to_string())?;
     (json.len() as u64)
         .checked_mul(8)
         .and_then(|n| {

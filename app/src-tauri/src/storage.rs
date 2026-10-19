@@ -15,6 +15,7 @@ mod analysis_ui;
 #[allow(dead_code)]
 pub(crate) mod backup;
 mod capture_preferences;
+pub(crate) mod completion_preferences;
 #[cfg(test)]
 pub(crate) mod current_minutes_fixture;
 #[allow(dead_code)] // Shared deletion admission and user confirmation follow.
@@ -51,8 +52,11 @@ mod recording_preparation;
 pub(crate) mod recordings;
 mod restored_input;
 mod revisions;
+pub(crate) mod speaker_assignment_update;
+pub(crate) mod speaker_completion;
 pub(crate) mod transcript_consolidation;
 mod transcription;
+pub(crate) mod voice_preferences;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
@@ -71,7 +75,8 @@ pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::ExportRecord;
 pub(crate) use jobs::{
-    retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
+    retry_source_permitted, ExecutionProgress, JobKind, JobSnapshot, JobSpec, NotificationJob,
+    NotificationOutput,
 };
 pub(crate) use meeting_playback::{
     MeetingAudioSummary, MeetingIntervalRequest, MeetingPlaybackMode, MeetingPlaybackRequest,
@@ -118,6 +123,8 @@ const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.s
 const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
 const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
 const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
+const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
+const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
 const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
 
@@ -149,6 +156,9 @@ pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
     restored_inputs: Mutex<restored_input::Registry>,
+    pub(crate) analysis_pcm: Mutex<crate::analysis_pcm_cache::Cache>,
+    pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
+    execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
@@ -353,6 +363,9 @@ impl Storage {
             root,
             connection: Mutex::new(connection),
             restored_inputs: Mutex::new(restored_input::Registry::default()),
+            feature_vectors: Mutex::default(),
+            analysis_pcm: Mutex::default(),
+            execution_progress: Mutex::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
@@ -658,7 +671,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
         return Ok(true);
     }
     let version = verify_migration_history(connection)?;
-    if version != MIGRATIONS.len() && version != 31 {
+    if version != MIGRATIONS.len() {
         return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
     }
     Ok(false)
@@ -666,9 +679,6 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
 
 fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        if verify_migration_history(connection)? == 31 {
-            return upgrade_voice_registry(connection);
-        }
         return Ok(());
     }
     // These trusted SQL definitions construct a NEW current database only.
@@ -693,51 +703,6 @@ fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>
         )?;
     }
     transaction.commit()?;
-    Ok(())
-}
-
-// The immediately previous product schema is the sole supported upgrade.
-// Rebuilding a parent table requires FK enforcement to be disabled before BEGIN;
-// the complete rebuild/history update is atomic and checked before publication.
-fn upgrade_voice_registry(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
-    if verify_migration_history(connection)? != 31 {
-        return Err("声の登録DBの更新元が一致しません".into());
-    }
-    let unfinished:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention'))",[],|r|r.get(0))?;
-    if unfinished || deletion::fence::has_pending(connection)? {
-        return Err(
-            "保存先の削除・復元・移動が未完了です。旧版で処理を完了してから更新してください".into(),
-        );
-    }
-    connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
-    let result = (|| -> Result<(), Box<dyn Error>> {
-        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if verify_migration_history(&tx)? != 31 {
-            return Err("DB形式が更新開始前に変わりました".into());
-        }
-        tx.execute_batch(MIGRATION_32)?;
-        let invalid: bool = tx
-            .prepare("PRAGMA foreign_key_check")?
-            .query([])?
-            .next()?
-            .is_some();
-        if invalid {
-            return Err("声の登録DBの更新で参照不整合を検出しました".into());
-        }
-        tx.execute(
-            "INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(32,?1,?2)",
-            params![
-                format!("{:x}", Sha256::digest(MIGRATION_32.as_bytes())),
-                now_ms()?
-            ],
-        )?;
-        tx.commit()?;
-        Ok(())
-    })();
-    let enforcement =
-        connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF;");
-    result?;
-    enforcement?;
     Ok(())
 }
 
@@ -774,6 +739,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (30, MIGRATION_30),
     (31, MIGRATION_31),
     (32, MIGRATION_32),
+    (33, MIGRATION_33),
+    (34, MIGRATION_34),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

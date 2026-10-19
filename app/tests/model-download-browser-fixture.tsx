@@ -21,7 +21,7 @@ const fakeRuntimeFiles = [
   { relativePath: "build-info.json", role: "notice", expectedSize: 32, expectedHash: "a".repeat(64) },
 ];
 const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし", description: "同梱処理の画面検証のみ・実ファイルなし", recipe: {
-  schemaVersion: 3, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files, ...vadNetwork.files] },
+  schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files, ...vadNetwork.files] },
   sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources, ...vadNetwork.sources],
 } };
 const hybridChoices = whisperVariants.map(variant => {
@@ -46,7 +46,7 @@ f.settingsByEngine = {
 f.preferenceVersions = { "whisper.cpp": 0, "sherpa-onnx": 0, "llama.cpp": 0 };
 const componentRoles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
 (window as any).isTauri = true; mockWindows("main");
-f.definition = JSON.stringify({ schemaVersion: 2, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: "c".repeat(64), memberPath: "model" } }] });
+f.definition = JSON.stringify({ schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: "c".repeat(64), memberPath: "model" } }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
   const recipe = parseDownloadDefinition(definition);
   return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), recipeSchemaVersion: recipe.schemaVersion, ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };

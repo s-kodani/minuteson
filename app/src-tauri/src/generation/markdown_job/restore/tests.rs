@@ -96,9 +96,13 @@ impl Fixture {
     }
 }
 const EXACT:&str=" \r\n# 点検日\n自然文のutteranceや /Users/fictional は保持\n[区間](audio:00:00:00.100001-00:00:00.799999)\n";
-const EXACT_INLINE: &str = "# 議事録\n\n## 要約\n点検日を確認する。[00:02:00.000000–00:02:06.000000](audio:00:02:00.000000-00:02:06.000000)";
 fn fixture(long: bool, pending: bool, queued: bool) -> Fixture {
-    fixture_version(long, pending, queued, markdown::PromptVersion::Legacy)
+    fixture_version(
+        long,
+        pending,
+        queued,
+        markdown::PromptVersion::CustomPromptsV5,
+    )
 }
 fn fixture_version(
     long: bool,
@@ -108,7 +112,7 @@ fn fixture_version(
 ) -> Fixture {
     let mut old_input = crate::storage::current_minutes_fixture::input();
     if long {
-        old_input.analysis.utterances[0].effective_text = "点検日について確認する。".repeat(150);
+        old_input.analysis.utterances[0].effective_text = "点検日について確認する。".repeat(1500);
     }
     let mut new_input = old_input.clone();
     new_input.analysis.id = "mapped-analysis".into();
@@ -134,7 +138,7 @@ fn fixture_version(
         seed: 1,
     };
     let capacity = crate::generation::model_budget::Capacity::synthetic(&engine, 32768, 8192);
-    let prompt_budget = if version == markdown::PromptVersion::ConciseSummaryV4 {
+    let prompt_budget = if version == markdown::PromptVersion::CustomPromptsV5 {
         5400
     } else {
         2400
@@ -155,8 +159,10 @@ fn fixture_version(
     );
     let plan = plan::build_with_system(&old_input, limit, version, extract_system).unwrap();
     let p = Parameters {
-        resident_runtime: None,
-        schema_version: 7,
+        resident_runtime: Some(serde_json::from_value(json!({"protocol":1,"engine":"llama","name":"mon-llama-worker","bytes":1234,"sha256":"a".repeat(64)})).unwrap()),
+        schema_version: crate::current_formats::MINUTES,
+        optimization_version: Some(1),
+        optimization: None,
         prompt_version: version,
         prompt_snapshot,
         acceleration_policy: None,
@@ -193,10 +199,8 @@ fn fixture_version(
         for (index, node) in p.plan.nodes.iter().enumerate() {
             let (text, batches) = match node {
                 plan::Node::Extract { slices } => {
-                    let text = if !version.is_legacy() {
-                        EXACT_INLINE.into()
-                    } else if long {
-                        "異なる事項をすべて確認する。\n".repeat(180)
+                    let text = if long {
+                        "異なる事項をすべて確認する。\n".repeat(500)
                     } else {
                         EXACT.into()
                     };
@@ -207,12 +211,7 @@ fn fixture_version(
                     let mut cursor = cursor(node, &bodies, plan_limit(&p).unwrap(), &p).unwrap();
                     let mut batches = vec![];
                     while cursor.result().is_none() {
-                        let text = if !version.is_legacy() {
-                            EXACT_INLINE
-                        } else {
-                            EXACT
-                        }
-                        .to_string();
+                        let text = EXACT.to_string();
                         batches.push(assets.batch(&merge_task(&cursor).unwrap(), &text));
                         cursor.accept(text).unwrap();
                         if pending {
@@ -238,6 +237,7 @@ fn fixture_version(
         }
     }
     let job = |spec: &JobSpec| JobSnapshot {
+        execution_progress: None,
         id: format!("job-{}", spec.meeting_id),
         meeting_id: spec.meeting_id.clone(),
         kind: "minutes_generation".into(),
@@ -274,7 +274,6 @@ fn fixture_version(
 fn markdown_restore_keeps_exact_text_intervals_and_four_files_without_models_or_evidence_mapping() {
     for (long, pending, queued) in [
         (false, false, false),
-        (true, false, false),
         (true, false, false),
         (false, false, true),
     ] {
@@ -351,7 +350,7 @@ fn markdown_restore_preserves_model_capacity_and_schema_even_before_first_output
 }
 #[test]
 fn markdown_restore_rejects_changed_fixed_input_target_progress_and_strict_output_before_writing() {
-    for case in 0..13 {
+    for case in 0..15 {
         let mut f = fixture(false, false, false);
         match case {
             0 => f.new_input.analysis.utterances[0].effective_text.push('変'),
@@ -372,6 +371,14 @@ fn markdown_restore_rejects_changed_fixed_input_target_progress_and_strict_outpu
             12 => {
                 f.new_spec.parameters["generation"]["markdownTarget"]["expected"]["lockVersion"] =
                     json!(-1)
+            }
+            13 => {
+                f.new_spec.parameters["generation"]["promptSnapshot"]["preferences"]
+                    ["extractPrompt"] = json!("別の設定")
+            }
+            14 => {
+                f.new_spec.parameters["generation"]["promptSnapshot"]["preferences"]
+                    ["mergePrompt"] = json!("別の設定")
             }
             _ => unreachable!(),
         }
@@ -424,40 +431,20 @@ fn markdown_restore_cancellation_and_invalid_artifact_sets_never_publish_dummy_u
 }
 
 #[test]
-fn prompt_version_is_fixed_across_restore_and_legacy_parameters_stay_unchanged() {
-    let mut legacy = fixture(false, false, false);
-    assert!(legacy.old_spec.parameters["generation"]
-        .get("promptVersion")
-        .is_none());
-    assert!(legacy.run(&crate::test_support::never_cancelled).is_ok());
+fn prompt_version_is_fixed_across_restore_and_old_revisions_are_rejected() {
+    let mut f = fixture(false, false, false);
+    assert!(f.run(&|| false).is_ok());
     for version in [
-        markdown::PromptVersion::InlineEvidenceV1,
-        markdown::PromptVersion::InlineEvidenceV2,
-        markdown::PromptVersion::CompactEvidenceV3,
+        "legacy",
+        "inlineEvidenceV1",
+        "inlineEvidenceV2",
+        "compactEvidenceV3",
+        "conciseSummaryV4",
+        "futureVersion",
     ] {
-        for (long, pending, queued) in [
-            (false, false, false),
-            (true, false, false),
-            (false, false, true),
-        ] {
-            let mut current = fixture_version(long, pending, queued, version);
-            assert_eq!(
-                current.old_spec.parameters["generation"]["promptVersion"],
-                serde_json::to_value(version).unwrap()
-            );
-            assert!(current.run(&crate::test_support::never_cancelled).is_ok());
-            let mut changed = fixture_version(long, pending, queued, version);
-            changed.new_spec.parameters["generation"]
-                .as_object_mut()
-                .unwrap()
-                .remove("promptVersion");
-            assert!(changed.run(&crate::test_support::never_cancelled).is_err());
-            assert!(changed.assets.target.is_empty());
-        }
+        f.new_spec.parameters["generation"]["promptVersion"] = json!(version);
+        assert!(f.run(&|| false).is_err());
     }
-    let mut unknown = fixture(false, false, true);
-    unknown.new_spec.parameters["generation"]["promptVersion"] = json!("futureVersion");
-    assert!(unknown.run(&crate::test_support::never_cancelled).is_err());
 }
 
 #[test]
@@ -466,13 +453,16 @@ fn restoring_format_mismatched_minutes_keeps_exact_output_without_treating_forma
         false,
         false,
         false,
-        markdown::PromptVersion::InlineEvidenceV1,
+        markdown::PromptVersion::CustomPromptsV5,
     );
-    let text = "# 議事録\n\n## 要約\n根拠リンクのない生成本文。";
+    let text = format!(
+        "# 議事録\n\n## 要約\n{}",
+        "根拠リンクのない生成本文。".repeat(160)
+    );
     f.replace(3, serde_json::to_vec(&json!({"markdown":text})).unwrap());
-    f.value["markdownHash"] = json!(content_hash(text));
+    f.value["markdownHash"] = json!(content_hash(&text));
     let result = f.run(&crate::test_support::never_cancelled).unwrap();
-    assert_eq!(result["markdownHash"], content_hash(text));
+    assert_eq!(result["markdownHash"], content_hash(&text));
     assert!(f
         .assets
         .target
@@ -487,7 +477,7 @@ fn acceleration_fixture() -> Fixture {
         false,
         false,
         false,
-        markdown::PromptVersion::CompactEvidenceV3,
+        markdown::PromptVersion::CustomPromptsV5,
     );
     for spec in [&mut f.old_spec, &mut f.new_spec] {
         let mut p: Parameters =
@@ -501,7 +491,7 @@ fn acceleration_fixture() -> Fixture {
         let mut capacity = serde_json::to_value(&p.capacity).unwrap();
         capacity["modelSha256"] = json!(p.engine.model.sha256);
         p.capacity = serde_json::from_value(capacity).unwrap();
-        p.acceleration_policy = Some(super::super::super::acceleration::Policy::MetalTrialV1);
+        p.acceleration_policy = Some(super::super::super::acceleration::Policy::AutoMetalV2);
         spec.profile_snapshot = super::super::super::profile(&p.engine, "standard");
         spec.parameters["generation"] = serde_json::to_value(p).unwrap();
     }
@@ -525,7 +515,7 @@ fn acceleration_choice_survives_portable_replay_and_cannot_be_removed_or_added_t
         false,
         false,
         false,
-        markdown::PromptVersion::CompactEvidenceV3,
+        markdown::PromptVersion::CustomPromptsV5,
     );
     old.value["acceleration"] = json!({"backend":"cpu","reason":"trialFailed"});
     assert!(old.run(&crate::test_support::never_cancelled).is_err());
@@ -542,7 +532,7 @@ fn metal_proof_restores_as_historical_bytes_and_rejects_changed_gpu_evidence() {
     let mut f = acceleration_fixture();
     let p: Parameters =
         serde_json::from_value(f.old_spec.parameters["generation"].clone()).unwrap();
-    f.value["acceleration"] = json!({"backend":"metal","proof":{"schemaVersion":1,"engineSha256":p.engine.executable.sha256,"modelSha256":p.engine.model.sha256,"contextTokens":acceleration_context(&p).unwrap(),"gpuLayers":37,"device":"MTL0","result":"{\"ok\":true}","log":"llama_prepare_model_devices: using device MTL0 (Apple M1 Max)\nload_tensors: offloaded 37/37 layers to GPU\nhistorical model path: /old-machine/model.gguf"}});
+    f.value["acceleration"] = json!({"backend":"metal","proof":{"schemaVersion":2,"engineSha256":p.engine.executable.sha256,"modelSha256":p.engine.model.sha256,"contextTokens":acceleration_context(&p).unwrap(),"gpuLayers":37,"device":"MTL0","result":"{\"ok\":true}","log":"llama_prepare_model_devices: using device MTL0 (Apple M1 Max)\nload_tensors: offloaded 37/37 layers to GPU\nhistorical model path: /old-machine/model.gguf"}});
     let proof = f.value["acceleration"].clone();
     assert_eq!(
         f.run(&crate::test_support::never_cancelled).unwrap()["acceleration"],
@@ -603,56 +593,9 @@ fn automatic_cpu_choice_survives_restore_but_the_pinned_policy_cannot_change() {
         f.value["acceleration"]
     );
     let mut f = acceleration_fixture();
-    f.new_spec.parameters["generation"]["accelerationPolicy"] = json!("autoMetalV2");
+    f.new_spec.parameters["generation"]["accelerationPolicy"] = json!("metalTrialV1");
     assert!(f.run(&crate::test_support::never_cancelled).is_err());
     assert!(f.assets.target.is_empty());
-}
-
-#[test]
-fn concise_summary_restore_verifies_projected_hash_but_keeps_raw_engine_artifact() {
-    let mut f = fixture_version(
-        false,
-        false,
-        false,
-        markdown::PromptVersion::ConciseSummaryV4,
-    );
-    let raw = format!(
-        "# 議事録\n\n## 要約\n{}\n\n## ToDo\n- 日程を確認する。\n",
-        "確認する。".repeat(160)
-    );
-    let projected = markdown::summary::limit(&raw);
-    assert_ne!(raw, projected);
-    let bytes = serde_json::to_vec(&json!({"markdown":raw})).unwrap();
-    f.replace(3, bytes.clone());
-    f.value["markdownHash"] = json!(content_hash(&projected));
-    let saved = f.run(&crate::test_support::never_cancelled).unwrap();
-    assert_eq!(saved["markdownHash"], content_hash(&projected));
-    assert!(f.assets.target.values().any(|v| v == &bytes));
-    let mut bad = fixture_version(
-        false,
-        false,
-        false,
-        markdown::PromptVersion::ConciseSummaryV4,
-    );
-    bad.replace(3, bytes);
-    bad.value["markdownHash"] = json!(content_hash(&raw));
-    assert!(bad.run(&crate::test_support::never_cancelled).is_err());
-    assert!(bad.assets.target.is_empty());
-}
-
-#[test]
-fn custom_prompt_backup_replays_without_settings_and_rejects_changed_snapshot() {
-    for long in [false, true] {
-        let mut f = fixture_version(long, false, false, markdown::PromptVersion::CustomPromptsV5);
-        let hash = f.value["markdownHash"].clone();
-        assert_eq!(
-            f.run(&crate::test_support::never_cancelled).unwrap()["markdownHash"],
-            hash
-        );
-        f.new_spec.parameters["generation"]["promptSnapshot"]["preferences"]["mergePrompt"] =
-            json!("別の設定");
-        assert!(f.run(&crate::test_support::never_cancelled).is_err());
-    }
 }
 
 #[test]
@@ -673,5 +616,26 @@ fn resident_markdown_restore_preserves_worker_identity_and_rejects_substitution(
     );
     assert_eq!(f.value, before);
     f.new_spec.parameters["generation"]["residentRuntime"]["sha256"] = json!("b".repeat(64));
+    assert!(f.run(&|| false).is_err());
+}
+
+#[test]
+fn current_restore_retains_optimization_policy_without_loading_models() {
+    let mut f = fixture(false, false, false);
+    let runtime = json!({"protocol":1,"engine":"llama","name":"mon-llama-worker","bytes":1234,"sha256":"a".repeat(64)});
+    let policy =
+        json!({"version":1,"tokenPacking":false,"prefixReuse":true,"evidenceHash":"b".repeat(64)});
+    for spec in [&mut f.old_spec, &mut f.new_spec] {
+        let p = &mut spec.parameters["generation"];
+        p["schemaVersion"] = json!(9);
+        p["optimizationVersion"] = json!(1);
+        p["optimization"] = policy.clone();
+        p["residentRuntime"] = runtime.clone();
+    }
+    assert!(f.run(&|| false).is_ok());
+    f.new_spec.parameters["generation"]["optimization"]["prefixReuse"] = json!(false);
+    assert!(f.run(&|| false).is_err());
+    f.new_spec.parameters["generation"]["optimization"] = policy;
+    f.value["tokenCounts"] = json!({"bad-key":1});
     assert!(f.run(&|| false).is_err());
 }

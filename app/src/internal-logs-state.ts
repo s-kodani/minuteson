@@ -33,7 +33,7 @@ export interface InternalLogPage {
 }
 export const logCategories: Record<string, string> = {
   application: "アプリ", recording: "録音", import: "音声取り込み", model: "モデル準備",
-  transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成",
+  speaker_completion: "話者補完", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成",
   playback: "再生準備", backup: "バックアップ", restore: "復元", relocation: "保存先変更",
   deletion: "会議削除", audiodeletion: "音声削除", data: "データ管理", analysis: "解析", recovery: "回復処理",
 };

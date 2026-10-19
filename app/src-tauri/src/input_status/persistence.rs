@@ -30,6 +30,8 @@ enum State {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Final {
+    schema_version: u32,
+    input_diagnostics_state: String,
     #[serde(default)]
     recording_owner_id: Option<String>,
     #[serde(default)]
@@ -56,9 +58,27 @@ impl HistoricalFinal {
     ) -> Result<Option<Self>, String> {
         crate::capture_manifest::validate_size(bytes)?;
         let report: Final = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        if report.input_event_journal_persistence.is_none()
-            && report.input_event_journal_error.is_none()
+        if report.schema_version != crate::current_formats::CAPTURE
+            || !["unavailable", "unconfirmed", "reported"]
+                .contains(&report.input_diagnostics_state.as_str())
         {
+            return Err("非対応の録音診断形式です".into());
+        }
+        // A stopped application can leave the current producer manifest in
+        // progress. It carries no final stop result; do not invent closure or
+        // discard an actual persistence result/error under that state.
+        if matches!(
+            report.state.as_str(),
+            "preparing" | "recording" | "stopping"
+        ) && report.input_event_journal_persistence.is_none()
+            && report.input_event_journal_error.is_none()
+            && report.input_diagnostics_state != "reported"
+        {
+            if report.recording_owner_id.as_deref() != Some(owner)
+                || !crate::input_levels::valid_owner(owner)
+            {
+                return Err("録音途中の履歴診断の所有が不正です".into());
+            }
             return Ok(None);
         }
         let result = Self {
@@ -67,7 +87,8 @@ impl HistoricalFinal {
                 .ok_or("停止時診断の所有がありません")?,
             state: report.state,
             persistence: report.input_event_journal_persistence,
-            unconfirmed_at_stop: report.input_event_journal_error.is_some(),
+            unconfirmed_at_stop: report.input_event_journal_error.is_some()
+                || report.input_diagnostics_state != "reported",
         };
         result.validate(owner)?;
         Ok(Some(result))
@@ -75,9 +96,13 @@ impl HistoricalFinal {
     pub(in crate::input_status) fn validate(&self, owner: &str) -> Result<(), String> {
         if self.owner_id != owner
             || !crate::input_levels::valid_owner(owner)
-            || !matches!(self.state.as_str(), "saved" | "failed")
+            || !matches!(self.state.as_str(), "saved" | "failed" | "interrupted")
         {
             return Err("持ち運ぶ停止時の履歴診断の所有または状態が不正です".into());
+        }
+        if self.state == "interrupted" && (self.persistence.is_some() || !self.unconfirmed_at_stop)
+        {
+            return Err("部分救出の診断を録音完了の証拠にはできません".into());
         }
         if self
             .persistence
@@ -126,6 +151,7 @@ impl HistoricalFinal {
 pub(crate) fn portable_manifest_fields(
     bytes: &[u8],
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    crate::capture_manifest::validate_size(bytes)?;
     let report: Final = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let mut fields = serde_json::Map::new();
     if report.input_event_journal_persistence.is_none()
@@ -312,8 +338,7 @@ impl Reader {
 
 /// The final manifest carries a structured copy, not a new commit receipt.
 /// A bounded finish timeout remains unconfirmed even if the writer completes
-/// immediately afterwards. No diagnostics in a legacy manifest means unknown,
-/// never 'confirmed'. Do not display arbitrary error strings or paths.
+/// immediately afterwards. Current diagnostics explicitly distinguish unknown and confirmed states. Do not display arbitrary error strings or paths.
 pub(super) fn archived_issue(directory: &File, owner: &str) -> Option<&'static str> {
     final_issue(directory, owner).unwrap_or(Some("unavailable"))
 }
@@ -328,16 +353,20 @@ fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, St
     };
     crate::capture_manifest::validate_size(&data)?;
     let final_report: Final = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
-    if final_report.input_event_journal_persistence.is_none()
-        && final_report.input_event_journal_error.is_none()
-    {
-        return retained_issue(directory, owner);
+    if final_report.schema_version != crate::current_formats::CAPTURE {
+        return Err("非対応の録音診断形式です".into());
     }
     if final_report.recording_owner_id.as_deref() != Some(owner)
         || !crate::input_levels::valid_owner(owner)
         || !matches!(final_report.state.as_str(), "saved" | "failed")
     {
         return Err("停止時の履歴診断の所有または状態が不正です".into());
+    }
+    match final_report.input_diagnostics_state.as_str() {
+        "unavailable" => return Ok(Some("unavailable")),
+        "unconfirmed" => return Ok(Some("unconfirmed")),
+        "reported" => {}
+        _ => return Err("録音診断の確定状態が不正です".into()),
     }
     if let Some(p) = final_report.input_event_journal_persistence {
         if !p.valid() || !p.closed {
@@ -365,7 +394,7 @@ fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, St
 fn retained_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, String> {
     if crate::input_levels::open_capture_file_at_optional(directory, "input-events.json")?.is_none()
     {
-        return Ok(None); // pre-journal recording: unknown, no fabricated result
+        return Ok(Some("unavailable"));
     }
     let record = super::journal::Reader::pin_at(directory)?.read_record(owner)?;
     Ok((!record.sealed).then_some("unconfirmed"))

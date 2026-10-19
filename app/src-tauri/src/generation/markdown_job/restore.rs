@@ -63,7 +63,7 @@ pub(in crate::generation) fn references(
     p.engine.validate()?;
     validate_capacity(&p)?;
     p.markdown_target.validate()?;
-    if p.schema_version != 7
+    if !(p.schema_version == crate::current_formats::MINUTES)
         || job.kind != "minutes_generation"
         || job.total_units != Some(p.plan.nodes.len() as i64)
         || p.plan.nodes.is_empty()
@@ -119,6 +119,8 @@ pub(in crate::generation) fn checkpoint(
     }
     if old_p.engine != engine
         || old_p.resident_runtime != new_p.resident_runtime
+        || old_p.optimization_version != new_p.optimization_version
+        || old_p.optimization != new_p.optimization
         || old_p.schema_version != new_p.schema_version
         || old_p.prompt_version != new_p.prompt_version
         || old_p.prompt_snapshot != new_p.prompt_snapshot

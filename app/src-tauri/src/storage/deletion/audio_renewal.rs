@@ -144,7 +144,7 @@ fn read_record(
         return Err("残り音声への再同意の固定記録が不正です".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2)
+    if record.version != 3
         || record.subtype != "audioRemainingConfirmation"
         || record.source_operation != saved.operation()
         || record.source_hash != source_hash(saved)?
@@ -217,26 +217,20 @@ pub(super) fn load(
         record
             .previous_progress
             .validate(saved, &super::targets(&plan.snapshot)?)?;
-        // Version 1 retains its original own-operation classification. Version
-        // 2 includes typed ancestors. The source-chain reader defers only that
-        // membership check until its oldest-to-newest validation pass; its
-        // provisional frame can never become a removal permit.
+        // Classify typed ancestor paths on the oldest-to-newest validation pass.
         let mut paths = plan.paths.clone();
-        if record.version == 2 {
-            if let Some(ancestors) = ancestors {
-                paths.extend(ancestors.iter().cloned());
-                if paths.len() > MAX_PATHS {
-                    return Err("残り音声と祖先の履歴対象数が安全上限を超えています".into());
-                }
+        if let Some(ancestors) = ancestors {
+            paths.extend(ancestors.iter().cloned());
+            if paths.len() > MAX_PATHS {
+                return Err("残り音声と祖先の履歴対象数が安全上限を超えています".into());
             }
         }
         let own = historical(&next, &plan.paths);
-        let history_valid =
-            if record.version == 1 || ancestors.is_some() || saved.header.origin.is_none() {
-                next.historical_audio == historical(&next, &paths)
-            } else {
-                own.is_subset(&next.historical_audio)
-            };
+        let history_valid = if ancestors.is_some() || saved.header.origin.is_none() {
+            next.historical_audio == historical(&next, &paths)
+        } else {
+            own.is_subset(&next.historical_audio)
+        };
         if record.previous_progress.confirmation != previous
             || consent < latest
             || next.scope != saved.snapshot.scope
@@ -453,7 +447,7 @@ fn accept_inner(
         .as_ref()
         .map_or(1, |r| r.generation + 1);
     let record = Record {
-        version: 2,
+        version: 3,
         subtype: "audioRemainingConfirmation".into(),
         source_operation: old.saved.operation().into(),
         source_hash: source_hash(&old.saved)?,
@@ -470,7 +464,7 @@ fn accept_inner(
         generation,
     };
     let next = Progress {
-        version: 3,
+        version: 4,
         phase: Phase::RemovingAudio,
         census_hash: old.saved.header.census_hash.clone(),
         next: 0,
@@ -559,7 +553,7 @@ fn accept_inner(
 }
 pub(in crate::storage::deletion) fn audit_source(json: &str) -> Result<String, String> {
     let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2)
+    if record.version != 3
         || record.subtype != "audioRemainingConfirmation"
         || !audio::uuid(&record.source_operation)
         || record.encode()? != json

@@ -235,7 +235,7 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
 }
 
 pub(super) fn stopped(db: &Connection) -> Result<(), String> {
-    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE source_type!='historical_snapshot' AND state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if active {
         Err("録音・解析・取り込み・準備・書き出しの停止完了後に削除を確認してください".into())
     } else {

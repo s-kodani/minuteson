@@ -4,6 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::time::SystemTime;
 
 pub(crate) mod flac;
+pub(crate) mod reuse;
 
 pub const PREVIEW_FRAMES: u64 = 65_536;
 
@@ -34,6 +35,7 @@ pub struct VerifiedAudio {
     file: File,
     size: u64,
     modified: SystemTime,
+    identity: String,
     pub format: PcmFormat,
     flac: Option<flac::FlacAudio>,
 }
@@ -64,6 +66,7 @@ impl VerifiedAudio {
         let audio = Self {
             file,
             size: expected_size,
+            identity: reuse::stamp(&before),
             modified: before.modified().map_err(|e| e.to_string())?,
             format,
             flac: Some(flac),
@@ -91,6 +94,9 @@ impl VerifiedAudio {
         expected_hash: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        if let Some(audio) = reuse::open(&file, expected_size, expected_hash, cancelled)? {
+            return Ok(audio);
+        }
         file.rewind().map_err(|e| e.to_string())?;
         let before = file.metadata().map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() != expected_size {
@@ -125,16 +131,19 @@ impl VerifiedAudio {
             file,
             size: expected_size,
             modified,
+            identity: reuse::stamp(&before),
             format,
             flac,
         };
         audio.check_unchanged()?;
+        reuse::remember(&audio, expected_hash)?;
         Ok(audio)
     }
 
     pub(crate) fn check_unchanged(&self) -> Result<(), String> {
         let metadata: Metadata = self.file.metadata().map_err(|e| e.to_string())?;
-        if metadata.len() != self.size
+        if reuse::stamp(&metadata) != self.identity
+            || metadata.len() != self.size
             || metadata.modified().map_err(|e| e.to_string())? != self.modified
         {
             return Err("再生準備後に音声ファイルが変更されました".into());

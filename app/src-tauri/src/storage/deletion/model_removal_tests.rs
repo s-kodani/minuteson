@@ -45,7 +45,7 @@ fn model_deletion_body_removes_only_fixed_package_and_preserves_cpu_profiles_job
         .unwrap();
     let profile =
         serde_json::json!({"managedModel":{"package":{"packageId":f.package}}}).to_string();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('history',?1,'transcription','paused','history',?2,?3,'{}',?2,1,1)",params![meeting,"a".repeat(64),profile]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('history',?1,'transcription','paused','history',?2,?3,'{\"schemaVersion\":4}',?2,1,1)",params![meeting,"a".repeat(64),profile]).unwrap();
     drop(db);
     let other = f.root.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir(&other).unwrap();

@@ -134,13 +134,17 @@ impl Execution<'_> {
         match self {
             Self::Whisper(e) => {
                 let mut value = json!({"threads":e.threads,"useGpu":e.use_gpu});
-                if let Some(options) = e.vad_options { value["vadOptions"] = serde_json::to_value(options).unwrap(); }
+                if let Some(options) = e.vad_options {
+                    value["vadOptions"] = serde_json::to_value(options).unwrap();
+                }
                 value
-            },
+            }
             Self::Sherpa(e) => {
                 let mut value = json!({"threads":e.threads,"clusterThresholdMilli":e.cluster_threshold_milli,
                 "windowShiftMilli":e.window_shift_milli,"minDurationOnMs":e.min_duration_on_ms,"minDurationOffMs":e.min_duration_off_ms});
-                if e.speech_sensitivity_milli != 0 { value["speechSensitivityMilli"] = json!(e.speech_sensitivity_milli); }
+                if e.speech_sensitivity_milli != 0 {
+                    value["speechSensitivityMilli"] = json!(e.speech_sensitivity_milli);
+                }
                 value
             }
             Self::Llama(e, b) => json!({"threads":e.threads,"contextTokens":e.context_tokens,
@@ -460,6 +464,12 @@ fn with_execution<T>(
                     .map_err(|e| e.to_string())?;
             run(Execution::Sherpa(&e))
         }
+        JobKind::SpeakerCompletion => {
+            let e: SherpaConfig =
+                serde_json::from_value(spec.parameters["completion"]["engine"].clone())
+                    .map_err(|e| e.to_string())?;
+            run(Execution::Sherpa(&e))
+        }
         JobKind::Diarization => {
             let e: SherpaConfig =
                 serde_json::from_value(spec.parameters["diarization"]["engine"].clone())
@@ -708,6 +718,7 @@ pub(in crate::storage) fn gate(db: &Connection, spec: &JobSpec) -> Result<(), St
         Some("standard" | "high_accuracy")
     ) && match spec.kind {
         JobKind::Transcription => spec.parameters["engine"].is_object(),
+        JobKind::SpeakerCompletion => spec.parameters["completion"]["engine"].is_object(),
         JobKind::Diarization => spec.parameters["diarization"]["engine"].is_object(),
         JobKind::VoiceRegistration | JobKind::VoiceMatching => {
             spec.parameters["voice"]["engine"].is_object()

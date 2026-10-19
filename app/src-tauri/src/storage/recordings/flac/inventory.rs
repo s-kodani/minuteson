@@ -62,7 +62,7 @@ pub(in crate::storage) fn inspect_workspaces(
         }
         let root = Directory::open(&path)?;
         // A read-only shared lock excludes the producer's exclusive converter.
-        // Legacy recordings with no workspace have no lock and no plan.
+        // An incomplete capture may have neither a workspace lock nor a plan.
         let lock = match root.optional(LOCK, false) {
             Ok(lock) => lock,
             // An unknown/non-private sidecar cannot prove native ownership.

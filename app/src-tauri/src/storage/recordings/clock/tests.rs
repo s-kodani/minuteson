@@ -10,13 +10,15 @@ fn segment(first: i64, last: i64, start: i64, end: i64) -> Value {
 
 pub(super) fn corrected(storage: &Storage) -> (String, String, PathBuf, Value) {
     let (meeting, session, output, mut value) = saved_probe_fixture(storage);
-    value["schemaVersion"] = json!(2);
+    value["schemaVersion"] = json!(4);
     value["captureClock"] = json!({"domain":"mach_continuous_time","originUtcMs":1234567890000_i64,"uncertaintyNs":1000000});
     value["microphone"]["clockSegments"] = json!([
         segment(0, 24000, 0, 500010),
         segment(24000, 48000, 500010, 1000020),
     ]);
     value["system"]["clockSegments"] = json!([segment(0, 48000, 5000, 1005100)]);
+    value["captureEnd"] = json!({"method":"acquisition_closed","microphoneClosedUs":1000020,"systemClosedUs":1005100,"endUs":1005100});
+    crate::storage::recordings::tests::seal_probe_fixture(&output, &mut value);
     write(&output, &value);
     (meeting, session, output, value)
 }
@@ -452,6 +454,7 @@ fn corrected_capture_invalid_or_incomplete_clock_proofs_never_publish_or_modify_
 }
 
 fn with_gap(value: &mut Value) {
+    value["captureEnd"] = json!({"method":"acquisition_closed","microphoneClosedUs":4000000,"systemClosedUs":4000000,"endUs":4000000});
     value["microphone"]["clockSegments"] = json!([
         segment(0, 24000, 0, 500000),
         segment(24000, 48000, 3500000, 4000000),
@@ -464,6 +467,7 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, session, output, mut value) = corrected(&storage);
     with_gap(&mut value);
+    crate::storage::recordings::tests::seal_probe_fixture(&output, &mut value);
     write(&output, &value);
     assert_eq!(
         storage.finalize_recording(&session).unwrap().duration_us,
@@ -496,12 +500,28 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
         assert_eq!(audio.total_frames(), 24000);
         assert_eq!(audio.read_pcm(0, 32).unwrap().len(), 128);
     }
+    let both = storage
+        .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
+            start_reference: None,
+            meeting_id: meeting.clone(),
+            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both,
+        })
+        .unwrap();
+    // The current closure also proves the system lane's leading/trailing loss.
+    assert_eq!(both.missing_ranges.len(), 3);
+    assert_eq!(
+        both.missing_ranges
+            .iter()
+            .filter(|gap| gap.track_kind == "system")
+            .count(),
+        2
+    );
     let store = crate::playback::PlaybackStore::default();
     let audio = storage
         .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
             start_reference: None,
             meeting_id: meeting.clone(),
-            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both,
+            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Mic,
         })
         .unwrap();
     let info = store.insert_meeting(audio).unwrap();
@@ -532,6 +552,7 @@ fn corrected_capture_clock_or_gap_insert_failure_rolls_back_all_publication_and_
         let storage = Storage::open(root.path().into()).unwrap();
         let (meeting, session, output, mut value) = corrected(&storage);
         with_gap(&mut value);
+        crate::storage::recordings::tests::seal_probe_fixture(&output, &mut value);
         write(&output, &value);
         storage.connection.lock().unwrap().execute_batch(&format!("CREATE TRIGGER refuse_clock BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT,'clock insert failure'); END;")).unwrap();
         assert!(storage
@@ -582,35 +603,15 @@ fn corrected_capture_restart_uses_the_saved_shared_origin_and_retains_bad_clock_
 }
 
 #[test]
-fn corrected_capture_legacy_manifest_stays_nominal_and_unverified_without_invented_maps() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, session, _, _) = saved_probe_fixture(&storage);
-    let before = load_session(&storage.connection.lock().unwrap(), &session)
-        .unwrap()
-        .unwrap()
-        .started_at_utc_ms;
-    assert_eq!(
-        storage
-            .finalize_recording(&session)
-            .unwrap()
-            .started_at_utc_ms,
-        before
-    );
-    for track in storage.recorded_audio_plan(&meeting).unwrap().tracks {
-        assert_eq!((track.start_us, track.end_us), (0, 1000000));
-        assert!(track.chunks[0].clock_segments.is_empty());
-        let config: String = storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT processing_config_json FROM audio_tracks WHERE id=?1",
-                params![track.id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(config, "{\"timeline_alignment\":\"unverified\"}");
+fn old_capture_manifest_is_rejected_without_inventing_maps() {
+    for version in [1, 2, 3] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, session, output, mut value) = saved_probe_fixture(&storage);
+        value["schemaVersion"] = json!(version);
+        write(&output, &value);
+        assert!(storage.finalize_recording(&session).is_err());
+        unpublished(&storage, &meeting, &session);
     }
 }
 

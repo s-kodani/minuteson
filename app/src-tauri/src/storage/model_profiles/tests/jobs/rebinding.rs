@@ -316,11 +316,15 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
         .storage
         .create_transcript_draft(&f.meeting, &analysis.id)
         .unwrap();
-    draft.payload.utterances = vec![crate::storage::drafts::UtteranceEdit {
-        utterance_id: analysis.utterances[0].id.clone(),
-        effective_text: "点検日と異なる確認事項を記録します。".repeat(180),
-        speaker_ids: analysis.utterances[0].speaker_ids.clone(),
-    }];
+    draft.payload.utterances = analysis
+        .utterances
+        .iter()
+        .map(|utterance| crate::storage::drafts::UtteranceEdit {
+            utterance_id: utterance.id.clone(),
+            effective_text: "点検日と異なる確認事項を記録します。".repeat(800),
+            speaker_ids: utterance.speaker_ids.clone(),
+        })
+        .collect();
     f.storage
         .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
@@ -609,7 +613,9 @@ fn prepare(f: &Fixture, spec: &JobSpec, target: usize) -> Result<Binding, String
 }
 fn check_execution<T>(spec: &JobSpec, run: impl FnOnce(Execution<'_>) -> T) -> T {
     match spec.kind {
-        JobKind::VoiceRegistration | JobKind::VoiceMatching => panic!("not a rebinding fixture"),
+        JobKind::VoiceRegistration | JobKind::VoiceMatching | JobKind::SpeakerCompletion => {
+            panic!("not a rebinding fixture")
+        }
         JobKind::Transcription => {
             let e: WhisperConfig =
                 serde_json::from_value(spec.parameters["engine"].clone()).unwrap();

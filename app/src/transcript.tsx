@@ -9,6 +9,7 @@ import { IconButton } from "./action-icon";
 import { IssueNotice } from "./toast";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
+import { IdentificationBadge } from "./speaker-identification";
 import { WorkspacePanel } from "./workspace-panel";
 import { useMeetingAudio } from "./meeting-audio";
 import { playingRows, playbackTimeline } from "./playback-follow";
@@ -243,20 +244,38 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
     } } : { kind:"utterance", analysisId:analysis.id, utteranceId:utterance.id, expectedContentHash:analysis.contentHash,
       startUs:utterance.startUs, endUs:utterance.endUs });
   };
-  const reloadVoice = async (automatic = false) => {
-    if (automatic) {
-      const current=queue.snapshot();
-      // A background result must never save an unconfirmed name or replace
-      // text that the user is still editing. Explicit operations flush first.
-      if (running.current || current.dirty || current.saving || current.error || Object.keys(textRef.current).length || nameRef.current || addingRef.current || assignmentRef.current || structureRef.current) return;
-    } else await barrier.current();
-    const [base,draft]=await Promise.all([invoke<Analysis|null>("get_current_analysis",{meetingId}),invoke<Draft|null>("get_transcript_draft",{meetingId})]);
-    if (!mounted.current) return;
-    if (!base || base.id!==analysisRef.current?.id || draft&&draft.baseAnalysisId!==base.id) throw Error("解析版が変更されています。会議を開き直してください。");
-    consolidationAttempt.current="";setAnalysis(base);queue.load(draft);
-  };
-  const voiceReload=useRef(reloadVoice);voiceReload.current=reloadVoice;
-  useEffect(()=>{if(!isTauri())return;let disposed=false;const subscription=listen<string>("voice-identity-changed",event=>{if(event.payload===meetingId&&!disposed)void voiceReload.current(true).catch(c=>{if(mounted.current)setError(String(c));});});return()=>{disposed=true;void subscription.then(unlisten=>unlisten());};},[meetingId]);
+  const [transcriptRefresh,setTranscriptRefresh]=useState(0);
+  const appliedRefresh=useRef(0);
+  const reloadVoice=async()=>{setTranscriptRefresh(value=>value+1);};
+  useEffect(()=>{
+    if(!isTauri())return;
+    let disposed=false;
+    const subscriptions=["voice-identity-changed","analysis-version-changed"].map(event=>listen<string>(event,message=>{
+      if(message.payload===meetingId&&!disposed)setTranscriptRefresh(value=>value+1);
+    }));
+    return()=>{disposed=true;for(const subscription of subscriptions)void subscription.then(unlisten=>unlisten());};
+  },[meetingId]);
+  useEffect(()=>{
+    // Completion publishes a new immutable revision. Keep its notification
+    // pending until the editor is idle; never flush unconfirmed inputs here.
+    if(transcriptRefresh===appliedRefresh.current||loading||busy||locked||!visible||running.current
+      ||snapshot.dirty||snapshot.saving||snapshot.error||Object.keys(texts).length||nameEditor||adding||assignmentEditor||structureEditor)return;
+    let disposed=false;
+    const current=queue.snapshot();
+    void Promise.all([invoke<Analysis|null>("get_current_analysis",{meetingId}),invoke<Draft|null>("get_transcript_draft",{meetingId})]).then(([base,draft])=>{
+      const latest=queue.snapshot();
+      // Inputs or a local operation may have started while the reads ran.
+      if(disposed||!mounted.current||running.current||analysisRef.current!==analysis||latest.draft!==current.draft||latest.payload!==current.payload
+        ||latest.dirty||latest.saving||latest.error||Object.keys(textRef.current).length||nameRef.current||addingRef.current||assignmentRef.current||structureRef.current)return;
+      if(!base||base.meetingId!==meetingId||!/^[a-f0-9]{64}$/.test(base.contentHash)
+        ||draft&&(draft.meetingId!==meetingId||draft.baseAnalysisId!==base.id))throw Error("保存された文字起こしと編集が一致しません。再読込してください。");
+      appliedRefresh.current=transcriptRefresh;
+      consolidationAttempt.current="";
+      if(base.id!==analysis?.id)setSpeakerFilter("");
+      setAnalysis(base);queue.load(draft);
+    }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=transcriptRefresh;setError(String(cause));}});
+    return()=>{disposed=true;};
+  },[transcriptRefresh,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
   return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集">
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
     {!loading && !analysis && !error && <p className="transcript-state">文字起こしはまだありません。</p>}
@@ -278,7 +297,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
             <button type="button" className="speaker-count-filter" aria-label={name + "の発言で絞り込み"} aria-pressed={speakerFilter === speaker.id} onClick={() => setSpeakerFilter(speaker.id)}>{view?.utterances.filter(item => item.speakerIds.includes(speaker.id)).length ?? 0}発言</button>
           </div>;
         })}</div>
-        <VoicePanel meetingId={meetingId} speakers={speakers} revision={`${analysis.id}:${analysis.contentHash}:${snapshot.draft?.contentHash??""}`} locked={disabled||!!snapshot.error||!visible} beforeOperation={()=>barrier.current()} onChanged={()=>reloadVoice(true)} onPlay={async window=>{
+        <VoicePanel meetingId={meetingId} speakers={speakers} revision={`${analysis.id}:${analysis.contentHash}:${snapshot.draft?.contentHash??""}`} locked={disabled||!!snapshot.error||!visible} beforeOperation={()=>barrier.current()} onChanged={reloadVoice} onPlay={async window=>{
           if(!audio?.canPlay||audio.locked||audio.durationUs===null||!analysis)throw Error("登録元の音声を再生できません。");
           const mode=tracks.kinds?.get(window.trackId);
           if((mode!=="mic"&&mode!=="system"&&mode!=="imported")||!audio.modes.includes(mode))throw Error("登録元の音声トラックを確認できません。");
@@ -295,6 +314,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
           event.preventDefault();if(audio.selected===utterance.id&&audio.available&&!audio.atEnd)audio.toggle();else play(utterance);
         }}>
           <div className="utterance-meta"><SpeakerLabels meetingId={meetingId} speakerIds={utterance.speakerIds} speakers={speakers} /><button type="button" className="utterance-stamp" aria-label="音声を再生" title={timeLabel(utterance.startUs) + "–" + timeLabel(utterance.endUs)} disabled={disabled || !audio || !audio.canPlay || audio.locked} onClick={() => play(utterance)}><time>{timeLabel(utterance.startUs)}</time></button></div>
+          <IdentificationBadge value={utterance.speakerIdentification}/>
           {Object.hasOwn(texts, utterance.id) ? <div className="utterance-text-edit">
             <textarea autoFocus aria-label={timeLabel(utterance.startUs) + "の発言"} rows={2} maxLength={20000} disabled={disabled} value={texts[utterance.id]} onChange={event => setTexts(current => ({ ...current, [utterance.id]: event.target.value }))} onKeyDown={event => {
               if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;

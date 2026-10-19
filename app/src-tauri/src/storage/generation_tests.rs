@@ -1,6 +1,5 @@
 //! Retired formats are rejected without executing or publishing old workers.
 use super::*;
-use crate::generation;
 use serde_json::json;
 
 #[test]
@@ -31,30 +30,18 @@ fn retired_worker_never_changes_fixed_input_or_human_markdown() {
                 markdown: "保持する人間本文".into(),
             })
             .unwrap();
-        let job = storage
+        assert!(storage
             .enqueue_markdown_minutes_job_configured(
                 req,
                 json!({"profile":"standard","engine":"removed"}),
                 minutes_markdown::GenerationTarget {
                     schema_version: 1,
-                    expected: Some(human.stamp()),
+                    expected: Some(human.stamp())
                 },
-                |_| Ok((json!({"schemaVersion":version}), Some(1))),
+                |_| Ok((json!({"schemaVersion":version}), Some(1)))
             )
-            .unwrap();
-        storage.acquire_local_inference_job().unwrap().unwrap();
-        let before = storage.get_job(&job.id).unwrap();
-        let fixed = storage.fixed_job_input(&job.id).unwrap();
-        assert!(generation::process(
-            &storage,
-            &job.id,
-            &crate::test_support::never_cancelled,
-            &|_| panic!("retired progress")
-        )
-        .unwrap_err()
-        .contains("minutes_structured_generation_removed"));
-        assert_eq!(storage.get_job(&job.id).unwrap(), before);
-        assert_eq!(storage.fixed_job_input(&job.id).unwrap(), fixed);
+            .is_err());
+        assert!(storage.list_jobs(&meeting.id).unwrap().is_empty());
         assert_eq!(
             storage.get_minutes_markdown(&meeting.id).unwrap(),
             Some(human)

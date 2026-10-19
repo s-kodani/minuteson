@@ -1,5 +1,12 @@
 export interface Speaker { id: string; label: string; displayName: string | null }
+export interface SpeakerIdentification {
+  similarityMilli: number;
+  runnerUpMilli: number | null;
+  needsReview: boolean;
+  reason: string;
+}
 export interface Utterance {
+  speakerIdentification?: SpeakerIdentification | null;
   trackId?: string;
   id: string; startUs: number; endUs: number; recognizedText: string;
   effectiveText: string; attributionState: string; speakerIds: string[];
@@ -26,8 +33,9 @@ export interface DraftUtteranceAudioRequest {
 }
 const compareId = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 export function canonicalPayload(payload: DraftPayload): DraftPayload {
+  if (payload.schema_version !== 4) throw Error("非対応の下書き形式です");
   const result: DraftPayload = {
-    schema_version: payload.schema_version,
+    schema_version: 4, manual_speakers: [], speaker_merges: [], utterance_splits: [],
     speaker_names: [...payload.speaker_names].sort((a, b) => compareId(a.speaker_id, b.speaker_id)),
     utterances: payload.utterances.map(item => ({ ...item, speaker_ids: [...item.speaker_ids].sort(compareId) })).sort((a, b) => compareId(a.utterance_id, b.utterance_id)),
   };
@@ -51,11 +59,13 @@ export function projectTranscript(base: Analysis, payload: DraftPayload | null):
       if(split) return split.parts.map(p=>{
         const edit=edits.get(p.id),speakerIds=mergedIds(payload,edit?.speaker_ids ?? p.speaker_ids);
         return {...u,id:p.id,startUs:p.start_us,endUs:p.end_us,effectiveText:edit?.effective_text ?? p.effective_text,speakerIds,
-          recognitionIsSource:true,sourceUtteranceId:u.id,attributionState:speakerIds.length===0?"unknown":speakerIds.length===1?"assigned":"overlap"};
+          speakerIdentification:undefined,recognitionIsSource:true,sourceUtteranceId:u.id,attributionState:speakerIds.length===0?"unknown":speakerIds.length===1?"assigned":"overlap"};
       });
       const edit = edits.get(u.id);
       const speakerIds = mergedIds(payload,edit?.speaker_ids ?? u.speakerIds);
+      const changed = speakerIds.length!==u.speakerIds.length || speakerIds.some(id=>!u.speakerIds.includes(id));
       return [{...u,effectiveText:edit?.effective_text ?? u.effectiveText,speakerIds,
+        ...(changed?{speakerIdentification:undefined}:{}),
         attributionState:speakerIds.length===0?"unknown":speakerIds.length===1?"assigned":"overlap"}];
     });
   // Preserve the stored sequence unless a structural split needs a new one.
@@ -73,7 +83,7 @@ export function activeSpeakers(view: Analysis, payload: DraftPayload | null): Sp
 export function mergeSpeaker(base: Analysis, payload: DraftPayload, sourceId: string, targetId: string): DraftPayload {
   const active = new Set(activeSpeakers(projectTranscript(base,payload),payload).map(s=>s.id));
   if (sourceId === targetId || !active.has(sourceId) || !active.has(targetId)) throw new Error("統合元と統合先には別の有効な話者を選んでください。");
-  return canonicalPayload({...payload,schema_version:Math.max(payload.schema_version,2),speaker_merges:[
+  return canonicalPayload({...payload,schema_version:4,speaker_merges:[
     ...(payload.speaker_merges ?? []).map(m=>({...m,target_id:m.target_id===sourceId?targetId:m.target_id})),
     {source_id:sourceId,target_id:targetId},
   ]});
@@ -85,7 +95,7 @@ export function addSpeaker(base: Analysis, payload: DraftPayload, id: string, na
   if ([...name].length>200) throw new Error("話者名は200文字までです。");
   const utterance = utteranceId ? view.utterances.find(u=>u.id===utteranceId) : null;
   if (utteranceId && !utterance) throw new Error("発言が見つかりません。");
-  return canonicalPayload({...payload,schema_version:Math.max(payload.schema_version,2),
+  return canonicalPayload({...payload,schema_version:4,
     manual_speakers:[...(payload.manual_speakers ?? []),{id,label:`手動話者 ${(payload.manual_speakers?.length ?? 0)+1}`}],
     speaker_names:[...payload.speaker_names,{speaker_id:id,display_name:name || null}],
     utterances:utterance?[...payload.utterances.filter(e=>e.utterance_id!==utterance.id),{utterance_id:utterance.id,effective_text:utterance.effectiveText,speaker_ids:[id]}]:payload.utterances,
@@ -126,7 +136,7 @@ export function splitUtterance(base:Analysis,payload:DraftPayload,utteranceId:st
   const sourceText=parts.map(p=>p.effective_text).join("");
   const removed=new Set([originalId,...currentParts.map(u=>u.id)]);
   const sourceEdit=payload.utterances.find(e=>e.utterance_id===originalId);
-  return canonicalPayload({...payload,schema_version:3,
+  return canonicalPayload({...payload,schema_version:4,
     utterance_splits:[...(payload.utterance_splits ?? []).filter(s=>s.source_utterance_id!==originalId),{source_utterance_id:originalId,source_effective_text:sourceText,parts}],
     utterances:[...payload.utterances.filter(e=>!removed.has(e.utterance_id)),{utterance_id:originalId,effective_text:sourceText,speaker_ids:sourceEdit?.speaker_ids ?? parent.speakerIds}],
   });

@@ -22,9 +22,12 @@ fn budget(value: &impl Serialize, used: &mut usize) -> Result<(), String> {
 #[serde(deny_unknown_fields, tag = "engine")]
 enum Configuration {
     #[serde(rename = "whisper.cpp", rename_all = "camelCase")]
-    Whisper { threads: u32, use_gpu: bool,
+    Whisper {
+        threads: u32,
+        use_gpu: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        vad_options: Option<crate::transcription::vad::VadOptions> },
+        vad_options: Option<crate::transcription::vad::VadOptions>,
+    },
     #[serde(rename = "sherpa-onnx", rename_all = "camelCase")]
     Sherpa {
         threads: u32,
@@ -32,7 +35,10 @@ enum Configuration {
         window_shift_milli: u32,
         min_duration_on_ms: u32,
         min_duration_off_ms: u32,
-        #[serde(default, skip_serializing_if = "crate::diarization::sensitivity::is_standard")]
+        #[serde(
+            default,
+            skip_serializing_if = "crate::diarization::sensitivity::is_standard"
+        )]
         speech_sensitivity_milli: i32,
     },
     #[serde(rename = "llama.cpp", rename_all = "camelCase")]
@@ -75,14 +81,16 @@ impl Configuration {
         // Empty paths allow numerical validation by the actual preferences
         // validators. They are not selected model references on this host.
         match *self {
-            Self::Whisper { threads, use_gpu, vad_options } => {
-                Settings::Whisper(preferences::EnginePreferences {
-                    threads,
-                    use_gpu,
-                    vad_options,
-                    ..Default::default()
-                })
-            }
+            Self::Whisper {
+                threads,
+                use_gpu,
+                vad_options,
+            } => Settings::Whisper(preferences::EnginePreferences {
+                threads,
+                use_gpu,
+                vad_options,
+                ..Default::default()
+            }),
             Self::Sherpa {
                 threads,
                 cluster_threshold_milli,
@@ -284,9 +292,8 @@ pub(in crate::storage) fn export(
             return Err("持ち運び用モデル構成が件数上限を超えています".into());
         }
     }
-    // Validate legacy single-file historical rows separately, never attempt to
-    // deserialize them as managed placements or infer missing engine metadata.
-    super::super::model_metadata::historical(db)?;
+    // File references are explicit metadata, separate from managed packages.
+    super::super::model_metadata::retained_files(db)?;
     let rows = db
         .prepare("SELECT id,source_type FROM model_packages ORDER BY id")
         .map_err(|e| e.to_string())?
@@ -299,7 +306,7 @@ pub(in crate::storage) fn export(
     for (id, source) in rows {
         check()?;
         match source.as_str() {
-            "historical_snapshot" => {}
+            "historical_snapshot" => return Err("非対応の旧モデル履歴です".into()),
             "manual_import" | "download" => {
                 let (record, _) = super::super::model_placements::load(db, &id)?
                     .ok_or("持ち運び用のモデル配置記録が欠損しています")?;

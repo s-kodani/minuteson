@@ -60,7 +60,7 @@ fn assert_whole_gap_playback(storage: &Storage, meeting: &str, end: i64) {
 
 fn ending(storage: &Storage) -> (String, String, PathBuf, Value) {
     let (meeting, session, output, mut value) = corrected(storage);
-    value["schemaVersion"] = json!(3);
+    value["schemaVersion"] = json!(4);
     value["recordingOwnerId"] = json!(session);
     value["captureEnd"] = json!({"method":"acquisition_closed","microphoneClosedUs":1050000,"systemClosedUs":1100000,"endUs":1100000});
     write(&output, &value);
@@ -265,12 +265,8 @@ fn capture_ending_never_upgrades_legacy_manifests_from_wall_time_other_track_or_
         value.as_object_mut().unwrap().remove("captureEnd");
         value["endedAtUTC"] = json!("2099-01-01T00:00:00Z");
         write(&output, &value);
-        let saved = storage.finalize_recording(&session).unwrap();
-        assert_eq!(
-            saved.duration_us,
-            if schema == 1 { 1000000 } else { 1005100 }
-        );
-        assert!(gaps(&storage).is_empty());
+        assert!(storage.finalize_recording(&session).is_err());
+        unpublished(&storage, &meeting, &session);
     }
 }
 
@@ -284,6 +280,7 @@ fn capture_ending_interior_and_boundary_gaps_coexist_without_padding_known_runs(
     value["captureEnd"]["microphoneClosedUs"] = json!(1250000);
     value["captureEnd"]["systemClosedUs"] = json!(1300000);
     value["captureEnd"]["endUs"] = json!(1300000);
+    crate::storage::recordings::tests::seal_probe_fixture(&output, &mut value);
     write(&output, &value);
     assert_eq!(
         storage.finalize_recording(&session).unwrap().duration_us,
@@ -501,7 +498,7 @@ fn swift_generated_capture_ending_clock_recovery_preserves_sleep_gaps_and_actual
     );
     let before = originals(&output);
     let manifest: Value = serde_json::from_slice(&before[0]).unwrap();
-    assert_eq!(manifest["schemaVersion"], 3);
+    assert_eq!(manifest["schemaVersion"], 4);
     assert_eq!(manifest["recordingOwnerId"], session.id);
     // Lifecycle history belongs to its separate producer journal/status, never
     // to the audio manifest. Its clock_changed reason is asserted in the Swift
@@ -631,7 +628,7 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
     );
     let before = originals(&output);
     let manifest: Value = serde_json::from_slice(&before[0]).unwrap();
-    assert_eq!(manifest["schemaVersion"], 3);
+    assert_eq!(manifest["schemaVersion"], 4);
     assert_eq!(manifest["recordingOwnerId"], session.id);
     assert_eq!(manifest["system"]["systemRecovery"]["interruptions"], 1);
     let saved = storage.finalize_recording(&session.id).unwrap();

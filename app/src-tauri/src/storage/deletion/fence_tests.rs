@@ -30,7 +30,7 @@ fn edit_recovery_review_remains_read_only_under_pending_deletion_and_cold_start(
         if with_names {
             let id = format!("manual:{}", uuid::Uuid::new_v4());
             let mut payload = draft.payload.clone();
-            payload.schema_version = 2;
+            payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
             payload.manual_speakers.push(ManualSpeaker {
                 id: id.clone(),
                 label: "保持する話者".into(),
@@ -466,7 +466,7 @@ fn deletion_fence_blocks_backup_move_stage_and_startup_recording_import_recovery
 fn deletion_fence_cold_open_skips_mutable_recovery_preserves_active_rows_and_requires_restart_after_keep(
 ) {
     for (sql,table,state) in [
-        ("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('pending-active',?1,'transcription','running','pending-active',?2,'{}','{}',?2,1,1)","processing_jobs","running"),
+        ("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('pending-active',?1,'transcription','running','pending-active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)","processing_jobs","running"),
         ("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,created_at,updated_at) VALUES('pending-active',?1,'preparing','system','{}','pending-active',1,1)","recording_sessions","preparing"),
         ("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,created_at,updated_at) VALUES('pending-active',?1,'copying',?2,1,1)","audio_imports","copying"),
         ("INSERT INTO export_records(id,meeting_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,format,destination_path,state,created_at,updated_at) VALUES('pending-active',?1,?2,?2,?2,0,'markdown','/tmp/unused.md','writing',1,1)","export_records","writing"),

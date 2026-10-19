@@ -21,7 +21,7 @@ fn audio_job(meeting: &str, operation: &str) -> JobSpec {
         input_analysis_id: None,
         input_hash: "a".repeat(64),
         profile_snapshot: serde_json::json!({"engine":"test","model_hash":"b".repeat(64)}),
-        parameters: serde_json::json!({"window_seconds":30}),
+        parameters: serde_json::json!({"schemaVersion":4,"window_seconds":30}),
         total_units: Some(10),
     }
 }
@@ -665,6 +665,7 @@ fn diarization_enqueue_and_cached_input_reject_before_configuring_or_reading_sna
     assert!(!configured.get());
     let mut spec = audio_job(&f.meeting, "cached-diarization");
     spec.kind = JobKind::Diarization;
+    spec.parameters["schemaVersion"] = serde_json::json!(3);
     spec.input_analysis_id = Some(uuid::Uuid::new_v4().to_string());
     let mut db = f.storage.connection.lock().unwrap();
     let tx = db.transaction().unwrap();

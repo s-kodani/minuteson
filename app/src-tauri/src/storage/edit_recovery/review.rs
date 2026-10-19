@@ -147,7 +147,7 @@ impl Storage {
             );
         }
         let payload = Payload {
-            schema_version: 2,
+            schema_version: crate::current_formats::EDIT_RECOVERY,
             base_payload: draft.payload.clone(),
             buffers: vec![],
             name_buffers: vec![],

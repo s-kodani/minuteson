@@ -24,7 +24,7 @@ final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
           lastEntrySHA256: nil, producerClosed: false, failure: nil))
     }
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "capacity-only-not-saved", captureMode: "system",
+      schemaVersion: 4, scenario: "capacity-only-not-saved", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
       requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "failed",
       microphone: track("microphone"), system: track("system"), errors: [], recordingOwnerId: owner)
@@ -159,7 +159,7 @@ final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
     system.recordSavedClock(
       clock.observe(hostTicks: UInt64(origin + 255_000_000)), frames: 2400, sourceFrame: nil)
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-clock-proof", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-clock-proof", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [],
       startedAtUTC: "2023-11-14T22:13:20Z", requestedDurationSeconds: nil,
       osVersion: "synthetic", architecture: "arm64", state: "saved",

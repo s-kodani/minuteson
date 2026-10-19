@@ -133,6 +133,9 @@ impl Fixture {
         self.app_data.path().canonicalize().unwrap().join("models")
     }
     fn add(&mut self, engine: Engine, trial: bool, fail: bool) -> usize {
+        if engine == Engine::Sherpa {
+            super::super::diarization::tests::extraction_fixture(self.app_data.path());
+        }
         let source = tempfile::tempdir().unwrap();
         let id = Uuid::new_v4().to_string();
         let check = Uuid::new_v4().to_string();
@@ -146,7 +149,7 @@ impl Fixture {
             Engine::Sherpa => vec![
                 ("seg.onnx", Role::Segmentation),
                 ("embed.onnx", Role::SpeakerEmbedding),
-                ("lib/runtime.dylib", Role::RuntimeLibrary),
+                ("lib/libsherpa-onnx-c-api.dylib", Role::RuntimeLibrary),
                 ("lib/sub/runtime.dylib", Role::RuntimeLibrary),
             ],
             Engine::Llama => vec![

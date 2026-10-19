@@ -34,7 +34,7 @@ export class TranscriptRecoveryDiscard<P> {
       && record.lockVersion === request.expectedRecoveryLockVersion + 1 && hash(record.contentHash)
       && record.baseDraftLockVersion === request.expectedDraftLockVersion
       && record.baseDraftContentHash === request.expectedDraftContentHash
-      && record.payload.schemaVersion === 2 && record.payload.buffers.length === 0
+      && record.payload.schemaVersion === 4 && record.payload.buffers.length === 0
       && (record.payload.nameBuffers === undefined || Array.isArray(record.payload.nameBuffers) && record.payload.nameBuffers.length === 0)
       && record.payload.discardedFrom?.lockVersion === request.expectedRecoveryLockVersion
       && record.payload.discardedFrom?.contentHash === request.expectedRecoveryContentHash;

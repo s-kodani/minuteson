@@ -51,7 +51,6 @@ struct Record {
     path_count: usize,
     paths_hash: String,
     immutable_hash: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     historical_roots: Vec<HistoricalRoot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,7 +72,6 @@ pub(in crate::storage) struct Source {
     schema_hash: String,
     records: Vec<Record>,
     directories: Vec<Directory>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     historical_directories: Vec<HistoricalDirectory>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +91,6 @@ pub(in crate::storage) struct Destination {
     root: fs::Identity,
     database: fs::Identity,
     directories: Vec<BoundDirectory>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     historical_directories: Vec<BoundDirectory>,
 }
 type OperationRow = (
@@ -378,7 +375,7 @@ impl Source {
         storage.managed_anchor.verify()?;
         check(cancelled)?;
         let mut result = Self {
-            version: 2,
+            version: 4,
             source_root: storage.root.clone(),
             native_hash: snapshot.manifest_hash().into(),
             root,
@@ -409,14 +406,6 @@ impl Source {
             &result.directories,
             cancelled,
         )?;
-        if !result.historical_directories.is_empty()
-            || result
-                .records
-                .iter()
-                .any(|r| !r.historical_roots.is_empty())
-        {
-            result.version = 3;
-        }
         result.verify_size()?;
         snapshot.verify(cancelled)?;
         snapshot.verify_source(cancelled)?;
@@ -534,7 +523,7 @@ impl Source {
             });
         }
         let result = Destination {
-            version: if self.version == 3 { 2 } else { 1 },
+            version: 3,
             operation: operation.into(),
             native_hash: snapshot.manifest_hash().into(),
             target_root: progress.target,

@@ -90,7 +90,7 @@ fn stale(f: &Fixture) {
     let meeting: String = db
         .query_row("SELECT id FROM meetings LIMIT 1", [], |r| r.get(0))
         .unwrap();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{}',?2,1,1)", params![meeting,"a".repeat(64)]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale',?1,'transcription','running','stale',?2,'{}','{\"schemaVersion\":4}',?2,1,1)", params![meeting,"a".repeat(64)]).unwrap();
 }
 fn job_state(f: &Fixture) -> String {
     f.storage

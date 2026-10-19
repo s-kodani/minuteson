@@ -7,7 +7,7 @@ use std::cell::Cell;
 pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) -> String {
     let meeting = archive::tests::meeting(storage, operation);
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
-    draft.payload.schema_version = 3;
+    draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     let analysis = storage.load_current_analysis(&meeting).unwrap().unwrap();
     let utterance = &analysis.utterances[0];
     let first = format!("元IDを自然文に保持 {}", utterance.id);
@@ -387,7 +387,7 @@ fn private_plan_rejects_current_dependency_cycles_without_modifying_live_data() 
                     input_analysis_id: None,
                     input_hash: "a".repeat(64),
                     profile_snapshot: json!({"fixture":true}),
-                    parameters: json!({"cycle":true}),
+                    parameters: json!({"schemaVersion":4,"cycle":true}),
                     total_units: Some(1),
                 })
                 .unwrap();

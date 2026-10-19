@@ -171,11 +171,19 @@ mod tests {
         );
     }
     #[test]
-    fn legacy_recording_conditions_are_not_rewritten_and_uid_validation_is_strict() {
+    fn recording_conditions_require_current_fields_and_uid_validation_is_strict() {
         let legacy = r#"{"mode":"system","backend":"screencapturekit","target_pids":[]}"#;
-        let value: RecordingConfig = serde_json::from_str(legacy).unwrap();
-        assert_eq!(value.microphone_device_uid, None);
-        assert_eq!(serde_json::to_string(&value).unwrap(), legacy);
+        assert!(serde_json::from_str::<RecordingConfig>(legacy).is_err());
+        let current = serde_json::to_value(config(None)).unwrap();
+        assert!(current
+            .as_object()
+            .unwrap()
+            .contains_key("microphone_device_uid"));
+        assert!(current
+            .as_object()
+            .unwrap()
+            .contains_key("target_application_identity"));
+        assert!(serde_json::from_value::<RecordingConfig>(current).is_ok());
         for uid in ["", " \t", "a\nb", "a\0b", &"x".repeat(1025)] {
             assert!(!super::super::recordings::valid_microphone_uid(uid));
         }

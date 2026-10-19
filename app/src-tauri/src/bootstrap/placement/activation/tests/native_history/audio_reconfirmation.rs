@@ -104,7 +104,7 @@ fn audio_reconfirmation_after_owned_move_records_current_identity_and_keeps_orig
     assert!(storage.deletion_resume_restart_required());
     let (header, snapshot) = reconfirmation::synthetic_saved(&storage, &operation);
     let header: serde_json::Value = serde_json::from_str(&header).unwrap();
-    assert_eq!(header["version"], 2);
+    assert_eq!(header["version"], 3);
     assert_eq!(header["origin"]["operationId"], f.deletion);
     let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
     for (field, path) in [

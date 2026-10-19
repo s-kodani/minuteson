@@ -22,6 +22,7 @@ const MAX_METADATA: u64 = 16 * 1024 * 1024;
 const MAX_PACKET_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PACKETS: usize = 2_000_000;
 
+#[derive(Clone)]
 struct FrameIndex {
     offset: u64,
     bytes: usize,
@@ -88,7 +89,8 @@ impl MediaSource for EssentialFlacSource {
 
 pub(super) struct FlacAudio {
     file: File,
-    index: Vec<FrameIndex>,
+    index: std::sync::Arc<Vec<FrameIndex>>,
+    parameters: symphonia::core::codecs::CodecParameters,
     decoder: Box<dyn Decoder>,
     rate: u32,
     channels: u32,
@@ -98,7 +100,45 @@ pub(super) struct FlacAudio {
     next_frame: u64,
 }
 
+#[derive(Clone)]
+pub(super) struct VerifiedIndex {
+    index: std::sync::Arc<Vec<FrameIndex>>,
+    parameters: symphonia::core::codecs::CodecParameters,
+    rate: u32,
+    channels: u32,
+}
+impl VerifiedIndex {
+    pub(super) fn bytes(&self) -> usize {
+        self.index.len() * std::mem::size_of::<FrameIndex>()
+    }
+    pub(super) fn reopen(&self, file: &File) -> Result<FlacAudio, String> {
+        let decoder = symphonia::default::get_codecs()
+            .make(&self.parameters, &DecoderOptions::default())
+            .map_err(|e| e.to_string())?;
+        Ok(FlacAudio {
+            file: file.try_clone().map_err(|e| e.to_string())?,
+            index: self.index.clone(),
+            parameters: self.parameters.clone(),
+            decoder,
+            rate: self.rate,
+            channels: self.channels,
+            cached_start: 0,
+            cached: vec![],
+            stream: None,
+            next_frame: 0,
+        })
+    }
+}
 impl FlacAudio {
+    pub(super) fn verified_index(&self) -> Option<VerifiedIndex> {
+        (!self.index.is_empty()).then(|| VerifiedIndex {
+            index: self.index.clone(),
+            parameters: self.parameters.clone(),
+            rate: self.rate,
+            channels: self.channels,
+        })
+    }
+
     // Normal file playback: header-only open, sequential packet decoding and
     // the demuxer's byte search for seeks. No whole-file hash, scan or decode.
     pub(super) fn open_saved(
@@ -132,7 +172,8 @@ impl FlacAudio {
             format,
             Self {
                 file: file.try_clone().map_err(|e| e.to_string())?,
-                index: vec![],
+                index: std::sync::Arc::new(vec![]),
+                parameters: parameters.clone(),
                 decoder,
                 rate,
                 channels,
@@ -230,7 +271,8 @@ impl FlacAudio {
             format,
             Self {
                 file: file.try_clone().map_err(|e| e.to_string())?,
-                index,
+                index: std::sync::Arc::new(index),
+                parameters: parameters.clone(),
                 decoder,
                 rate,
                 channels,

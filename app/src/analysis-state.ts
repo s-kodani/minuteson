@@ -32,7 +32,15 @@ export interface VersionState {
   versions: VersionSummary[];
 }
 
+export interface ExecutionProgress {
+  phase: "preparing" | "references" | "matching" | "saving";
+  completed: number;
+  total: number;
+  phaseCompleted: number;
+  phaseTotal: number;
+}
 export interface AnalysisJob {
+  executionProgress?: ExecutionProgress | null;
   createdAt?: number;
   id: string;
   kind: string;

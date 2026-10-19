@@ -152,12 +152,12 @@ export class TranscriptRecoverySaveQueue<P> {
       && record.baseDraftLockVersion <= record.currentDraftLockVersion
       && Number.isSafeInteger(record.updatedAt) && record.updatedAt >= 0
       && validHash(record.contentHash) && validHash(record.baseDraftContentHash) && validHash(record.currentDraftContentHash)
-      && (record.payload.nameBuffers === undefined || Array.isArray(record.payload.nameBuffers)) && validNames(nameBuffers)
-      && (record.payload.schemaVersion === 1 && !proof && nameBuffers.length === 0
-        || record.payload.schemaVersion === 3 && !proof && nameBuffers.length > 0
-        || record.payload.schemaVersion === 2 && !!proof && nameBuffers.length === 0
+      && Array.isArray(record.payload.nameBuffers) && Object.hasOwn(record.payload,"discardedFrom") && validNames(nameBuffers)
+      && record.payload.schemaVersion === 4
+      && (proof === null || proof === undefined || !!proof && nameBuffers.length === 0
         && validHash(proof.contentHash) && validVersion(proof.lockVersion) && proof.lockVersion > 0
         && proof.lockVersion + 1 === record.lockVersion && record.payload.buffers.length === 0);
+
   }
 
   load(context: RecoveryContext<P> | null, record: TranscriptRecovery<P> | null) {
@@ -287,7 +287,7 @@ export class TranscriptRecoverySaveQueue<P> {
     const req = pending.request;
     return this.validRecord(record, pending.context) && this.current(record, pending.context)
       && record.operationId === req.operationId && record.lockVersion === req.expectedRecoveryLockVersion + 1
-      && record.payload.schemaVersion === (req.nameBuffers?.length ? 3 : 1) && !record.payload.discardedFrom
+      && record.payload.schemaVersion === 4 && !record.payload.discardedFrom
       && same(buffers(record.payload.buffers), req.buffers)
       && same(names(record.payload.nameBuffers ?? []),req.nameBuffers ?? []);
   }
@@ -299,8 +299,8 @@ export class TranscriptRecoverySaveQueue<P> {
       || Array.from(item.text).length > 20_000 || Array.from(item.value).length > 20_000
       || item.speakerIds.length > 100 || item.speakerIds.some((id,n) => typeof id !== "string" || !id || n > 0 && id === item.speakerIds[n - 1]))) throw Error("回復入力の件数・本文・話者の上限または重複を修正してください。入力は保持しています");
     if(!validNames(nameValues)) throw Error("回復する話者名の件数・文字数の上限または重複を修正してください。入力は保持しています");
-    const nameFields = nameValues.length ? { nameBuffers: nameValues } : {};
-    const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: nameValues.length ? 3 : 1,basePayload: this.normalizePayload(context.payload),buffers: texts,...nameFields })).length;
+    const nameFields = { nameBuffers: nameValues };
+    const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: 4,basePayload: this.normalizePayload(context.payload),buffers: texts,...nameFields })).length;
     if(bytes > 4 * 1024 * 1024) throw Error("回復入力が4MiBの容量上限を超えています。入力を保持したまま、開いている編集を減らしてください");
   }
 
@@ -315,7 +315,7 @@ export class TranscriptRecoverySaveQueue<P> {
         // A failed native request must be replayed unchanged; user-correctable
         // limits instead need to retain input without freezing an invalid CAS.
         this.validateInputs(context,this.desired,this.desiredNames);
-        const nameFields = this.desiredNames.length ? { nameBuffers: this.desiredNames } : {};
+        const nameFields = { nameBuffers: this.desiredNames };
         const version = this.saved?.lockVersion ?? 0;
         if (!validVersion(version + 1)) throw Error("回復版番号が安全な範囲を超えています");
         const operationId = this.operationId();

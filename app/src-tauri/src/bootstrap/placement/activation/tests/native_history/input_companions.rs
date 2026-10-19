@@ -90,7 +90,7 @@ fn seed(storage: &Storage) -> (String, String, PathBuf, Vec<u8>, Vec<u8>) {
     let journal = serde_json::to_vec(&json!({"schemaVersion":1,"sealed":true,"report":{
         "schemaVersion":3,"ownerId":owner,"revision":201,"microphone":stopped,"system":stopped,
         "microphoneHistory":history("device_disconnected"),"systemHistory":history("stream_stopped")}})).unwrap();
-    let manifest = serde_json::to_vec(&json!({"state":"failed","recordingOwnerId":owner,
+    let manifest = serde_json::to_vec(&json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":owner,
         "inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"failed","closed":true}})).unwrap();
     for (name, bytes) in [
         ("input-events.json", &journal),

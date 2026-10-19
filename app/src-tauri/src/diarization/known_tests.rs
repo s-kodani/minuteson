@@ -418,7 +418,10 @@ fn fixture() -> (tempfile::TempDir, Storage, String, Parameters, JobSpec) {
         speech_sensitivity_milli: 0,
     };
     let parameters = Parameters {
-        resident_runtime: None,
+        optimization_version: Some(1),
+        completion_after: None,
+        attribution_policy: None,
+        resident_runtime: crate::local_engine::resident::prepare(storage.root(), "sherpa").unwrap(),
         tracks: vec![TrackSettings {
             track_id: source.tracks[0].id.clone(),
             num_speakers: None,
@@ -426,7 +429,11 @@ fn fixture() -> (tempfile::TempDir, Storage, String, Parameters, JobSpec) {
         source,
         engine,
         known_input: known,
-        extractor: Some(embedding::ExtractorConfig { helper, library }),
+        extractor: Some(embedding::ExtractorConfig {
+            library_index: 0,
+            helper,
+            library,
+        }),
         matching: Some(Policy::fixed()),
         manual_assignment_hash: "a".repeat(64),
     };
@@ -445,7 +452,7 @@ fn fixture() -> (tempfile::TempDir, Storage, String, Parameters, JobSpec) {
         input_analysis_id: Some("fixed-input".into()),
         input_hash: "a".repeat(64),
         profile_snapshot: json!({"profile":"standard"}),
-        parameters: json!({"schemaVersion":2,"request":request,"diarization":parameters}),
+        parameters: json!({"schemaVersion":3,"request":request,"diarization":parameters}),
         total_units: Some(2),
     };
     (root, storage, meeting, parameters, spec)
@@ -1024,7 +1031,7 @@ fn saved_run_worker_automatic_handoff_preserves_existing_text_without_explicit_r
     assert_eq!(job.total_units, Some(2));
     assert_eq!(
         storage.fixed_job_input(&job.id).unwrap().0.parameters["schemaVersion"],
-        2
+        3
     );
     let id = super::super::process(
         &storage,

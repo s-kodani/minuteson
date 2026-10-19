@@ -46,6 +46,7 @@ const switchDraft = (nextId) => {
 };
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.emitTranscriptChange = (event = "analysis-version-changed", meetingId = meetings[0].id) => emit(event, meetingId);
 fixture.emitDiarizationRuntime = payload => emit("diarization-runtime-progress", payload);
 fixture.emitMinutesRuntime = payload => emit("minutes-runtime-progress", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
@@ -202,12 +203,16 @@ mockIPC(async (command, args) => {
     case "get_meeting":
       if (fixture.failMeetingRead) throw Error("模擬会議読込失敗");
       return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
-    case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
+    case "get_current_analysis": {
+      const result = args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
+      if (fixture.holdAnalysisRead) await new Promise(resolve => { fixture.releaseAnalysisRead = resolve; });
+      return result;
+    }
     case "get_transcript_draft":
       if (fixture.failDraftRead) throw Error("模擬下書き読込失敗");
       return args.meetingId === meetings[0].id ? stampFixtureDraft(fixture.draft) : null;
     case "begin_transcript_draft":
-      fixture.draft = { id: crypto.randomUUID(), meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
+      fixture.draft = { id: crypto.randomUUID(), meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
       return stampFixtureDraft(fixture.draft);
     case "save_transcript_draft":
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
@@ -300,6 +305,25 @@ mockIPC(async (command, args) => {
       switchDraft(fixture.currentId); meetings[0].lockVersion++;
       if (fixture.lostPublicationResponse) { fixture.lostPublicationResponse = false; throw Error("模擬復元応答喪失"); }
       return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
+    }
+    case "get_speaker_completion_preferences": return structuredClone(fixture.speakerCompletionPreferences??={id:"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}});
+    case "save_speaker_completion_preferences": {
+      const current=fixture.speakerCompletionPreferences;
+      if(!current||current.lockVersion!==args.expectedLockVersion)throw Error("話者補完設定の競合");
+      const p=args.payload;
+      if([p.similarityThresholdMilli,p.marginThresholdMilli].some(v=>!Number.isInteger(v)||v<0||v>1000||v%10!==0))throw Error("補完設定が不正です");
+      current.payload=structuredClone(p);current.lockVersion++;
+      if(fixture.loseCompletionPreferencesReply){fixture.loseCompletionPreferencesReply=false;throw Error("合成の話者補完設定応答喪失");}
+      return structuredClone(current);
+    }
+    case "get_voice_matching_preferences": return structuredClone(fixture.voiceMatchingPreferences??={id:"voice_matching",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}});
+    case "save_voice_matching_preferences": {
+      const current=fixture.voiceMatchingPreferences;
+      if(!current||current.lockVersion!==args.expectedLockVersion)throw Error("声の設定の競合");
+      if(Object.values(args.payload).some(v=>!Number.isInteger(v)||v<0||v>1000||v%10!==0))throw Error("閾値が不正です");
+      current.payload=structuredClone(args.payload);current.lockVersion++;
+      if(fixture.loseVoicePreferencesReply){fixture.loseVoicePreferencesReply=false;throw Error("合成の声の設定応答喪失");}
+      return structuredClone(current);
     }
     case "consolidate_transcript": {
       const request=args.request,base=currentAnalysis(),draft=fixture.draft;

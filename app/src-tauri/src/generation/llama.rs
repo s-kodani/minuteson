@@ -17,7 +17,7 @@ const MAX_PROMPT_BYTES: usize = 64 * 1024;
 // does not pass its --reasoning option into the initial template application,
 // so fix the no-thinking prefix explicitly rather than stripping model output.
 const QWEN3_NON_THINKING_TEMPLATE: &str = r#"{%- for message in messages %}{{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' }}{%- endif %}"#;
-fn model_arguments(model: &Fingerprint) -> &'static [&'static str] {
+pub(super) fn model_arguments(model: &Fingerprint) -> &'static [&'static str] {
     if matches!(
         (model.size, model.sha256.as_str()),
         (
@@ -416,7 +416,7 @@ pub(crate) fn run_unit_observed_on_device(
     let spawning = Instant::now();
     let mut child = crate::local_engine::resident::Run::spawn(
         &mut launch,
-        "llama",
+        super::optimization::kind(),
         &directory,
         "result.json",
         "stderr.log",

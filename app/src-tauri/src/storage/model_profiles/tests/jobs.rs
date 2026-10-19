@@ -338,7 +338,9 @@ fn managed_jobs_current_model_vad_executable_library_manifest_and_trial_artifact
     let i = f.add(Engine::Sherpa, true, false);
     f.apply(i, ProfileName::Standard);
     std::fs::write(
-        f.models().join(&f.packages[i].id).join("lib/runtime.dylib"),
+        f.models()
+            .join(&f.packages[i].id)
+            .join("lib/libsherpa-onnx-c-api.dylib"),
         b"changed library",
     )
     .unwrap();
@@ -896,7 +898,7 @@ fn managed_jobs_diarization_and_minutes_runtime_reject_untracked_library_mutatio
         let job = &jobs[index];
         let spec = f.storage.fixed_job_input(&job.id).unwrap();
         let library = if index == 1 {
-            "lib/runtime.dylib"
+            "lib/libsherpa-onnx-c-api.dylib"
         } else {
             "lib/llama-runtime.dylib"
         };

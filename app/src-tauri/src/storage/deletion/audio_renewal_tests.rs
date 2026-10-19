@@ -121,7 +121,7 @@ fn ancestral_unobserved_reservation_requires_new_choice_and_cold_resumes_exact_s
     .unwrap();
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(fixed(&f, &parent), old);
-    assert_eq!(saved.progress.version, 3);
+    assert_eq!(saved.progress.version, 4);
     assert!(returned.exists() && unrelated.exists());
     drop(lease);
     let f = f.reopen();
@@ -467,7 +467,7 @@ fn forged_canonical_ancestral_membership_never_becomes_a_receipt_or_deletion_per
 }
 
 #[test]
-fn version_one_remaining_record_keeps_its_exact_original_classification() {
+fn old_remaining_record_is_rejected_without_removing_current_audio() {
     let f = Fixture::new();
     let lease = owner();
     let parent = started(&f, &lease);
@@ -492,15 +492,10 @@ fn version_one_remaining_record_keeps_its_exact_original_classification() {
     rewrite_audit(&f, &op, |record, _| {
         record.version = 1;
     });
-    finish(&f, &op, &lease);
-    intent::reconfirmation::Source::load(
-        &f.storage.connection.lock().unwrap(),
-        &op,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
+    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(f.path.exists());
     drop(lease);
-    assert!(!f.reopen().storage.data_write_blocked());
+    assert!(f.reopen().storage.data_write_blocked());
 }
 #[test]
 fn changed_remaining_requires_new_consent_preserves_original_and_exact_retry() {
@@ -543,7 +538,7 @@ fn changed_remaining_requires_new_consent_preserves_original_and_exact_retry() {
     )
     .unwrap();
     assert_eq!(current.policy.include_unregistered_audio, false);
-    assert_eq!(current.progress.version, 3);
+    assert_eq!(current.progress.version, 4);
     assert_eq!(current.audits.len(), 1);
     assert_eq!(fixed(&f, &op), original);
     assert_eq!(

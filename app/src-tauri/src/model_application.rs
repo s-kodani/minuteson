@@ -65,24 +65,56 @@ pub(crate) fn preview_with_tuning(
     diarization_cluster_threshold_milli: Option<u32>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<ApplyPreview, String> {
-    preview_with_vad(storage, models_root, name, package, review, check, diarization_threads,
-        diarization_cluster_threshold_milli, None, cancelled)
+    preview_with_vad(
+        storage,
+        models_root,
+        name,
+        package,
+        review,
+        check,
+        diarization_threads,
+        diarization_cluster_threshold_milli,
+        None,
+        cancelled,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_with_vad(
-    storage: &Storage, models_root: &Path, name: ProfileName, package: &str,
-    review: &str, check: &str, diarization_threads: Option<u32>,
+    storage: &Storage,
+    models_root: &Path,
+    name: ProfileName,
+    package: &str,
+    review: &str,
+    check: &str,
+    diarization_threads: Option<u32>,
     diarization_cluster_threshold_milli: Option<u32>,
     whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<ApplyPreview, String> {
-    preview_with_sensitivity(storage, models_root, name, package, review, check, diarization_threads, diarization_cluster_threshold_milli, whisper_vad_options, None, cancelled)
+    preview_with_sensitivity(
+        storage,
+        models_root,
+        name,
+        package,
+        review,
+        check,
+        diarization_threads,
+        diarization_cluster_threshold_milli,
+        whisper_vad_options,
+        None,
+        cancelled,
+    )
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_with_sensitivity(
-    storage: &Storage, models_root: &Path, name: ProfileName, package: &str,
-    review: &str, check: &str, diarization_threads: Option<u32>,
+    storage: &Storage,
+    models_root: &Path,
+    name: ProfileName,
+    package: &str,
+    review: &str,
+    check: &str,
+    diarization_threads: Option<u32>,
     diarization_cluster_threshold_milli: Option<u32>,
     whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
     diarization_speech_sensitivity_milli: Option<i32>,

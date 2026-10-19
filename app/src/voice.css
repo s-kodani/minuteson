@@ -69,3 +69,4 @@
 .voice-sample-player .audio-controls > label { flex:none; flex-wrap:nowrap; }
 .voice-library [role=alert] { overflow-wrap:anywhere; }
 @media(max-width:600px) { .voice-library .voice-person { padding:16px; } }
+.voice-job > .operation-progress {flex-basis:100%;min-width:0}

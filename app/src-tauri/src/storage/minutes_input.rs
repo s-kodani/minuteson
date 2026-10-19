@@ -29,6 +29,29 @@ pub(crate) struct MinutesInput {
 // The native generation entry point checks the selected local engine first.
 // The request carries editor stamps; pending saves must be flushed by its UI.
 impl Storage {
+    // Read-only preparation; callers release this transaction before invoking
+    // a tokenizer and compare working_content_hash again during admission.
+    pub(crate) fn preview_minutes_optimization_input(
+        &self,
+        meeting: &str,
+    ) -> Result<MinutesInput, String> {
+        let mut db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let (mut analysis, draft, title, created, started) = current_working(&tx, meeting)?;
+        let payload = draft.map(|d| d.payload).unwrap_or_default();
+        apply_edits(&mut analysis, &payload);
+        let hash = working_hash(&tx, &analysis, &title, created, started, Some(&payload))?;
+        Ok(MinutesInput {
+            analysis,
+            meeting_title: title,
+            meeting_created_at: created,
+            meeting_started_at_utc_ms: started,
+            working_content_hash: hash,
+        })
+    }
     // Historical database fixtures only; the product admits Markdown jobs.
     #[cfg(test)]
     pub(crate) fn enqueue_minutes_job(
@@ -335,6 +358,7 @@ pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayl
         .map(|e| (e.utterance_id.as_str(), e))
         .collect();
     for utterance in &mut view.utterances {
+        let previous_ids = utterance.speaker_ids.clone();
         if let Some(edit) = edits.get(utterance.id.as_str()) {
             utterance.effective_text = edit.effective_text.clone();
             utterance.speaker_ids = edit.speaker_ids.clone();
@@ -347,6 +371,9 @@ pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayl
                 _ => "overlap",
             }
             .into();
+        }
+        if previous_ids != utterance.speaker_ids {
+            utterance.speaker_identification = None;
         }
     }
     if !payload.utterance_splits.is_empty() {
@@ -365,6 +392,7 @@ pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayl
                         edit.map_or(&part.speaker_ids, |e| &e.speaker_ids),
                     );
                     result.push(super::analysis::AnalysisUtterance {
+                        speaker_identification: None,
                         id: part.id.clone(),
                         track_id: original.track_id.clone(),
                         start_us: part.start_us,
@@ -512,6 +540,35 @@ pub(super) fn copy_snapshot_with_consolidation(
         &[Vec<AnalysisUtterance>],
     )>,
 ) -> Result<String, String> {
+    copy_snapshot_with_update(
+        tx,
+        source,
+        payload,
+        title,
+        created_at,
+        started_at,
+        working_hash,
+        draft,
+        consolidation,
+        None,
+    )
+}
+
+pub(super) fn copy_snapshot_with_update(
+    tx: &Transaction<'_>,
+    source: &AnalysisView,
+    payload: &TranscriptDraftPayload,
+    title: &str,
+    created_at: i64,
+    started_at: Option<i64>,
+    working_hash: &str,
+    draft: Option<Value>,
+    consolidation: Option<(
+        &super::transcript_consolidation::Request,
+        &[Vec<AnalysisUtterance>],
+    )>,
+    update: Option<&dyn Fn(&Transaction<'_>, &str) -> Result<(), String>>,
+) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
     let now = now_ms()?;
     let (audio_hash, profile, config): (String,String,String) = tx.query_row("SELECT audio_manifest_hash, profile_snapshot_json, config_json FROM analysis_revisions WHERE id = ?1", params![source.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e| e.to_string())?;
@@ -526,6 +583,15 @@ pub(super) fn copy_snapshot_with_consolidation(
         config["manualSpeakerOperations"] = json!({"schemaVersion":1,"added":payload.manual_speakers,"merges":payload.speaker_merges});
     }
     let lineages = lineage_map(tx, "utterances", &source.id)?;
+    if let Some(info) = config["speakerIdentification"].as_object_mut() {
+        for u in source
+            .utterances
+            .iter()
+            .filter(|u| u.speaker_identification.is_none())
+        {
+            info.remove(lineages.get(&u.id).unwrap_or(&u.id));
+        }
+    }
     let mut source_recognition: Vec<_> = source
         .utterances
         .iter()
@@ -643,14 +709,17 @@ pub(super) fn copy_snapshot_with_consolidation(
             tx, source, payload, &id, request, groups,
         )?;
     }
+    if let Some(update) = update {
+        update(tx, &id)?;
+    }
     let hash = super::revisions::analysis_content_hash(tx, &id)?;
-    let state = if consolidation.is_some() {
+    let state = if consolidation.is_some() || update.is_some() {
         "committed"
     } else {
         "internal_snapshot"
     };
     tx.execute("UPDATE analysis_revisions SET content_hash = ?1, publication_state = ?3 WHERE id = ?2 AND publication_state = 'building'", params![hash,id,state]).map_err(|e| e.to_string())?;
-    if consolidation.is_none() {
+    if consolidation.is_none() && update.is_none() {
         tx.execute("INSERT INTO analysis_input_snapshots (analysis_id,meeting_id,source_analysis_id,source_content_hash,source_draft_json,working_content_hash,meeting_title,meeting_created_at,meeting_started_at_utc_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id,source.meeting_id,source.id,source.content_hash,draft.map(|d| d.to_string()),working_hash,title,created_at,started_at]).map_err(|e| e.to_string())?;
     }
     Ok(id)

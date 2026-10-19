@@ -1,7 +1,7 @@
 import type { AnalysisJob } from "./analysis-state.ts";
 import type { ToastLevel } from "./toast-state.ts";
 
-export type JobKind = "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching";
+export type JobKind = "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
 export interface NotificationJob extends AnalysisJob {
   kind: JobKind; meetingId: string; meetingTitle: string; operationId: string; inputHash: string;
   createdAt: number; updatedAt: number; outputMinutesId: string | null;
@@ -10,7 +10,7 @@ export interface JobNotice {
   job: NotificationJob; topic: "result" | "issue"; message: string;
   level: ToastLevel; important: boolean; eventId: string;
 }
-export const jobName = (kind: JobKind) => ({ transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合" })[kind];
+export const jobName = (kind: JobKind) => ({ transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
 export const jobFailureDetail = (code: string | null) => code === "transcription_quality_failed"
   ? "ヒントなしで認識しても反復が残ったため停止しました。異常な区間は保存結果へ採用していません。"
   : code ?? "会議を開いて再開状態を確認してください。";
@@ -24,7 +24,7 @@ const notice = (job: NotificationJob, message: string, level: ToastLevel = "info
   job, message: `「${job.meetingTitle}」の${jobName(job.kind)}${message}`, level, topic,
   important: topic === "issue", eventId: JSON.stringify([job.id, job.updatedAt, transition(job)]),
 });
-export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded" | "voice";
+export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded" | "voice" | "completion";
 export function verifiedJobOutput(job: NotificationJob, value: unknown): VerifiedJobPublication {
   const proof = value as { job?: NotificationJob; contentHash?: string; publicationState?: string; warnings?: unknown } | null;
   const receipt = proof?.job && { ...proof.job, meetingTitle: job.meetingTitle };
@@ -32,7 +32,11 @@ export function verifiedJobOutput(job: NotificationJob, value: unknown): Verifie
   if (!receipt || job.state !== "succeeded" || receipt.id !== job.id || identity(receipt) !== identity(job)
     || transition(receipt) !== transition(job)
     || !proof || typeof proof.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(proof.contentHash)
-    || !["candidate", "committed", "markdown", "superseded", "voice"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
+    || !["candidate", "committed", "markdown", "superseded", "voice", "completion"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
+  if (proof.publicationState==="completion") {
+    if(job.kind!=="speaker_completion"||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash||!Array.isArray(proof.warnings)||proof.warnings.some(v=>typeof v!=="string")) throw Error("話者補完の完了記録が一致しません。");
+    return "completion";
+  }
   if (proof.publicationState==="voice") {
     if (!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash) throw Error("声の処理の完了記録が一致しません。");
     return "voice";
@@ -47,7 +51,7 @@ export function assertNotificationJobs(value: unknown): asserts value is Notific
   if (!Array.isArray(value)) throw Error("解析通知の状態を照合できません。");
   const ids = new Set<string>();
   for (const job of value) {
-    if (!job || typeof job.id !== "string" || !job.id || ids.has(job.id) || !["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching"].includes(job.kind)
+    if (!job || typeof job.id !== "string" || !job.id || ids.has(job.id) || !["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching", "speaker_completion"].includes(job.kind)
       || !states.has(job.state) || typeof job.meetingId !== "string" || !job.meetingId || typeof job.meetingTitle !== "string" || !job.meetingTitle
       || typeof job.operationId !== "string" || !job.operationId || typeof job.specHash !== "string" || !/^[a-f0-9]{64}$/.test(job.specHash)
       || typeof job.inputHash !== "string" || !/^[a-f0-9]{64}$/.test(job.inputHash)
@@ -109,6 +113,10 @@ export class JobNotificationTracker {
   confirmOutput(job: NotificationJob, publication: VerifiedJobPublication) {
     const pending = this.pending.get(job.id), current = this.seen.get(job.id);
     if (!pending || !current || transition(current) !== transition(job) || identity(current) !== identity(job)) return null;
+    if(publication==="completion") {
+      if(job.kind!=="speaker_completion"||job.completedUnits!==1||job.totalUnits!==1)throw Error("話者補完の完了状態が不正です。");
+      this.pending.delete(job.id);return notice(job,"が完了しました","success");
+    }
     if(publication==="voice") {
       if(!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1)throw Error("声の処理の完了状態が不正です。");
       this.pending.delete(job.id);return notice(job,"が完了しました","success");

@@ -116,7 +116,7 @@ async (page, capturePath, detailUI) => {
   check((await record()).payload.buffers.length === 1 && (await recoveryCalls("discard_transcript_edit_recovery")).length === 0,"cancelled confirmation discarded journal");
   results.push("discard confirmation defaults to cancel and cancellation preserves the exact preview");
   await confirmDiscard(); await dialog().getByText("確認した未確定入力を破棄しました。確定本文と編集履歴は変更していません。",{ exact: true }).waitFor();
-  const cleared = await record(); check(cleared.payload.schemaVersion === 2 && cleared.payload.discardedFrom.lockVersion === 1 && cleared.payload.buffers.length === 0 && (await bodyWrites()).length === 0,"discard lacks exact proof or published body");
+  const cleared = await record(); check(cleared.payload.schemaVersion === 4 && cleared.payload.discardedFrom.lockVersion === 1 && cleared.payload.buffers.length === 0 && (await bodyWrites()).length === 0,"discard lacks exact proof or published body");
   await dialog().getByRole("button",{ name: "閉じる",exact: true }).click();
   check(await editor.getByRole("button",{ name: "00:00:00の発言を編集",exact: true }).isEnabled(),"discard did not release current review");
   results.push("explicit reviewed discard creates an exact-proof tombstone and leaves confirmed body/Undo untouched");
@@ -142,7 +142,7 @@ async (page, capturePath, detailUI) => {
   await boot(); await input("00:00:00").fill("旧解析に残る入力"); await savedInput("旧解析に残る入力");
   await page.evaluate(async () => {
     const f = window.monBrowserFixture,old = structuredClone(f.draft); f.archivedDrafts[old.baseAnalysisId] = old;
-    f.draft = { ...structuredClone(old),id: crypto.randomUUID(),baseAnalysisId: f.candidate.id,lockVersion: 0,payload: { schema_version: 1,speaker_names: [],utterances: [] } }; f.currentId = f.candidate.id;
+    f.draft = { ...structuredClone(old),id: crypto.randomUUID(),baseAnalysisId: f.candidate.id,lockVersion: 0,payload: { schema_version:4,speaker_names: [],utterances: [] } }; f.currentId = f.candidate.id;
     const r = structuredClone(f.recovery.records[old.id]);
     for(let i = 0; i < 24; i++) { const d = { ...structuredClone(old),id: `00000000-0000-4000-8000-${String(i).padStart(12,"0")}`,baseAnalysisId: `old-${i}` }; f.archivedDrafts[d.baseAnalysisId] = d; f.recovery.records[d.id] = { ...structuredClone(r),draftId: d.id,baseAnalysisId: d.baseAnalysisId }; }
   }); await crash();

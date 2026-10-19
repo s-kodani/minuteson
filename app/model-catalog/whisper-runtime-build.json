@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "engine": "whisper.cpp",
   "engineVersion": "v1.9.4",
   "sourceCommit": "927cfce34f31707e17f2bff35c349632fb9e2c3a",

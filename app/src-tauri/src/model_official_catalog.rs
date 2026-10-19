@@ -134,22 +134,22 @@ mod tests {
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
             let expected = match choice.id.as_str() {
                 "llama-b11533-qwen25-15b-q4km" => {
-                    "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
+                    "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3"
                 }
                 "sherpa-1138-pyannote3-eres2net-base" => {
-                    "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee"
+                    "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
                 }
                 "llama-b11533-qwen25-15b-q8" => {
-                    "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221"
+                    "a8f5330b3cd2a0c700b81b0d0402473c441dad3faa3814060162ec132d1fdd59"
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
-                    "7ae4eeab8889de993a9c726a9cf3f11a6e70a2dd0c1c8a9596f85e33822c7cfe"
+                    "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96"
                 }
                 "llama-b11533-qwen3-8b-q4km" => {
-                    "1d3b48eebaea1750b93abbe1551423ca080ddff9b6c4f5069952aa188acbde37"
+                    "344413ffe456e123c918af5f422a82f64f7443fa6a81f332a58068caeed12f14"
                 }
                 "llama-b11533-qwen3-4b-q4km" => {
-                    "75f65a85091ad8cf44a33bfe2902be95acb3984244b099777d868de3e4f41fc8"
+                    "920cc12b71fdc8d1dc66234050be25d0c577f16a639e4bf55048ca8e634e70b8"
                 }
                 _ => panic!("unverified catalog choice"),
             };

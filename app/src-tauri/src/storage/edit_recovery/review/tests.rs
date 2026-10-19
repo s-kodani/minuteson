@@ -241,7 +241,7 @@ fn reviewed_inactive_discard_only_writes_tombstone_and_survives_cold_start() {
         .unwrap();
     assert_eq!(published_snapshot(&storage), before);
     assert_eq!(cleared.lock_version, 2);
-    assert_eq!(cleared.payload.schema_version, 2);
+    assert_eq!(cleared.payload.schema_version, 4);
     assert_eq!(
         cleared.payload.discarded_from,
         Some(DiscardProof {
@@ -357,7 +357,7 @@ fn new_input_after_preview_is_not_discarded_by_old_confirmation_or_retry() {
     let after = storage
         .save_transcript_edit_recovery(new_input.clone())
         .unwrap();
-    assert_eq!(after.payload.schema_version, 1);
+    assert_eq!(after.payload.schema_version, 4);
     assert!(after.payload.discarded_from.is_none());
     assert!(storage.discard_transcript_edit_recovery(req).is_err());
     assert_eq!(
@@ -497,7 +497,9 @@ fn corrupt_empty_or_inactive_records_are_not_hidden_or_automatically_fixed() {
         match corruption {
             0 => json["schemaVersion"] = 1.into(),
             1 => json["schemaVersion"] = 3.into(),
-            2 => json["discardedFrom"] = serde_json::Value::Null,
+            2 => {
+                json.as_object_mut().unwrap().remove("discardedFrom");
+            }
             3 => json["discardedFrom"]["lockVersion"] = 0.into(),
             4 => json["discardedFrom"]["lockVersion"] = 2.into(),
             5 => json["discardedFrom"]["contentHash"] = "not-a-hash".into(),
@@ -535,21 +537,18 @@ fn corrupt_empty_or_inactive_records_are_not_hidden_or_automatically_fixed() {
 }
 
 #[test]
-fn schema_one_serialization_stays_byte_compatible_and_unknown_discard_request_is_refused() {
+fn current_serialization_has_explicit_discard_proof_and_unknown_request_is_refused() {
     let payload = Payload {
-        schema_version: 1,
+        schema_version: 4,
         base_payload: TranscriptDraftPayload::default(),
         buffers: vec![],
         name_buffers: vec![],
         discarded_from: None,
     };
     let json = serde_json::to_string(&payload).unwrap();
-    assert!(!json.contains("discardedFrom"));
-    let legacy = format!(
-        "{{\"schemaVersion\":1,\"basePayload\":{},\"buffers\":[]}}",
-        serde_json::to_string(&payload.base_payload).unwrap()
-    );
-    assert_eq!(json, legacy);
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value["discardedFrom"].is_null());
+    assert_eq!(value["nameBuffers"], serde_json::json!([]));
     let mut request = serde_json::json!({"meetingId":"m","draftId":"d","baseAnalysisId":"b","operationId":"o","expectedDraftLockVersion":0,"expectedDraftContentHash":"h","expectedRecoveryLockVersion":1,"expectedRecoveryContentHash":"h"});
     assert!(serde_json::from_value::<DiscardRequest>(request.clone()).is_ok());
     request["adoptOldDraft"] = true.into();

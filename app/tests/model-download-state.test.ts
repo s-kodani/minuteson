@@ -4,8 +4,8 @@ import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteT
 import { readFileSync } from "node:fs";
 import { placementLabel } from "../src/model-inspection-state.ts";
 const id = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", hash = "a".repeat(64);
-const recipe = canonicalRecipe({ schemaVersion: 2, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成素材", modelVersion: "1", licenseRef: "fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: hash }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: hash }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "model" } }] });
-async function review() { return assertDownloadReview({ manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 2, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" }); }
+const recipe = canonicalRecipe({ schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成素材", modelVersion: "1", licenseRef: "fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: hash }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: hash }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "model" } }] });
+async function review() { return assertDownloadReview({ manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 4, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" }); }
 async function receipt() {
   const checked = await review(), manifestHash = await downloadDigest(recipe.manifest);
   const files = recipe.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
@@ -20,11 +20,11 @@ test("recipe canonical struct order and optional null bind regardless of input p
 test("canonical unicode recipe agrees with native Rust independent golden", async () => {
   const value = structuredClone(recipe);
   value.manifest.modelName = "合成取得素材"; value.manifest.licenseRef = "synthetic fixture only"; value.manifest.files[1].expectedHash = "b".repeat(64);
-  assert.equal(await downloadDigest(value), "6f1480c0ec46ee12daef6daa63fd1b53bac6317d3753d7a7236ac8e3c0e95f52");
+  assert.equal(await downloadDigest(value), "aeffb9a375e04f37c51d6c2c9c3c5f817ef0c6315893005418523a4892c914e2");
 });
 for (const field of ["schema", "missing-size", "missing-hash", "source-order", "total", "unknown", "byte-limit"]) test(`definition rejects ${field} before review`, () => {
   const value = structuredClone(recipe);
-  if (field === "schema") value.schemaVersion = 1 as 2;
+  if (field === "schema") value.schemaVersion = 1 as 4;
   else if (field === "missing-size") value.manifest.files[0].expectedSize = null as unknown as number;
   else if (field === "missing-hash") value.manifest.files[0].expectedHash = "";
   else if (field === "source-order") value.sources.reverse();
@@ -56,7 +56,7 @@ test("current reviews require explicit schema and transfer/archive byte totals w
     Reflect.deleteProperty(value, field);
     await assert.rejects(assertDownloadReview(value));
   }
-  for (const version of [1, 0, 4, "2", null]) {
+  for (const version of [1, 0, 2, 3, 5, "4", null]) {
     const value = { ...await review(), recipeSchemaVersion: version };
     await assert.rejects(assertDownloadReview(value));
   }
@@ -104,12 +104,12 @@ test("placement catalog source type and origin are mutually bound without changi
   for (const bad of [{ ...base, sourceType: "download" as const }, { ...base, sourceType: "manual_import" as const, download: { operationId: id, recipeHash: hash } }, { ...base, sourceType: "download" as const, download: { operationId: "../x", recipeHash: hash } }]) assert.throws(() => placementLabel(bad));
 });
 function archivedRecipe() {
-  const value = structuredClone(recipe); value.schemaVersion = 2;
+  const value = structuredClone(recipe); value.schemaVersion = 4;
   value.sources = value.sources.map(source => ({ ...source, url: "https://example.com/engine.tar.gz", archive: { format: "tar" as const, expectedSize: 100, expectedHash: hash, memberPath: `package/${source.relativePath}` } }));
   return canonicalRecipe(value);
 }
 function bundledRecipe() {
-  const value = structuredClone(recipe); value.schemaVersion = 3; value.manifest.engineVersion = "v1.9.4";
+  const value = structuredClone(recipe); value.schemaVersion = 4; value.manifest.engineVersion = "v1.9.4";
   value.sources[0] = { ...value.sources[0], url: bundledWhisperSource, archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "bin/whisper-cli" } };
   value.sources[1] = { relativePath: "model", url: "https://example.com/model" };
   return canonicalRecipe(value);
@@ -117,7 +117,7 @@ function bundledRecipe() {
 test("hybrid bundle recipe separates wire traffic and storage; strict review and receipt survive readback", async () => {
   const value = bundledRecipe(), totals = downloadByteTotals(value);
   assert.deepEqual(totals, { downloadBytes: 17, archiveBytes: 100, bundledBytes: 100 });
-  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 3, ...totals, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 4, ...totals, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
   const checked = await assertDownloadReview(native);
   assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 17, totalBytes: 17 }, id, checked, 0), 17);
   for (const patch of [{ bundledBytes: 0 }, { downloadBytes: 117 }, { archiveBytes: 0 }, { recipeSchemaVersion: 2 }, { recipeSchemaVersion: "3" }, { ready: true }]) await assert.rejects(assertDownloadReview({ ...native, ...patch }));
@@ -128,17 +128,16 @@ test("hybrid bundle recipe separates wire traffic and storage; strict review and
   assert.equal((await assertDownloadReadback({ state: "incomplete", review: checked, receipt: null }, id, checked.recipeHash)).receipt, null);
 });
 test("bundled source is a fixed native ID, not legacy network or arbitrary local input", () => {
-  for (const variant of ["schema1", "schema2", "id", "member", "raw", "engine", "version", "target", "network-only", "network-asr"]) {
+  for (const variant of ["schema1", "schema2", "id", "member", "raw", "engine", "version", "target", "network-asr"]) {
     const value = bundledRecipe();
-    if (variant === "schema1") value.schemaVersion = 1 as 2;
-    else if (variant === "schema2") value.schemaVersion = 2;
+    if (variant === "schema1") value.schemaVersion = 1 as 4;
+    else if (variant === "schema2") Object.assign(value, {schemaVersion:2});
     else if (variant === "id") value.sources[0].url = "mon-bundled://other/runtime.tar";
     else if (variant === "member") value.sources[0].archive!.memberPath = "bin/other";
     else if (variant === "raw") delete value.sources[0].archive;
     else if (variant === "engine") value.manifest.engine = "llama.cpp";
     else if (variant === "version") value.manifest.engineVersion = "v0";
     else if (variant === "target") value.manifest.target = "windows_x86_64";
-    else if (variant === "network-only") value.sources[0].url = "https://example.com/engine.tar";
     else value.sources[1].url = bundledWhisperSource;
     assert.throws(() => canonicalRecipe(value), variant);
   }
@@ -146,7 +145,7 @@ test("bundled source is a fixed native ID, not legacy network or arbitrary local
 test("archive transfer is deduplicated, while installed payload and archive storage are separate", async () => {
   const value = archivedRecipe();
   assert.deepEqual(downloadByteTotals(value), { downloadBytes: 100, archiveBytes: 100 });
-  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 2, downloadBytes: 100, archiveBytes: 100, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 4, downloadBytes: 100, archiveBytes: 100, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
   const checked = await assertDownloadReview(native);
   assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 100, totalBytes: 100 }, id, checked, 0), 100);
   assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 33, totalBytes: 33 }, id, checked, 0), null);
@@ -157,7 +156,7 @@ test("archive transfer is deduplicated, while installed payload and archive stor
 test("archive definition rejects duplicate members, mixed use, inconsistent metadata and invalid paths", () => {
   for (const variant of ["version", "duplicate", "raw", "size", "sha", "path", "format", "extra", "zero"]) {
     const value = archivedRecipe();
-    if (variant === "version") value.schemaVersion = 1 as 2;
+    if (variant === "version") value.schemaVersion = 1 as 4;
     else if (variant === "duplicate") value.sources[1].archive!.memberPath = value.sources[0].archive!.memberPath;
     else if (variant === "raw") delete value.sources[1].archive;
     else if (variant === "size") value.sources[1].archive!.expectedSize++;
@@ -174,7 +173,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const native = await Promise.all(choices.map(async (choice: any) => {
     const recipe = canonicalRecipe(choice.recipe);
     return { id: choice.id, label: choice.label, description: choice.description, tokenLimits: choice.tokenLimits ?? null, definition: JSON.stringify(recipe), review: {
-      manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 2, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe),
+      manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 4, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe),
       totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0), publisherAuthenticity: "not_verified", installed: false, ready: false,
     } };
   }));
@@ -185,16 +184,16 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   assert.equal(options[1].tokenLimits, null);
   assert.equal(options[0].review.manifest.files.filter(f => f.role === "notice").length, 2);
   assert.equal(options[0].review.downloadBytes, 1_129_407_950);
-  assert.equal(options[0].review.recipeHash, "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba");
+  assert.equal(options[0].review.recipeHash, "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3");
   assert.equal(options[1].review.manifest.engine, "sherpa-onnx");
   assert.equal(options[1].review.manifest.files.filter(f => f.role === "notice").length, 5);
   assert.equal(options[1].review.downloadBytes, 65_153_215);
   assert.equal(options[1].review.archiveBytes, 25_210_612);
   assert.equal(options[1].review.totalBytes, 78_117_057);
-  assert.equal(options[1].review.recipeHash, "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee");
+  assert.equal(options[1].review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
   assert.deepEqual(options.slice(2, 4).map(o => o.review.recipeHash), [
-    "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221",
-    "7ae4eeab8889de993a9c726a9cf3f11a6e70a2dd0c1c8a9596f85e33822c7cfe",
+    "a8f5330b3cd2a0c700b81b0d0402473c441dad3faa3814060162ec132d1fdd59",
+    "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96",
   ]);
   for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && !o.id.includes("qwen3-"))) {
     assert.deepEqual(option.tokenLimits, options[0].tokenLimits);
@@ -204,12 +203,12 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const qwen3 = options[4];
   assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
   assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });
-  assert.equal(qwen3.review.recipeHash, "1d3b48eebaea1750b93abbe1551423ca080ddff9b6c4f5069952aa188acbde37");
+  assert.equal(qwen3.review.recipeHash, "344413ffe456e123c918af5f422a82f64f7443fa6a81f332a58068caeed12f14");
   assert.equal(qwen3.review.manifest.files.find(file => file.role === "llm")?.expectedHash, "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785");
   const qwen3_4b = options.find(o => o.id === "llama-b11533-qwen3-4b-q4km")!;
   assert.equal(qwen3_4b.label, "Qwen 3 4B · Q4_K_M");
   assert.deepEqual(qwen3_4b.tokenLimits, qwen3.tokenLimits);
-  assert.equal(qwen3_4b.review.recipeHash, "75f65a85091ad8cf44a33bfe2902be95acb3984244b099777d868de3e4f41fc8");
+  assert.equal(qwen3_4b.review.recipeHash, "920cc12b71fdc8d1dc66234050be25d0c577f16a639e4bf55048ca8e634e70b8");
   const model4b = qwen3_4b.review.manifest.files.find(file => file.role === "llm")!;
   assert.equal(model4b.expectedHash, "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5");
   assert.equal(model4b.expectedSize, 2_497_280_256);

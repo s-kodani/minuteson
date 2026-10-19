@@ -11,8 +11,8 @@ function notice(sequence=1,generation=1,receiver:string|null=null,rendered=false
     delivery:{sequence,generation,leaseAgeMs:receiver?0:null,receiveId:receiver?op:null,rendered,status:{state:kind==="recovered"?"connected":"disconnected",sourceEpoch:Math.floor(sequence/2)+1,interruptions:count,reason:kind==="recovered"?null:"device_disconnected"}}};
 }
 const batch=(n:InputNotice[]= [notice()],revision=1):ArchivedInputBatch=>({schemaVersion:1,ownerId:owner,revision,notices:n,noticeLoss:{microphone:0,system:0},historyIssue:null});
-const row=(b:ArchivedInputBatch|null=batch(),issue:null|"unavailable"=null):ArchivedInputRow=>({meetingId:meeting,sessionId:owner,title:"会議",batch:b,issue});
-const page=(recordings:ArchivedInputRow[]=[row()],nextCursor:string|null=null)=>({schemaVersion:1,recordings,nextCursor});
+const row=(b:ArchivedInputBatch|null=batch(),issue:null|"unavailable"=null):ArchivedInputRow=>({meetingId:meeting,sessionId:owner,title:"会議",batch:b,issue,historySaveIssue:null});
+const page=(recordings:ArchivedInputRow[]=[row()],nextCursor:string|null=null)=>({schemaVersion:3,recordings,nextCursor});
 const own=(request:ArchivedAttempt,rendered=false):InputNotice=>({...request.attempt.notice,recipientId:recipient,delivery:{...request.attempt.notice.delivery!,leaseAgeMs:0,receiveId:request.attempt.receiveId,rendered}});
 const receipt=(r:ArchivedAttempt,rendered=r.attempt.action!=="receive")=>({schemaVersion:2,ownerId:r.attempt.sessionId,noticeId:r.attempt.noticeId,target:"main",recipientId:recipient,delivery:own(r,rendered).delivery});
 const create=()=>new ArchivedInputController(recipient);

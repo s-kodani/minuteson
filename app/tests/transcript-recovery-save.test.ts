@@ -23,7 +23,7 @@ function result(req: RecoverySaveRequest, base = context): TranscriptRecovery<Pa
     baseDraftContentHash: base.contentHash, contentHash: hash(req.expectedRecoveryLockVersion + 1),
     lockVersion: req.expectedRecoveryLockVersion + 1, updatedAt: 1, matchesDraft: true,
     currentDraftLockVersion: base.lockVersion, currentDraftContentHash: base.contentHash, currentContext: true,
-    payload: { schemaVersion: req.nameBuffers?.length ? 3 : 1, basePayload: structuredClone(base.payload), buffers: structuredClone(req.buffers),
+    payload: { ...{ nameBuffers: [], discardedFrom: null }, schemaVersion: 4, basePayload: structuredClone(base.payload), buffers: structuredClone(req.buffers),
       ...(req.nameBuffers?.length ? { nameBuffers: structuredClone(req.nameBuffers) } : {}) } };
 }
 function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<TranscriptRecovery<Payload>>;
@@ -166,7 +166,7 @@ test("rebase refuses an active save and disposal during final read without accep
   await assert.rejects(accepting,/終了/); assert.equal(g.queue.snapshot().context?.lockVersion,0);
 });
 
-test("name-only recovery is normalized immutable and uses schema three while old text stays byte-compatible", async () => {
+test("name-only recovery is normalized immutable and uses the current format for both names and text", async () => {
   const { queue,calls } = fixture();
   const input = name("入力中","b");
   queue.update([],[input,{ ...name("別名","a"),name: null,hadOverride: false }]);
@@ -176,12 +176,12 @@ test("name-only recovery is normalized immutable and uses schema three while old
   assert.deepEqual(calls[0].nameBuffers?.map(n => n.speakerId),["a","b"]);
   assert.equal(calls[0].nameBuffers?.[1].value,"入力中");
   assert.throws(() => { calls[0].nameBuffers![0].value = "変更"; },TypeError);
-  assert.equal(queue.snapshot().saved?.payload.schemaVersion,3);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,4);
   assert.equal(queue.snapshot().dirty,false);
   queue.update([buffer("本文だけ")]); await queue.flush();
-  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),false);
-  assert.equal(Object.hasOwn(queue.snapshot().saved!.payload,"nameBuffers"),false);
-  assert.equal(queue.snapshot().saved?.payload.schemaVersion,1);
+  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),true);
+  assert.equal(Object.hasOwn(queue.snapshot().saved!.payload,"nameBuffers"),true);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,4);
 });
 
 test("name and text changes coalesce under one CAS without replacing an in-flight request", async () => {
@@ -206,8 +206,8 @@ test("clearing names during a delayed write saves an empty next revision and nev
   const saving = queue.flush(); await Promise.resolve(); queue.update([]);
   wait.resolve(result(calls[0])); await saving;
   assert.equal(calls.length,2); assert.equal(calls[1].expectedRecoveryLockVersion,1);
-  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),false);
-  assert.equal(queue.snapshot().saved?.payload.schemaVersion,1);
+  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),true);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,4);
   assert.deepEqual(queue.snapshot().nameBuffers,[]);
   assert.equal(queue.snapshot().dirty,false);
 });
@@ -312,7 +312,7 @@ test("name JSON bytes count toward the shared UTF-8 capacity before assigning an
 });
 
 test("name record format and sorted identity checks reject malformed reviews before replacing local context", () => {
-  for(const field of ["empty","versionOne","proof","duplicates","unsorted","unknown"]) {
+  for(const field of ["versionOne","proof","duplicates","unsorted","unknown"]) {
     const record = result({ ...context,operationId: randomUUID(),expectedDraftLockVersion: 0,expectedRecoveryLockVersion: 0,
       buffers: [],nameBuffers: [name("名","a"),name("別名","b")] });
     switch(field) {
@@ -556,7 +556,7 @@ test("dispose rejects a late acknowledgement and sends no coalesced follow-up wr
 test("reviewed empty tombstone keeps its CAS version and cannot count as a normal save acknowledgement", async () => {
   const record = result({ ...context,operationId: randomUUID(),expectedDraftLockVersion: 0,
     expectedRecoveryLockVersion: 1,buffers: [] });
-  record.payload.schemaVersion = 2;
+  record.payload.schemaVersion = 4;
   record.payload.discardedFrom = { contentHash: hash(1),lockVersion: 1 };
   const { queue,calls } = fixture();
   queue.load(context,record);
@@ -565,7 +565,7 @@ test("reviewed empty tombstone keeps its CAS version and cannot count as a norma
   queue.update([buffer("破棄後の新入力")]);
   await queue.flush();
   assert.equal(calls[0].expectedRecoveryLockVersion,2);
-  assert.equal(queue.snapshot().saved?.payload.schemaVersion,1);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,4);
 });
 
 test("normal save cannot accept a disguised reviewed-discard acknowledgement", async () => {

@@ -111,6 +111,8 @@ fn groups(rows: &[AnalysisUtterance], gaps: &[(String, i64, i64)]) -> Vec<Vec<An
                 && row.speaker_ids == p.speaker_ids
                 && !p.recognition_is_source
                 && !row.recognition_is_source
+                && p.speaker_identification.is_none()
+                && row.speaker_identification.is_none()
                 && row.start_us >= p.end_us
                 && row.start_us - p.end_us <= 2_000_000
                 && row.end_us - g[0].start_us <= 60_000_000
@@ -242,6 +244,37 @@ pub(super) fn consolidate_copied_rows(
     Ok(())
 }
 
+pub(super) fn copy_voice_matches(
+    tx: &Transaction<'_>,
+    source: &AnalysisView,
+    id: &str,
+) -> Result<(), String> {
+    // Speaker lineages remain 1:1; carry confirmed/candidate person links.
+    let matches = {
+        let mut q=tx.prepare("SELECT v.person_id,v.name_snapshot,v.state,v.similarity,v.model_hash,v.policy_version,v.created_at,n.id FROM voice_matches v JOIN speakers s ON s.id=v.speaker_id AND s.analysis_revision_id=v.analysis_revision_id JOIN speakers n ON n.lineage_id=s.lineage_id AND n.analysis_revision_id=?1 WHERE v.analysis_revision_id=?2").map_err(|e|e.to_string())?;
+        let rows = q
+            .query_map(params![id, source.id], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, String>(7)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    for (person, name, state, similarity, model, policy, created, speaker) in matches {
+        tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![Uuid::new_v4().to_string(),source.meeting_id,id,speaker,person,name,state,similarity,model,policy,created]).map_err(|e|e.to_string())?;
+    }
+    Ok(())
+}
+
 impl Storage {
     pub(crate) fn consolidate_transcript(&self, request: &Request) -> Result<Reply, String> {
         if Uuid::parse_str(&request.operation_id).is_err() {
@@ -306,7 +339,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?
         };
         let groups = groups(&source.utterances, &gaps);
-        let voice_busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE meeting_id=?1 AND input_analysis_id=?2 AND kind IN ('voice_registration','voice_matching') AND state IN ('queued','running','pausing','paused','interrupted'))",params![request.meeting_id,source.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let voice_busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE meeting_id=?1 AND input_analysis_id=?2 AND kind IN ('voice_registration','voice_matching','speaker_completion') AND state IN ('queued','running','pausing','paused','interrupted'))",params![request.meeting_id,source.id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if groups.is_empty() || voice_busy {
             return Ok(Reply {
                 analysis: base,
@@ -333,29 +366,7 @@ impl Storage {
             None,
             Some((request, &groups)),
         )?;
-        // Speaker lineages remain 1:1; carry confirmed/candidate person links.
-        let matches = {
-            let mut q=tx.prepare("SELECT v.person_id,v.name_snapshot,v.state,v.similarity,v.model_hash,v.policy_version,v.created_at,n.id FROM voice_matches v JOIN speakers s ON s.id=v.speaker_id AND s.analysis_revision_id=v.analysis_revision_id JOIN speakers n ON n.lineage_id=s.lineage_id AND n.analysis_revision_id=?1 WHERE v.analysis_revision_id=?2").map_err(|e|e.to_string())?;
-            let rows = q
-                .query_map(params![id, source.id], |r| {
-                    Ok((
-                        r.get::<_, Option<String>>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, Option<f64>>(3)?,
-                        r.get::<_, String>(4)?,
-                        r.get::<_, String>(5)?,
-                        r.get::<_, i64>(6)?,
-                        r.get::<_, String>(7)?,
-                    ))
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?
-        };
-        for (person, name, state, similarity, model, policy, created, speaker) in matches {
-            tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![Uuid::new_v4().to_string(),request.meeting_id,id,speaker,person,name,state,similarity,model,policy,created]).map_err(|e|e.to_string())?;
-        }
+        copy_voice_matches(&tx, &source, &id)?;
         tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1",[&request.meeting_id]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
         let hash = super::revisions::analysis_content_hash(&tx, &id)?;
@@ -600,7 +611,7 @@ mod tests {
         let first = &next.utterances[0];
         let text = first.effective_text.clone();
         let mut p = draft.payload;
-        p.schema_version = 3;
+        p.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
         p.utterance_splits
             .push(super::super::draft_splits::UtteranceSplit {
                 source_utterance_id: first.id.clone(),
@@ -671,7 +682,7 @@ mod tests {
             .create_transcript_draft(&r.meeting_id, &r.analysis_id)
             .unwrap();
         let mut payload = draft.payload;
-        payload.schema_version = 2;
+        payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
         payload
             .speaker_merges
             .push(super::super::drafts::SpeakerMerge {
@@ -724,6 +735,7 @@ mod tests {
     #[test]
     fn consolidation_boundaries_keep_turns_tracks_overlaps_pauses_gaps_and_manual_parts() {
         let row = |id: &str, start: i64| AnalysisUtterance {
+            speaker_identification: None,
             id: id.into(),
             track_id: "track".into(),
             start_us: start,
@@ -765,6 +777,15 @@ mod tests {
             },
             AnalysisUtterance {
                 recognition_is_source: true,
+                ..b.clone()
+            },
+            AnalysisUtterance {
+                speaker_identification: Some(super::super::analysis::SpeakerIdentification {
+                    similarity_milli: 530,
+                    runner_up_milli: Some(200),
+                    needs_review: true,
+                    reason: "nearest_below_threshold".into(),
+                }),
                 ..b.clone()
             },
         ] {

@@ -132,6 +132,7 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
     };
     let original = serde_json::to_vec(&engine).unwrap();
     let config = ExtractorConfig {
+        library_index: 0,
         helper: proof("helper"),
         library: engine.runtime_libraries[0].clone(),
     };
@@ -139,10 +140,12 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
     config.validate(&engine).unwrap();
     for invalid in [
         ExtractorConfig {
+            library_index: 0,
             library: proof("other-runtime"),
             ..config.clone()
         },
         ExtractorConfig {
+            library_index: 0,
             helper: Fingerprint {
                 sha256: "A".repeat(64),
                 ..config.helper.clone()
@@ -150,6 +153,7 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
             ..config.clone()
         },
         ExtractorConfig {
+            library_index: 0,
             helper: Fingerprint {
                 size: 0,
                 ..config.helper.clone()
@@ -157,6 +161,7 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
             ..config.clone()
         },
         ExtractorConfig {
+            library_index: 0,
             helper: Fingerprint {
                 path: "relative-helper".into(),
                 ..config.helper.clone()
@@ -169,6 +174,16 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
     let mut duplicates = engine.clone();
     duplicates.runtime_libraries.push(config.library.clone());
     assert!(config.validate(&duplicates).is_err());
+    // Equal bytes in a different declared slot do not make the selection ambiguous.
+    let mut aliases = engine.clone();
+    aliases
+        .runtime_libraries
+        .push(proof("same-bytes-other-runtime.dylib"));
+    #[cfg(target_os = "macos")]
+    config.validate(&aliases).unwrap();
+    let mut wrong_slot = config.clone();
+    wrong_slot.library_index = 1;
+    assert!(wrong_slot.validate(&aliases).is_err());
     assert_eq!(serde_json::to_vec(&engine).unwrap(), original);
 }
 
@@ -441,7 +456,11 @@ fn real_feature_child_repeats_exact_synthetic_features_with_fixed_library_model_
         min_duration_off_ms: 0,
         speech_sensitivity_milli: 0,
     };
-    let config = ExtractorConfig { helper, library };
+    let config = ExtractorConfig {
+        library_index: 0,
+        helper,
+        library,
+    };
     let wave = proof(&wave_path);
     let mut previous = None;
     for name in ["first", "second"] {

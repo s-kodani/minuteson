@@ -53,3 +53,8 @@ test("Japanese joins naturally while Latin words retain a space and existing whi
   assert.equal(transcriptFragmentSeparator("Hello ", "world"), "");
   assert.equal(transcriptFragmentSeparator("", "続き"), "");
 });
+
+test('automatic identification scores remain on their original rows instead of being consolidated away',()=>{
+  const rows=[row('a',0),row('b',1_000_000,{speakerIdentification:{similarityMilli:530,runnerUpMilli:200,needsReview:true,reason:'nearest_below_threshold'}}),row('c',2_000_000)];
+  assert.deepEqual(ids(groupTranscriptRows(rows,rows)),[['a'],['b'],['c']]);
+});

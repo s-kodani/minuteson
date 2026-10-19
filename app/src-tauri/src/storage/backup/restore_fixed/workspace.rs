@@ -62,6 +62,7 @@ impl FixedWorkspace {
             return Err("復元音声成果物の構築が既に完了しています".into());
         }
         self.speech_artifacts(fixed, cancelled)?;
+        self.completion_checkpoints(fixed, cancelled)?;
         self.completed[0] = true;
         Ok(self)
     }
@@ -135,6 +136,49 @@ impl FixedWorkspace {
         work.rebuild_dependencies(fixed, cancelled)?;
         check_cancelled(cancelled)?;
         Ok(work)
+    }
+
+    fn completion_checkpoints(
+        &mut self,
+        fixed: &FixedData<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let source = &fixed.ids.source().database;
+        let mut q=source.prepare("SELECT c.rowid,c.id,c.job_id,j.meeting_id,c.checkpoint_hash FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id WHERE j.kind='speaker_completion' ORDER BY j.rowid,c.sequence").map_err(|e|e.to_string())?;
+        let rows = q
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (rowid, id, job, meeting, old_hash) in rows {
+            check_cancelled(cancelled)?;
+            let c = fixed.checkpoint(&meeting, &job, rowid, cancelled)?;
+            let mapped = fixed.ids.get("job_checkpoints", &meeting, &id)?;
+            if !c.missing_assets.is_empty() {
+                return Err("話者補完の再開情報に予期しない音声参照があります".into());
+            }
+            if self
+                .database
+                .execute(
+                    "UPDATE job_checkpoints SET checkpoint_json=?1,checkpoint_hash=?2 WHERE id=?3",
+                    params![c.json, c.content_hash, mapped],
+                )
+                .map_err(|e| e.to_string())?
+                != 1
+            {
+                return Err("話者補完の再開情報がありません".into());
+            }
+            fixed.remember("job_checkpoints", &meeting, &id, &old_hash, &c.content_hash)?;
+        }
+        Ok(())
     }
 
     fn load_rows(

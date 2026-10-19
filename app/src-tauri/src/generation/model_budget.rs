@@ -13,20 +13,12 @@ pub(super) const COMPLETION_INSTRUCTION: &str =
 // must use a new policy variant so existing jobs keep their fixed budgets.
 const ADAPTIVE_OUTPUT_RESERVE: u32 = 8192;
 
-// Missing on existing fixed jobs: preserve their original partitioning and
-// execution budget when resuming, retrying, or restoring them.
+// The only current allocation policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum Allocation {
     #[default]
-    Profile,
-    ModelMaximum,
     ModelAdaptive,
-}
-impl Allocation {
-    fn is_profile(&self) -> bool {
-        *self == Self::Profile
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +30,6 @@ pub(crate) struct Capacity {
     max_output_tokens: u32,
     template_reserve_tokens: u32,
     tokenizer: Tokenizer,
-    #[serde(default, skip_serializing_if = "Allocation::is_profile")]
     allocation: Allocation,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +82,9 @@ impl Capacity {
     }
     pub(super) fn validate(&self, engine: &LlamaConfig) -> Result<(), String> {
         engine.validate()?;
+        if self.allocation != Allocation::ModelAdaptive {
+            return Err("非対応の旧トークン予算です".into());
+        }
         if self.model_sha256 != engine.model.sha256
             || !(2048..=1_048_576).contains(&self.max_context_tokens)
             || !(2048..=self.max_context_tokens).contains(&self.max_input_tokens)
@@ -113,32 +107,26 @@ impl Capacity {
         runtime.validate()?;
         Ok(runtime)
     }
+    pub(super) fn token_configuration(&self, engine: &LlamaConfig) -> Result<LlamaConfig, String> {
+        self.validate(engine)?;
+        let mut c = self.model_configuration(engine)?;
+        c.prediction_tokens = self.max_output_tokens.min(ADAPTIVE_OUTPUT_RESERVE);
+        Ok(c)
+    }
     pub(super) fn input_limit(
         &self,
         engine: &LlamaConfig,
         requested: usize,
     ) -> Result<usize, String> {
         self.validate(engine)?;
-        let runtime = if self.allocation != Allocation::Profile {
-            self.model_configuration(engine)?
-        } else {
-            engine.clone()
-        };
-        let reserved_output = if self.allocation == Allocation::ModelAdaptive {
-            self.max_output_tokens.min(ADAPTIVE_OUTPUT_RESERVE)
-        } else {
-            runtime.prediction_tokens.min(self.max_output_tokens)
-        };
+        let runtime = self.model_configuration(engine)?;
+        let reserved_output = self.max_output_tokens.min(ADAPTIVE_OUTPUT_RESERVE);
         let available = self
             .context(&runtime)
             .checked_sub(reserved_output)
             .and_then(|n| n.checked_sub(self.template_reserve_tokens))
             .ok_or("選択モデルの入力と生成予算を確保できません")? as usize;
-        let requested = if self.allocation != Allocation::Profile {
-            available
-        } else {
-            requested
-        };
+        let requested = available;
         let limit = requested.min(available).min(
             self.max_input_tokens
                 .saturating_sub(self.template_reserve_tokens) as usize,
@@ -162,12 +150,15 @@ impl Capacity {
         prompt: &str,
     ) -> Result<LlamaConfig, String> {
         self.validate(engine)?;
-        let input_upper_bound = system
-            .len()
-            .checked_add(prompt.len())
-            .and_then(|n| u32::try_from(n).ok())
-            .and_then(|n| n.checked_add(self.template_reserve_tokens))
-            .ok_or("議事録の入力トークン予算が範囲外です")?;
+        let input_upper_bound = match super::optimization::count(system, prompt) {
+            Some(n) => n?.checked_add(self.template_reserve_tokens),
+            None => system
+                .len()
+                .checked_add(prompt.len())
+                .and_then(|n| u32::try_from(n).ok())
+                .and_then(|n| n.checked_add(self.template_reserve_tokens)),
+        }
+        .ok_or("議事録の入力トークン予算が範囲外です")?;
         if input_upper_bound > self.max_input_tokens {
             return Err("選択モデルの入力トークン上限を超えています".into());
         }
@@ -184,25 +175,7 @@ impl Capacity {
             runtime.validate()?;
             return Ok(runtime);
         }
-        if self.allocation == Allocation::ModelMaximum {
-            let runtime = self.model_configuration(engine)?;
-            if input_upper_bound
-                .checked_add(runtime.prediction_tokens)
-                .is_none_or(|total| total > runtime.context_tokens)
-            {
-                return Err("選択モデルの最大出力を確保できません。入力を分割してください".into());
-            }
-            return Ok(runtime);
-        }
-        let available = self
-            .context(engine)
-            .checked_sub(input_upper_bound)
-            .ok_or("選択モデルのコンテキストに入力が収まりません")?;
-        let mut runtime = engine.clone();
-        runtime.context_tokens = self.context(engine);
-        runtime.prediction_tokens = available.min(self.max_output_tokens).min(8192);
-        runtime.validate()?;
-        Ok(runtime)
+        Err("非対応の旧トークン予算です".into())
     }
     #[cfg(test)]
     pub(crate) fn synthetic(engine: &LlamaConfig, context: u32, output: u32) -> Self {
@@ -213,14 +186,7 @@ impl Capacity {
             max_output_tokens: output,
             template_reserve_tokens: 512,
             tokenizer: Tokenizer::Utf8ByteBpe,
-            allocation: Allocation::Profile,
-        }
-    }
-    #[cfg(test)]
-    pub(crate) fn synthetic_model_maximum(engine: &LlamaConfig, context: u32, output: u32) -> Self {
-        Self {
-            allocation: Allocation::ModelMaximum,
-            ..Self::synthetic(engine, context, output)
+            allocation: Allocation::ModelAdaptive,
         }
     }
     #[cfg(test)]
@@ -259,16 +225,16 @@ mod tests {
     fn different_model_limits_and_inputs_allocate_different_output_without_a_character_cap() {
         let e = engine();
         let small = Capacity::synthetic(&e, 4096, 1024);
-        let large = Capacity::synthetic(&e, 32768, 8192);
+        let large = Capacity::synthetic(&e, 32768, 16384);
         let a = small.execution(&e, "system", &"あ".repeat(400)).unwrap();
         let b = large.execution(&e, "system", &"あ".repeat(400)).unwrap();
         assert_eq!((a.context_tokens, a.prediction_tokens), (4096, 1024));
-        assert_eq!((b.context_tokens, b.prediction_tokens), (8192, 6474));
-        let long = large.execution(&e, "system", &"あ".repeat(1800)).unwrap();
-        assert_eq!(long.prediction_tokens, 2274);
+        assert_eq!((b.context_tokens, b.prediction_tokens), (32768, 16384));
+        let long = large.execution(&e, "system", &"あ".repeat(7000)).unwrap();
+        assert_eq!(long.prediction_tokens, 11250);
         assert!(long.prediction_tokens < b.prediction_tokens);
         assert_eq!(small.input_limit(&e, 5400).unwrap(), 2560);
-        assert!(large.execution(&e, "system", &"x".repeat(8000)).is_err());
+        assert!(large.execution(&e, "system", &"x".repeat(30000)).is_err());
     }
     #[test]
     fn unknown_or_changed_model_bytes_do_not_inherit_another_models_limits() {
@@ -347,97 +313,14 @@ mod tests {
     }
 
     #[test]
-    fn model_maximum_reserves_full_output_despite_saved_small_profile_limits() {
-        let e = engine(); // Existing 8192 context / 2048 output profile.
-        let capacity = Capacity::synthetic_model_maximum(&e, 32768, 8192);
-        assert_eq!(capacity.input_limit(&e, 2400).unwrap(), 24064);
-        // Reproduce the byte sizes from HRB_202604's failed second unit.
-        let runtime = capacity
-            .execution(&e, &"s".repeat(787), &"p".repeat(4224))
-            .unwrap();
-        assert_eq!(
-            (runtime.context_tokens, runtime.prediction_tokens),
-            (32768, 8192)
-        );
-        let boundary = capacity.execution(&e, "", &"x".repeat(24064)).unwrap();
-        assert_eq!(boundary.prediction_tokens, 8192);
-        assert!(capacity.execution(&e, "", &"x".repeat(24065)).is_err());
-        assert_eq!(runtime.threads, e.threads);
-        assert_eq!(runtime.gpu_layers, e.gpu_layers);
-        let smaller = Capacity::synthetic_model_maximum(&e, 4096, 1024);
-        assert_eq!(smaller.input_limit(&e, 5400).unwrap(), 2560);
-        assert_eq!(
-            smaller
-                .execution(&e, "system", "入力")
-                .unwrap()
-                .prediction_tokens,
-            1024
-        );
-    }
-
-    #[test]
-    fn old_fixed_capacity_roundtrips_without_changing_its_execution_conditions() {
+    fn older_capacity_allocations_are_rejected() {
         let e = engine();
-        let legacy = Capacity::synthetic(&e, 32768, 8192);
-        let encoded = serde_json::to_value(&legacy).unwrap();
-        assert!(encoded.get("allocation").is_none());
-        let decoded: Capacity = serde_json::from_value(encoded.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&decoded).unwrap(), encoded);
-        assert_eq!(decoded.input_limit(&e, 2400).unwrap(), 2400);
-        assert_eq!(
-            decoded
-                .execution(&e, &"s".repeat(787), &"p".repeat(4224))
-                .unwrap()
-                .prediction_tokens,
-            2669
-        );
-        let current = Capacity::synthetic_model_maximum(&e, 32768, 8192);
-        let value = serde_json::to_value(&current).unwrap();
-        assert_eq!(value["allocation"], "modelMaximum");
-        assert_eq!(serde_json::from_value::<Capacity>(value).unwrap(), current);
-    }
-
-    #[test]
-    fn model_maximum_partitions_all_utf8_input_and_reserves_output_for_extraction_and_merge() {
-        use crate::generation::{markdown, markdown_plan as plan};
-        let e = engine();
-        let capacity = Capacity::synthetic_model_maximum(&e, 32768, 8192);
-        let mut input = crate::storage::current_minutes_fixture::input();
-        input.analysis.utterances.truncate(1);
-        let original = "議題と決定事項を確認する。".repeat(2000);
-        input.analysis.utterances[0].effective_text = original.clone();
-        let limit = capacity.plan_limit(&e, 2400).unwrap();
-        let planned = plan::build(&input, limit).unwrap();
-        let mut reconstructed = String::new();
-        let mut units = 0;
-        for node in &planned.nodes {
-            if let plan::Node::Extract { slices } = node {
-                let prompt = plan::extract_prompt(&input, slices).unwrap();
-                let system = format!("{}{COMPLETION_INSTRUCTION}", markdown::system());
-                let runtime = capacity.execution(&e, &system, &prompt).unwrap();
-                assert_eq!(runtime.prediction_tokens, 8192);
-                for slice in slices {
-                    reconstructed.push_str(&original[slice.first_byte..slice.end_byte]);
-                }
-                units += 1;
-            }
-        }
-        assert!(units > 1);
-        assert_eq!(reconstructed, original);
-        let mut cursor = plan::Cursor::new(vec!["確認事項。".repeat(2000); 2], limit).unwrap();
-        while cursor.result().is_none() {
-            let system = format!("{}{COMPLETION_INSTRUCTION}", plan::MERGE_SYSTEM);
-            assert_eq!(
-                capacity
-                    .execution(&e, &system, &cursor.task().unwrap())
-                    .unwrap()
-                    .prediction_tokens,
-                8192
-            );
-            cursor.accept("統合した議事録".into()).unwrap();
+        for allocation in ["profile", "modelMaximum"] {
+            let mut value = serde_json::to_value(Capacity::synthetic(&e, 32768, 8192)).unwrap();
+            value["allocation"] = serde_json::json!(allocation);
+            assert!(serde_json::from_value::<Capacity>(value).is_err());
         }
     }
-
     #[test]
     fn model_adaptive_uses_remaining_context_and_bounds_input_by_minimum_output() {
         let e = engine(); // The saved 8192 / 2048 profile must not limit new jobs.
@@ -490,31 +373,12 @@ mod tests {
     fn adaptive_merge_can_consume_both_hrb_sized_drafts_without_rewriting_them_separately() {
         use crate::generation::markdown_plan as plan;
         let e = engine();
-        let old = Capacity::synthetic_model_maximum(&e, 40960, 32768);
         let new = Capacity::synthetic_model_adaptive(&e, 40960, 32768);
         let parts = vec!["左".repeat(1092), format!("{}x", "右".repeat(2196))];
         assert_eq!(
             parts.iter().map(String::len).collect::<Vec<_>>(),
             vec![3276, 6589]
         );
-        let legacy_value = serde_json::to_value(&old).unwrap();
-        let legacy: Capacity = serde_json::from_value(legacy_value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&legacy).unwrap(), legacy_value);
-        let old_cursor =
-            plan::Cursor::new(parts.clone(), legacy.plan_limit(&e, 2400).unwrap()).unwrap();
-        let old_prompt: serde_json::Value =
-            serde_json::from_str(&old_cursor.task().unwrap()).unwrap();
-        assert_eq!(old_prompt["drafts"], serde_json::json!([parts[0]]));
-        assert_eq!(
-            legacy
-                .execution(&e, "system", "入力")
-                .unwrap()
-                .prediction_tokens,
-            32768
-        );
-        assert!(legacy
-            .execution(&e, &"s".repeat(635), &"p".repeat(9986))
-            .is_err());
         let mut cursor =
             plan::Cursor::new(parts.clone(), new.plan_limit(&e, 2400).unwrap()).unwrap();
         let prompt = cursor.task().unwrap();

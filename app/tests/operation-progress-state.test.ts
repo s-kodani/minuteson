@@ -207,3 +207,27 @@ test("elapsed time handles missing or invalid starts and clocks behind the start
   assert.equal(operationElapsed({ ...progress, startedAtMs: 1000 }, 999), "全体の経過時間 0分0秒");
   assert.equal(operationElapsed({ ...progress, startedAtMs: 0 }, 3600000), "全体の経過時間 60分0秒");
 });
+
+test("speaker completion shows transient work separately from durable result units", () => {
+  const completion = { ...job, kind: "speaker_completion", completedUnits: 0, totalUnits: 1,
+    executionProgress: { phase: "matching" as const, completed: 14, total: 33, phaseCompleted: 12, phaseTotal: 30 } };
+  const p = jobProgress(completion, "会議A")!;
+  assert.equal(progressPercent(p.completed, p.total), 42);
+  assert.match(p.detail!, /発言照合 12／30件/);
+  assert.match(p.label, /発言照合中/);
+  const saving = jobProgress({ ...completion, executionProgress: { ...completion.executionProgress, phase: "saving", completed: 32, phaseCompleted: 0, phaseTotal: 1 } }, "会議A")!;
+  assert.equal(progressPercent(saving.completed, saving.total), 96);
+  assert.match(saving.label, /結果を保存中/);
+  for (const state of ["paused", "interrupted", "failed", "cancelled", "queued"]) {
+    const view = jobProgress({ ...completion, state }, "会議A");
+    assert.equal(view?.total ?? null, null);
+    assert.doesNotMatch(view?.label ?? "", /発言照合中/);
+  }
+  assert.equal(jobProgress({ ...completion, state: "succeeded", completedUnits: 1 }, "会議A"), null);
+  assert.equal(jobProgress({ ...completion, executionProgress: undefined }, "会議A")!.total, null);
+  for (const patch of [{ completed: 33 }, { total: 0 }, { completed: -1 }, { phaseCompleted: 31 }, { completed: 1.5 }, { total: NaN }]) {
+    assert.equal(jobProgress({ ...completion, executionProgress: { ...completion.executionProgress, ...patch } }, "会議A")!.total, null);
+  }
+  const large = jobProgress({ ...completion, executionProgress: { phase: "saving", completed: 999, total: 1000, phaseCompleted: 0, phaseTotal: 1 } }, "会議A")!;
+  assert.equal(progressPercent(large.completed, large.total), 99);
+});

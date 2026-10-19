@@ -41,7 +41,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
     );
     let path = output.join("manifest.json");
     let original = std::fs::read(&path).unwrap();
-    assert!(original.len() > crate::capture_manifest::LEGACY_BYTES as usize);
+    assert!(original.len() > crate::capture_manifest::SMALL_MANIFEST_BYTES as usize);
     let good: Value = serde_json::from_slice(&original).unwrap();
     assert_eq!(
         good["microphone"]["clockSegments"]

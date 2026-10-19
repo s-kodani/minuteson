@@ -12,7 +12,7 @@ fn portable_final_diagnostics_preserve_results_without_exporting_native_error_pa
         let mut persistence =
             report(123, 3, if state == "confirmed" { 3 } else { 2 }, state)["persistence"].clone();
         persistence["closed"] = json!(true);
-        let source = json!({"state":"saved","recordingOwnerId":OWNER,
+        let source = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
             "inputEventJournalPersistence":persistence,
             "inputEventJournalError":"cannot sync /Users/source/private/meeting or C:\\private\\meeting"});
         let bytes = serde_json::to_vec(&source).unwrap();
@@ -33,10 +33,8 @@ fn portable_final_diagnostics_preserve_results_without_exporting_native_error_pa
             "cannot sync /Users/source/private/meeting or C:\\private\\meeting"
         );
     }
-    assert!(portable_manifest_fields(br#"{"state":"saved"}"#)
-        .unwrap()
-        .is_empty());
-    let confirmed = json!({"state":"saved","recordingOwnerId":OWNER,
+    assert!(portable_manifest_fields(br#"{"state":"saved"}"#).is_err());
+    let confirmed = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
         "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":3,"state":"confirmed","closed":true}});
     let fields = portable_manifest_fields(&serde_json::to_vec(&confirmed).unwrap()).unwrap();
     assert_eq!(fields.len(), 1);
@@ -44,10 +42,8 @@ fn portable_final_diagnostics_preserve_results_without_exporting_native_error_pa
     assert!(portable_manifest_fields(
         br#"{"state":"saved","inputEventJournalError":null,"inputEventJournalPersistence":null}"#
     )
-    .unwrap()
-    .is_empty());
-    let error_only =
-        json!({"state":"failed","recordingOwnerId":OWNER,"inputEventJournalError":"native path"});
+    .is_err());
+    let error_only = json!({"schemaVersion":4,"inputDiagnosticsState":"unconfirmed","state":"failed","recordingOwnerId":OWNER,"inputEventJournalError":"native path"});
     let fields = portable_manifest_fields(&serde_json::to_vec(&error_only).unwrap()).unwrap();
     assert_eq!(fields.len(), 1);
     assert!(fields.get("inputEventJournalPersistence").is_none());
@@ -55,7 +51,7 @@ fn portable_final_diagnostics_preserve_results_without_exporting_native_error_pa
 
 #[test]
 fn portable_final_diagnostics_reject_open_invalid_foreign_or_duplicated_results() {
-    let good = json!({"state":"saved","recordingOwnerId":OWNER,
+    let good = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
         "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":2,"state":"failed","closed":true}});
     for (field, value) in [
         ("state", json!("recording")),
@@ -216,7 +212,7 @@ fn journal_diagnostics_stop_errors_are_not_audio_failure_or_optimistic_confirmat
         write(
             temp.path(),
             "manifest.json",
-            &json!({"state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":p}),
+            &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":p}),
         );
         assert_eq!(archived_issue(&directory, OWNER), expected);
     }
@@ -225,22 +221,22 @@ fn journal_diagnostics_stop_errors_are_not_audio_failure_or_optimistic_confirmat
     write(
         temp.path(),
         "manifest.json",
-        &json!({"state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":confirmed,"inputEventJournalError":"/private/secret: timed out"}),
+        &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":confirmed,"inputEventJournalError":"/private/secret: timed out"}),
     );
     assert_eq!(archived_issue(&directory, OWNER), Some("unconfirmed"));
     write(
         temp.path(),
         "manifest.json",
-        &json!({"state":"saved","recordingOwnerId":"foreign","inputEventJournalPersistence":confirmed}),
+        &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":"foreign","inputEventJournalPersistence":confirmed}),
     );
     assert_eq!(archived_issue(&directory, OWNER), Some("unavailable"));
     write(temp.path(), "manifest.json", &json!({"state":"saved"}));
-    assert_eq!(archived_issue(&directory, OWNER), None);
+    assert_eq!(archived_issue(&directory, OWNER), Some("unavailable"));
     let mut unsealed: Value =
         serde_json::from_slice(&fs::read(temp.path().join("input-events.json")).unwrap()).unwrap();
     unsealed["sealed"] = json!(false);
     write(temp.path(), "input-events.json", &unsealed);
-    assert_eq!(archived_issue(&directory, OWNER), Some("unconfirmed"));
+    assert_eq!(archived_issue(&directory, OWNER), Some("unavailable"));
     fs::write(temp.path().join("manifest.json"),format!("{{\"state\":\"saved\",\"recordingOwnerId\":\"{OWNER}\",\"inputEventJournalError\":\"first\",\"inputEventJournalError\":null}}")).unwrap();
     assert_eq!(archived_issue(&directory, OWNER), Some("unavailable"));
 }
@@ -266,4 +262,28 @@ fn swift_generated_input_journal_status_has_separate_writer_result_and_heartbeat
         report.persistence.committed_revision,
         history.report.revision
     );
+}
+
+#[test]
+fn interrupted_current_producer_has_no_final_stop_result_or_fabricated_closure() {
+    for state in ["preparing", "recording", "stopping"] {
+        let manifest = json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","state":state,"recordingOwnerId":OWNER});
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        assert!(HistoricalFinal::from_manifest(&bytes, OWNER)
+            .unwrap()
+            .is_none());
+        for (key, value) in [
+            ("recordingOwnerId", json!("foreign")),
+            ("inputDiagnosticsState", json!("reported")),
+            ("inputEventJournalError", json!("unconfirmed stop")),
+            ("schemaVersion", json!(3)),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid[key] = value;
+            assert!(
+                HistoricalFinal::from_manifest(&serde_json::to_vec(&invalid).unwrap(), OWNER)
+                    .is_err()
+            );
+        }
+    }
 }

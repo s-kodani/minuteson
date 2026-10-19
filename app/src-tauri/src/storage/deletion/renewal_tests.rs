@@ -97,7 +97,7 @@ fn finish(f: &Fixture, r: &mut Receipt) {
 }
 
 #[test]
-fn rootless_renewal_uses_current_v3_and_rejects_noncurrent_audit_versions_without_conversion() {
+fn rootless_renewal_uses_current_format_and_rejects_noncurrent_audit_versions_without_conversion() {
     let base = tempfile::tempdir().unwrap();
     let storage = Storage::open(base.path().join("root")).unwrap();
     let meeting = storage.create_meeting("EMPTY CURRENT MEETING").unwrap();
@@ -155,10 +155,10 @@ fn rootless_renewal_uses_current_v3_and_rejects_noncurrent_audit_versions_withou
         )
         .unwrap();
     let current: serde_json::Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(current["version"], 3);
+    assert_eq!(current["version"], 5);
     assert_eq!(renewal::audit_source(&saved).unwrap(), operation);
-    let tail = saved.strip_prefix("{\"version\":3,").unwrap();
-    for version in [0, 1, 2, 5] {
+    let tail = saved.strip_prefix("{\"version\":5,").unwrap();
+    for version in [0, 1, 2, 3, 4, 6] {
         let unsupported = format!("{{\"version\":{version},{tail}");
         assert!(renewal::audit_source(&unsupported).is_err());
     }

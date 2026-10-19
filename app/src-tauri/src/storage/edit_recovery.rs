@@ -42,13 +42,10 @@ pub(crate) struct Payload {
     // durable Undo changes the current draft. Stale buffers remain readable.
     pub base_payload: TranscriptDraftPayload,
     pub buffers: Vec<TextBuffer>,
-    // v3 adds names. Omit this field for v1/v2 so existing JSON and hashes
-    // remain byte-for-byte compatible; v2 is still an entirely empty proof.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_buffers: Vec<NameBuffer>,
     // v2 empty tombstones identify the exact preview that was discarded, so a
     // lost acknowledgement cannot disguise reuse of an operation with new input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::current_formats::optional")]
     pub discarded_from: Option<DiscardProof>,
 }
 
@@ -81,7 +78,6 @@ pub(crate) struct SaveRequest {
     pub expected_draft_lock_version: i64,
     pub expected_recovery_lock_version: i64,
     pub buffers: Vec<TextBuffer>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_buffers: Vec<NameBuffer>,
 }
 
@@ -145,17 +141,16 @@ fn normalize_names(mut names: Vec<NameBuffer>) -> Result<Vec<NameBuffer>, String
 }
 
 pub(super) fn validate(db: &Connection, base: &str, payload: &Payload) -> Result<(), String> {
-    let format = match (payload.schema_version, &payload.discarded_from) {
-        (1, None) => payload.name_buffers.is_empty(),
-        (3, None) => !payload.name_buffers.is_empty(),
-        (2, Some(proof)) => {
-            payload.buffers.is_empty()
-                && payload.name_buffers.is_empty()
-                && proof.lock_version > 0
-                && valid_hash(&proof.content_hash)
-        }
-        _ => false,
-    };
+    let format = payload.schema_version == crate::current_formats::EDIT_RECOVERY
+        && match &payload.discarded_from {
+            None => true,
+            Some(proof) => {
+                payload.buffers.is_empty()
+                    && payload.name_buffers.is_empty()
+                    && proof.lock_version > 0
+                    && valid_hash(&proof.content_hash)
+            }
+        };
     if !format
         || normalize(payload.buffers.clone())? != payload.buffers
         || normalize_names(payload.name_buffers.clone())? != payload.name_buffers
@@ -328,7 +323,7 @@ impl Storage {
             return Err("下書きまたは回復保存が更新されています。結果を再確認してください".into());
         }
         let payload = Payload {
-            schema_version: if names.is_empty() { 1 } else { 3 },
+            schema_version: crate::current_formats::EDIT_RECOVERY,
             base_payload: draft.payload.clone(),
             buffers,
             name_buffers: names,

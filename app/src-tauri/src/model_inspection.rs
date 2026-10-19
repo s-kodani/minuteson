@@ -383,30 +383,17 @@ fn inspect_bytes(
                 entry.relative_path
             ));
         }
-        let mut digest = Sha256::new();
-        let mut buffer = [0_u8; 65_536];
-        let mut read = 0_u64;
-        loop {
-            check(cancelled)?;
-            let count = source.file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            read = read
-                .checked_add(count as u64)
-                .ok_or("モデル容量が範囲外です")?;
-            if read > size {
-                return Err("照合中にモデルファイルが増大しました".into());
-            }
-            digest.update(&buffer[..count]);
-        }
-        let actual_hash = format!("{:x}", digest.finalize());
+        let actual_hash = crate::local_engine::verification::hash(
+            &source.path,
+            &mut source.file,
+            cancelled,
+            true,
+        )?;
         source.verify()?;
-        if read != size
-            || entry
-                .expected_hash
-                .as_ref()
-                .is_some_and(|h| *h != actual_hash)
+        if entry
+            .expected_hash
+            .as_ref()
+            .is_some_and(|h| *h != actual_hash)
         {
             return Err(format!(
                 "モデルファイルのSHA・容量が一致しません: {}",

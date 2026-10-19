@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-18",
+  "scope": "transcription_diarization_minutes_processing_efficiency",
+  "readiness": {
+    "physicalFileVerification": "enabled_for_new_jobs",
+    "audioVerificationAndFlacIndex": "enabled_for_new_jobs",
+    "embeddingWaveVerification": "enabled_for_new_jobs",
+    "sharedAnalysisPcm": "enabled_for_new_jobs",
+    "minutesTokenPacking": "implemented_no_approved_configurations",
+    "minutesSystemPrefixReuse": "implemented_no_approved_configurations"
+  },
+  "compatibility": {
+    "existingJobPoliciesPreserved": true,
+    "minutesParameterVersions": [
+      7,
+      8
+    ],
+    "databaseMigrationRequired": false,
+    "cacheIncludedInBackups": false,
+    "realMeetingsUpdated": false
+  },
+  "bounds": {
+    "verifiedFilesRetainedPerJob": 128,
+    "flacIndexFilesPerJob": 64,
+    "flacIndexBytesPerJob": 67108864,
+    "analysisPcmEntries": 4,
+    "analysisPcmBytes": 1073741824,
+    "tokenMemoEntries": 4096,
+    "promptBytes": 65536,
+    "tokenizerTimeoutSeconds": 5
+  },
+  "qualification": {
+    "requiredMedianGainPercent": 10,
+    "runs": 3,
+    "cpuAndMetalRequired": true,
+    "criticalFactsCompleteRequired": true,
+    "noUnsupportedClaimsRequired": true,
+    "linksValidRequired": true,
+    "coverageNotWorseRequired": true,
+    "approvedConfigurations": 0
+  },
+  "checks": {
+    "frontend": {
+      "passed": 872,
+      "failed": 0
+    },
+    "pythonRuntime": {
+      "passed": 21,
+      "failed": 0
+    },
+    "rustRegression": {
+      "state": "passed",
+      "log": "/tmp/mon-pipeline-regression-sealed.log",
+      "passed": 282,
+      "failed": 0,
+      "ignored": 19
+    },
+    "realRustTokenizer": {
+      "passed": 1,
+      "failed": 0,
+      "log": "/tmp/mon-pipeline-real-token-final.log"
+    },
+    "nativeWorker": {
+      "tokenCountMatchesInference": true,
+      "qwen25CpuPrefixJsonMatches": true,
+      "qwen3MetalPrefixJsonMatches": true,
+      "generatedByteComparisonLog": "/tmp/mon-pipeline-native-output-bytes.log",
+      "generatedOutputBytesEqual": true,
+      "byteComparisonCases": 2
+    },
+    "qaBuild": {
+      "state": "passed",
+      "log": "/tmp/mon-pipeline-qa-sealed.log",
+      "signature": "ad_hoc",
+      "codesignDeepStrict": true,
+      "architecture": "arm64",
+      "bundle": "app/src-tauri/target/release/bundle/macos/MON QA.app",
+      "workerIndexVerified": 3,
+      "executableSha256": "e2b725939e4951b2aba8ab9edc20471aae1327231940b6410654c71da27877d6"
+    },
+    "cargoCheckTests": true,
+    "rustfmt": true,
+    "gitDiffCheck": true,
+    "frontendBuild": true
+  },
+  "screening": {
+    "cases": [
+      "short",
+      "medium",
+      "long"
+    ],
+    "runsPerModePerCase": 3,
+    "predictionTokens": 1024,
+    "completeJsonResults": 0,
+    "classification": "preliminary_screening_not_production_qualification",
+    "approved": false,
+    "log": "/tmp/mon-pipeline-minutes-evaluation.log",
+    "report": "/tmp/mon-pipeline-minutes-evaluation.json",
+    "evaluatorDefaultPredictionTokens": 8192,
+    "generationAttempts": 18,
+    "fullBudgetAdditionalCheck": {
+      "predictionTokens": 8192,
+      "case": "short",
+      "report": "/tmp/mon-pipeline-full-budget.json",
+      "state": "rejected_incomplete_json",
+      "milliseconds": 84333,
+      "completeJson": false,
+      "approved": false
+    }
+  }
+}

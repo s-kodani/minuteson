@@ -223,11 +223,6 @@ pub(super) fn verify_saved_books(connection: &Connection) -> Result<(), String> 
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn compile(entries: &[FixedEntry], extra: &str) -> Result<String, String> {
-    compile_method(entries, extra, "whisper-initial-prompt-v1")
-}
-
 pub(super) fn compile_method(
     entries: &[FixedEntry],
     extra: &str,
@@ -239,13 +234,6 @@ pub(super) fn compile_method(
             prompt.push('\n');
         }
         match method {
-            "whisper-initial-prompt-v1" => {
-                prompt.push_str(
-                    "会議の用語（表記・読みの認識ヒント。無条件な本文置換ではありません）: ",
-                );
-                let terms:Vec<_> = entries.iter().map(|e|serde_json::json!({"term":e.entry.term,"reading":e.entry.reading,"note":e.entry.note})).collect();
-                prompt.push_str(&serde_json::to_string(&terms).map_err(|e| e.to_string())?);
-            }
             "whisper-vocabulary-v2" => {
                 for (index, item) in entries.iter().enumerate() {
                     if index > 0 {
@@ -262,10 +250,7 @@ pub(super) fn compile_method(
             _ => return Err("未対応の用語ヒント方式です".into()),
         }
     }
-    if !matches!(
-        method,
-        "whisper-initial-prompt-v1" | "whisper-vocabulary-v2"
-    ) {
+    if method != "whisper-vocabulary-v2" {
         return Err("未対応の用語ヒント方式です".into());
     }
     if prompt.chars().count() > 8000 || prompt.contains('\0') {

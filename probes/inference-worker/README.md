@@ -14,8 +14,9 @@ model ownership and per-request reset/cleanup around the upstream CLI code.
 Model-specific templates, grammar, sampling, output and bounds still use those
 CLI implementations. Sherpa uses the pinned 1.13.8 C API and keeps one diarizer
 and one lazily initialized feature extractor. Each feature request creates a
-fresh stream. The old embedding helper remains unchanged for old jobs and voice
-registration jobs.
+fresh stream. New speaker completion, voice registration and voice matching jobs also use
+this job-owned extractor. The old embedding helper remains unchanged for old
+jobs without a feature session.
 
 The three static binaries and notices are packaged in
 `.cache/inference-runtime/package`. Build with CMake on Apple Silicon; optional
@@ -57,3 +58,27 @@ top of that file. Use only synthetic audio, matching pinned engine versions,
 and `/usr/bin/time -l` in an environment allowing its resource queries. The test
 records actual load counts, stable worker PIDs, output equality, elapsed time,
 peak RSS and RSS after each unit. Smoke timings are not a controlled benchmark.
+
+## Evaluated minutes optimizations
+
+The pinned llama worker additionally accepts `llama_tokenize` (vocabulary-only
+model, exact completion chat template, bounded JSON token count) and
+`llama_prefix` (retain only matching system-prefix tokens). Normal `llama`
+requests retain the original reset behavior. Both generation modes create a
+fresh sampler, grammar and repetition history. The last retained token is
+removed and replayed before continuing; previous user input and generated text
+are removed. No session state is written to disk or shared across jobs.
+
+New minutes specifications use version 8. Token-based plans and prefix reuse
+require packaged evidence matching model, worker and prompt hashes, quality
+checks for both CPU and Metal, and at least a 10% median speed improvement.
+`optimization-evidence.json` currently contains no approved entries. Therefore
+new jobs use the existing partitioning and full context reset while benefiting
+from shared physical-file verification. Existing version 7 jobs remain valid.
+Stored token-count memos permit read-only merge replay without loading a model.
+
+`tools/mon_minutes_optimization_eval.py` runs synthetic short/medium/long
+screening comparisons and never modifies this allowlist or real meetings. Its
+report requires content review; keyword and link checks alone are insufficient
+approval. The default output budget is 8192 tokens. Smaller diagnostic budgets
+must be recorded and must not be presented as production qualification.

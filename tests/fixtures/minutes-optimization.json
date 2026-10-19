@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"name":"short","utterances":12,"stepSeconds":15},
+    {"name":"medium","utterances":120,"stepSeconds":15},
+    {"name":"long","utterances":240,"stepSeconds":15}
+  ],
+  "facts": [
+    {"text":"資料のレビュー期限は11月5日に決定しました。","required":["11月5日","レビュー"]},
+    {"text":"田中がレビュー結果を取りまとめます。","required":["田中","取りまとめ"]},
+    {"text":"追加予算については結論が出ておらず、引き続き検討します。","required":["予算","検討"]}
+  ]
+}

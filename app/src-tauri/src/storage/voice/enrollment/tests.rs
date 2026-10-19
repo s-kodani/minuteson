@@ -6,7 +6,7 @@ fn assign_manual(s: &Storage, m: &str, merge: bool) -> String {
     let draft = s.create_transcript_draft(m, &view.id).unwrap();
     let mut payload = draft.payload;
     let manual = format!("manual:{}", Uuid::new_v4());
-    payload.schema_version = 2;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     payload.manual_speakers.push(drafts::ManualSpeaker {
         id: manual.clone(),
         label: "手動話者".into(),
@@ -47,7 +47,7 @@ fn splitting_a_second_into_two_short_utterances_does_not_join_registration_candi
     let view = s.load_current_analysis(&m).unwrap().unwrap();
     let draft = s.create_transcript_draft(&m, &view.id).unwrap();
     let mut payload = draft.payload;
-    payload.schema_version = 3;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     payload
         .utterance_splits
         .push(crate::storage::draft_splits::UtteranceSplit {
@@ -215,7 +215,7 @@ fn selected_manual_window_is_fixed_published_and_rejected_after_a_saved_edit() {
     let c = s.voice_context(&m).unwrap();
     let selected = vec![c.registration_candidates[0].window.clone()];
     let (job, spec, plan) = enqueue_selected(&s, &m, &manual, true, Some(selected.clone()));
-    assert_eq!(plan.schema_version, 2);
+    assert_eq!(plan.schema_version, crate::current_formats::VOICE);
     assert_eq!(plan.windows, selected);
     s.check_voice_plan(&spec, &plan).unwrap();
     // Even read-back of a lost acceptance reply must retain the exact selection.
@@ -256,10 +256,10 @@ fn selected_manual_window_is_fixed_published_and_rejected_after_a_saved_edit() {
 }
 
 #[test]
-fn legacy_request_json_and_version_one_plan_remain_compatible() {
+fn automatic_registration_uses_current_plan_and_replays_exact_request() {
     let (_root, s, m, speaker) = fixture();
     let (job, spec, plan) = enqueue(&s, &m, &speaker, true);
-    assert_eq!(plan.schema_version, 1);
+    assert_eq!(plan.schema_version, crate::current_formats::VOICE);
     assert!(spec.parameters["voiceRequest"]
         .get("selectedWindows")
         .is_none());

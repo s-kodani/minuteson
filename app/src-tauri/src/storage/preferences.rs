@@ -85,7 +85,9 @@ impl Storage {
 
 pub(super) fn validate(payload: &AnalysisPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
-        if let Some(options) = engine.vad_options { options.validate()?; }
+        if let Some(options) = engine.vad_options {
+            options.validate()?;
+        }
         if !(1..=64).contains(&engine.threads) {
             return Err("スレッド数は1～64で設定してください".into());
         }

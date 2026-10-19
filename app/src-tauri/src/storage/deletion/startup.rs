@@ -102,7 +102,7 @@ fn source(db: &Connection, operation: &str) -> Result<(Prepared, removal::Progre
     if state == "installing"
         || serde_json::from_str::<serde_json::Value>(&progress)
             .ok()
-            .is_some_and(|p| p["version"] == 3)
+            .is_some_and(|p| p["version"] == 4)
     {
         let receipt = removal::Receipt::load(db, operation, &|| false)?;
         Ok((receipt.confirmed().clone(), receipt.progress))
@@ -269,7 +269,7 @@ pub(super) fn completed_attention(
                 // wrapper/acknowledgement. The existing unfinished fence
                 // already covers it; do not label it a corrupt final receipt.
                 if serde_json::from_str::<serde_json::Value>(&progress)
-                    .is_ok_and(|p| p["version"] == 3)
+                    .is_ok_and(|p| p["version"] == 4)
                 {
                     return Ok(None);
                 }

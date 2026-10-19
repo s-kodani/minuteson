@@ -520,14 +520,5 @@ fn insert_asset(
 }
 
 #[cfg(test)]
-pub(super) fn remove_import_schema_for_test(db: &Connection) {
-    super::backup::ledger::remove_restore_schema_for_test(db);
-    db.execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
-    db.execute_batch("DROP TRIGGER imported_track_kind_update;")
-        .unwrap();
-    db.execute_batch("DROP TRIGGER audio_import_identity_fixed; DROP TRIGGER audio_import_ready_fixed; DROP TRIGGER audio_import_ready_assets; DROP TRIGGER audio_import_recording_exclusive; DROP TRIGGER recording_audio_import_exclusive; DROP TRIGGER imported_track_kind; DROP INDEX audio_import_single_active; DROP TABLE audio_import_commits; DELETE FROM schema_migrations WHERE version=19;").unwrap();
-}
-
-#[cfg(test)]
 #[path = "import_tests.rs"]
 pub(in crate::storage) mod tests;

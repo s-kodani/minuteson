@@ -19,6 +19,7 @@ pub fn write_window(
     path: &Path,
     cancelled: &impl Fn() -> bool,
 ) -> Result<u64, String> {
+    let started = std::time::Instant::now();
     if frames == 0
         || frames > u64::from(audio.sample_rate) * MAX_WINDOW_SECONDS
         || first_frame
@@ -75,6 +76,7 @@ pub fn write_window(
     writer.flush().map_err(|e| e.to_string())?;
     writer.get_ref().sync_all().map_err(|e| e.to_string())?;
     check_cancelled(cancelled)?;
+    crate::internal_logs::detail(crate::internal_logs::current_context("analysis"),"running","info",started.elapsed(),&serde_json::json!({"event":"文字起こし用PCM変換","outputFrames":output_frames,"sourceRate":audio.sample_rate,"sourceChannels":audio.channels,"conversionMs":started.elapsed().as_millis()}).to_string());
     Ok(output_frames)
 }
 
@@ -86,6 +88,7 @@ pub(crate) fn write_track(
     path: &Path,
     cancelled: &impl Fn() -> bool,
 ) -> Result<u64, String> {
+    let started = std::time::Instant::now();
     let frames = audio.total_frames();
     if frames == 0
         || !(8_000..=384_000).contains(&audio.sample_rate)
@@ -159,6 +162,7 @@ pub(crate) fn write_track(
     writer.flush().map_err(|e| e.to_string())?;
     writer.get_ref().sync_all().map_err(|e| e.to_string())?;
     check_cancelled(cancelled)?;
+    crate::internal_logs::detail(crate::internal_logs::current_context("analysis"),"running","info",started.elapsed(),&serde_json::json!({"event":"話者分離用PCM変換","outputFrames":output_frames,"sourceRate":audio.sample_rate,"sourceChannels":audio.channels,"conversionMs":started.elapsed().as_millis()}).to_string());
     Ok(output_frames)
 }
 
@@ -170,7 +174,7 @@ fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 
-fn wav_header(frames: u32) -> [u8; 44] {
+pub(crate) fn wav_header(frames: u32) -> [u8; 44] {
     let mut header = [0; 44];
     header[..4].copy_from_slice(b"RIFF");
     header[4..8].copy_from_slice(&(36 + frames * 2).to_le_bytes());

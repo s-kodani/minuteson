@@ -38,7 +38,7 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
     )
     .unwrap();
     let recipe = crate::model_download_recipe::Recipe {
-        schema_version: 2,
+        schema_version: 4,
         manifest: record.manifest.clone(),
         sources: record
             .manifest
@@ -58,7 +58,7 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
             })
             .collect(),
     };
-    record.schema_version = 2;
+    record.schema_version = 3;
     record.download = Some(recipe.origin(&Uuid::new_v4().to_string()).unwrap());
     record.validate().unwrap();
     // Persist synthetic intent only. No model execution or completed copy is

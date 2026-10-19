@@ -322,7 +322,7 @@ fn active_recording_import_export_track_building_or_ai_job_cannot_start_backup()
                         input_analysis_id: None,
                         input_hash: "a".repeat(64),
                         profile_snapshot: serde_json::json!({}),
-                        parameters: serde_json::json!({}),
+                        parameters: serde_json::json!({"schemaVersion":4}),
                         total_units: Some(1),
                     })
                     .unwrap();
@@ -493,7 +493,7 @@ fn queued(storage: &Storage, meeting: &str) -> JobSnapshot {
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: serde_json::json!({"modelName":"fixture","modelHash":"b".repeat(64)}),
-            parameters: serde_json::json!({}),
+            parameters: serde_json::json!({"schemaVersion":4}),
             total_units: Some(4),
         })
         .unwrap()

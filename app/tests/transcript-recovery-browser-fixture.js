@@ -52,7 +52,7 @@ export function recoveryFixture({ drafts, current, blocked = () => false }) {
         return read(draft,old);
       }
       if(draft.lockVersion !== req.expectedDraftLockVersion || (old?.lockVersion ?? 0) !== req.expectedRecoveryLockVersion) throw Error("模擬回復版競合");
-      const saved = await write(draft,req,{ schemaVersion: nameBuffers.length ? 3 : 1,basePayload: canonicalPayload(draft.payload),buffers,...(nameBuffers.length ? { nameBuffers } : {}) });
+      const saved = await write(draft,req,{ schemaVersion: 4,basePayload: canonicalPayload(draft.payload),buffers,nameBuffers,discardedFrom: null });
       if(f.lostSave || f.lostClear && !buffers.length && !nameBuffers.length) { f.lostSave = false; f.lostClear = false; throw Error("模擬回復保存応答喪失"); }
       return saved;
     }
@@ -65,7 +65,7 @@ export function recoveryFixture({ drafts, current, blocked = () => false }) {
     }
     if(!old || old.lockVersion !== req.expectedRecoveryLockVersion || old.contentHash !== req.expectedRecoveryContentHash
       || draft.lockVersion !== req.expectedDraftLockVersion || draft.contentHash !== req.expectedDraftContentHash) throw Error("確認後に回復記録が変更されています。保持しています");
-    const saved = await write(draft,req,{ schemaVersion: 2,basePayload: canonicalPayload(draft.payload),buffers: [],discardedFrom: proof });
+    const saved = await write(draft,req,{ schemaVersion: 4,basePayload: canonicalPayload(draft.payload),buffers: [],nameBuffers: [],discardedFrom: proof });
     if(f.lostDiscard) { f.lostDiscard = false; throw Error("模擬回復破棄応答喪失"); }
     return saved;
   };

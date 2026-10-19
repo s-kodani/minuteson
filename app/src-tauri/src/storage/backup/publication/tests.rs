@@ -27,7 +27,7 @@ pub(super) fn fixture() -> Fixture {
         .load_transcript_draft(&first)
         .unwrap()
         .unwrap();
-    draft.payload.schema_version = 2;
+    draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     draft
         .payload
         .manual_speakers
@@ -354,7 +354,7 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
     // preparation. Reuse the incoming manual ID to force an exact collision.
     let meeting = f.target.list_meetings().unwrap().remove(0).id;
     let mut draft = f.target.load_transcript_draft(&meeting).unwrap().unwrap();
-    draft.payload.schema_version = 2;
+    draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     draft
         .payload
         .manual_speakers

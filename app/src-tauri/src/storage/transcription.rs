@@ -248,8 +248,7 @@ fn read_audio_metadata(
         AudioMetadataState::Available => ("ready", "ready"),
         AudioMetadataState::Deleted => ("failed", "missing"),
     };
-    // Keep the serialized plan shape for old jobs; both source types use
-    // verified managed manifests, never an external original path.
+    // Both current source types use verified managed manifests.
     let partial = partial_recording_committed(transaction, meeting_id)?;
     let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
             "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND (r.state = 'saved' OR (r.state='interrupted' AND ?2)) AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",

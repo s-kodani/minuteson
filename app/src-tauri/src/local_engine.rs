@@ -1,11 +1,10 @@
 //! Shared identity and lifetime guards for local native inference engines.
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 pub(crate) mod resident;
+pub(crate) mod verification;
 
 #[cfg(target_os = "macos")]
 mod guard_core;
@@ -22,6 +21,13 @@ pub struct Fingerprint {
 
 impl Fingerprint {
     pub fn capture(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Self, String> {
+        Self::capture_mode(path, cancelled, false)
+    }
+    fn capture_mode(
+        path: &Path,
+        cancelled: &impl Fn() -> bool,
+        retain: bool,
+    ) -> Result<Self, String> {
         if !path.is_absolute() {
             return Err("モデル・実行ファイルには絶対パスが必要です".into());
         }
@@ -34,20 +40,10 @@ impl Fingerprint {
         if !before.is_file() || before.len() == 0 {
             return Err("モデル・実行ファイルが空または通常ファイルではありません".into());
         }
-        let mut hash = Sha256::new();
-        let mut bytes = [0; 65_536];
-        loop {
-            if cancelled() {
-                return Err("ファイル照合を中断しました".into());
-            }
-            let count = file.read(&mut bytes).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            hash.update(&bytes[..count]);
-        }
+        let digest = verification::hash(&path, &mut file, cancelled, retain)?;
         let after = file.metadata().map_err(|e| e.to_string())?;
-        if before.len() != after.len()
+        if crate::audio::reuse::stamp(&before) != crate::audio::reuse::stamp(&after)
+            || before.len() != after.len()
             || before.modified().map_err(|e| e.to_string())?
                 != after.modified().map_err(|e| e.to_string())?
         {
@@ -56,12 +52,12 @@ impl Fingerprint {
         Ok(Self {
             path,
             size: before.len(),
-            sha256: format!("{:x}", hash.finalize()),
+            sha256: digest,
         })
     }
 
     pub fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
-        if *self != Self::capture(&self.path, cancelled)? {
+        if *self != Self::capture_mode(&self.path, cancelled, true)? {
             return Err("固定したモデル・実行ファイルのハッシュが一致しません".into());
         }
         Ok(())
@@ -205,7 +201,11 @@ impl StableFile {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            if current.dev() != self.metadata.dev() || current.ino() != self.metadata.ino() {
+            if current.dev() != self.metadata.dev()
+                || current.ino() != self.metadata.ino()
+                || current.ctime() != self.metadata.ctime()
+                || current.ctime_nsec() != self.metadata.ctime_nsec()
+            {
                 return Err("実行中にモデル・実行ファイルが差し替えられました".into());
             }
         }

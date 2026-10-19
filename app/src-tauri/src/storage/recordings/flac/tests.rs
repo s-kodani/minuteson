@@ -278,7 +278,7 @@ impl Fixture {
             .unwrap()["timelineEndUs"]
             .as_i64()
             .unwrap();
-        let manifest = json!({"schemaVersion":3,"captureMode":"system","backend":"screencapturekit",
+        let manifest = json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","captureMode":"system","backend":"screencapturekit",
             "targetPIDs":[],"state":"saved","errors":[],"recordingOwnerId":session.id,
             "microphone":tracks[0],"system":tracks[1],
             "captureClock":{"domain":"mach_continuous_time","originUtcMs":1700000000000_i64,"uncertaintyNs":1000},

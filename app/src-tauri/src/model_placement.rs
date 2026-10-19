@@ -18,8 +18,7 @@ pub(crate) struct PlacementRecord {
     pub source_manifest_hash: String,
     pub review_hash: String,
     pub files: Vec<FileReport>,
-    // Omit entirely for v1: preserve its serialized bytes and all old hashes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::current_formats::optional")]
     pub download: Option<crate::model_download_recipe::DownloadOrigin>,
 }
 impl PlacementRecord {
@@ -36,10 +35,11 @@ impl PlacementRecord {
             return Err("モデル配置記録の形式版・操作IDが不正です".into());
         }
         self.manifest.validate(target)?;
-        match (self.schema_version, &self.download) {
-            (1, None) => {}
-            (2, Some(origin)) => origin.validate(&self.manifest, &self.source_manifest_hash)?,
-            _ => return Err("モデル配置記録の形式版と由来が一致しません".into()),
+        if self.schema_version != 3 {
+            return Err("モデル配置記録の形式版が未対応です".into());
+        }
+        if let Some(origin) = &self.download {
+            origin.validate(&self.manifest, &self.source_manifest_hash)?;
         }
         if self.source_manifest_hash.len() != 64
             || !self
@@ -82,7 +82,7 @@ impl PlacementRecord {
     }
     fn from_report(package_id: &str, report: &Report) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 3,
             package_id: package_id.into(),
             manifest: report.manifest.clone(),
             source_manifest_hash: report.manifest_hash.clone(),
@@ -97,7 +97,6 @@ impl PlacementRecord {
         origin: crate::model_download_recipe::DownloadOrigin,
     ) -> Result<Self, String> {
         let mut record = Self::from_report(package_id, report);
-        record.schema_version = 2;
         record.download = Some(origin);
         record.validate()?;
         Ok(record)

@@ -6,6 +6,7 @@ pub(crate) mod markdown;
 pub(crate) mod markdown_job;
 mod markdown_plan;
 pub(crate) mod model_budget;
+mod optimization;
 pub(crate) mod restore;
 pub(crate) mod runtime;
 use crate::storage::{JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
@@ -108,7 +109,7 @@ pub(crate) fn restore_checkpoint_references(
     value: Value,
     map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
 ) -> Result<Value, String> {
-    if parameters["schemaVersion"].as_u64() != Some(7) {
+    if !matches!(parameters["schemaVersion"].as_u64(), Some(9)) {
         return Err(REMOVED_GENERATION.into());
     }
     markdown_job::restore::references(job, parameters, value, map)

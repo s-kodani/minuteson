@@ -13,6 +13,7 @@ pub enum JobKind {
     MinutesGeneration,
     VoiceRegistration,
     VoiceMatching,
+    SpeakerCompletion,
 }
 
 impl JobKind {
@@ -23,6 +24,7 @@ impl JobKind {
             Self::MinutesGeneration => "minutes_generation",
             Self::VoiceRegistration => "voice_registration",
             Self::VoiceMatching => "voice_matching",
+            Self::SpeakerCompletion => "speaker_completion",
         }
     }
 }
@@ -41,7 +43,19 @@ pub struct JobSpec {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExecutionProgress {
+    pub phase: String,
+    pub completed: usize,
+    pub total: usize,
+    pub phase_completed: usize,
+    pub phase_total: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct JobSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_progress: Option<ExecutionProgress>,
     pub id: String,
     pub meeting_id: String,
     pub kind: String,
@@ -95,6 +109,74 @@ impl Storage {
             return Err("通知対象の処理は成功していません".into());
         }
         let (spec, checkpoint) = read_fixed_input(&tx, job_id)?;
+        if spec.kind == JobKind::SpeakerCompletion {
+            let c = checkpoint
+                .as_ref()
+                .ok_or("話者補完の完了記録がありません")?;
+            if c["completionResult"] != true
+                || job.completed_units != 1
+                || job.total_units != Some(1)
+                || c["jobId"] != job.id
+                || job.output_analysis_id.is_some()
+                || job.output_minutes_id.is_some()
+            {
+                return Err("話者補完の完了記録が一致しません".into());
+            }
+            let count = c["updatedCount"]
+                .as_u64()
+                .ok_or("話者補完の件数が不正です")?;
+            if let Some(id) = c["outputAnalysisId"].as_str() {
+                let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id=?1 AND meeting_id=?2 AND json_extract(config_json,'$.speakerCompletion.jobId')=?3)",params![id,job.meeting_id,job.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+                if !valid || count == 0 {
+                    return Err("話者補完の保存版が一致しません".into());
+                }
+                let stored: String = tx
+                    .query_row(
+                        "SELECT content_hash FROM analysis_revisions WHERE id=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                if stored != super::revisions::analysis_content_hash(&tx, id)? {
+                    return Err("話者補完の保存版の内容が変わっています".into());
+                }
+            } else if count != 0 {
+                return Err("話者補完の保存版がありません".into());
+            }
+            let skipped = c["skipped"]
+                .as_object()
+                .ok_or("話者補完の見送り件数がありません")?
+                .values()
+                .map(|v| v.as_u64().unwrap_or(0))
+                .sum::<u64>();
+            let mut details = vec![format!("{}件を補完、{}件を見送りました", count, skipped)];
+            if let Some(n) = c["needsReviewCount"].as_u64().filter(|n| *n > 0) {
+                details.push(format!("うち{}件は低信頼のため要確認です", n));
+            }
+            for (reason, n) in c["skipped"].as_object().unwrap() {
+                let label = match reason.as_str() {
+                    "manual" => "手動指定を保護",
+                    "detected_interval" => "検出済み区間あり",
+                    "too_short" => "発言が1秒未満",
+                    "too_long" => "切り出しが30秒超",
+                    "missing_audio" => "音声欠損・不連続",
+                    "feature_unavailable" => "特徴量を取得できず",
+                    "no_reference" => "参照音声なし",
+                    "tie" => "候補が同点",
+                    "different_winners" => "本体と前後付きの候補が不一致",
+                    "other_speaker_in_context" => "前後に別話者あり",
+                    "below_threshold" => "閾値未達",
+                    _ => "条件外",
+                };
+                details.push(format!("{}：{}件", label, n));
+            }
+            return Ok(NotificationOutput {
+                content_hash: job.spec_hash.clone(),
+                job,
+                publication_state: "completion".into(),
+                warnings: details,
+            });
+        }
         if matches!(
             spec.kind,
             JobKind::VoiceRegistration | JobKind::VoiceMatching
@@ -287,7 +369,7 @@ impl Storage {
         // Preserve fixed historical jobs after audio deletion, but do not let
         // those queued entries starve another meeting or text-only work.
         let queued = {
-            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ('transcription','diarization','minutes_generation','voice_registration','voice_matching') AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
+            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ('transcription','diarization','minutes_generation','voice_registration','voice_matching','speaker_completion') AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
             let mut rows = query
                 .query(params![kind.map(JobKind::as_str)])
                 .map_err(|e| e.to_string())?;
@@ -304,7 +386,11 @@ impl Storage {
                 #[cfg(unix)]
                 if matches!(
                     job_kind.as_str(),
-                    "transcription" | "diarization" | "voice_registration" | "voice_matching"
+                    "transcription"
+                        | "diarization"
+                        | "voice_registration"
+                        | "voice_matching"
+                        | "speaker_completion"
                 ) && super::deletion::audio::intent::removal::completion::deleted(
                     &transaction,
                     &meeting,
@@ -488,12 +574,58 @@ impl Storage {
         Ok(snapshot)
     }
 
+    fn decorate_execution_progress(&self, job: &mut JobSnapshot) {
+        if job.kind == "speaker_completion" && job.state == "running" {
+            job.execution_progress = self
+                .execution_progress
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&job.id).cloned());
+        }
+    }
+    pub(crate) fn set_completion_progress(
+        &self,
+        id: &str,
+        value: ExecutionProgress,
+    ) -> Result<JobSnapshot, String> {
+        if value.total == 0
+            || value.completed >= value.total
+            || value.phase_completed > value.phase_total
+        {
+            return Err("話者補完の表示進捗が不正です".into());
+        }
+        let mut job = self.get_job(id)?;
+        if job.kind != "speaker_completion" || job.state != "running" {
+            return Ok(job);
+        }
+        let mut map = self
+            .execution_progress
+            .lock()
+            .map_err(|_| "進捗ロックを取得できません")?;
+        if map
+            .get(id)
+            .is_some_and(|old| old.total != value.total || old.completed > value.completed)
+        {
+            return Err("話者補完の表示進捗が逆戻りしました".into());
+        }
+        map.insert(id.into(), value.clone());
+        job.execution_progress = Some(value);
+        Ok(job)
+    }
+    pub(crate) fn clear_completion_progress(&self, id: &str) {
+        if let Ok(mut map) = self.execution_progress.lock() {
+            map.remove(id);
+        }
+    }
+
     pub(crate) fn get_job(&self, job_id: &str) -> Result<JobSnapshot, String> {
         let connection = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        load_job(&connection, job_id)?.ok_or_else(|| "処理が見つかりません".into())
+        let mut job = load_job(&connection, job_id)?.ok_or("処理が見つかりません")?;
+        self.decorate_execution_progress(&mut job);
+        Ok(job)
     }
 
     pub(crate) fn list_jobs(&self, meeting_id: &str) -> Result<Vec<JobSnapshot>, String> {
@@ -505,8 +637,13 @@ impl Storage {
         let rows = query
             .query_map(params![meeting_id], job_from_row)
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
+        let mut jobs = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for job in &mut jobs {
+            self.decorate_execution_progress(job);
+        }
+        Ok(jobs)
     }
 
     /// Read-only notification census, independent of the selected meeting and
@@ -527,13 +664,13 @@ impl Storage {
         let mut query = connection.prepare(
             "WITH ranked AS (
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY meeting_id, kind ORDER BY created_at DESC, rowid DESC) AS position
-                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching') AND (kind != 'minutes_generation' OR json_extract(parameters_json,'$.generation.schemaVersion') = 7)
+                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching', 'speaker_completion')
             )
             SELECT j.id, j.meeting_id, j.kind, j.state, j.operation_id, j.input_hash, j.spec_hash,
                 j.completed_units, j.total_units, j.error_code, j.created_at, j.updated_at,
                 j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, j.output_minutes_id, m.title
             FROM processing_jobs j JOIN meetings m ON m.id = j.meeting_id
-            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching') AND (j.kind != 'minutes_generation' OR json_extract(j.parameters_json,'$.generation.schemaVersion') = 7) AND (
+            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching', 'speaker_completion') AND (
                 j.state IN ('queued', 'running', 'pausing', 'paused', 'interrupted')
                 OR j.id IN (SELECT id FROM ranked WHERE position = 1)
                 OR j.id IN (SELECT value FROM json_each(?1))
@@ -547,8 +684,24 @@ impl Storage {
                 })
             })
             .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())
+        let mut jobs = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for job in &mut jobs {
+            let parameters: String = connection
+                .query_row(
+                    "SELECT parameters_json FROM processing_jobs WHERE id=?1",
+                    [&job.job.id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            crate::current_formats::job(
+                &job.job.kind,
+                &serde_json::from_str(&parameters).map_err(|e| e.to_string())?,
+            )?;
+            self.decorate_execution_progress(&mut job.job);
+        }
+        Ok(jobs)
     }
 
     pub(crate) fn fixed_job_input(&self, job_id: &str) -> Result<(JobSpec, Option<Value>), String> {
@@ -888,6 +1041,7 @@ impl Storage {
 
 fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
     Ok(JobSnapshot {
+        execution_progress: None,
         id: row.get(0)?,
         meeting_id: row.get(1)?,
         kind: row.get(2)?,
@@ -912,7 +1066,11 @@ fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<()
     #[cfg(unix)]
     if matches!(
         kind,
-        "transcription" | "diarization" | "voice_registration" | "voice_matching"
+        "transcription"
+            | "diarization"
+            | "voice_registration"
+            | "voice_matching"
+            | "speaker_completion"
     ) {
         super::deletion::audio::require_source(db, meeting)?;
     }
@@ -925,6 +1083,7 @@ pub(super) fn enqueue_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     spec: &JobSpec,
 ) -> Result<JobSnapshot, String> {
+    crate::current_formats::job(spec.kind.as_str(), &spec.parameters)?;
     require_audio_source(transaction, spec.kind.as_str(), &spec.meeting_id)?;
     if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
         return Err("処理の操作IDが不正です".into());
@@ -941,6 +1100,7 @@ pub(super) fn enqueue_in_transaction(
             | JobKind::Diarization
             | JobKind::VoiceRegistration
             | JobKind::VoiceMatching
+            | JobKind::SpeakerCompletion
     ) != spec.input_analysis_id.is_some()
     {
         return Err("処理種別と入力解析版が一致しません".into());
@@ -1080,6 +1240,7 @@ pub(super) fn read_fixed_input(
         let decode = |index, error| rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error));
         Ok(JobSpec { meeting_id: row.get(0)?, kind: serde_json::from_value(Value::String(kind)).map_err(|e| decode(1, e))?, operation_id: row.get(2)?, input_analysis_id: row.get(3)?, input_hash: row.get(4)?, profile_snapshot: serde_json::from_str(&profile).map_err(|e| decode(5, e))?, parameters: serde_json::from_str(&parameters).map_err(|e| decode(6, e))?, total_units: row.get(7)? })
     }).map_err(|e| e.to_string())?;
+    crate::current_formats::job(spec.kind.as_str(), &spec.parameters)?;
     let job = load_job(connection, job_id)?.ok_or("処理が見つかりません")?;
     let hash = fixed_spec_hash(&spec, job.retry_of_job_id.as_deref(), job.attempt)?;
     if hash != job.spec_hash {
@@ -1237,7 +1398,7 @@ mod tests {
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: json!({"engine": "test", "model_hash": "b".repeat(64)}),
-            parameters: json!({"window_seconds": 30}),
+            parameters: json!({"schemaVersion":4,"window_seconds": 30}),
             total_units: Some(10),
         }
     }
@@ -1303,6 +1464,22 @@ mod tests {
     }
 
     #[test]
+    fn notification_jobs_reject_obsolete_formats() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("現行形式").unwrap();
+        for version in [0, 1, 2, 3, 5, 99] {
+            let mut spec = audio_job(&meeting.id, &format!("unsupported-{version}"));
+            spec.parameters["schemaVersion"] = json!(version);
+            assert!(storage.enqueue_job(spec).unwrap_err().contains("非対応"));
+        }
+        let job = storage
+            .enqueue_job(audio_job(&meeting.id, "current"))
+            .unwrap();
+        assert_eq!(storage.notification_jobs(&[]).unwrap()[0].job.id, job.id);
+    }
+
+    #[test]
     fn notification_jobs_keep_latest_per_kind_without_invalid_or_missing_watch_targets() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
@@ -1321,7 +1498,9 @@ mod tests {
             let mut spec = audio_job(&meeting.id, kind.as_str());
             spec.kind = kind;
             if spec.kind == JobKind::MinutesGeneration {
-                spec.parameters = json!({"generation":{"schemaVersion":7}});
+                spec.parameters = json!({"generation":{"schemaVersion":9}});
+            } else {
+                spec.parameters["schemaVersion"] = json!(3);
             }
             spec.input_analysis_id = Some("notification-input".into());
             spec.input_hash = committed.content_hash.clone();
@@ -1354,6 +1533,13 @@ mod tests {
         spec.total_units = Some(1);
         let mut input = super::super::analysis::tests::input();
         input.profile_snapshot = spec.profile_snapshot.clone();
+        storage.connection.lock().unwrap().execute("INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES ('manifest',?1,'meeting','meetings/test/manifest.json','application/json',16,'sha256',?2,'ready',0,0)",params![meeting.id,"a".repeat(64)]).unwrap();
+        let (source, known) = storage.recorded_analysis_input(&meeting.id).unwrap();
+        let known = known.unwrap();
+        spec.parameters["source"] = serde_json::to_value(&source).unwrap();
+        spec.parameters["knownInput"] = serde_json::to_value(&known).unwrap();
+        input.config["audioCoverage"] = json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|g|!g.recovered).count(),"timeBase":"meeting"});
+
         let job = storage.enqueue_job(spec).unwrap();
         assert!(storage.notification_output(&job.id).is_err());
         storage.acquire_next_job().unwrap().unwrap();
@@ -1571,6 +1757,7 @@ mod tests {
             .unwrap();
         let mut spec = audio_job(&other.id, "minutes-1");
         spec.kind = JobKind::MinutesGeneration;
+        spec.parameters = json!({"generation":{"schemaVersion":9}});
         spec.input_analysis_id = Some("analysis".into());
         spec.input_hash = committed.content_hash.clone();
         assert!(storage.enqueue_job(spec.clone()).is_err());
@@ -1592,5 +1779,41 @@ mod tests {
         assert!(storage
             .finish_job(&cancelled.id, 0, "failed", Some("retry"))
             .is_err());
+    }
+}
+
+impl Storage {
+    pub(crate) fn optimization_version_for_operation(
+        &self,
+        meeting: &str,
+        operation: &str,
+    ) -> Result<Option<u32>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let value: Option<(String, String)> = db
+            .query_row(
+                "SELECT meeting_id,parameters_json FROM processing_jobs WHERE operation_id=?1",
+                [operation],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match value {
+            None => Ok(Some(1)),
+            Some((owner, json)) => {
+                if owner != meeting {
+                    return Err("操作IDが別の会議に属しています".into());
+                }
+                let value: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                let version =
+                    value.get("diarization").unwrap_or(&value)["optimizationVersion"].as_u64();
+                if version != Some(u64::from(crate::current_formats::OPTIMIZATION)) {
+                    return Err("非対応の処理最適化情報です".into());
+                }
+                Ok(Some(crate::current_formats::OPTIMIZATION))
+            }
+        }
     }
 }

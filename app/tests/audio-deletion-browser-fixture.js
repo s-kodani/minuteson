@@ -28,7 +28,7 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
   retained: { analysisRevisions: 2, utterances: 105, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 4, jobs: 3, externalExportRecords: 1 },
   tracks: [{ id: "11111111-1111-4111-8111-111111111111", kind: "mic", state: "ready", chunks: 2, durationUs: 60000000 }, { id: "21111111-1111-4111-8111-111111111111", kind: "system", state: "ready", chunks: 2, durationUs: 60000000 }], priorDeletionCompleted: phase === "awaiting_ack" });
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
-d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
+d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
 d.recovery = recoveryFixture({ drafts: () => [d.draft],current: () => d.draft,blocked: () => d.blocked });
 export const audioDeletionIPC = async (command, args) => {
   const recovery = await d.recovery.invoke(command,args);

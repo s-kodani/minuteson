@@ -54,7 +54,7 @@ impl Fixture {
     }
     fn job(&self, kind: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,?3,'failed',?1,?4,'{}','{}',?4,1,1)",params![id,self.meeting,kind,"a".repeat(64)]).unwrap();
+        self.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,?3,'failed',?1,?4,'{}',CASE ?3 WHEN 'diarization' THEN '{\"schemaVersion\":3}' WHEN 'minutes_generation' THEN '{\"generation\":{\"schemaVersion\":9}}' ELSE '{\"schemaVersion\":4}' END,?4,1,1)",params![id,self.meeting,kind,"a".repeat(64)]).unwrap();
         id
     }
 }

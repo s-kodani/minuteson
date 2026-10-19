@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cancelName, nameBaseline, namesDirty, stageName } from "../src/speaker-name-edit.ts";
 import type { DraftPayload } from "../src/transcript-state.ts";
-const payload: DraftPayload = { schema_version: 1,speaker_names: [],utterances: [{ utterance_id: "u",effective_text: "本文",speaker_ids: ["a"] }] };
+const payload: DraftPayload = { schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_names: [],utterances: [{ utterance_id: "u",effective_text: "本文",speaker_ids: ["a"] }] };
 const speaker = { id: "a",label: "話者A",displayName: "田中" };
 test("typing keeps names separate; confirming one name preserves every other field", () => {
   const first = { ...nameBaseline(payload,speaker),value: "鈴木" };

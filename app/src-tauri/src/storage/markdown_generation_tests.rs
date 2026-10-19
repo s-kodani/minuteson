@@ -78,7 +78,7 @@ if kind in ('inline_evidence','compact_evidence'):
         assert all('## 要約\n' in d and '](audio:' in d for d in p['drafts'])
         text=p['drafts'][0]
     print(json.dumps({{'markdown':text}},ensure_ascii=False));sys.exit(0)
-if kind=='wide' and 'utterances' in p: text='異なる確認事項\n'*230
+if kind=='wide' and 'utterances' in p: text='異なる確認事項\n'*500
 else: text=' \n# 点検会議\n- 点検日\n[区間](audio:00:00:00.100001-00:00:00.799999)\n'
 print(json.dumps({{'markdown':text}},ensure_ascii=False))
 "#
@@ -98,20 +98,27 @@ print(json.dumps({{'markdown':text}},ensure_ascii=False))
     }
 }
 fn request(storage: &Storage, long: bool) -> MinutesJobRequest {
-    request_text(
+    request_text_units(
         storage,
         if long {
-            "点検日・異なる作業を確認します。".repeat(120)
+            "点検日・異なる作業を確認します。".repeat(500)
         } else {
             "点検日を確認します".into()
         },
+        if long { 5 } else { 1 },
     )
 }
 fn request_text(storage: &Storage, text: String) -> MinutesJobRequest {
+    request_text_units(storage, text, 1)
+}
+fn request_text_units(storage: &Storage, text: String, copies: usize) -> MinutesJobRequest {
     let meeting = analysis::tests::saved_meeting(storage);
     std::fs::create_dir_all(storage.root.join("meetings").join(&meeting.id)).unwrap();
     let mut input = analysis::tests::input();
     input.utterances[0].text = text;
+    for _ in 1..copies {
+        input.utterances.push(input.utterances[0].clone());
+    }
     let id = storage
         .create_analysis_candidate(&meeting.id, input)
         .unwrap();
@@ -144,7 +151,7 @@ fn incomplete_markdown_preserves_human_body_and_never_commits_a_partial_unit() {
     )
     .unwrap();
     let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
-    assert_eq!(spec.parameters["generation"]["schemaVersion"], 7);
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 9);
     claim(&storage, &job);
     let error = markdown_job::process(
         &storage,
@@ -215,59 +222,6 @@ fn model_budget_drives_actual_cli_and_saves_more_than_480_characters_without_tru
             .unwrap()
             .unwrap(),
         body
-    );
-}
-
-#[test]
-fn model_maximum_uses_full_cli_limits_and_preserves_human_body_until_publication() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let req = request(&storage, true);
-    let human = save(&storage, &req.meeting_id, None, "生成前の本文");
-    let job = markdown_job::enqueue_synthetic_model_maximum(
-        &storage,
-        req.clone(),
-        engine(root.path(), "model_maximum"),
-        "standard",
-        2400,
-        Some(human.stamp()),
-    )
-    .unwrap();
-    // An old 2400-byte profile split this input. New jobs use the model budget.
-    assert_eq!(job.total_units, Some(1));
-    let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
-    assert_eq!(
-        spec.parameters["generation"]["engine"]["contextTokens"],
-        8192
-    );
-    assert_eq!(
-        spec.parameters["generation"]["capacity"]["allocation"],
-        "modelMaximum"
-    );
-    claim(&storage, &job);
-    assert!(markdown_job::process(
-        &storage,
-        &job.id,
-        &crate::test_support::never_cancelled,
-        &|_| {}
-    )
-    .unwrap()
-    .is_some());
-    assert_eq!(calls(root.path()), 1);
-    let body = storage
-        .get_minutes_markdown(&req.meeting_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        body.markdown,
-        "# モデル上限で生成\n- 確認事項を統合しました。"
-    );
-    assert_eq!(body.lock_version, human.lock_version + 1);
-    drop(storage);
-    let storage = Storage::open(root.path().into()).unwrap();
-    assert_eq!(
-        storage.get_minutes_markdown(&req.meeting_id).unwrap(),
-        Some(body)
     );
 }
 
@@ -1079,7 +1033,7 @@ fn inline_evidence_generation_keeps_sentence_links_through_merge_pause_and_cold_
     let job = markdown_job::enqueue_synthetic_inline(
         &storage,
         req.clone(),
-        engine(root.path(), "inline_evidence"),
+        engine(root.path(), "compact_evidence"),
         Some(human.stamp()),
     )
     .unwrap();
@@ -1087,7 +1041,7 @@ fn inline_evidence_generation_keeps_sentence_links_through_merge_pause_and_cold_
     let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
     assert_eq!(
         spec.parameters["generation"]["promptVersion"],
-        "inlineEvidenceV2"
+        "customPromptsV5"
     );
     claim(&storage, &job);
     assert!(process(
@@ -1136,19 +1090,18 @@ fn inline_evidence_generation_keeps_sentence_links_through_merge_pause_and_cold_
     let first = &input.analysis.utterances[0];
     let stamp = |us: i64| {
         format!(
-            "{:02}:{:02}:{:02}.{:06}",
+            "{:02}:{:02}:{:02}",
             us / 3_600_000_000,
             us / 60_000_000 % 60,
-            us / 1_000_000 % 60,
-            us % 1_000_000
+            us / 1_000_000 % 60
         )
     };
     assert!(document.markdown.contains(&format!(
         "範囲を確認する。[{}–{}](audio:{}-{})",
         stamp(first.start_us),
-        stamp(first.end_us),
+        stamp((first.end_us / 1_000_000 + i64::from(first.end_us % 1_000_000 != 0)) * 1_000_000),
         stamp(first.start_us),
-        stamp(first.end_us)
+        stamp((first.end_us / 1_000_000 + i64::from(first.end_us % 1_000_000 != 0)) * 1_000_000)
     )));
     drop(storage);
     assert_eq!(
@@ -1241,7 +1194,7 @@ fn compact_generation_replays_across_pause_and_cold_reopen_and_checks_second_lin
     assert!(job.total_units.unwrap() > 1);
     assert_eq!(
         storage.fixed_job_input(&job.id).unwrap().0.parameters["generation"]["promptVersion"],
-        "compactEvidenceV3"
+        "customPromptsV5"
     );
     claim(&storage, &job);
     let events = std::cell::RefCell::new(Vec::new());
@@ -1476,7 +1429,7 @@ fn concise_summary_replays_after_final_checkpoint_and_never_caps_human_markdown(
             .unwrap()
             .matches("確認する。")
             .count(),
-        100
+        160
     );
     assert!(saved
         .markdown

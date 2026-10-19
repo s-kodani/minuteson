@@ -40,6 +40,7 @@ pub(super) fn verify_package(
 ) -> Result<PathBuf, String> {
     check_cancelled(cancelled)?;
     let path = package_path(models_root, &record.package_id)?;
+    crate::local_engine::verification::inventory(&path)?;
     let report = crate::model_inspection::inspect(&path, cancelled)?;
     if report.review_hash != record.review_hash {
         return Err("配置済みモデルの全構成・容量・SHAが変わっています".into());
@@ -167,7 +168,11 @@ fn run(
                 executable,
                 model: one(record, package, Role::Asr)?,
                 vad_model: fingerprints(record, package, Role::Vad).into_iter().next(),
-                vad_options: record.files.iter().any(|f| f.role == Role::Vad).then(Default::default),
+                vad_options: record
+                    .files
+                    .iter()
+                    .any(|f| f.role == Role::Vad)
+                    .then(Default::default),
                 threads: 1,
                 use_gpu: false,
                 prompt: String::new(),

@@ -31,6 +31,49 @@ impl FixedData<'_, '_> {
         if !value.is_object() {
             return Err("固定条件はオブジェクトである必要があります".into());
         }
+        if let Some(request) = original.get("assignmentRequest").filter(|v| !v.is_null()) {
+            let mut r: crate::storage::transcript_consolidation::Request =
+                serde_json::from_value(request.clone()).map_err(|e| e.to_string())?;
+            if r.meeting_id != meeting {
+                return Err("話者補完の要求会議が一致しません".into());
+            }
+            r.expected_content_hash = self.resolve(
+                "analysis_revisions",
+                meeting,
+                &r.analysis_id,
+                &r.expected_content_hash,
+            )?;
+            r.analysis_id = self
+                .ids
+                .get("analysis_revisions", meeting, &r.analysis_id)?;
+            r.operation_id = self.ids.get("operation", meeting, &r.operation_id)?;
+            r.meeting_id = self.ids.get("meetings", "", meeting)?;
+            if let Some(d) = &mut r.expected_draft {
+                d.id = self.ids.get("working_drafts", meeting, &d.id)?;
+            }
+            value["assignmentRequest"] = serde_json::to_value(r).map_err(|e| e.to_string())?;
+        }
+        if let Some(completion) = original.get("completion") {
+            let mut plan: crate::speaker_completion::Plan =
+                serde_json::from_value(completion.clone()).map_err(|e| e.to_string())?;
+            let source = self.analysis_audio_plan(
+                meeting,
+                &serde_json::to_value(&plan.source).map_err(|e| e.to_string())?,
+                Some(&plan.known),
+            )?;
+            plan.source = serde_json::from_value(source).map_err(|e| e.to_string())?;
+            for w in &mut plan.references {
+                w.speaker_id = self.ids.get("speakers", meeting, &w.speaker_id)?;
+                w.track_id = self.ids.get("audio_tracks", meeting, &w.track_id)?;
+            }
+            for t in &mut plan.targets {
+                t.lineage = self.ids.get("utterance_lineage", meeting, &t.lineage)?;
+                t.body.track_id = self.ids.get("audio_tracks", meeting, &t.body.track_id)?;
+            }
+            // Source working hash is retained as historical evidence. A fresh
+            // completion operation is required after additive restore.
+            value["completion"] = serde_json::to_value(plan).map_err(|e| e.to_string())?;
+        }
         if let Some(voice) = original.get("voice") {
             let mut plan: crate::voice::Plan =
                 serde_json::from_value(voice.clone()).map_err(|e| e.to_string())?;
@@ -235,6 +278,43 @@ impl FixedData<'_, '_> {
             }
             value["tracks"] = serde_json::to_value(tracks).map_err(|e| e.to_string())?;
         }
+        if let Some(entries) = original
+            .get("speakerIdentification")
+            .and_then(Value::as_object)
+        {
+            let mut mapped = serde_json::Map::new();
+            for (lineage, info) in entries {
+                let mut info = info.clone();
+                if let Some(owner) = info["speakerLineage"].as_str() {
+                    info["speakerLineage"] =
+                        json!(self.ids.get("speaker_lineage", meeting, owner)?);
+                }
+                if let Some(track) = info["trackId"].as_str() {
+                    info["trackId"] = json!(self.ids.get("audio_tracks", meeting, track)?);
+                }
+                mapped.insert(self.ids.get("utterance_lineage", meeting, lineage)?, info);
+            }
+            value["speakerIdentification"] = Value::Object(mapped);
+        }
+        if let Some(completion) = original.get("speakerCompletion") {
+            let job = completion["jobId"]
+                .as_str()
+                .ok_or("話者補完の元ジョブがありません")?;
+            value["speakerCompletion"]["jobId"] =
+                json!(self.ids.get("processing_jobs", meeting, job)?);
+        }
+        if let Some(update) = original.get("speakerAssignmentUpdate") {
+            if update["schemaVersion"] != 1 || update["policy"] != "all_detected_v1" {
+                return Err("話者割り当て更新の履歴形式が不正です".into());
+            }
+            let draft: Option<crate::storage::DraftStamp> =
+                serde_json::from_value(update["sourceDraft"].clone()).map_err(|e| e.to_string())?;
+            if let Some(mut draft) = draft {
+                draft.id = self.ids.get("working_drafts", meeting, &draft.id)?;
+                value["speakerAssignmentUpdate"]["sourceDraft"] =
+                    serde_json::to_value(draft).map_err(|e| e.to_string())?;
+            }
+        }
         if let Some(consolidation) = original.get("utteranceConsolidation") {
             let mut provenance: crate::storage::transcript_consolidation::Provenance =
                 serde_json::from_value(consolidation.clone()).map_err(|e| e.to_string())?;
@@ -282,7 +362,7 @@ impl FixedData<'_, '_> {
                     self.ids
                         .get("analysis_revisions", meeting, &operation.source_analysis_id)?;
                 let mut payload = TranscriptDraftPayload {
-                    schema_version: 3,
+                    schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
                     utterance_splits: operation.splits.clone(),
                     ..Default::default()
                 };

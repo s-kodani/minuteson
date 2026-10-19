@@ -27,9 +27,11 @@ fn bytes(value: &impl Serialize) -> Vec<u8> {
     serde_json::to_vec(value).unwrap()
 }
 fn manifest(state: &str, committed: u64, error: bool) -> Vec<u8> {
-    bytes(&json!({"state":"failed","recordingOwnerId":OWNER,
+    bytes(
+        &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":OWNER,
         "inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":committed,"state":state,"closed":true},
-        "inputEventJournalError":error.then_some("secret /Users/private/person/recording.json")}))
+        "inputEventJournalError":error.then_some("secret /Users/private/person/recording.json")}),
+    )
 }
 
 #[test]
@@ -110,11 +112,7 @@ fn legacy_unknown_and_failed_recording_diagnostics_without_audio_are_not_fabrica
     assert!(Snapshot::from_evidence(OWNER, None, None, None)
         .unwrap()
         .is_none());
-    assert!(
-        Snapshot::from_evidence(OWNER, None, None, Some(br#"{"state":"saved"}"#))
-            .unwrap()
-            .is_none()
-    );
+    assert!(Snapshot::from_evidence(OWNER, None, None, Some(br#"{"state":"saved"}"#)).is_err());
     for state in ["confirmed", "pending", "failed", "invalid"] {
         let raw = manifest(state, if state == "confirmed" { 201 } else { 200 }, true);
         let snapshot = Snapshot::from_evidence(OWNER, None, None, Some(&raw))
@@ -384,7 +382,7 @@ fn immutable_codec_rejects_foreign_owners_duplicated_fields_receipt_injection_mi
     assert_eq!(snapshot.encode().unwrap(), encoded);
     assert!(Snapshot::from_evidence(OTHER, Some(&raw), None, None).is_err());
     let foreign = bytes(
-        &json!({"state":"failed","recordingOwnerId":OTHER,"inputEventJournalError":"timeout"}),
+        &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":OTHER,"inputEventJournalError":"timeout"}),
     );
     assert!(Snapshot::from_evidence(OWNER, None, None, Some(&foreign)).is_err());
     let duplicate = raw.iter().copied().collect::<Vec<_>>();
@@ -479,8 +477,8 @@ fn final_diagnostic_original_bytes_reject_known_duplicates_invalid_states_open_r
     for raw in [
         br#"{"state":"failed","recordingOwnerId":"735027d4-a03e-43d3-830a-21e767dfaf88","inputEventJournalError":"timeout","inputEventJournalError":"timeout"}"#.to_vec(),
         manifest("unexpected", 200, false),
-        bytes(&json!({"state":"failed","recordingOwnerId":OWNER,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"confirmed","closed":true}})),
-        bytes(&json!({"state":"failed","recordingOwnerId":OWNER,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"failed","closed":false}})),
+        bytes(&json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":OWNER,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"confirmed","closed":true}})),
+        bytes(&json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":OWNER,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"failed","closed":false}})),
         bytes(&json!({"state":"recording","recordingOwnerId":OWNER,"inputEventJournalError":"timeout"})),
     ] {
         assert!(Snapshot::from_evidence(OWNER, None, None, Some(&raw)).is_err());

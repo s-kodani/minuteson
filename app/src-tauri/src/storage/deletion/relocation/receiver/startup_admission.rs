@@ -17,7 +17,6 @@ struct SourceFacts {
     schema_hash: String,
     records: Vec<Record>,
     directories: Vec<super::super::Directory>,
-    #[serde(default)]
     historical_directories: Vec<super::super::HistoricalDirectory>,
 }
 #[derive(Deserialize)]
@@ -30,7 +29,6 @@ struct DestinationFacts {
     root: fs::Identity,
     database: fs::Identity,
     directories: Vec<BoundDirectory>,
-    #[serde(default)]
     historical_directories: Vec<BoundDirectory>,
 }
 #[derive(Deserialize)]
@@ -64,8 +62,7 @@ fn record_valid(record: &Record, version: u32) -> bool {
         && sha(&record.paths_hash)
         && record.path_count <= MAX_PATHS
         && record.historical_roots.len() <= MAX_ROOTS_PER_RECORD
-        && (version == 3 || record.historical_roots.is_empty())
-        && matches!(version, 2 | 3)
+        && version == 4
         && sha(&record.immutable_hash)
         && match (
             record.kind.as_str(),
@@ -89,7 +86,7 @@ fn record_valid(record: &Record, version: u32) -> bool {
         }
 }
 fn records(db: &Connection, source: &SourceFacts) -> Result<(), String> {
-    if !matches!(source.version, 2 | 3)
+    if source.version != 4
         || source
             .records
             .iter()
@@ -194,7 +191,7 @@ pub(in crate::storage) fn admitted_history(
     destination.root.validate(true)?;
     destination.database.validate(false)?;
     let (path, root_id, db_id) = admission.source();
-    if !matches!(source.version, 2 | 3)
+    if source.version != 4
         || source.source_root != path
         || source.root.registered()? != root_id
         || source.database.registered()? != db_id
@@ -213,10 +210,6 @@ pub(in crate::storage) fn admitted_history(
                 .map(|r| r.historical_roots.len())
                 .sum::<usize>()
             > MAX_PATHS
-        || (source.version != 3 && !source.historical_directories.is_empty())
-        || (source.version == 3
-            && source.historical_directories.is_empty()
-            && source.records.iter().all(|r| r.historical_roots.is_empty()))
         || source
             .records
             .windows(2)
@@ -226,7 +219,7 @@ pub(in crate::storage) fn admitted_history(
             .iter()
             .any(|r| !record_valid(r, source.version))
         || source.records.iter().map(|r| r.path_count).sum::<usize>() > MAX_PATHS
-        || destination.version != if source.version == 3 { 2 } else { 1 }
+        || destination.version != 3
         || destination.operation != admission.operation()
         || destination.native_hash != admission.native_hash()
         || destination.target_root != admission.root()
@@ -717,7 +710,7 @@ mod tests {
         let old_label: SourceFacts = serde_json::from_value(old_label).unwrap();
         assert!(!record_valid(&old_label.records[0], old_label.version));
         assert!(records(&db, &old_label).is_err());
-        for version in [0, 1, 4] {
+        for version in [0, 1, 2, 3, 5] {
             let mut unsupported = serde_json::to_value(&source).unwrap();
             unsupported["version"] = version.into();
             let unsupported: SourceFacts = serde_json::from_value(unsupported).unwrap();

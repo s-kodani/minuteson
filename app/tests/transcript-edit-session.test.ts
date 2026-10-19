@@ -3,7 +3,7 @@ import test from "node:test";
 import { cancelTextEdit, retainedTextRows, stageTextEdit, textBuffersDirty, textEditBaseline } from "../src/transcript-edit-session.ts";
 import { DraftSaveQueue } from "../src/draft-save.ts";
 import { canonicalPayload, type DraftPayload, type Utterance } from "../src/transcript-state.ts";
-const payload = (): DraftPayload => ({ schema_version: 1, speaker_names: [], utterances: [] });
+const payload = (): DraftPayload => ({ schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]}, speaker_names: [], utterances: [] });
 const utterance: Utterance = { id: "u", startUs: 0, endUs: 1, effectiveText: "点検日", recognizedText: "点検日", speakerIds: ["a"], attributionState: "assigned" };
 test("an unchanged open buffer never creates an override; confirming one buffer preserves unrelated assignments", () => {
   const session = { ...textEditBaseline(payload(), utterance), value: "点検日" };

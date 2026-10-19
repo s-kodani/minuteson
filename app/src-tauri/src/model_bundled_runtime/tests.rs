@@ -20,6 +20,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Value) {
         .map(|path| json!({"relativePath":path,"bytes":16,"sha256":hash(b"synthetic member")}))
         .collect::<Vec<_>>());
     value["runtimeSigning"] = json!("ad_hoc_only");
+    value["signingTeamId"] = Value::Null;
     std::fs::write(
         root.join("runtime-index.json"),
         serde_json::to_vec(&value).unwrap(),
@@ -41,15 +42,15 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
         catalog[6]["review"]["recipeHash"],
-        "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
+        "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3"
     );
     assert_eq!(
         catalog[7]["review"]["recipeHash"],
-        "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee"
+        "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
-    assert_eq!(review.recipe_schema_version, 3);
+    assert_eq!(review.recipe_schema_version, 4);
     assert_eq!(review.download_bytes, 488_492_581);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
@@ -64,7 +65,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     origin.validate(&recipe.manifest, &manifest_hash).unwrap();
     assert_eq!(
         serde_json::to_value(&origin).unwrap()["recipeSchemaVersion"],
-        3
+        4
     );
 }
 #[test]
@@ -303,7 +304,7 @@ fn developer_id_packaging_metadata_keeps_unverified_trust_and_binds_changed_payl
 fn signing_team_state_shape_never_accepts_null_wrong_team_or_self_approved_provenance() {
     for (state, team) in [
         ("ad_hoc_only", Some(json!("ABCDE12345"))),
-        ("ad_hoc_only", Some(Value::Null)),
+        ("ad_hoc_only", None),
         ("developer_id_signed", None),
         ("developer_id_signed", Some(Value::Null)),
         ("developer_id_signed", Some(json!(1234567890))),
@@ -315,6 +316,8 @@ fn signing_team_state_shape_never_accepts_null_wrong_team_or_self_approved_prove
         value["runtimeSigning"] = json!(state);
         if let Some(team) = team {
             value["signingTeamId"] = team;
+        } else {
+            value.as_object_mut().unwrap().remove("signingTeamId");
         }
         std::fs::write(
             root.join("runtime-index.json"),
@@ -469,7 +472,6 @@ fn bundled_identifiers_are_not_generic_local_urls_or_legacy_network_sources() {
         "traversal",
         "raw",
         "wrong-role",
-        "network-only",
         "no-network-asr",
     ] {
         let mut value = serde_json::to_value(&recipe).unwrap();
@@ -485,11 +487,6 @@ fn bundled_identifiers_are_not_generic_local_urls_or_legacy_network_sources() {
                     .remove("archive");
             }
             "wrong-role" => value["manifest"]["files"][0]["role"] = json!("notice"),
-            "network-only" => {
-                for source in value["sources"].as_array_mut().unwrap() {
-                    source["url"] = json!("https://example.com/archive");
-                }
-            }
             "no-network-asr" => value["sources"][3]["url"] = json!(BUNDLED_WHISPER),
             _ => unreachable!(),
         }

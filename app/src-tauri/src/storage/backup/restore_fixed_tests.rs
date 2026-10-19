@@ -32,12 +32,15 @@ pub(super) fn fixture_with_clock(storage: &Storage, operation: &str, corrected: 
             }],
         )
         .unwrap();
-    let audio = storage.recorded_audio_plan(&meeting).unwrap();
+    let (audio, known) = storage.recorded_analysis_input(&meeting).unwrap();
+    let runtime = |engine: &str| json!({"protocol":1,"engine":engine,"name":format!("mon-{engine}-worker"),"bytes":1234,"sha256":"a".repeat(64)});
+    let library = json!({"path":"/Users/source-machine/lib/libsherpa-onnx-c-api.dylib","size":9,"sha256":"e".repeat(64)});
+
     let transcription = storage.enqueue_with_vocabulary(&meeting, &format!("{operation}-transcription"), "固有名詞は文脈で確認", None, |vocabulary| {
         Ok(JobSpec {
             meeting_id:meeting.clone(),kind:JobKind::Transcription,operation_id:format!("{operation}-transcription"),input_analysis_id:None,input_hash:audio.manifest_hash.clone(),
             profile_snapshot:json!({"profile":"high_accuracy","model":{"path":"/Users/source-machine/models/model.bin","size":7,"sha256":"b".repeat(64)}}),
-            parameters:json!({"schemaVersion":2,"source":audio,"engine":{"executable":{"path":"/Users/source-machine/bin/whisper","size":1,"sha256":"d".repeat(64)},"model":{"path":"/Users/source-machine/models/model.bin","size":7,"sha256":"b".repeat(64)},"vadModel":null,"threads":4,"useGpu":false,"prompt":vocabulary.actual_prompt},"units":[{"trackIndex":0,"coreFirst":0,"coreEnd":64000,"windowFirst":0,"windowEnd":64000}],"vocabulary":vocabulary}),total_units:Some(1),
+            parameters:json!({"schemaVersion":4,"residentRuntime":runtime("whisper"),"optimizationVersion":1,"recognitionPolicy":"guardedVocabularyV2","knownInput":known,"source":audio,"engine":{"executable":{"path":"/Users/source-machine/bin/whisper","size":1,"sha256":"d".repeat(64)},"model":{"path":"/Users/source-machine/models/model.bin","size":7,"sha256":"b".repeat(64)},"vadModel":null,"threads":4,"useGpu":false,"prompt":vocabulary.actual_prompt},"units":[{"runIndex":0,"trackIndex":0,"coreFirst":0,"coreEnd":64000,"windowFirst":0,"windowEnd":64000}],"vocabulary":vocabulary}),total_units:Some(1),
         })
     }).unwrap();
     let cancelled = storage
@@ -58,7 +61,7 @@ pub(super) fn fixture_with_clock(storage: &Storage, operation: &str, corrected: 
     let diarization=storage.enqueue_diarization_job(MinutesJobRequest {
         meeting_id:meeting.clone(),operation_id:format!("{operation}-diarization"),expected_analysis_id:analysis.id,expected_content_hash:analysis.content_hash,
         expected_meeting_lock_version:storage.get_meeting(&meeting).unwrap().unwrap().lock_version,expected_draft:Some(DraftStamp{id:draft.id,lock_version:draft.lock_version}),
-    },json!({"profile":"high_accuracy"}),|input|Ok((json!({"source":audio,"engine":{"executable":{"path":"/Users/source-machine/bin/sherpa","size":1,"sha256":"d".repeat(64)},"segmentationModel":{"path":"/Users/source-machine/models/segmentation.onnx","size":9,"sha256":"c".repeat(64)},"embeddingModel":{"path":"/Users/source-machine/models/speaker.onnx","size":9,"sha256":"c".repeat(64)},"runtimeLibraries":[],"threads":4,"clusterThresholdMilli":500,"windowShiftMilli":500,"minDurationOnMs":200,"minDurationOffMs":100},"tracks":[{"trackId":audio.tracks[0].id,"numSpeakers":3}],"manualAssignmentHash":input.manual_assignment_hash}),1))).unwrap();
+    },json!({"profile":"high_accuracy"}),|input|Ok((json!({"residentRuntime":runtime("sherpa"),"optimizationVersion":1,"knownInput":known,"extractor":{"libraryIndex":0,"helper":{"path":"/Users/source-machine/bin/embedding","size":9,"sha256":"f".repeat(64)},"library":library},"matching":{"algorithm":"run_centroids_cosine_complete_v1","windows":"unambiguous_longest_two_center30_v1"},"source":audio,"engine":{"executable":{"path":"/Users/source-machine/bin/sherpa","size":1,"sha256":"d".repeat(64)},"segmentationModel":{"path":"/Users/source-machine/models/segmentation.onnx","size":9,"sha256":"c".repeat(64)},"embeddingModel":{"path":"/Users/source-machine/models/speaker.onnx","size":9,"sha256":"c".repeat(64)},"runtimeLibraries":[library],"threads":4,"clusterThresholdMilli":500,"windowShiftMilli":500,"minDurationOnMs":200,"minDurationOffMs":100},"tracks":[{"trackId":audio.tracks[0].id,"numSpeakers":3}],"manualAssignmentHash":input.manual_assignment_hash}),1))).unwrap();
     storage
         .finish_job(&diarization.id, 0, "cancelled", None)
         .unwrap();
@@ -849,7 +852,7 @@ fn shared_job_spec_hash_keeps_the_original_domains_and_retry_shape() {
         input_analysis_id: None,
         input_hash: "a".repeat(64),
         profile_snapshot: json!({"profile":"standard"}),
-        parameters: json!({"value":"natural text"}),
+        parameters: json!({"schemaVersion":4,"value":"natural text"}),
         total_units: Some(1),
     };
     let mut hash = Sha256::new();

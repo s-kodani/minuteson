@@ -44,9 +44,7 @@ struct Progress {
     census_hash: String,
     next: usize,
     pending: Option<Pending>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     final_audio: Option<Vec<crate::storage::deletion::database::Table>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     confirmation: Option<renewal::Reference>,
 }
 impl Progress {
@@ -67,10 +65,8 @@ impl Progress {
         Ok(json)
     }
     fn validate(&self, saved: &Prepared, targets: &[Entry]) -> Result<(), String> {
-        if !matches!(
-            (self.version, self.confirmation.is_some()),
-            (2, false) | (3, true)
-        ) || self.confirmation.as_ref().is_some_and(|r| !r.valid())
+        if self.version != 4
+            || self.confirmation.as_ref().is_some_and(|r| !r.valid())
             || self.census_hash != saved.header.census_hash
             || self.next > targets.len()
             || (self.phase != Phase::RemovingAudio
@@ -317,29 +313,17 @@ impl Receipt {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        let bytes = if self.progress.confirmation.is_none() {
-            // Keep persisted v1/v2 origin seals byte-for-byte compatible.
-            serde_json::to_vec(&(
-                "completed_audio_source",
-                row,
-                &self.saved.header,
-                &self.saved.snapshot,
-                self.saved.consent,
-                &self.progress,
-            ))
-        } else {
-            serde_json::to_vec(&(
-                "renewed_completed_audio_source",
-                row,
-                &self.saved.header,
-                &self.saved.snapshot,
-                self.saved.consent,
-                &self.progress,
-                &self.plan,
-                &self.policy,
-                &self.historical_paths,
-            ))
-        }
+        let bytes = serde_json::to_vec(&(
+            "completed_audio_source_v4",
+            row,
+            &self.saved.header,
+            &self.saved.snapshot,
+            self.saved.consent,
+            &self.progress,
+            &self.plan,
+            &self.policy,
+            &self.historical_paths,
+        ))
         .map_err(|e| e.to_string())?;
         Ok(super::hash(&bytes))
     }
@@ -742,7 +726,7 @@ pub(crate) fn start(
         return Err("音声削除予約の観測容量を確保できません".into());
     }
     let progress = Progress {
-        version: 2,
+        version: 4,
         phase: Phase::RemovingAudio,
         census_hash: saved.header.census_hash.clone(),
         next: 0,

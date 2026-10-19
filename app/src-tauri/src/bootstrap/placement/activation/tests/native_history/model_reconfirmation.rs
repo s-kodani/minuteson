@@ -135,7 +135,7 @@ fn model_relocated_consent_requires_current_review_and_unknown_choice_without_re
     assert_eq!(audits.len(), 1);
     let record: serde_json::Value = serde_json::from_str(&audits[0].1).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&audits[0].2).unwrap();
-    assert_eq!(record["version"], 2);
+    assert_eq!(record["version"], 3);
     assert_eq!(record["sourceOperation"], op);
     assert_eq!(record["previousProgress"]["phase"], "completed");
     for (field, path) in [

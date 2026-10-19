@@ -222,3 +222,48 @@ fn internal_logs_saturated_queue_drops_without_waiting() {
     assert_eq!(logs.dropped.load(Ordering::Relaxed), 100);
     assert!(logs.query(Query::default()).is_err());
 }
+
+#[test]
+fn completion_details_preserve_each_decision_elapsed_and_filter_context() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = LogService::start(Ok(root.path().into()));
+    let context = Context {
+        category: "speaker_completion".into(),
+        ..context()
+    };
+    let message = serde_json::json!({"event":"発言照合完了","decision":{"lineage":"u1","reason":"below_threshold","similarity":0.79,"runnerUp":0.7},"margin":0.09}).to_string();
+    // Detailed records must not deduplicate distinct units even with identical text.
+    logs.detail(
+        &context,
+        "running",
+        "info",
+        Duration::from_millis(1234),
+        &message,
+    );
+    logs.detail(
+        &context,
+        "running",
+        "info",
+        Duration::from_millis(1500),
+        &message,
+    );
+    logs.flush();
+    let page = logs
+        .query(Query {
+            filter: Filter {
+                category: Some("speaker_completion".into()),
+                related_id: Some("job-a".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(page.entries.len(), 2);
+    assert_eq!(page.entries[0].elapsed_ms, Some(1234));
+    assert_eq!(page.entries[1].elapsed_ms, Some(1500));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&page.entries[0].message).unwrap()["decision"]
+            ["reason"],
+        "below_threshold"
+    );
+}

@@ -7,10 +7,10 @@ import type { SpeakerNameSession } from "../src/speaker-name-edit.ts";
 import type { TranscriptRecovery } from "../src/transcript-recovery-save.ts";
 const base: Analysis = { id: "a",meetingId: "m",contentHash: "a".repeat(64),speakers: [{ id: "s",label: "話者A",displayName: "元名" },{ id: "t",label: "話者B",displayName: null }],
   utterances: [{ id: "u",startUs: 0,endUs: 10_000_000,recognizedText: "原文です",effectiveText: "原文です",attributionState: "assigned",speakerIds: ["s"] }] };
-const empty = (): DraftPayload => ({ schema_version: 1,speaker_names: [],utterances: [] });
+const empty = (): DraftPayload => ({ schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_names: [],utterances: [] });
 const text = (value = "手元入力"): TextEditSession => ({ utteranceId: "u",text: "旧開始時本文",speakerIds: ["s"],hadOverride: false,value });
 const name = (value = "手元名"): SpeakerNameSession => ({ speakerId: "s",name: "旧名",hadOverride: false,value });
-const record = (texts = [text("保存済み入力")],names = [name("保存済み名")]) => ({ payload: { schemaVersion: 3,basePayload: empty(),buffers: texts,nameBuffers: names } } as TranscriptRecovery<DraftPayload>);
+const record = (texts = [text("保存済み入力")],names = [name("保存済み名")]) => ({ payload: { schemaVersion: 4,basePayload: empty(),buffers: texts,nameBuffers: names,discardedFrom: null } } as TranscriptRecovery<DraftPayload>);
 test("sparse body comparison keeps independent local text and latest assignment without false conflicts", () => {
   const local = empty(), latest = empty();
   local.utterances.push({ utterance_id: "u",effective_text: "手元変更",speaker_ids: ["s"] });
@@ -46,7 +46,7 @@ test("stored-only input is included and explicit omission never modifies the sav
   assert.deepEqual(saved,before);
 });
 test("a hidden merged name cannot partially resume other selected text", () => {
-  const latest = { ...empty(),schema_version: 2,speaker_merges: [{ source_id: "s",target_id: "t" }] };
+  const latest = { ...empty(),schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_merges: [{ source_id: "s",target_id: "t" }] };
   const plan = planConflictInput(base,empty(),empty(),latest,[text()],[name()],null);
   assert.throws(() => resolveConflictInput(base,plan,{},Object.fromEntries(plan.inputs.map(r => [r.key,"local"]))),/選択した話者/);
   const selected = resolveConflictInput(base,plan,{},Object.fromEntries(plan.inputs.map(r => [r.key,r.kind === "name" ? "omit" : "local"])));
@@ -59,7 +59,7 @@ test("a split-away original buffer is copyable but cannot be invisibly resumed",
   assert.equal(resolveConflictInput(base,plan,{},Object.fromEntries(plan.inputs.map(r => [r.key,"omit"]))).payload.utterance_splits?.length,1);
 });
 test("incompatible speaker dependency choices are rejected before returning resumed state", () => {
-  const id = "manual:00000000-0000-4000-8000-000000000003", local = { ...empty(),schema_version: 2,manual_speakers: [{ id,label: "追加" }],speaker_names: [{ speaker_id: id,display_name: "手元" }] };
+  const id = "manual:00000000-0000-4000-8000-000000000003", local = { ...empty(),schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},manual_speakers: [{ id,label: "追加" }],speaker_names: [{ speaker_id: id,display_name: "手元" }] };
   const latest = empty(), plan = planConflictInput(base,empty(),local,latest,[],[],null);
   const choices = Object.fromEntries(plan.body.rows.filter(r => r.kind === "manual").map(r => [r.key,"latest" as const]));
   assert.throws(() => resolveConflictInput(base,plan,choices,{}),/話者名の参照/);
@@ -80,8 +80,8 @@ test("split source text, contiguous times, ID uniqueness and speaker assignments
   }
 });
 test("manual IDs, cyclic merges, reference limits and payload schema are preflighted", () => {
-  for(const patch of [{ schema_version: 99 },{ manual_speakers: [{ id: "manual:bad",label: "名" }],schema_version: 2 },
-    { schema_version: 2,speaker_merges: [{ source_id: "s",target_id: "t" },{ source_id: "t",target_id: "s" }] },
+  for(const patch of [{ schema_version: 99 },{ manual_speakers: [{ id: "manual:bad",label: "名" }],schema_version:4 },
+    { schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_merges: [{ source_id: "s",target_id: "t" },{ source_id: "t",target_id: "s" }] },
     { speaker_names: [{ speaker_id: "missing",display_name: "名" }] },{ speaker_names: [{ speaker_id: "s",display_name: "あ".repeat(201) }] },
     { utterances: [{ utterance_id: "missing",effective_text: "文",speaker_ids: [] }] },
     { utterances: [{ utterance_id: "u",effective_text: "文",speaker_ids: ["s","s"] }] }]) assert.throws(() => validateConflictPayload(base,{ ...empty(),...patch }));

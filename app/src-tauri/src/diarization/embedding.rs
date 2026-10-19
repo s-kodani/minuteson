@@ -16,6 +16,7 @@ const MAX_DIMENSION: usize = 4096;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExtractorConfig {
+    pub library_index: usize,
     pub helper: Fingerprint,
     pub library: Fingerprint,
 }
@@ -39,6 +40,11 @@ impl ExtractorConfig {
             return Err("固定した話者エンジンに一意のC APIランタイムが必要です".into());
         }
         let config = Self {
+            library_index: engine
+                .runtime_libraries
+                .iter()
+                .position(|p| std::ptr::eq(p, matches[0]))
+                .ok_or("抽出ランタイムの位置がありません")?,
             helper: Fingerprint::capture(helper, &|| false)?,
             library: matches[0].clone(),
         };
@@ -51,12 +57,13 @@ impl ExtractorConfig {
             return Err("保存区間の特徴量抽出は現在macOSだけに対応しています".into());
         }
         engine.validate_settings(None)?;
-        if engine
-            .runtime_libraries
-            .iter()
-            .filter(|proof| *proof == &self.library)
-            .count()
-            != 1
+        if engine.runtime_libraries.get(self.library_index) != Some(&self.library)
+            || engine
+                .runtime_libraries
+                .iter()
+                .filter(|p| *p == &self.library)
+                .count()
+                != 1
         {
             return Err("特徴量抽出のランタイムが固定エンジンと一致しません".into());
         }

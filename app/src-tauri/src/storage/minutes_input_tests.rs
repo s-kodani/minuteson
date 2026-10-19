@@ -11,7 +11,7 @@ fn manual_splits_materialize_fresh_lineages_original_scope_and_fixed_minutes_wit
     let old_job = enqueue(&storage, request.clone());
     let old_input = storage.load_minutes_input(&old_job.id).unwrap();
     let mut p = draft.payload.clone();
-    p.schema_version = 3;
+    p.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     let u = &original.utterances[0];
     let text = p
         .utterances
@@ -149,7 +149,7 @@ fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_refe
     let before = enqueue(&storage, request.clone());
     let old_fixed = storage.load_minutes_input(&before.id).unwrap();
     let mut payload = draft.payload.clone();
-    payload.schema_version = 2;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     let manual = format!("manual:{}", Uuid::new_v4());
     payload.manual_speakers.push(ManualSpeaker {
         id: manual.clone(),
@@ -384,7 +384,7 @@ fn enqueue(storage: &Storage, request: MinutesJobRequest) -> JobSnapshot {
         .enqueue_minutes_job(
             request,
             json!({"engine":"llama.cpp", "modelHash":"c".repeat(64)}),
-            json!({"templateVersion":"standard-v1"}),
+            json!({"schemaVersion":9,"templateVersion":"standard-v1"}),
             Some(1),
         )
         .unwrap()
@@ -577,7 +577,7 @@ fn minutes_input_rejects_stale_requests_and_operation_collisions_without_writes(
     let job = enqueue(&storage, request.clone());
     request.expected_draft.as_mut().unwrap().lock_version += 1;
     assert!(storage
-        .enqueue_minutes_job(request, json!({}), json!({}), Some(1))
+        .enqueue_minutes_job(request, json!({}), json!({"schemaVersion":9}), Some(1))
         .is_err());
     assert_eq!(storage.list_jobs(&job.meeting_id).unwrap(), vec![job]);
 }
@@ -589,7 +589,12 @@ fn failed_minutes_job_insert_rolls_back_snapshot_and_all_remapped_children() {
     let (request, original, draft) = fixture(&storage);
     storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER simulate_minutes_failure BEFORE INSERT ON processing_jobs WHEN NEW.kind = 'minutes_generation' BEGIN SELECT RAISE(ABORT, 'simulated insert failure'); END;").unwrap();
     assert!(storage
-        .enqueue_minutes_job(request.clone(), json!({}), json!({}), Some(1))
+        .enqueue_minutes_job(
+            request.clone(),
+            json!({}),
+            json!({"schemaVersion":9}),
+            Some(1)
+        )
         .is_err());
     let db = storage.connection.lock().unwrap();
     for (table, expected) in [
@@ -700,7 +705,7 @@ fn internal_snapshots_are_sql_frozen_and_tampering_is_detected_on_read() {
             .enqueue_minutes_job(
                 request,
                 json!({"engine":"llama.cpp","modelHash":"c".repeat(64)}),
-                json!({"templateVersion":"standard-v1"}),
+                json!({"schemaVersion":9,"templateVersion":"standard-v1"}),
                 Some(1)
             )
             .is_err());
@@ -735,7 +740,7 @@ fn snapshot_revalidates_draft_ids_even_when_modified_json_has_matching_hash() {
             .unwrap();
         assert!(
             storage
-                .enqueue_minutes_job(request, json!({}), json!({}), Some(1))
+                .enqueue_minutes_job(request, json!({}), json!({"schemaVersion":9}), Some(1))
                 .is_err(),
             "{kind}"
         );

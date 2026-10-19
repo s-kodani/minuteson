@@ -98,7 +98,7 @@ mod tests {
         let data = b"exact installed ASR weights";
         std::fs::write(&path, data).unwrap();
         let hash = format!("{:x}", Sha256::digest(data));
-        let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":3,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"test","modelVersion":"fixed","quantization":null,"target":"macos_aarch64","licenseRef":"test","files":[{"relativePath":"models/model.bin","role":"asr","expectedSize":data.len(),"expectedHash":hash}]},"sources":[{"relativePath":"models/model.bin","url":"https://example.com/model"}]})).unwrap();
+        let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"test","modelVersion":"fixed","quantization":null,"target":"macos_aarch64","licenseRef":"test","files":[{"relativePath":"models/model.bin","role":"asr","expectedSize":data.len(),"expectedHash":hash}]},"sources":[{"relativePath":"models/model.bin","url":"https://example.com/model"}]})).unwrap();
         let mut entry = CatalogEntry {
             package_id: id,
             source_type: "download".into(),

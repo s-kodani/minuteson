@@ -13,9 +13,12 @@ pub(super) mod restore;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    optimization_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    optimization: Option<super::optimization::Policy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     schema_version: u32,
-    #[serde(default, skip_serializing_if = "markdown::PromptVersion::is_legacy")]
     prompt_version: markdown::PromptVersion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     acceleration_policy: Option<super::acceleration::Policy>,
@@ -57,6 +60,8 @@ struct Envelope {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Checkpoint {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    token_counts: std::collections::BTreeMap<String, u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     acceleration: Option<super::acceleration::Resolved>,
     outputs: Vec<Output>,
@@ -74,7 +79,7 @@ pub(crate) fn is_markdown(spec: &JobSpec) -> bool {
     spec.kind == JobKind::MinutesGeneration
         && matches!(
             spec.parameters["generation"]["schemaVersion"].as_u64(),
-            Some(7)
+            Some(9)
         )
 }
 pub(crate) fn enqueue(
@@ -142,7 +147,7 @@ pub(crate) fn enqueue_prepared_synthetic(
         "standard",
         prompt_budget,
         None,
-        markdown::PromptVersion::Legacy,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
         Some(selection),
     )
@@ -165,29 +170,7 @@ pub(crate) fn enqueue_synthetic(
         name,
         prompt_budget,
         expected,
-        markdown::PromptVersion::Legacy,
-        None,
-    )
-}
-#[cfg(test)]
-pub(crate) fn enqueue_synthetic_model_maximum(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: super::llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-    expected: Option<MarkdownStamp>,
-) -> Result<JobSnapshot, String> {
-    let capacity = Capacity::synthetic_model_maximum(&engine, 32768, 8192);
-    enqueue_with_capacity(
-        storage,
-        request,
-        engine,
-        capacity,
-        name,
-        prompt_budget,
-        expected,
-        markdown::PromptVersion::Legacy,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
     )
 }
@@ -207,7 +190,7 @@ pub(crate) fn enqueue_synthetic_model_adaptive(
         "standard",
         2400,
         expected,
-        markdown::PromptVersion::Legacy,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
     )
 }
@@ -227,7 +210,7 @@ pub(crate) fn enqueue_synthetic_inline(
         "standard",
         2400,
         expected,
-        markdown::PromptVersion::InlineEvidenceV2,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
     )
 }
@@ -247,7 +230,7 @@ pub(crate) fn enqueue_synthetic_compact(
         "standard",
         4000,
         expected,
-        markdown::PromptVersion::CompactEvidenceV3,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
     )
 }
@@ -267,7 +250,7 @@ pub(crate) fn enqueue_synthetic_concise(
         "standard",
         5400,
         expected,
-        markdown::PromptVersion::ConciseSummaryV4,
+        markdown::PromptVersion::CustomPromptsV5,
         None,
     )
 }
@@ -278,7 +261,7 @@ pub(crate) fn enqueue_synthetic_custom(
     engine: super::llama::LlamaConfig,
     expected: Option<MarkdownStamp>,
 ) -> Result<JobSnapshot, String> {
-    let capacity = Capacity::synthetic(&engine, 32768, 8192);
+    let capacity = Capacity::synthetic(&engine, engine.context_tokens, engine.prediction_tokens);
     enqueue_with_capacity(
         storage,
         request,
@@ -349,44 +332,65 @@ fn enqueue_with_selection(
         schema_version: 1,
         expected,
     };
-    // Lost admission responses may be replayed after an app upgrade. Preserve
-    // that operation's original policy, including absence on older V3 jobs.
-    let (acceleration_policy, prompt_version) = if let Some(existing) = storage
-        .list_jobs(&request.meeting_id)?
-        .iter()
-        .find(|j| j.operation_id == request.operation_id)
-    {
-        let (spec, _) = storage.fixed_job_input(&existing.id)?;
-        let saved = &spec.parameters["generation"];
-        (
-            serde_json::from_value::<Option<super::acceleration::Policy>>(
-                saved["accelerationPolicy"].clone(),
-            )
-            .map_err(|e| e.to_string())?,
-            saved
-                .get("promptVersion")
-                .cloned()
-                .map(serde_json::from_value::<markdown::PromptVersion>)
-                .transpose()
-                .map_err(|e| e.to_string())?
-                .unwrap_or_default(),
-        )
-    } else {
-        (
-            if prompt_version.is_compact() {
-                new_acceleration_policy
-            } else {
-                None
-            },
-            prompt_version,
-        )
-    };
+    let acceleration_policy = new_acceleration_policy;
+    let prompt_version = markdown::PromptVersion::CustomPromptsV5;
     let new_runtime = crate::local_engine::resident::prepare_job(
         storage,
         &request.meeting_id,
         &request.operation_id,
         "llama",
     )?;
+    let existing = storage
+        .list_jobs(&request.meeting_id)?
+        .iter()
+        .any(|j| j.operation_id == request.operation_id);
+    let prompt_settings = if prompt_version == markdown::PromptVersion::CustomPromptsV5 {
+        Some(storage.minutes_prompt_preferences()?)
+    } else {
+        None
+    };
+    let extract = prompt_settings.as_ref().map_or_else(
+        || prompt_version.extract_system(),
+        |s| s.payload.extract_prompt.as_str(),
+    );
+    let merge = prompt_settings.as_ref().map_or_else(
+        || prompt_version.merge_system(),
+        |s| s.payload.merge_prompt.as_str(),
+    );
+    let selected_optimization = if existing {
+        None
+    } else {
+        super::optimization::select(
+            &engine,
+            new_runtime.as_ref(),
+            &task_system(extract, prompt_version),
+            &task_system(merge, prompt_version),
+            prompt_version,
+        )?
+    };
+    let prepared_token_plan = if selected_optimization
+        .as_ref()
+        .is_some_and(|p| p.token_packing)
+    {
+        let input = storage.preview_minutes_optimization_input(&request.meeting_id)?;
+        let _files = crate::local_engine::verification::Scope::enter(true)?;
+        let _resident =
+            crate::local_engine::resident::Scope::enter(storage.root(), new_runtime.as_ref())?;
+        let tokens = super::optimization::Scope::enter(
+            &capacity.token_configuration(&engine)?,
+            selected_optimization.as_ref(),
+        )?;
+        let plan = tokens.check(plan::build_with_system(
+            &input,
+            plan_limit_for(&capacity, &engine, prompt_budget, prompt_version)?,
+            prompt_version,
+            extract,
+        ))?;
+        _files.finish(&|| false)?;
+        Some((input.working_content_hash, plan))
+    } else {
+        None
+    };
     storage.enqueue_markdown_minutes_job_with_prompts(request, profile, target, |input, db, saved| {
         let prompt_snapshot = if prompt_version == markdown::PromptVersion::CustomPromptsV5 {
             Some(if let Some(saved) = saved {
@@ -403,13 +407,21 @@ fn enqueue_with_selection(
         if !plan::fits(merge_system, "{\"drafts\":[\"a\"]}", limit) {
             return Err("統合用プロンプトが長すぎて入力が収まりません。プロンプトを短くしてください".into());
         }
-        let plan = plan::build_with_system(input, limit, prompt_version, extract_system)?;
+        let optimization=if let Some(saved)=saved {saved.get("optimization").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?}else{selected_optimization.clone()};
+        let plan=if optimization.as_ref().is_some_and(|p:&super::optimization::Policy|p.token_packing) {
+            if let Some(saved)=saved {let plan:plan::Plan=serde_json::from_value(saved["plan"].clone()).map_err(|e|e.to_string())?;plan::validate_coverage(input,&plan)?;plan}
+            else {let (hash,plan)=prepared_token_plan.as_ref().ok_or("トークン分割の準備がありません")?;
+                if hash!=&input.working_content_hash || prompt_settings.as_ref().is_some_and(|s|serde_json::to_value(&s.payload).ok()!=prompt_snapshot.as_ref().and_then(|p|serde_json::to_value(&p.preferences).ok())) {return Err("トークン算定中に生成入力・指示文が変更されました".into())}plan.clone()}
+        }else{plan::build_with_system(input, limit, prompt_version, extract_system)?};
         let total = plan.nodes.len() as i64;
-        let mut parameters = serde_json::json!({"schemaVersion":7,"promptVersion":prompt_version,"engine":engine,"capacity":capacity,"promptBudget":prompt_budget,"plan":plan});
+        let schema=u64::from(crate::current_formats::MINUTES);
+        let mut parameters = serde_json::json!({"schemaVersion":schema,"promptVersion":prompt_version,"engine":engine,"capacity":capacity,"promptBudget":prompt_budget,"plan":plan});
         let resident_runtime = match saved {
             Some(saved) => saved.get("residentRuntime").cloned(),
             None => new_runtime.as_ref().map(serde_json::to_value).transpose().map_err(|e| e.to_string())?,
         };
+        if schema==u64::from(crate::current_formats::MINUTES) {parameters["optimizationVersion"]=serde_json::json!(1);}
+        if let Some(optimization)=optimization {parameters["optimization"]=serde_json::to_value(optimization).map_err(|e|e.to_string())?;}
         if let Some(runtime) = resident_runtime { parameters["residentRuntime"] = runtime; }
         if let Some(snapshot) = prompt_snapshot { parameters["promptSnapshot"] = serde_json::to_value(snapshot).map_err(|e| e.to_string())?; }
         if let Some(policy) = acceleration_policy { parameters["accelerationPolicy"] = serde_json::to_value(policy).map_err(|e| e.to_string())?; }
@@ -446,19 +458,23 @@ fn checked_fixed_parameters(
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || p.schema_version != 7
+        || !(p.schema_version == crate::current_formats::MINUTES)
         || p.markdown_target.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
         || p.prompt_budget > super::budget(&p.engine)?
-        || p.plan
-            != plan::build_with_system(
-                input,
-                plan_limit(&p)?,
-                p.prompt_version,
-                p.extract_system(),
-            )?
+        || if p.optimization.as_ref().is_some_and(|p| p.token_packing) {
+            plan::validate_coverage(input, &p.plan).is_err()
+        } else {
+            p.plan
+                != plan::build_with_system(
+                    input,
+                    plan_limit(&p)?,
+                    p.prompt_version,
+                    p.extract_system(),
+                )?
+        }
         || spec.total_units != Some(p.plan.nodes.len() as i64)
         || managed::rebinding::base_profile(&spec.profile_snapshot)?
             != managed::attach(
@@ -484,6 +500,15 @@ fn checked_checkpoint(
         .transpose()
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
+    if c.token_counts.len() > 4096
+        || c.token_counts
+            .keys()
+            .any(|k| k.len() != 64 || !k.bytes().all(|b| b.is_ascii_hexdigit()))
+        || c.token_counts.values().any(|n| *n == 0 || *n > 131072)
+        || (!p.optimization.as_ref().is_some_and(|p| p.token_packing) && !c.token_counts.is_empty())
+    {
+        return Err("保存トークン数の固定条件が不正です".into());
+    }
     if c.outputs.len() as i64 != job.completed_units
         || c.outputs.len() > p.plan.nodes.len()
         || c.outputs.iter().enumerate().any(|(i, o)| {
@@ -526,6 +551,18 @@ fn acceleration_context(p: &Parameters) -> Result<u32, String> {
         .context_tokens)
 }
 fn validate_capacity(p: &Parameters) -> Result<(), String> {
+    if p.resident_runtime.is_none()
+        || p.prompt_version != markdown::PromptVersion::CustomPromptsV5
+        || (p.optimization_version != Some(crate::current_formats::OPTIMIZATION))
+        || p.optimization.as_ref().is_some_and(|p| {
+            p.version != 1
+                || p.evidence_hash.len() != 64
+                || !p.evidence_hash.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+    {
+        return Err("議事録最適化の固定条件が不正です".into());
+    }
+
     match (&p.prompt_snapshot, p.prompt_version) {
         (Some(snapshot), markdown::PromptVersion::CustomPromptsV5) => {
             if !(0..=9_007_199_254_740_991).contains(&snapshot.settings_lock_version) {
@@ -533,10 +570,9 @@ fn validate_capacity(p: &Parameters) -> Result<(), String> {
             }
             snapshot.preferences.validate()?;
         }
-        (None, version) if version != markdown::PromptVersion::CustomPromptsV5 => {}
         _ => return Err("議事録プロンプトの固定条件が不正です".into()),
     }
-    if p.schema_version != 7
+    if !(p.schema_version == crate::current_formats::MINUTES)
         || p.acceleration_policy
             .is_some_and(|policy| !policy.accepts(&p.engine) || !p.prompt_version.is_compact())
     {
@@ -566,7 +602,7 @@ fn plan_limit_for(
         capacity.plan_limit(engine, requested)
     }
 }
-fn task_system(system: &str, version: markdown::PromptVersion) -> String {
+pub(in crate::generation) fn task_system(system: &str, version: markdown::PromptVersion) -> String {
     let suffix = if version == markdown::PromptVersion::CustomPromptsV5 {
         CUSTOM_COMPLETION
     } else {
@@ -598,12 +634,6 @@ fn task_text(_task: &Task, raw: Value) -> Result<String, String> {
     // Content format is unrestricted. Invalid JSON, empty/NUL/oversized text
     // and artifact/CAS failures still stop publication through their checks.
     markdown::text(raw)
-}
-
-fn finish_summary(text: &mut String, version: markdown::PromptVersion) {
-    if version == markdown::PromptVersion::ConciseSummaryV4 {
-        *text = markdown::summary::limit(text);
-    }
 }
 
 fn cursor(
@@ -644,70 +674,84 @@ fn replay_with(
     cancelled: &impl Fn() -> bool,
     mut verify: impl FnMut(&Task, &[Artifact]) -> Result<Value, String>,
 ) -> Result<Option<(Vec<String>, Option<plan::Cursor>)>, String> {
-    let mut outputs = vec![];
-    for saved in &c.outputs {
-        if cancelled() {
-            return Ok(None);
-        }
-        let text = match &p.plan.nodes[saved.index] {
-            plan::Node::Extract { slices } => {
-                if saved.batches.len() != 1 {
-                    return Err("抽出の保存形式が不正です".into());
-                }
-                let task = extract_task(input, slices, p)?;
-                task_text(&task, verify(&task, &saved.batches[0])?)?
-            }
-            node => {
-                let mut current = cursor(node, &outputs, plan_limit(p)?, p)?;
-                for batch in &saved.batches {
-                    if cancelled() {
-                        return Ok(None);
-                    }
-                    let task = merge_task(&current)?;
-                    let text = task_text(&task, verify(&task, batch)?)?;
-                    current.accept(text)?;
-                }
-                current
-                    .result()
-                    .ok_or("統合が完了していません")?
-                    .to_string()
-            }
-        };
-        outputs.push(text);
-    }
-    if outputs.len() == p.plan.nodes.len() {
-        if let Some(text) = outputs.last_mut() {
-            finish_summary(text, p.prompt_version);
-        }
-    }
-    if c.markdown_hash.as_deref()
-        != outputs
-            .last()
-            .filter(|_| outputs.len() == p.plan.nodes.len())
-            .map(|t| content_hash(t))
-            .as_deref()
-    {
-        return Err("議事録Markdownの生成結果ハッシュが一致しません".into());
-    }
-    let pending = if let Some(saved) = &c.pending {
-        let mut current = cursor(&p.plan.nodes[saved.index], &outputs, plan_limit(p)?, p)?;
-        for batch in &saved.batches {
-            if cancelled() {
-                return Ok(None);
-            }
-            let task = merge_task(&current)?;
-            let text = task_text(&task, verify(&task, batch)?)?;
-            current.accept(text)?;
-        }
-        if current.result().is_some() {
-            return Err("完了した統合が途中保存されています".into());
-        }
-        Some(current)
+    let recorded_tokens = if p.optimization.as_ref().is_some_and(|p| p.token_packing) {
+        super::optimization::Scope::replay(
+            &p.capacity.token_configuration(&p.engine)?,
+            p.optimization.as_ref(),
+            &c.token_counts,
+        )?
     } else {
         None
     };
-    Ok(Some((outputs, pending)))
+    let replayed = (|| {
+        let mut outputs = vec![];
+        for saved in &c.outputs {
+            if cancelled() {
+                return Ok(None);
+            }
+            let text = match &p.plan.nodes[saved.index] {
+                plan::Node::Extract { slices } => {
+                    if saved.batches.len() != 1 {
+                        return Err("抽出の保存形式が不正です".into());
+                    }
+                    let task = extract_task(input, slices, p)?;
+                    task_text(&task, verify(&task, &saved.batches[0])?)?
+                }
+                node => {
+                    let mut current = cursor(node, &outputs, plan_limit(p)?, p)?;
+                    for batch in &saved.batches {
+                        if cancelled() {
+                            return Ok(None);
+                        }
+                        let task = merge_task(&current)?;
+                        let text = task_text(&task, verify(&task, batch)?)?;
+                        current.accept(text)?;
+                    }
+                    current
+                        .result()
+                        .ok_or("統合が完了していません")?
+                        .to_string()
+                }
+            };
+            outputs.push(text);
+        }
+        if outputs.len() == p.plan.nodes.len() {
+            if let Some(text) = outputs.last_mut() {}
+        }
+        if c.markdown_hash.as_deref()
+            != outputs
+                .last()
+                .filter(|_| outputs.len() == p.plan.nodes.len())
+                .map(|t| content_hash(t))
+                .as_deref()
+        {
+            return Err("議事録Markdownの生成結果ハッシュが一致しません".into());
+        }
+        let pending = if let Some(saved) = &c.pending {
+            let mut current = cursor(&p.plan.nodes[saved.index], &outputs, plan_limit(p)?, p)?;
+            for batch in &saved.batches {
+                if cancelled() {
+                    return Ok(None);
+                }
+                let task = merge_task(&current)?;
+                let text = task_text(&task, verify(&task, batch)?)?;
+                current.accept(text)?;
+            }
+            if current.result().is_some() {
+                return Err("完了した統合が途中保存されています".into());
+            }
+            Some(current)
+        } else {
+            None
+        };
+        Ok(Some((outputs, pending)))
+    })();
+    match recorded_tokens {
+        Some(scope) => scope.check(replayed),
+        None => replayed,
+    }
 }
+
 pub(crate) fn retry_preflight(
     storage: &Storage,
     job: &JobSnapshot,
@@ -774,6 +818,7 @@ fn infer(
         Execution::Llama(&p.engine, p.prompt_budget),
         cancelled,
     )?;
+    let actual_tokens = super::optimization::count(&task.system, &task.prompt).transpose()?;
     let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
     *diagnostic_directory = Some(directory.clone());
     let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
@@ -830,7 +875,7 @@ fn infer(
     {
         return Err("生成結果が登録中に変更されています".into());
     }
-    let timings = serde_json::json!({"schemaVersion":1,"jobId":job_id,"attempt":current_job.attempt,"specHash":current_job.spec_hash,"unitIndex":index,"preparationMs":prepare_ms,"inferenceMs":inference_ms,"resultVerificationMs":result_verification_ms,"artifactRegistrationMs":saving.elapsed().as_millis(),"totalMs":started.elapsed().as_millis()});
+    let timings = serde_json::json!({"schemaVersion":1,"jobId":job_id,"attempt":current_job.attempt,"specHash":current_job.spec_hash,"unitIndex":index,"inputTokens":actual_tokens,"optimization":p.optimization,"preparationMs":prepare_ms,"inferenceMs":inference_ms,"resultVerificationMs":result_verification_ms,"artifactRegistrationMs":saving.elapsed().as_millis(),"totalMs":started.elapsed().as_millis()});
     if let Ok(bytes) = serde_json::to_vec_pretty(&timings) {
         use std::io::Write;
         if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -867,8 +912,15 @@ pub(crate) fn process_observed(
     let (spec, value) = storage.fixed_job_input(job_id)?;
     let input = storage.load_minutes_input(job_id)?;
     let p = checked_parameters(storage, job_id, &spec, &input)?;
+    let optimization = crate::processing_optimization::Scope::enter(p.optimization_version)?;
     let _resident =
         crate::local_engine::resident::Scope::enter(storage.root(), p.resident_runtime.as_ref())?;
+    let token_engine = if p.optimization.as_ref().is_some_and(|p| p.token_packing) {
+        p.capacity.token_configuration(&p.engine)?
+    } else {
+        p.engine.clone()
+    };
+    let tokens = super::optimization::Scope::enter(&token_engine, p.optimization.as_ref())?;
     let mut checkpoint = checked_checkpoint(&storage.get_job(job_id)?, &p, value)?;
     let cancelled = || {
         stopping()
@@ -922,6 +974,7 @@ pub(crate) fn process_observed(
             };
             checkpoint.acceleration = Some(choice);
             // Pin CPU or concrete Metal configuration before any extract/merge.
+            checkpoint.token_counts = super::optimization::counts();
             let job = storage.save_job_checkpoint(
                 job_id,
                 0,
@@ -1004,6 +1057,7 @@ pub(crate) fn process_observed(
                             break (text.to_string(), checkpoint.pending.take().unwrap().batches);
                         }
                         let checkpoint_started = Instant::now();
+                        checkpoint.token_counts = super::optimization::counts();
                         let job = storage.save_job_checkpoint(
                             job_id,
                             index as i64,
@@ -1022,12 +1076,11 @@ pub(crate) fn process_observed(
             outputs.push(text);
             checkpoint.outputs.push(Output { index, batches });
             if outputs.len() == p.plan.nodes.len() {
-                if let Some(text) = outputs.last_mut() {
-                    finish_summary(text, p.prompt_version);
-                }
+                if let Some(text) = outputs.last_mut() {}
                 checkpoint.markdown_hash = Some(content_hash(outputs.last().unwrap()));
             }
             let checkpoint_started = Instant::now();
+            checkpoint.token_counts = super::optimization::counts();
             let job = storage.save_job_checkpoint(
                 job_id,
                 index as i64,
@@ -1051,6 +1104,8 @@ pub(crate) fn process_observed(
             Execution::Llama(&p.engine, p.prompt_budget),
             &cancelled,
         )?;
+        tokens.check(Ok(()))?;
+        optimization.finish(&cancelled)?;
         if storage.load_minutes_input(job_id)? != input {
             return Err("議事録の固定入力が変更されています".into());
         }

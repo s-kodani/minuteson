@@ -210,7 +210,7 @@ fn deletion_intent_keeps_missing_changed_unknown_and_producer_hints_distinct() {
     std::fs::write(&f.file, b"CHANGED SOURCE").unwrap();
     std::fs::write(f.file.parent().unwrap().join("foreign.bin"), b"UNKNOWN").unwrap();
     let job = uuid::Uuid::new_v4().to_string();
-    f.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,'minutes_generation','failed',?1,?3,'{}','{}',?3,1,1)",params![job,f.meeting,"a".repeat(64)]).unwrap();
+    f.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,'minutes_generation','failed',?1,?3,'{}','{\"generation\":{\"schemaVersion\":9}}',?3,1,1)",params![job,f.meeting,"a".repeat(64)]).unwrap();
     let dir = f
         .storage
         .root()
@@ -521,7 +521,7 @@ fn deletion_intent_root_replacement_or_active_work_never_persists_a_new_confirma
             std::fs::rename(&root, f.base.path().join("original")).unwrap();
             std::fs::create_dir(&root).unwrap();
         } else {
-            f.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active-other',?1,'transcription','running','active-other',?2,'{}','{}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
+            f.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active-other',?1,'transcription','running','active-other',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![f.other,"a".repeat(64)]).unwrap();
         }
         assert!(prepare(
             &f.storage,

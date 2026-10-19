@@ -125,9 +125,7 @@ pub(super) struct Progress {
     consent_at: i64,
     next: usize,
     pending: Option<Pending>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) confirmation: Option<super::renewal::Reference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) database_phase: Option<super::completion::Phase>,
 }
 impl Progress {
@@ -143,16 +141,11 @@ impl Progress {
         self.consent_at
     }
     pub(super) fn validate(&self, p: &Prepared, manifest: &Manifest) -> Result<(), String> {
-        if !((self.version == 1
-            && self.confirmation.is_none()
-            && self.database_phase.is_none()
-            && manifest == p.manifest())
-            || (self.version == 2
-                && self.database_phase.is_none()
-                && self.confirmation.as_ref().is_some_and(|r| r.valid()))
-            || (self.version == 3
-                && self.database_phase.is_some()
-                && self.confirmation.as_ref().is_some_and(|r| r.valid())))
+        if self.version != 4
+            || match &self.confirmation {
+                None => self.database_phase.is_some() || manifest != p.manifest(),
+                Some(reference) => !reference.valid(),
+            }
             || self.manifest_hash != manifest_hash(manifest)?
             || self.plan_hash != plan_hash(manifest, &self.policy)?
             || self.consent_at < p.consent_at()
@@ -208,7 +201,7 @@ impl Progress {
             Policy::RegisteredOnly
         };
         let next = Self {
-            version: if database_phase.is_some() { 3 } else { 2 },
+            version: 4,
             file_phase: Phase::Removing,
             manifest_hash: manifest_hash(manifest)?,
             plan_hash: plan_hash(manifest, &policy)?,
@@ -558,7 +551,7 @@ pub(super) fn is_database_files(storage: &Storage, operation: &str) -> Result<bo
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
-    db.query_row("SELECT json_extract(progress_json,'$.version')=3 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
+    db.query_row("SELECT json_extract(progress_json,'$.version')=4 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
 }
 pub(super) fn read(
     storage: &Storage,
@@ -589,7 +582,7 @@ pub(super) fn start(
     confirmed.verify_saved(&db, check)?;
     confirmed.verify_locked(storage, &db, check)?;
     let progress = Progress {
-        version: 1,
+        version: 4,
         file_phase: Phase::Removing,
         manifest_hash: manifest_hash(&reviewed.manifest)?,
         plan_hash: plan_hash(&reviewed.manifest, &reviewed.policy)?,
@@ -757,7 +750,6 @@ fn verify_remaining(
                 receipt.reserved()
             )
         });
-    // Old v1/v2 audit plans did not necessarily retain every earlier sibling.
     // Inspect all names derived from the validated chain before any unlink,
     // without changing the fixed plan or adopting unexpected contents.
     let roots = super::renewal::reconfirmation_roots(db, p, &receipt.progress, check)?;

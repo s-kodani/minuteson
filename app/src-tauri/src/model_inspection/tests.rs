@@ -350,12 +350,15 @@ fn replacement_and_modification_during_hashing_are_detected() {
 fn cancelled_read_has_no_success_report_and_single_operation_lifetime_is_guarded() {
     let (dir, _) = fixture(Engine::Whisper);
     let calls = Cell::new(0);
-    assert!(inspect_for_target(dir.path(), Target::MacosAarch64, &|| {
+    let error = inspect_for_target(dir.path(), Target::MacosAarch64, &|| {
         calls.set(calls.get() + 1);
         calls.get() >= 4
     })
-    .unwrap_err()
-    .contains("取り消し"));
+    .unwrap_err();
+    assert!(
+        error.contains("取り消し") || error == "ファイル照合を中断しました",
+        "{error}"
+    );
     let inspector = Inspector::default();
     assert!(inspector.status("invalid").is_err());
     assert!(inspector.begin("invalid").is_err());

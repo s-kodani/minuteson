@@ -42,7 +42,7 @@ fn name_recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequ
         .unwrap()
         .unwrap();
     let mut payload = draft.payload;
-    payload.schema_version = 2;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     let speaker = format!("manual:{}", uuid::Uuid::new_v4());
     payload.manual_speakers.push(ManualSpeaker {
         id: speaker.clone(),
@@ -586,7 +586,7 @@ fn deletion_scope_refuses_cross_meeting_retry_references_without_widening_its_ta
     // retry guard; the deletion closure must independently refuse it.
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('owned-retry-parent',?1,'transcription','cancelled','owned-retry-parent',?2,'{}','{}',?2,0,0)",params![f.meeting,"a".repeat(64)]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('owned-retry-parent',?1,'transcription','cancelled','owned-retry-parent',?2,'{}','{\"schemaVersion\":4}',?2,0,0)",params![f.meeting,"a".repeat(64)]).unwrap();
     db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,retry_of_job_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) SELECT 'other-retry',?1,kind,'cancelled','other-operation',id,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,0 FROM processing_jobs LIMIT 1",params![f.other]).unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
@@ -602,7 +602,7 @@ fn deletion_scope_refuses_cross_meeting_retry_references_without_widening_its_ta
 fn deletion_scope_refuses_foreign_schema_missing_guards_and_active_work() {
     let f = Fixture::new();
     let db = f.storage.connection.lock().unwrap();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active',?1,'transcription','running','active',?2,'{}','{}',?2,1,1)",params![f.meeting,"a".repeat(64)]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('active',?1,'transcription','running','active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![f.meeting,"a".repeat(64)]).unwrap();
     assert!(
         Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
             .unwrap_err()
@@ -901,7 +901,7 @@ fn deletion_dependency_order_removes_retry_leaves_before_parents() {
     let f = Fixture::new();
     {
         let db = f.storage.connection.lock().unwrap();
-        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('retry-root',?1,'transcription','cancelled','retry-root',?2,'{}','{}',?2,0,0)",params![f.meeting,"a".repeat(64)]).unwrap();
+        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('retry-root',?1,'transcription','cancelled','retry-root',?2,'{}','{\"schemaVersion\":4}',?2,0,0)",params![f.meeting,"a".repeat(64)]).unwrap();
         db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,retry_of_job_id,attempt,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) SELECT 'retry-one',meeting_id,kind,'cancelled','retry-op-one',id,attempt+1,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,0 FROM processing_jobs WHERE id='retry-root'",[]).unwrap();
         db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,retry_of_job_id,attempt,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) SELECT 'retry-two',meeting_id,kind,'cancelled','retry-op-two',id,attempt+1,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,0 FROM processing_jobs WHERE id='retry-one'",[]).unwrap();
     }
@@ -985,7 +985,7 @@ fn deletion_database_purge_refuses_active_other_meeting_work_before_completion()
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('other-active',?1,'transcription','running','other-active',?2,'{}','{}',?2,1,1)", params![f.other,"a".repeat(64)]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('other-active',?1,'transcription','running','other-active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)", params![f.other,"a".repeat(64)]).unwrap();
     assert!(finish_database_purge(
         &db,
         &operation,

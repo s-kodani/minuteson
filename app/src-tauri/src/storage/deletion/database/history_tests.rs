@@ -49,16 +49,7 @@ fn history_schema_checks_do_not_admit_old_database_initialization() {
         );
         assert_eq!(trusted_history_schema(&db).is_ok(), current);
         assert_eq!(trusted_schema(&db).is_ok(), current);
-        // Only the immediately preceding format can migrate. Its historical
-        // deletion scope must still be rejected before initialization.
-        let upgradeable = version + 1 == MIGRATIONS.len();
-        assert_eq!(initialize_database(&mut db).is_ok(), current || upgradeable);
-        if upgradeable {
-            assert_ne!(schema(&db).unwrap(), before);
-            assert!(trusted_schema(&db).is_ok());
-            assert!(scope.validate_format(&db).is_ok());
-            continue;
-        }
+        assert_eq!(initialize_database(&mut db).is_ok(), current);
         assert_eq!(schema(&db).unwrap(), before);
         if !current {
             continue;

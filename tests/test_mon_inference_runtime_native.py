@@ -145,6 +145,8 @@ class NativeResident(unittest.TestCase):
             measurements.append(self.legacy(executable, (legacy_args or arguments)(old, index), old, output))
             native.append(read(resident))
             baseline.append(read(old))
+            if kind == 'llama_prefix':
+                self.assertEqual((resident/output).read_bytes(), (old/output).read_bytes(), 'generated output bytes changed under prefix reuse')
         metrics = worker.close()
         self.assertEqual(len(set(pids)), 1)
         self.assertEqual(native, baseline)
@@ -202,7 +204,7 @@ class NativeResident(unittest.TestCase):
                 values.remove('--no-kv-offload'); values.remove('--no-op-offload')
                 values += ['--log-verbosity','4']
                 return values
-        self.check_sequence('llama',os.environ['MON_RESIDENT_LLAMA_CLI'],args,lambda d:json.JSONDecoder().raw_decode((d/'result.json').read_text().lstrip())[0],output='result.json')
+        self.check_sequence('llama',os.environ['MON_RESIDENT_LLAMA_CLI'],args,lambda d:json.JSONDecoder().raw_decode((d/'result.json').read_text().lstrip())[0],output='result.json',kind=getattr(self,'llama_kind',None))
         if getattr(self, 'qwen3', False):
             REPORT[-1]['engine'] = 'llama_qwen3_sampling_reuse'
         if getattr(self, 'metal', False):
@@ -211,6 +213,38 @@ class NativeResident(unittest.TestCase):
                 self.assertRegex(text,r'using device MTL0')
                 self.assertRegex(text,r'offloaded [1-9][0-9]*/[1-9][0-9]* layers to GPU')
             REPORT[-1]['engine'] = 'llama_qwen3_metal_trial_reuse' if getattr(self, 'qwen3', False) else 'llama_metal_trial_reuse'
+
+    @unittest.skipUnless(os.environ.get('MON_RESIDENT_LLAMA_MODEL'), 'llama model not provided')
+    def test_llama_prefix_reuses_only_system_and_preserves_json(self):
+        self.llama_kind = 'llama_prefix'
+        self.test_llama_schema_seed_and_context_reset()
+        hits = [int(re.search(r'mon_prefix_cache: tokens=(\d+)', (self.root / ('resident-' + str(i)) / 'stderr.log').read_text())[1]) for i in range(1, 4)]
+        self.assertEqual(hits[0], 0)
+        self.assertGreater(hits[1], 0)
+        self.assertEqual(hits[1], hits[2])
+        REPORT[-1]['reusedSystemTokens'] = hits
+
+    @unittest.skipUnless(os.environ.get('MON_RESIDENT_LLAMA_MODEL'), 'llama model not provided')
+    def test_llama_tokenizer_matches_completion_prompt_tokens(self):
+        worker = Worker(self, 'llama')
+        d = self.directory('token-count', self.speech)
+        (d / 'system.txt').write_text('Return the requested JSON. 日本語の指示文。')
+        (d / 'prompt.txt').write_text('Return {"ok":true}')
+        (d / 'schema.json').write_text('{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}')
+        (d / 'count.json').touch()
+        args = ['--model',os.environ['MON_RESIDENT_LLAMA_MODEL'],'--system-prompt-file',str(d/'system.txt'),'--file',str(d/'prompt.txt'),'--conversation','--jinja','--no-escape','--reasoning','off','--offline']
+        worker.run(1,args,d,'count.json',kind='llama_tokenize')
+        count = json.loads((d/'count.json').read_text())
+        self.assertGreater(count['tokens'], count['systemPrefixTokens'])
+        self.assertGreater(count['systemPrefixTokens'], 0)
+        args += ['--json-schema-file',str(d/'schema.json'),'--ctx-size','2048','--predict','64','--threads','2','--threads-batch','2','--gpu-layers','0','--device','none','--no-kv-offload','--no-op-offload','--seed','42','--temp','0','--single-turn','--no-display-prompt','--no-context-shift','--no-warmup','--fit','off','--simple-io','--log-verbosity','4','--verbose-prompt']
+        worker.run(2,args,d,'result.json',kind='llama')
+        text=(d/'stderr.log').read_text()
+        measured = re.search(r'number of tokens in prompt = (\d+)',text)
+        self.assertIsNotNone(measured)
+        self.assertEqual(count['tokens'], int(measured[1]))
+        self.assertEqual(json.JSONDecoder().raw_decode((d/'result.json').read_text().lstrip())[0], {'ok':True})
+        worker.close()
 
     @unittest.skipUnless(os.environ.get('MON_RESIDENT_LLAMA_QWEN3_MODEL'), 'explicit Qwen3 model required')
     def test_llama_qwen3_sampling_template_and_seed_reset(self):

@@ -837,12 +837,7 @@ impl RestoreIds<'_> {
             let payload_schema = if kind == "transcript" {
                 let payload: TranscriptDraftPayload =
                     serde_json::from_str(&current).map_err(|e| e.to_string())?;
-                if !matches!(payload.schema_version, 1..=3)
-                    || (payload.schema_version == 1
-                        && (!payload.manual_speakers.is_empty()
-                            || !payload.speaker_merges.is_empty()))
-                    || (payload.schema_version < 3 && !payload.utterance_splits.is_empty())
-                {
+                if payload.schema_version != crate::current_formats::TRANSCRIPT_DRAFT {
                     return Err("復元下書きの形式が不正です".into());
                 }
                 i64::from(payload.schema_version)

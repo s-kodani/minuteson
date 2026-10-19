@@ -28,11 +28,12 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     let proof = |p: &Path| {
         crate::local_engine::Fingerprint::capture(p, &crate::test_support::never_cancelled).unwrap()
     };
+    let library = super::super::diarization::tests::extraction_fixture(root);
     let engine = crate::diarization::sherpa::SherpaConfig {
         executable: proof(&cli),
         segmentation_model: proof(&seg),
         embedding_model: proof(&emb),
-        runtime_libraries: vec![],
+        runtime_libraries: vec![library.clone()],
         threads: 1,
         cluster_threshold_milli: 500,
         window_shift_milli: 100,
@@ -58,6 +59,7 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     p.standard.segmentation_model_path = seg.to_str().unwrap().into();
     p.standard.embedding_model_path = emb.to_str().unwrap().into();
     p.standard.threads = 1;
+    p.standard.runtime_library_paths = vec![library.path.to_str().unwrap().into()];
     s.save_diarization_preferences(0, p).unwrap();
     (s, m)
 }
@@ -143,7 +145,7 @@ fn imported_audio_saves_utterances_and_freezes_explicit_minutes_input() {
                 expected_draft: None,
             },
             serde_json::json!({"engine":"protocol-fixture"}),
-            serde_json::json!({}),
+            serde_json::json!({"schemaVersion":9}),
             Some(1),
         )
         .unwrap();
@@ -575,11 +577,6 @@ fn unrelated_candidate_cannot_be_a_fixed_input_without_a_flow_and_original_check
 fn initial_import_speaker_count_survives_reopen_and_reaches_diarization() {
     let root = tempfile::tempdir().unwrap();
     let (s, _) = fixture(root.path());
-    let cli = root.path().join("sherpa-cli");
-    let script = std::fs::read_to_string(&cli)
-        .unwrap()
-        .replace("num_clusters=-1", "num_clusters=5");
-    std::fs::write(&cli, script).unwrap();
     let before = s.diarization_preferences().unwrap();
     let options = crate::audio_import::ImportOptions {
         num_speakers: Some(5),

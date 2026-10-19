@@ -56,7 +56,7 @@ fn fixture() -> Fixture {
     };
     let stopped = json!({"state":"stopped","sourceEpoch":66,"interruptions":33,"reason":null});
     let journal=serde_json::to_vec(&json!({"schemaVersion":1,"sealed":true,"report":{"schemaVersion":3,"ownerId":session,"revision":201,"microphone":stopped,"system":stopped,"microphoneHistory":report("microphone"),"systemHistory":report("system")}})).unwrap();
-    let manifest=serde_json::to_vec(&json!({"state":"failed","recordingOwnerId":session,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"failed","closed":true},"inputEventJournalError":"timeout /Users/private/source/manifest.json"})).unwrap();
+    let manifest=serde_json::to_vec(&json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"failed","recordingOwnerId":session,"inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":200,"state":"failed","closed":true},"inputEventJournalError":"timeout /Users/private/source/manifest.json"})).unwrap();
     for (name, data) in [
         ("input-events.json", &journal),
         ("manifest.json", &manifest),
@@ -361,6 +361,7 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
     manifest["inputEventJournalPersistence"] = json!({
         "requestedRevision":201,"committedRevision":201,"state":"confirmed","closed":true
     });
+    manifest["inputDiagnosticsState"] = json!("reported");
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     for (name, data) in [
         ("input-events.json", &journal_bytes),

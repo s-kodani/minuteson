@@ -6,8 +6,8 @@ type File = { relativePath: string; role: string; expectedSize: number; expected
 export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[] };
 export type DownloadArchive = { format: "tar"; expectedSize: number; expectedHash: string; memberPath: string };
 export const bundledWhisperSource = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
-export type DownloadRecipe = { schemaVersion: 2 | 3; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
-export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 2 | 3; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
+export type DownloadRecipe = { schemaVersion: 4; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
+export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded" }[] };
@@ -27,7 +27,7 @@ function identity(value: unknown): string { if (typeof value !== "string" || !do
 export function canonicalRecipe(value: unknown): DownloadRecipe {
   const recipe = object(value); keys(recipe, ["schemaVersion", "manifest", "sources"]);
   const m = object(recipe.manifest); keys(m, ["schemaVersion", "engine", "engineVersion", "modelName", "modelVersion", "quantization", "licenseRef", "target", "files"]);
-  if (![2, 3].includes(Number(recipe.schemaVersion)) || typeof recipe.schemaVersion !== "number" || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
+  if (recipe.schemaVersion !== 4 || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
   const manifest: DownloadManifest = {
     schemaVersion: 1, engine: text(m.engine, 32), engineVersion: text(m.engineVersion, 128), modelName: text(m.modelName, 256), modelVersion: text(m.modelVersion, 128),
     quantization: m.quantization == null ? null : text(m.quantization, 128), licenseRef: text(m.licenseRef, 4096), target: text(m.target, 32),
@@ -46,15 +46,14 @@ export function canonicalRecipe(value: unknown): DownloadRecipe {
     }
     if (result.url === bundledWhisperSource) {
       const file = manifest.files[index], member = result.archive?.memberPath;
-      if (recipe.schemaVersion !== 3 || manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
+      if (manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
         || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
     } else if (result.url.startsWith("mon-bundled:")) fail();
     return result;
   });
-  const result: DownloadRecipe = { schemaVersion: recipe.schemaVersion as 2 | 3, manifest, sources };
-  if (result.schemaVersion === 2 && !sources.some(source => source.archive)) fail();
-  if (result.schemaVersion === 3 && (!sources.some(source => source.url === bundledWhisperSource)
-    || !manifest.files.some((file, i) => file.role === "asr" && sources[i].url.startsWith("https://")))) fail();
+  const result: DownloadRecipe = { schemaVersion: recipe.schemaVersion as 4, manifest, sources };
+  if (sources.some(source => source.url === bundledWhisperSource)
+    && !manifest.files.some((file, i) => file.role === "asr" && sources[i].url.startsWith("https://"))) fail();
   downloadByteTotals(result);
   size(manifest.files.reduce((n, f) => n + f.expectedSize, 0));
   if (new TextEncoder().encode(JSON.stringify(result)).length > 65_536) fail();
@@ -76,7 +75,7 @@ export function downloadByteTotals(recipe: DownloadRecipe): { downloadBytes: num
     } else downloadBytes += recipe.manifest.files[index].expectedSize;
   });
   if (recipe.sources.some(source => !source.archive && archives.has(source.url))) fail();
-  return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.schemaVersion === 3 ? { bundledBytes: size(bundledBytes) } : {}) };
+  return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.sources.some(source => source.url === bundledWhisperSource) ? { bundledBytes: size(bundledBytes) } : {}) };
 }
 export function downloadTransferBytes(review: DownloadReview): number { return review.downloadBytes; }
 export function parseDownloadDefinition(definition: string): DownloadRecipe {
@@ -89,13 +88,13 @@ export async function downloadDigest(value: unknown): Promise<string> {
 }
 export async function assertDownloadReview(value: unknown, expectedRecipeHash?: string): Promise<DownloadReview> {
   const review = object(value); unready(review);
-  if (![2, 3].includes(Number(review.recipeSchemaVersion)) || typeof review.recipeSchemaVersion !== "number") fail();
+  if (review.recipeSchemaVersion !== 4) fail();
   const recipe = canonicalRecipe({ schemaVersion: review.recipeSchemaVersion, manifest: review.manifest, sources: review.sources });
   const recipeHash = await downloadDigest(recipe), totalBytes = recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0);
   if (review.recipeHash !== recipeHash || (expectedRecipeHash !== undefined && recipeHash !== expectedRecipeHash) || review.totalBytes !== totalBytes) fail();
   const totals = downloadByteTotals(recipe);
   if (review.downloadBytes !== totals.downloadBytes || review.archiveBytes !== totals.archiveBytes) fail();
-  if (recipe.schemaVersion === 3 ? review.bundledBytes !== totals.bundledBytes : review.bundledBytes !== undefined) fail();
+  if (review.bundledBytes !== totals.bundledBytes) fail();
   return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, totalBytes, recipeSchemaVersion: recipe.schemaVersion, ...totals, publisherAuthenticity: "not_verified", installed: false, ready: false };
 }
 export async function assertOfficialModelOptions(value: unknown): Promise<OfficialModelOption[]> {

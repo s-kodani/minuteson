@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { canonicalPayload, type DraftPayload } from "../src/transcript-state.ts";
 import { planTranscriptConflict, resolveTranscriptConflict, type ConflictChoice } from "../src/transcript-conflict.ts";
 
-const empty = (): DraftPayload => ({ schema_version: 1,speaker_names: [],utterances: [] });
+const empty = (): DraftPayload => ({ schema_version:4,...{manual_speakers:[],speaker_merges:[],utterance_splits:[]},speaker_names: [],utterances: [] });
 const payload = (): DraftPayload => ({ ...empty(),utterances: [{ utterance_id: "u",effective_text: "原文",speaker_ids: ["s"] }],speaker_names: [{ speaker_id: "s",display_name: "田中" }] });
 const choose = (plan: ReturnType<typeof planTranscriptConflict>,kind: string,value: ConflictChoice) => Object.fromEntries(plan.rows.filter(row => row.kind === kind).map(row => [row.key,value]));
 test("three-way comparison independently preserves local text and latest speaker assignment", () => {
@@ -50,7 +50,7 @@ test("override removal and simultaneous text change cannot silently produce a pa
   assert.deepEqual(resolveTranscriptConflict(plan,allLocal).utterances,[]);
 });
 test("manual speakers, merges and structural splits participate in comparison without automatic reapplication", () => {
-  const base = empty(), local = empty(), latest = empty(); local.schema_version = latest.schema_version = 3;
+  const base = empty(), local = empty(), latest = empty(); local.schema_version = latest.schema_version = 4;
   local.manual_speakers = [{ id: "manual:a",label: "手元追加" }]; latest.manual_speakers = [{ id: "manual:b",label: "最新追加" }];
   local.speaker_merges = [{ source_id: "s",target_id: "t" }]; latest.speaker_merges = [{ source_id: "s",target_id: "v" }];
   local.utterance_splits = [{ source_utterance_id: "u",source_effective_text: "手元分割",parts: [] }];

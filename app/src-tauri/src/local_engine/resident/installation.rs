@@ -37,7 +37,10 @@ impl Snapshot {
     }
     pub(crate) fn accepts(&self, kind: &str) -> Result<(), String> {
         self.validate()?;
-        if kind != self.engine && !(self.engine == "sherpa" && kind == "embedding") {
+        if kind != self.engine
+            && !(self.engine == "sherpa" && kind == "embedding")
+            && !(self.engine == "llama" && matches!(kind, "llama_tokenize" | "llama_prefix"))
+        {
             return Err("ジョブと推論エンジンが一致しません".into());
         }
         Ok(())
@@ -144,8 +147,13 @@ pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, Str
         snapshot.resolve(root)?;
         return Ok(Some(snapshot));
     }
-    if cfg!(test) || !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        return Ok(None);
+    #[cfg(test)]
+    {
+        return synthetic(root, engine).map(Some);
+    }
+    #[cfg(not(test))]
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Err("この環境の常駐推論ワーカーは未対応です".into());
     }
     let mut bytes = Vec::new();
     File::open(resources()?.join("runtime-index.json"))
@@ -191,12 +199,43 @@ pub(crate) fn prepare_job(
             "llama" => &spec.parameters["generation"],
             _ => return Err("未知の常駐推論工程です".into()),
         };
-        return parameters
+        let value = parameters
             .get("residentRuntime")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
+            .filter(|v| !v.is_null())
+            .ok_or("常駐推論情報がありません")?;
+        return serde_json::from_value(value.clone())
+            .map(Some)
             .map_err(|e| e.to_string());
     }
     prepare(storage.root(), engine)
+}
+
+#[cfg(test)]
+const SYNTHETIC: &[u8] = b"# MON unit-test engine substitute\n";
+#[cfg(test)]
+pub(super) fn is_synthetic(snapshot: &Snapshot) -> bool {
+    use sha2::Digest;
+    snapshot.sha256 == format!("{:x}", sha2::Sha256::digest(SYNTHETIC))
+}
+#[cfg(test)]
+fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
+    use sha2::Digest;
+    let snapshot = Snapshot {
+        protocol: 1,
+        engine: engine.into(),
+        name: format!("mon-{engine}-worker"),
+        bytes: SYNTHETIC.len() as u64,
+        sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
+    };
+    let cache = root.join("inference-runtimes");
+    ensure_directory(&cache)?;
+    let directory = cache.join(&snapshot.sha256);
+    ensure_directory(&directory)?;
+    let file = directory.join(&snapshot.name);
+    if !file.exists() {
+        std::fs::write(&file, SYNTHETIC).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(snapshot)
 }

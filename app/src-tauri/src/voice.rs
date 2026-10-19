@@ -88,10 +88,32 @@ pub(crate) struct Window {
     pub start_us: i64,
     pub end_us: i64,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct MatchingPolicy {
+    source: String,
+    version: String,
+    pub min_query_duration_us: i64,
+}
+impl MatchingPolicy {
+    pub(crate) fn fixed() -> Self {
+        Self {
+            source: "user_settings".into(),
+            version: "user_thresholds_v1".into(),
+            min_query_duration_us: 3_000_000,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Plan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_options: Option<crate::storage::voice_preferences::VoiceMatchingPreferences>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_policy: Option<MatchingPolicy>,
     pub engine: SherpaConfig,
     pub extractor: embedding::ExtractorConfig,
     pub book_hash: String,
@@ -144,7 +166,7 @@ pub(crate) fn process(
     let (spec, _) = storage.fixed_job_input(job_id)?;
     let plan: Plan =
         serde_json::from_value(spec.parameters["voice"].clone()).map_err(|e| e.to_string())?;
-    if !matches!(plan.schema_version, 1 | 2)
+    if plan.schema_version != crate::current_formats::VOICE
         || !matches!(
             spec.kind,
             JobKind::VoiceRegistration | JobKind::VoiceMatching
@@ -166,6 +188,27 @@ pub(crate) fn process(
             crate::storage::model_profiles::jobs::Execution::Sherpa(&plan.engine),
             &cancelled,
         )?;
+        let source = storage.recorded_analysis_input(&spec.meeting_id)?.0;
+        let mut feature_session = crate::speaker_features::Session::new(
+            storage,
+            &spec.meeting_id,
+            &plan.engine,
+            &plan.extractor,
+            &source,
+            plan.resident_runtime.as_ref(),
+            crate::internal_logs::Context {
+                category: if spec.kind == JobKind::VoiceRegistration {
+                    "voice_registration"
+                } else {
+                    "voice_matching"
+                }
+                .into(),
+                meeting_id: Some(spec.meeting_id.clone()),
+                job_id: Some(job_id.into()),
+                operation_id: Some(spec.operation_id.clone()),
+            },
+            &cancelled,
+        )?;
         let temporary = tempfile::tempdir().map_err(|e| e.to_string())?;
         let mut features = Vec::new();
         for (i, window) in plan.windows.iter().enumerate() {
@@ -173,42 +216,12 @@ pub(crate) fn process(
                 return Ok(None);
             }
             let dir = temporary.path().join(i.to_string());
-            std::fs::create_dir(&dir).map_err(|e| e.to_string())?;
-            let mut audio = storage.prepare_track_audio_cancellable(
-                &spec.meeting_id,
-                &window.track_id,
-                window.start_us,
-                window.end_us,
-                &cancelled,
-            )?;
-            let wave = dir.join("input.wav");
-            let frames = crate::transcription::wave::write_track(&mut audio, &wave, &cancelled)?;
-            let fingerprint = Fingerprint::capture(&wave, &cancelled)?;
-            let Some(output) = embedding::run(
-                &plan.extractor,
-                &plan.engine,
-                &fingerprint,
-                0,
-                frames,
-                &dir,
-                Duration::from_secs(300),
-                &cancelled,
-            )?
-            else {
-                return Ok(None);
-            };
-            for span in &audio.spans {
-                span.audio.check_unchanged()?;
-            }
-            if let Some(vector) = output.vector(0, frames)? {
+            if let Some(vector) = feature_session.extract(window, &dir, &cancelled)? {
                 features.push((window.clone(), normalize(&vector)?));
             }
-            // Resume starts this bounded extraction again; no partially extracted vectors survive.
             progress(storage.get_job(job_id)?);
         }
-        if cancelled() {
-            return Ok(None);
-        }
+        feature_session.finish(&cancelled)?;
         storage.check_voice_plan(&spec, &plan)?;
         plan.engine.verify(&cancelled)?;
         let job = storage.publish_voice_result(&spec, &plan, features, job_id)?;
@@ -281,7 +294,13 @@ pub(crate) fn enqueue_automatic(storage: &Storage, meeting: &str) -> Result<(), 
         return Ok(());
     }
     let context = storage.voice_context(meeting)?;
-    if context.windows.is_empty() || storage.has_voice_matching(&context.analysis_id)? {
+    if context.windows.is_empty()
+        || storage.has_voice_matching(
+            &context.analysis_id,
+            &context.book_hash,
+            &engine(storage)?.embedding_model.sha256,
+        )?
+    {
         return Ok(());
     }
     storage.start_voice(crate::storage::voice::Start {

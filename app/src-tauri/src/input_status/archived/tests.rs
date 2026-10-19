@@ -156,7 +156,7 @@ fn final_writer_failure_survives_archive_restart_without_a_queue_or_an_audio_fai
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().into()).unwrap();
     let (_, owner, output) = fixture(&storage, true);
-    let manifest = serde_json::to_vec(&json!({"state":"saved","recordingOwnerId":owner,
+    let manifest = serde_json::to_vec(&json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":owner,
         "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":2,"state":"failed","closed":true}})).unwrap();
     fs::write(output.join("manifest.json"), &manifest).unwrap();
     let admission = AnalysisController::default();

@@ -35,7 +35,7 @@ fn adoption_and_restore_preserve_each_base_draft_and_undo_chain() {
         .unwrap();
     let view = storage.load_current_analysis(&meeting.id).unwrap().unwrap();
     let payload = TranscriptDraftPayload {
-        schema_version: 1,
+        schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
         speaker_names: vec![],
         utterances: vec![super::super::drafts::UtteranceEdit {
             utterance_id: view.utterances[0].id.clone(),

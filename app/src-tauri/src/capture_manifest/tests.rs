@@ -7,12 +7,12 @@ fn envelope() -> Value {
         json!({"schemaVersion":2,"ownerId":OWNER,"lane":lane,"sealedSegments":0,
         "sealedFrames":0,"lastEntrySHA256":null,"producerClosed":false,"failure":null})
     };
-    json!({"schemaVersion":3,"recordingOwnerId":OWNER,"state":"failed","errors":[],
+    json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","recordingOwnerId":OWNER,"state":"failed","errors":[],
         "microphone":{"rawSegments":status("microphone")},"system":{"rawSegments":status("system")}})
 }
 fn large(value: &Value) -> Vec<u8> {
     let mut bytes = serde_json::to_vec(value).unwrap();
-    bytes.resize(LEGACY_BYTES as usize + 1, b' ');
+    bytes.resize(SMALL_MANIFEST_BYTES as usize + 1, b' ');
     bytes
 }
 #[test]
@@ -48,11 +48,11 @@ fn capture_manifest_capacity_requires_both_native_lanes_without_authorizing_save
 fn capture_manifest_capacity_preserves_duplicate_known_field_rejection() {
     let good = serde_json::to_string(&envelope()).unwrap();
     for duplicate in [
-        "\"schemaVersion\":3",
+        "\"schemaVersion\":4",
         "\"recordingOwnerId\":\"735027d4-a03e-43d3-830a-21e767dfaf88\"",
     ] {
         let mut bytes = format!("{{{duplicate},{}", &good[1..]).into_bytes();
-        bytes.resize(LEGACY_BYTES as usize + 1, b' ');
+        bytes.resize(SMALL_MANIFEST_BYTES as usize + 1, b' ');
         assert!(validate_size(&bytes).is_err());
     }
 }

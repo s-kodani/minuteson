@@ -31,7 +31,10 @@ pub(crate) struct SherpaConfig {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
-    #[serde(default, skip_serializing_if = "crate::diarization::sensitivity::is_standard")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::diarization::sensitivity::is_standard"
+    )]
     pub speech_sensitivity_milli: i32,
 }
 

@@ -286,7 +286,7 @@ mod tests {
         let draft = storage.create_transcript_draft(meeting, &view.id).unwrap();
         let u = &view.utterances[0];
         let mut p = draft.payload.clone();
-        p.schema_version = 3;
+        p.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
         p.utterance_splits.push(UtteranceSplit {
             source_utterance_id: u.id.clone(),
             source_effective_text: u.effective_text.clone(),

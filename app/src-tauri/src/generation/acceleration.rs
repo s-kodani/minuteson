@@ -8,36 +8,24 @@ use std::{path::Path, time::Duration};
 pub(super) const SYSTEM: &str = "Return only the exact JSON object required by the schema.";
 pub(super) const PROMPT: &str = "Return {\"ok\":true}.";
 const DEVICE: &str = "MTL0";
-const LEGACY_LAYERS: u32 = 37;
 const AUTO_LAYERS: &[u32] = &[256, 32, 16, 8, 1];
 const LOG_LIMIT: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) enum Policy {
-    MetalTrialV1,
     AutoMetalV2,
 }
 impl Policy {
     pub(super) fn accepts(self, engine: &LlamaConfig) -> bool {
         match self {
-            Self::MetalTrialV1 => legacy_eligible(engine),
             Self::AutoMetalV2 => engine.gpu_layers == 0 && engine.validate().is_ok(),
         }
     }
     fn proof_version(self) -> u32 {
         match self {
-            Self::MetalTrialV1 => 1,
             Self::AutoMetalV2 => 2,
         }
     }
-}
-fn legacy_eligible(engine: &LlamaConfig) -> bool {
-    engine.gpu_layers == 0
-        && engine.executable.size == 33472
-        && engine.executable.sha256
-            == "e3d5205729cb4c1e176d5c8e39796aefbe361a2300d0593586db9503dd0d63d1"
-        && engine.model.size == 5_027_783_488
-        && engine.model.sha256 == "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
 }
 pub(super) fn policy(engine: &LlamaConfig) -> Option<Policy> {
     if cfg!(target_os = "macos") && Policy::AutoMetalV2.accepts(engine) {
@@ -87,7 +75,6 @@ impl Resolved {
                 || proof.model_sha256 != base.model.sha256
                 || proof.context_tokens != context
                 || !(1..=256).contains(&proof.gpu_layers)
-                || policy == Policy::MetalTrialV1 && proof.gpu_layers != LEGACY_LAYERS
                 || proof.device != DEVICE
                 || proof.log.len() > LOG_LIMIT
                 || proof.result.len() > 4096
@@ -101,10 +88,7 @@ impl Resolved {
         Ok(())
     }
     pub(super) fn ensure_available(&self, policy: Policy) -> Result<(), String> {
-        if matches!(self, Self::Metal { .. })
-            && (!cfg!(target_os = "macos")
-                || policy == Policy::MetalTrialV1 && !memory_sufficient())
-        {
+        if matches!(self, Self::Metal { .. }) && (!cfg!(target_os = "macos")) {
             return Err("保存したGPU設定に必要なメモリ環境を確認できません。完了済み工程は保持しています。このMacで新しく生成するとCPU構成を選び直します。（minutes_gpu_unavailable）".into());
         }
         Ok(())
@@ -171,13 +155,7 @@ fn resolve_with_memory(
     if !policy.accepts(base) {
         return Err("未検証モデルのGPU自動設定は使用できません".into());
     }
-    if policy == Policy::MetalTrialV1 && !memory_available {
-        return Ok(Some(Resolved::Cpu {
-            reason: CpuReason::Memory,
-        }));
-    }
     let candidates = match policy {
-        Policy::MetalTrialV1 => &[LEGACY_LAYERS][..],
         Policy::AutoMetalV2 => AUTO_LAYERS,
     };
     for (index, layers) in candidates.iter().enumerate() {

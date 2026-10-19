@@ -112,6 +112,9 @@ def patch_llama(root):
     text = replace(text, "int llama_completion(int argc, char ** argv);", "void mon_request_sampling_defaults(llama_model *, common_params_sampling &);\nint llama_completion(int argc, char ** argv);")
     text = replace(text, "int llama_completion(int argc, char ** argv) {", """// Destroy cached GPU resources explicitly before backend static destructors.
 static common_init_result_ptr mon_cached;
+static bool mon_prefix_enabled=false;
+static std::vector<llama_token> mon_prefix_tokens;
+void mon_llama_mode(bool enabled) { mon_prefix_enabled=enabled; if(!enabled) mon_prefix_tokens.clear(); }
 void mon_llama_shutdown() { mon_cached.reset(); llama_backend_free(); }
 
 int llama_completion(int argc, char ** argv) {""")
@@ -148,11 +151,29 @@ int llama_completion(int argc, char ** argv) {""")
     if (!smpl) return 1;
     is_interacting = false;
     need_insert_eot = false;
-    if (ctx) llama_memory_clear(llama_get_memory(ctx), true);''')
+    if (ctx && !mon_prefix_enabled) llama_memory_clear(llama_get_memory(ctx), true);''')
+    text = replace(text, "    bool session_do_save = false;", r'''    size_t mon_system_tokens = 0;
+    if (mon_prefix_enabled) {
+        common_chat_templates_inputs in;
+        in.use_jinja=params.use_jinja; in.force_pure_content=params.force_pure_content_parser;
+        if (!params.system_prompt.empty()) { common_chat_msg m; m.role="system"; m.content=params.system_prompt; in.messages.push_back(m); }
+        in.add_generation_prompt=false;
+        auto system_tokens=common_tokenize(ctx,common_chat_templates_apply(chat_templates.get(),in).prompt,true,true);
+        while(mon_system_tokens<system_tokens.size() && mon_system_tokens<embd_inp.size() && system_tokens[mon_system_tokens]==embd_inp[mon_system_tokens]) ++mon_system_tokens;
+        size_t keep=0;
+        while(keep<mon_system_tokens && keep<mon_prefix_tokens.size() && mon_prefix_tokens[keep]==embd_inp[keep]) ++keep;
+        if(!llama_memory_seq_rm(mem,-1,keep ? keep-1 : 0,-1)) { llama_memory_clear(mem,true); keep=0; }
+        session_tokens.assign(mon_prefix_tokens.begin(),mon_prefix_tokens.begin()+keep);
+        fprintf(stderr,"mon_prefix_cache: tokens=%zu\n",keep);
+    }
+    bool session_do_save = false;''')
+    final_return=text.rfind("    return 0;\n}")
+    if final_return < 0: raise ValueError("completion return missing")
+    text=text[:final_return]+"    if(mon_prefix_enabled) mon_prefix_tokens.assign(embd_inp.begin(),embd_inp.begin()+mon_system_tokens);\n"+text[final_return:]
     text = replace(text, "    llama_backend_free();", "    // Model/context lifetime belongs to the worker.")
     source.write_text(text)
     with (root / "CMakeLists.txt").open("a") as output:
-        output.write('''\nadd_executable(mon-llama-worker tools/completion/completion.cpp mon/llama-main.cpp)
+        output.write('''\nadd_executable(mon-llama-worker tools/completion/completion.cpp mon/llama-main.cpp mon/llama-tokenize.cpp)
 target_include_directories(mon-llama-worker PRIVATE mon common)
 target_link_libraries(mon-llama-worker PRIVATE llama-common llama)
 target_compile_features(mon-llama-worker PRIVATE cxx_std_17)

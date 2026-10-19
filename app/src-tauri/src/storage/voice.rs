@@ -325,8 +325,18 @@ fn windows(tx: &Transaction<'_>, view: &AnalysisView) -> Result<Vec<Window>, Str
 }
 
 impl Storage {
-    pub(crate) fn has_voice_matching(&self, analysis: &str) -> Result<bool, String> {
-        self.connection.lock().map_err(|_|"DBロックを取得できません")?.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE kind='voice_matching' AND input_analysis_id=?1)",[analysis],|r|r.get(0)).map_err(|e|e.to_string())
+    pub(crate) fn has_voice_matching(
+        &self,
+        analysis: &str,
+        book: &str,
+        model: &str,
+    ) -> Result<bool, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let options = super::voice_preferences::load(&db)?.payload;
+        db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE kind='voice_matching' AND input_analysis_id=?1 AND state NOT IN ('failed','cancelled') AND json_extract(parameters_json,'$.voice.bookHash')=?2 AND json_extract(parameters_json,'$.voice.matchingOptions.similarityThresholdMilli')=?3 AND json_extract(parameters_json,'$.voice.matchingOptions.marginThresholdMilli')=?4 AND json_extract(parameters_json,'$.voice.engine.embeddingModel.sha256')=?5)",params![analysis,book,options.similarity_threshold_milli,options.margin_threshold_milli,model],|r|r.get(0)).map_err(|e|e.to_string())
     }
     pub(crate) fn prepare_voice_sample_audio_cancellable(
         &self,
@@ -482,6 +492,7 @@ impl Storage {
             model_profiles::jobs::Execution::Sherpa(&engine),
             &|| false,
         )?;
+        let runtime = crate::local_engine::resident::prepare(self.root(), "sherpa")?;
         let source = self.recorded_analysis_input(&request.meeting_id)?.0;
         let mut db = self
             .connection
@@ -541,11 +552,14 @@ impl Storage {
             );
         }
         let plan = Plan {
-            schema_version: if request.selected_windows.is_some() {
-                2
+            resident_runtime: runtime,
+            matching_options: if registration {
+                None
             } else {
-                1
+                Some(super::voice_preferences::load(&tx)?.payload)
             },
+            matching_policy: (!registration).then(voice::MatchingPolicy::fixed),
+            schema_version: crate::current_formats::VOICE,
             engine,
             extractor,
             book_hash: request.book_hash.clone(),
@@ -801,10 +815,22 @@ fn check_plan(tx: &Transaction<'_>, spec: &JobSpec, plan: &Plan) -> Result<(), S
     if serde_json::to_value(plan).map_err(|e| e.to_string())? != spec.parameters["voice"] {
         return Err("声の処理の固定条件が一致しません".into());
     }
-    if plan.schema_version == 2 {
-        if spec.kind != JobKind::VoiceRegistration {
-            return Err("登録区間の計画形式が不正です".into());
+    if plan.schema_version != crate::current_formats::VOICE || plan.resident_runtime.is_none() {
+        return Err("非対応の声の処理形式です".into());
+    }
+    if spec.kind == JobKind::VoiceMatching {
+        plan.matching_options
+            .ok_or("照合の閾値がありません")?
+            .validate()?;
+        if plan.matching_policy != Some(voice::MatchingPolicy::fixed()) {
+            return Err("声の自動適用方針が不正です".into());
         }
+    } else if plan.matching_options.is_some() || plan.matching_policy.is_some() {
+        return Err("登録の計画に照合条件を混在させることはできません".into());
+    }
+    if spec.kind == JobKind::VoiceRegistration
+        && spec.parameters["voiceRequest"]["selectedWindows"].is_array()
+    {
         let request: Start = serde_json::from_value(spec.parameters["voiceRequest"].clone())
             .map_err(|e| e.to_string())?;
         if request.selected_windows.as_ref() != Some(&plan.windows) {
@@ -819,7 +845,7 @@ fn check_plan(tx: &Transaction<'_>, spec: &JobSpec, plan: &Plan) -> Result<(), S
             &plan.windows,
         );
     }
-    if plan.schema_version != 1 {
+    if plan.schema_version != crate::current_formats::VOICE {
         return Err("声の処理の計画形式が不正です".into());
     }
     let allowed = windows(tx, &view)?;
@@ -848,7 +874,7 @@ fn apply_names(
         let payload = TranscriptDraftPayload::default();
         let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
         let hash = drafts::draft_hash(&json);
-        tx.execute("INSERT INTO working_drafts(id,meeting_id,target_kind,base_analysis_id,schema_version,payload_json,content_hash,lock_version,active,created_at,updated_at) VALUES(?1,?2,'transcript',?3,1,?4,?5,0,1,?6,?6)",params![id,meeting,analysis,json,hash,now_ms()?]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO working_drafts(id,meeting_id,target_kind,base_analysis_id,schema_version,payload_json,content_hash,lock_version,active,created_at,updated_at) VALUES(?1,?2,'transcript',?3,4,?4,?5,0,1,?6,?6)",params![id,meeting,analysis,json,hash,now_ms()?]).map_err(|e|e.to_string())?;
         drafts::load_draft(tx, meeting)?.ok_or("下書きがありません")?
     };
     for (speaker, name) in names {
@@ -896,15 +922,30 @@ fn publish_matches(
         }
     }
     let people = people(tx)?;
-    let policy:Option<(String,f64,f64)>=tx.query_row("SELECT id,threshold,margin FROM voice_policies WHERE model_hash=?1 AND extractor_version=?2 ORDER BY created_at DESC,id DESC LIMIT 1",params![plan.engine.embedding_model.sha256,voice::EXTRACTOR],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?;
     let mut queries: BTreeMap<String, Vec<Vec<f32>>> = BTreeMap::new();
+    let mut clean_speakers = BTreeSet::new();
     for (w, v) in features {
+        if w.end_us - w.start_us
+            >= plan
+                .matching_policy
+                .as_ref()
+                .map_or(3_000_000, |p| p.min_query_duration_us)
+        {
+            clean_speakers.insert(w.speaker_id.clone());
+        }
         queries.entry(w.speaker_id).or_default().push(v);
     }
     let mut ranked = Vec::new();
     for (speaker, vectors) in queries {
         if old.iter().any(|m| {
-            m.speaker_id == speaker && matches!(m.state.as_str(), "confirmed" | "dismissed")
+            m.speaker_id == speaker
+                && (matches!(m.state.as_str(), "confirmed" | "dismissed")
+                    || spec.kind == JobKind::VoiceMatching
+                        && m.state == "automatic"
+                        && view
+                            .speakers
+                            .iter()
+                            .any(|s| s.id == speaker && s.display_name.is_some()))
         }) {
             continue;
         }
@@ -920,15 +961,18 @@ fn publish_matches(
         let Some((person, score)) = scores.first() else {
             continue;
         };
-        if *score < 0.5 {
-            continue;
-        }
-        let automatic = policy.as_ref().is_some_and(|(_, threshold, margin)| {
-            *score >= *threshold && *score - scores.get(1).map_or(-1., |s| s.1) >= *margin
-        }) && view
+        let options = plan.matching_options.ok_or("声の照合設定がありません")?;
+        let automatic = options.accepts(
+            *score,
+            scores.get(1).map(|s| s.1),
+            clean_speakers.contains(&speaker),
+        ) && view
             .speakers
             .iter()
             .any(|s| s.id == speaker && s.display_name.is_none());
+        if !automatic && *score < 0.5 {
+            continue;
+        }
         ranked.push((speaker, (*person).clone(), *score, automatic));
     }
     // If distinct overlapping voices nominate the same identity, neither is automatic.
@@ -964,6 +1008,10 @@ fn publish_matches(
             }
         }
     }
+    let policy_version = plan
+        .matching_options
+        .ok_or("声の照合設定がありません")?
+        .policy_version();
     let mut names = Vec::new();
     for (speaker, person, score, automatic) in ranked {
         let name = people
@@ -973,7 +1021,7 @@ fn publish_matches(
             .name
             .clone();
         let automatic = automatic && !conflicts.contains(&speaker);
-        tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(analysis_revision_id,speaker_id) DO UPDATE SET person_id=excluded.person_id,name_snapshot=excluded.name_snapshot,state=excluded.state,similarity=excluded.similarity,model_hash=excluded.model_hash,policy_version=excluded.policy_version,created_at=excluded.created_at",params![Uuid::new_v4().to_string(),spec.meeting_id,view.id,speaker,person,name,if automatic{"automatic"}else{"candidate"},score,plan.engine.embedding_model.sha256,policy.as_ref().map_or("uncalibrated",|p|p.0.as_str()),now_ms()?]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(analysis_revision_id,speaker_id) DO UPDATE SET person_id=excluded.person_id,name_snapshot=excluded.name_snapshot,state=excluded.state,similarity=excluded.similarity,model_hash=excluded.model_hash,policy_version=excluded.policy_version,created_at=excluded.created_at",params![Uuid::new_v4().to_string(),spec.meeting_id,view.id,speaker,person,name,if automatic{"automatic"}else{"candidate"},score,plan.engine.embedding_model.sha256,policy_version,now_ms()?]).map_err(|e|e.to_string())?;
         if automatic {
             names.push((speaker, Some(name)));
         }
@@ -1082,9 +1130,13 @@ mod tests {
             speech_sensitivity_milli: 0,
         };
         let plan = Plan {
-            schema_version: if selected.is_some() { 2 } else { 1 },
+            resident_runtime: crate::local_engine::resident::prepare(s.root(), "sherpa").unwrap(),
+            matching_options: (!registration).then(Default::default),
+            matching_policy: (!registration).then(voice::MatchingPolicy::fixed),
+            schema_version: crate::current_formats::VOICE,
             engine,
             extractor: crate::diarization::embedding::ExtractorConfig {
+                library_index: 0,
                 helper: fp.clone(),
                 library: fp,
             },
@@ -1162,6 +1214,109 @@ mod tests {
         .unwrap();
         person
     }
+    #[test]
+    fn user_matching_plan_is_frozen_and_deduplication_tracks_model_registry_and_preferences() {
+        let (_root, s, m, speaker) = fixture();
+        let (_, mut spec, mut plan) = enqueue(&s, &m, &speaker, false);
+        plan.schema_version = crate::current_formats::VOICE;
+        plan.matching_options =
+            Some(super::super::voice_preferences::VoiceMatchingPreferences::default());
+        plan.matching_policy = Some(voice::MatchingPolicy::fixed());
+        spec.operation_id = Uuid::new_v4().to_string();
+        spec.parameters["voice"] = serde_json::to_value(&plan).unwrap();
+        s.enqueue_job(spec.clone()).unwrap();
+        let model = &plan.engine.embedding_model.sha256;
+        assert!(s
+            .has_voice_matching(&plan_source(&spec), &plan.book_hash, model)
+            .unwrap());
+        assert!(!s
+            .has_voice_matching(&plan_source(&spec), &"f".repeat(64), model)
+            .unwrap());
+        assert!(!s
+            .has_voice_matching(&plan_source(&spec), &plan.book_hash, &"e".repeat(64))
+            .unwrap());
+        s.save_voice_matching_preferences(
+            0,
+            super::super::voice_preferences::VoiceMatchingPreferences {
+                similarity_threshold_milli: 700,
+                margin_threshold_milli: 50,
+            },
+        )
+        .unwrap();
+        assert!(!s
+            .has_voice_matching(&plan_source(&spec), &plan.book_hash, model)
+            .unwrap());
+        let mut db = s.connection.lock().unwrap();
+        let tx = db.transaction().unwrap();
+        check_plan(&tx, &spec, &plan).unwrap(); // the old frozen thresholds still apply
+        let mut invalid = plan.clone();
+        invalid.matching_policy = None;
+        let mut changed = spec.clone();
+        changed.parameters["voice"] = serde_json::to_value(&invalid).unwrap();
+        assert!(check_plan(&tx, &changed, &invalid).is_err());
+        invalid = plan.clone();
+        invalid.schema_version = 1;
+        changed.parameters["voice"] = serde_json::to_value(&invalid).unwrap();
+        assert!(check_plan(&tx, &changed, &invalid).is_err());
+    }
+    fn plan_source(spec: &JobSpec) -> String {
+        spec.input_analysis_id.clone().unwrap()
+    }
+
+    #[test]
+    fn user_thresholds_override_evaluated_policy_and_candidate_floor_but_require_clean_audio() {
+        for (score, duration, threshold, expected) in [
+            (0.9, 3_000_000, 800, "automatic"),
+            (0.4, 3_000_000, 300, "automatic"),
+            (0.9, 2_999_999, 800, "candidate"),
+        ] {
+            let (_root, s, m, speaker) = fixture();
+            seed_person(&s, &m);
+            let (_job, spec, mut plan) = enqueue(&s, &m, &speaker, false);
+            plan.schema_version = crate::current_formats::VOICE;
+            plan.matching_policy = Some(voice::MatchingPolicy::fixed());
+            plan.matching_options =
+                Some(super::super::voice_preferences::VoiceMatchingPreferences {
+                    similarity_threshold_milli: threshold,
+                    margin_threshold_milli: 100,
+                });
+            let mut window = plan.windows[0].clone();
+            window.end_us = duration;
+            let mut db = s.connection.lock().unwrap();
+            let tx = db.transaction().unwrap();
+            tx.execute(
+                "INSERT INTO voice_policies VALUES('strict',?1,?2,0.99,0.99,?3,0)",
+                params!["a".repeat(64), voice::EXTRACTOR, "b".repeat(64)],
+            )
+            .unwrap();
+            publish_matches(
+                &tx,
+                &spec,
+                &plan,
+                vec![(window, vec![score, (1_f32 - score * score).sqrt()])],
+            )
+            .unwrap();
+            let found = matches(&tx, spec.input_analysis_id.as_deref().unwrap()).unwrap();
+            assert_eq!(found[0].state, expected);
+            let policy: String = tx
+                .query_row("SELECT policy_version FROM voice_matches", [], |r| r.get(0))
+                .unwrap();
+            assert!(policy.starts_with("user_thresholds_v1:"));
+            if expected == "automatic" {
+                assert_eq!(
+                    drafts::load_draft(&tx, &m)
+                        .unwrap()
+                        .unwrap()
+                        .payload
+                        .speaker_names[0]
+                        .display_name
+                        .as_deref(),
+                    Some("田中")
+                );
+            }
+        }
+    }
+
     #[test]
     fn voice_sample_playback_reads_only_the_registered_track_interval() {
         let (_root, s, m, _speaker) = fixture();
@@ -1468,7 +1623,7 @@ mod tests {
         assert!(s.voice_context(&m).unwrap().matches[0].person_id.is_none());
     }
     #[test]
-    fn calibrated_policy_applies_only_to_unnamed_speakers_and_keeps_fixed_analysis() {
+    fn short_queries_remain_candidates_despite_evaluated_policy() {
         let (_root, s, m, speaker) = fixture();
         seed_person(&s, &m);
         {
@@ -1493,18 +1648,9 @@ mod tests {
             &job.id,
         )
         .unwrap();
-        assert_eq!(s.voice_context(&m).unwrap().matches[0].state, "automatic");
+        assert_eq!(s.voice_context(&m).unwrap().matches[0].state, "candidate");
         assert_eq!(s.load_current_analysis(&m).unwrap(), before);
-        assert_eq!(
-            s.load_transcript_draft(&m)
-                .unwrap()
-                .unwrap()
-                .payload
-                .speaker_names[0]
-                .display_name
-                .as_deref(),
-            Some("田中")
-        );
+        assert!(s.load_transcript_draft(&m).unwrap().is_none());
         let (job, spec, plan) = enqueue(&s, &m, &speaker, false);
         s.publish_voice_result(
             &spec,
@@ -1513,16 +1659,7 @@ mod tests {
             &job.id,
         )
         .unwrap();
-        assert_eq!(
-            s.load_transcript_draft(&m)
-                .unwrap()
-                .unwrap()
-                .payload
-                .speaker_names[0]
-                .display_name
-                .as_deref(),
-            Some("田中")
-        );
+        assert!(s.load_transcript_draft(&m).unwrap().is_none());
     }
     #[test]
     fn lost_acceptance_and_completion_replies_reuse_the_original_registration() {

@@ -88,6 +88,7 @@ fn fingerprint(proof: &Fingerprint) -> Result<(), String> {
 }
 
 fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
+    super::validate_attribution_policy(parameters)?;
     if let Some(runtime) = &parameters.resident_runtime {
         runtime.accepts("sherpa")?;
     }
@@ -96,8 +97,7 @@ fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
         .as_ref()
         .ok_or("固定保存区間がありません")?;
     known.validate(&parameters.source)?;
-    if !known.needed(&parameters.source)
-        || parameters.matching.as_ref() != Some(&Policy::fixed())
+    if parameters.matching.as_ref() != Some(&Policy::fixed())
         || parameters.tracks.len() != parameters.source.tracks.len()
     {
         return Err("保存区間の話者分離条件が不正です".into());
@@ -117,10 +117,8 @@ fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
     if parameters
         .engine
         .runtime_libraries
-        .iter()
-        .filter(|proof| *proof == &extractor.library)
-        .count()
-        != 1
+        .get(extractor.library_index)
+        != Some(&extractor.library)
     {
         return Err("固定抽出ランタイムがエンジンと一致しません".into());
     }
@@ -193,6 +191,18 @@ pub(crate) fn enqueue(
         &source.manifest_hash,
     )?;
     let mut parameters = Parameters {
+        optimization_version: storage
+            .optimization_version_for_operation(&request.meeting_id, &request.operation_id)?,
+        completion_after: super::completion_after(
+            storage,
+            &request.meeting_id,
+            &request.operation_id,
+        )?,
+        attribution_policy: super::attribution_policy(
+            storage,
+            &request.meeting_id,
+            &request.operation_id,
+        )?,
         resident_runtime: crate::local_engine::resident::prepare_job(
             storage,
             &request.meeting_id,
@@ -217,7 +227,7 @@ pub(crate) fn enqueue(
         request,
         profile,
         transcription_job,
-        2,
+        crate::current_formats::DIARIZATION,
         move |input| {
             if input.audio_manifest_hash != parameters.source.manifest_hash {
                 return Err("文字起こしと保存音声の由来が一致しません".into());
@@ -245,7 +255,7 @@ fn envelope(spec: &JobSpec) -> Result<Envelope, String> {
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let known = validate(&value.diarization)?;
     if spec.kind != JobKind::Diarization
-        || value.schema_version != 2
+        || value.schema_version != crate::current_formats::DIARIZATION
         || value.request.meeting_id != spec.meeting_id
         || spec.total_units != Some(known.runs.len() as i64)
     {
@@ -323,26 +333,37 @@ fn runtime_extractor(
         .extractor
         .as_ref()
         .ok_or("固定抽出器がありません")?;
-    let matching: Vec<_> = runtime
+    let library = runtime
         .runtime_libraries
-        .iter()
-        .filter(|proof| proof.size == fixed.library.size && proof.sha256 == fixed.library.sha256)
-        .collect();
-    if matching.len() != 1 {
-        return Err("再結合した抽出ランタイムの指紋が一致しません".into());
-    }
+        .get(fixed.library_index)
+        .filter(|p| p.size == fixed.library.size && p.sha256 == fixed.library.sha256)
+        .ok_or("再結合した抽出ランタイムの指紋が一致しません")?;
     let path = if fixed.helper.path.is_absolute() && fixed.helper.path.is_file() {
         fixed.helper.path.clone()
     } else {
-        helper_path()?
+        #[cfg(test)]
+        let fixture = runtime
+            .executable
+            .path
+            .ancestors()
+            .skip(1)
+            .take(5)
+            .map(|p| p.join("test-embedding-helper"))
+            .find(|p| p.is_file());
+        #[cfg(test)]
+        let path = fixture.map(Ok).unwrap_or_else(helper_path)?;
+        #[cfg(not(test))]
+        let path = helper_path()?;
+        path
     };
     let helper = Fingerprint::capture(&path, cancelled)?;
     if helper.size != fixed.helper.size || helper.sha256 != fixed.helper.sha256 {
         return Err("固定した抽出ヘルパーと現在の実行ファイルが一致しません".into());
     }
     Ok(embedding::ExtractorConfig {
+        library_index: fixed.library_index,
         helper,
-        library: matching[0].clone(),
+        library: library.clone(),
     })
 }
 
@@ -568,6 +589,8 @@ pub(super) fn process_observed(
 ) -> Result<Option<String>, String> {
     let (spec, raw) = storage.fixed_job_input(job_id)?;
     let parameters = checked_parameters(storage, &spec, job_id)?;
+    let optimization =
+        crate::processing_optimization::Scope::enter(parameters.optimization_version)?;
     let _resident = crate::local_engine::resident::Scope::enter(
         storage.root(),
         parameters.resident_runtime.as_ref(),
@@ -601,8 +624,23 @@ pub(super) fn process_observed(
                 storage.prepare_analysis_run(&spec.meeting_id, track, run, &cancelled)?;
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
             let wave_path = directory.join("input.wav");
-            let frames =
-                crate::transcription::wave::write_track(&mut audio, &wave_path, &cancelled)?;
+            let key = crate::analysis_pcm_cache::key(
+                &parameters.source,
+                parameters.known_input.as_ref(),
+                run.track_index,
+                Some(index),
+            )?;
+            let cached = if parameters.optimization_version == Some(1) {
+                storage.write_cached_analysis_pcm(&key, &wave_path, &cancelled)?
+            } else {
+                None
+            };
+            let frames = match cached {
+                Some(n) => n,
+                None => {
+                    crate::transcription::wave::write_track(&mut audio, &wave_path, &cancelled)?
+                }
+            };
             if frames != run_frames(&parameters, index)? {
                 return Err("変換した保存区間のフレームが一致しません".into());
             }
@@ -745,6 +783,7 @@ pub(super) fn process_observed(
                 return Err("公開前に保存区間の話者・特徴量が変化しました".into());
             }
         }
+        optimization.finish(&cancelled)?;
         let input = storage.load_diarization_input(job_id)?;
         let candidate = build_candidate(&spec, &job, &parameters, &input, &results, &cancelled)?;
         let id = storage.finish_diarization_candidate(
@@ -959,7 +998,11 @@ fn build_candidate(
         } else if !contained {
             vec![]
         } else {
-            match timeline.attribute(original.start_us - offset, original.end_us - offset)? {
+            match timeline.attribute_with_policy(
+                original.start_us - offset,
+                original.end_us - offset,
+                parameters.attribution_policy.is_some(),
+            )? {
                 Attribution::Assigned { speaker } => vec![keys[speaker as usize].clone()],
                 Attribution::Overlap { speakers } => speakers
                     .iter()
@@ -980,7 +1023,7 @@ fn build_candidate(
     Ok(AnalysisInput {
         audio_manifest_hash: parameters.source.manifest_hash.clone(),
         profile_snapshot: spec.profile_snapshot.clone(),
-        config: serde_json::json!({"jobId":job.id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"inputAnalysisId":input.analysis.id,"inputContentHash":spec.input_hash,"diarization":"sherpa-onnx","tracks":parameters.tracks,"estimatedSpeakers":observed,"unmatchedRunGroups":unresolved,"speakerScope":"track_local_feature_matched","speakerMatching":parameters.matching,"overlapDetection":"same_track_interval_intersection","ambiguousTurns":"keep_text_unknown_needs_split","manualAssignments":"preserved","timelineAlignment":"unverified","audioCoverage":{"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"}}),
+        config: serde_json::json!({"jobId":job.id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"inputAnalysisId":input.analysis.id,"inputContentHash":spec.input_hash,"diarization":"sherpa-onnx","tracks":parameters.tracks,"estimatedSpeakers":observed,"unmatchedRunGroups":unresolved,"speakerScope":"track_local_feature_matched","speakerMatching":parameters.matching,"overlapDetection":"same_track_interval_intersection","ambiguousTurns":parameters.attribution_policy.as_deref().unwrap_or("keep_text_unknown_needs_split"),"manualAssignments":"preserved","timelineAlignment":"unverified","audioCoverage":{"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"}}),
         speakers,
         segments: raw_segments,
         utterances,
@@ -993,7 +1036,9 @@ fn validate_restore(
     before: &Envelope,
     after: &Envelope,
 ) -> Result<(), String> {
-    if before.diarization.resident_runtime != after.diarization.resident_runtime
+    if before.diarization.completion_after != after.diarization.completion_after
+        || before.diarization.attribution_policy != after.diarization.attribution_policy
+        || before.diarization.resident_runtime != after.diarization.resident_runtime
         || before.diarization.engine != after.diarization.engine
         || before.diarization.extractor != after.diarization.extractor
         || before.diarization.known_input != after.diarization.known_input

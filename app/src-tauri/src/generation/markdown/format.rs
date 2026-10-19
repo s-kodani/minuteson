@@ -1,16 +1,4 @@
-//! Legacy schema and citation-fragment preservation for replay. No output format validation.
-pub(super) fn pattern() -> String {
-    // llama.cpp's anchored pattern subset becomes a grammar. Keep it to
-    // literals, character classes and repetition (no lookaround/backrefs).
-    let text = r#"[^"\\\x00-\x20#。\[-][^"\\\x00-\x1F#。\[]*"#;
-    let link = r"\[[0-9:.]+–[0-9:.]+\]\(audio:[0-9:.]+-[0-9:.]+\)";
-    let paragraph = format!("({text}。({link})+)+");
-    let item = format!("- {paragraph}");
-    format!(
-        r"^# 議事録\n\n## 要約\n{paragraph}(\n\n{paragraph})*(\n\n## 決定事項\n{item}(\n{item})*)?(\n\n## ToDo\n{item}(\n{item})*)?\n?$"
-    )
-}
-
+//! Citation-fragment preservation for current prompt partitioning.
 pub(super) fn read_links(text: &str, strict: bool) -> Result<Vec<&str>, String> {
     let mut result = Vec::new();
     let mut remaining = text;

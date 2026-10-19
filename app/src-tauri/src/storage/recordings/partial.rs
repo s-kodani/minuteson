@@ -94,7 +94,7 @@ impl Review {
         input_hash(&self.summary.review_hash, self.origin, &self.prefixes)
     }
     pub(super) fn document(&self) -> serde_json::Value {
-        serde_json::json!({"schemaVersion":1,"state":"interrupted",
+        serde_json::json!({"schemaVersion":crate::current_formats::CAPTURE,"inputDiagnosticsState":"unavailable","state":"interrupted",
             "captureMode":self.config.mode,"backend":self.config.backend,
             "targetPIDs":self.config.target_pids,"recordingOwnerId":self.session.id,
             "errors":[],"partialRecovery":{

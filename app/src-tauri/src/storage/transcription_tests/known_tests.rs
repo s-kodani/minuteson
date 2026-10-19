@@ -73,7 +73,7 @@ fn known_runs_publish_original_meeting_times_and_exact_nonzero_pcm_without_gap_p
     .unwrap();
     let job = enqueue(&storage, &meeting, "known", config, "standard").unwrap();
     let fixed = storage.fixed_job_input(&job.id).unwrap().0;
-    assert_eq!(fixed.parameters["schemaVersion"], 3);
+    assert_eq!(fixed.parameters["schemaVersion"], 4);
     assert_eq!(job.total_units, Some(2));
     assert_eq!(fixed.parameters["units"][0]["runIndex"], 0);
     assert_eq!(fixed.parameters["units"][1]["runIndex"], 1);
@@ -392,14 +392,20 @@ fn known_runs_merge_overlapping_labels_and_reject_an_entirely_unavailable_track(
 }
 
 #[test]
-fn continuous_jobs_keep_schema_two_and_no_optional_run_fields() {
+fn continuous_jobs_use_current_known_run_format() {
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting, config) = fixture(root.path(), 4);
-    let job = enqueue(&storage, &meeting, "legacy-shape", config, "standard").unwrap();
+    let job = enqueue(&storage, &meeting, "continuous-current", config, "standard").unwrap();
     let spec = storage.fixed_job_input(&job.id).unwrap().0;
-    assert_eq!(spec.parameters["schemaVersion"], 2);
-    assert!(spec.parameters.get("knownInput").is_none());
-    assert!(spec.parameters["units"][0].get("runIndex").is_none());
+    assert_eq!(spec.parameters["schemaVersion"], 4);
+    assert_eq!(
+        spec.parameters["knownInput"]["runs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(spec.parameters["units"][0]["runIndex"], 0);
     assert_eq!(
         spec.parameters["source"],
         serde_json::to_value(storage.recorded_audio_plan(&meeting).unwrap()).unwrap()

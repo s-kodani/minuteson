@@ -39,7 +39,13 @@ impl Storage {
         transcription_job: Option<&str>,
         configure: impl FnOnce(&DiarizationInput) -> Result<(Value, i64), String>,
     ) -> Result<JobSnapshot, String> {
-        self.enqueue_diarization_source_version(request, profile, transcription_job, 1, configure)
+        self.enqueue_diarization_source_version(
+            request,
+            profile,
+            transcription_job,
+            crate::current_formats::DIARIZATION,
+            configure,
+        )
     }
 
     pub(crate) fn enqueue_diarization_source_version(
@@ -54,7 +60,7 @@ impl Storage {
             || request.operation_id.len() > 128
             || request.expected_meeting_lock_version < 0
             || !profile.is_object()
-            || !matches!(schema_version, 1 | 2)
+            || schema_version != crate::current_formats::DIARIZATION
         {
             return Err("話者分離の操作・固定入力指定が不正です".into());
         }
@@ -157,7 +163,8 @@ impl Storage {
             .map(|d| d.payload.clone())
             .unwrap_or_default();
         let lineages = lineage_map(&tx, "utterances", &source.id)?;
-        let mut manual_lineages = BTreeSet::new();
+        let mut manual_lineages =
+            super::speaker_assignment_update::manual_lineages(&tx, &source.id)?;
         let edits: HashMap<_, _> = payload
             .utterances
             .iter()
@@ -225,7 +232,7 @@ impl Storage {
         }
         spec.parameters["diarization"] = parameters;
         spec.total_units = Some(total);
-        if schema_version == 2 {
+        if schema_version == crate::current_formats::DIARIZATION {
             let (fixed_source, known) = crate::diarization::known::fixed_coverage(&spec)?;
             let source =
                 super::transcription::read_analysis_audio_plan(&tx, &spec.meeting_id, None)?;

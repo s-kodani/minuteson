@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, ChildStdout, ExitStatus, Stdio};
 
 mod installation;
-pub(crate) use installation::{prepare_job, Snapshot};
+pub(crate) use installation::{prepare, prepare_job, Snapshot};
 #[cfg(all(test, unix))]
 pub(crate) mod tests;
 
@@ -29,6 +29,10 @@ impl Scope {
         JOB.with(|cell| {
             if cell.borrow().is_some() {
                 return Err("推論セッションが重複しています".into());
+            }
+            #[cfg(test)]
+            if snapshot.is_some_and(installation::is_synthetic) {
+                return Ok(Self);
             }
             if let Some(snapshot) = snapshot {
                 snapshot.validate()?;
@@ -244,7 +248,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) enum Run {
-    Legacy(ManagedChild),
+    Direct(ManagedChild),
     Resident(u64),
 }
 impl Run {
@@ -258,7 +262,7 @@ impl Run {
         JOB.with(|cell| {
             let mut current = cell.borrow_mut();
             let Some(job) = current.as_mut() else {
-                return launch.spawn().map(Self::Legacy).map_err(|e| e.to_string());
+                return launch.spawn().map(Self::Direct).map_err(|e| e.to_string());
             };
             job.snapshot.accepts(kind)?;
             if job.worker.is_none() {
@@ -287,7 +291,7 @@ impl Run {
     }
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {
         match self {
-            Self::Legacy(child) => child.child.try_wait().map_err(|e| e.to_string()),
+            Self::Direct(child) => child.child.try_wait().map_err(|e| e.to_string()),
             Self::Resident(id) => JOB.with(|cell| {
                 cell.borrow_mut()
                     .as_mut()

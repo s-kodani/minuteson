@@ -718,14 +718,14 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let micClosure = try clock.close(.microphone)
     let systemClosure = try clock.close(.system)
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-raw-prefix", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-raw-prefix", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
       requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: tracks[0], system: tracks[1], errors: [], recordingOwnerId: recordingOwner)
     try manifest.finalizeStoppedClock(
       clock, microphoneClosure: micClosure, systemClosure: systemClosure)
     try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
-    XCTAssertEqual(manifest.schemaVersion, 3)
+    XCTAssertEqual(manifest.schemaVersion, 4)
     XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, dense ? 983_040 : 204_000)
     XCTAssertNotNil(manifest.microphone.rawSegments?.lastEntrySHA256)
     if dense {

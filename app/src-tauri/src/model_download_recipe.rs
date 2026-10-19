@@ -70,7 +70,8 @@ impl Recipe {
             recipe_schema_version: self.schema_version,
             download_bytes: self.transfer_bytes()?,
             archive_bytes: self.archive_bytes()?,
-            bundled_bytes: (self.schema_version == 3)
+            bundled_bytes: self
+                .has_bundled()
                 .then(|| self.bundled_bytes())
                 .transpose()?,
             publisher_authenticity: "not_verified",
@@ -145,7 +146,7 @@ impl Recipe {
         self.validate_for(Target::current()?)
     }
     fn validate_for(&self, target: Target) -> Result<u64, String> {
-        if !matches!(self.schema_version, 2 | 3) {
+        if self.schema_version != 4 {
             return Err("ダウンロード定義の形式版が未対応です".into());
         }
         self.manifest.validate(target)?;
@@ -162,8 +163,7 @@ impl Recipe {
                 return Err("全ダウンロードファイルに同順の配布元・容量・SHA-256が必要です".into());
             }
             if source.url == BUNDLED_WHISPER {
-                if self.schema_version != 3
-                    || self.manifest.engine != crate::model_inspection::Engine::Whisper
+                if self.manifest.engine != crate::model_inspection::Engine::Whisper
                     || self.manifest.target != Target::MacosAarch64
                     || self.manifest.engine_version != "v1.9.4"
                     || source.archive.is_none()
@@ -208,16 +208,12 @@ impl Recipe {
                 .filter(|n| *n <= MAX_TOTAL)
                 .ok_or("ダウンロード合計容量の上限は32GiBです")?;
         }
-        if self.schema_version == 2 && archives.is_empty() {
-            return Err("形式版2にはアーカイブの指定が必要です".into());
-        }
-        if self.schema_version == 3
-            && (!self.has_bundled()
-                || !self.manifest.files.iter().zip(&self.sources).any(|(f, s)| {
-                    f.role == crate::model_inspection::Role::Asr && s.url.starts_with("https://")
-                }))
+        if self.has_bundled()
+            && !self.manifest.files.iter().zip(&self.sources).any(|(f, s)| {
+                f.role == crate::model_inspection::Role::Asr && s.url.starts_with("https://")
+            })
         {
-            return Err("形式版3には同梱実行ファイルとHTTPSの文字起こしモデルが必要です".into());
+            return Err("同梱実行ファイルにはHTTPSの文字起こしモデルが必要です".into());
         }
         for (index, source) in self.sources.iter().enumerate() {
             if source.archive.is_none() && archives.contains_key(&source.url) {

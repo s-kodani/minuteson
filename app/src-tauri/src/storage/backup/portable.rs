@@ -135,6 +135,7 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
                 "maintenance_paths",
                 "restore_omitted_assets",
                 "model_compatibility_checks",
+                "model_reference_files",
                 "model_catalog_history",
                 "recording_input_delivery",
             ]
@@ -345,6 +346,8 @@ pub(super) fn portable_json_with_metadata(
         let mut result = serde_json::Map::new();
         for key in [
             "schemaVersion",
+            "inputDiagnosticsState",
+            "systemAudioUnreceived",
             "scenario",
             "captureMode",
             "backend",
@@ -482,7 +485,7 @@ pub(super) fn dump(
 ) -> Result<Vec<Table>, String> {
     let db = read_only(&snapshot.database)?;
     crate::storage::voice::validate_registry(&db)?;
-    let known = crate::storage::model_metadata::historical(&db)?;
+    let known = crate::storage::model_metadata::retained_files(&db)?;
     let trusted = schema(MIGRATIONS.len())?;
     let mut descriptions = tables(&db)?;
     if descriptions != tables(&trusted)? {

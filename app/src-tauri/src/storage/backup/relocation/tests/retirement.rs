@@ -86,7 +86,7 @@ fn retired_source_exits_without_mutating_idle_or_queued_jobs() {
             input_analysis_id: None,
             input_hash: "a".repeat(64),
             profile_snapshot: serde_json::json!({"engine": "test"}),
-            parameters: serde_json::json!({}),
+            parameters: serde_json::json!({"schemaVersion":4}),
             total_units: Some(10),
         })
         .unwrap();

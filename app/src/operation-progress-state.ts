@@ -9,13 +9,13 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching";
+  kind: "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
@@ -49,9 +49,22 @@ export function importProgress(snapshot: ImportSnapshot | null): OperationProgre
 }
 
 export function jobProgress(job: AnalysisJob, target: string, meetingId?: string): OperationProgress | null {
-  if (!["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching"].includes(job.kind) || !["queued", "running", "pausing", "paused", "interrupted"].includes(job.state)) return null;
+  if (!["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching", "speaker_completion"].includes(job.kind) || !["queued", "running", "pausing", "paused", "interrupted"].includes(job.state)) return null;
   const kind = job.kind as OperationProgress["kind"], state = job.state as OperationProgress["state"];
   const name = operationName(kind);
+  if (kind === "speaker_completion") {
+    const p = job.executionProgress;
+    const valid = job.state === "running" && p && ["preparing", "references", "matching", "saving"].includes(p.phase)
+      && [p.completed, p.total, p.phaseCompleted, p.phaseTotal].every(v => Number.isSafeInteger(v) && v >= 0)
+      && p.total > 0 && p.completed < p.total && p.phaseCompleted <= p.phaseTotal;
+    const stage = valid ? ({ preparing: "準備中", references: "参照音声を準備中", matching: "発言照合中", saving: "結果を保存中" })[p.phase] : operationStatus(state);
+    const detail = valid ? p.phase === "references" ? `参照音声 ${p.phaseCompleted}／${p.phaseTotal}区間`
+      : p.phase === "matching" ? `発言照合 ${p.phaseCompleted}／${p.phaseTotal}件` : undefined : undefined;
+    return { id: `job:${job.id}`, target, label: `${name} · ${stage}`, kind, state, meetingId,
+      startedAtMs: job.createdAt, paused: ["paused", "interrupted"].includes(state),
+      completed: valid ? Math.min(99, Math.floor(p.completed * 100 / p.total)) : null,
+      total: valid ? 100 : null, detail };
+  }
   const paused = ["paused", "interrupted"].includes(job.state);
   const minutes = kind === "minutes_generation";
   const status = minutes && state === "running" ? "解析中" : operationStatus(state);

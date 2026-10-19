@@ -226,9 +226,19 @@ fn trial_recipe(
 }
 
 fn vad_asset(url: &str) -> Option<PathBuf> {
-    if !url.contains("ggml-org/whisper-vad/") && !url.contains("snakers4/silero-vad/") { return None; }
-    let root=PathBuf::from(std::env::var("MON_QA_VAD_ASSETS").expect("fixed Silero VAD model and notices"));
-    Some(root.join(if url.ends_with(".bin") { "ggml-silero-v6.2.0.bin" } else if url.ends_with("README.md") { "silero-vad-model-card.md" } else { "silero-vad-MIT.txt" }))
+    if !url.contains("ggml-org/whisper-vad/") && !url.contains("snakers4/silero-vad/") {
+        return None;
+    }
+    let root = PathBuf::from(
+        std::env::var("MON_QA_VAD_ASSETS").expect("fixed Silero VAD model and notices"),
+    );
+    Some(root.join(if url.ends_with(".bin") {
+        "ggml-silero-v6.2.0.bin"
+    } else if url.ends_with("README.md") {
+        "silero-vad-model-card.md"
+    } else {
+        "silero-vad-MIT.txt"
+    }))
 }
 
 // The opt-in native fixture uses the same staging, placement and CPU admission
@@ -470,7 +480,8 @@ fn trial_recipe_at(
         if entry.role == crate::model_inspection::Role::Notice && source.archive.is_none() {
             assert_eq!(
                 std::fs::read(models.join(&package).join(&entry.relative_path)).unwrap(),
-                std::fs::read(vad_asset(&source.url).unwrap_or_else(||local(&source.url))).unwrap()
+                std::fs::read(vad_asset(&source.url).unwrap_or_else(|| local(&source.url)))
+                    .unwrap()
             );
         }
     }

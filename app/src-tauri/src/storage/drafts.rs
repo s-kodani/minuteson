@@ -40,19 +40,15 @@ pub struct TranscriptDraftPayload {
     pub schema_version: u32,
     pub speaker_names: Vec<SpeakerNameEdit>,
     pub utterances: Vec<UtteranceEdit>,
-    // Omission preserves byte-for-byte canonical v1 drafts and their undo hashes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manual_speakers: Vec<ManualSpeaker>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub speaker_merges: Vec<SpeakerMerge>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub utterance_splits: Vec<super::draft_splits::UtteranceSplit>,
 }
 
 impl Default for TranscriptDraftPayload {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
             speaker_names: vec![],
             utterances: vec![],
             manual_speakers: vec![],
@@ -113,7 +109,7 @@ impl Storage {
         let id = Uuid::new_v4().to_string();
         let now = now_ms()?;
         transaction.execute(
-            "INSERT INTO working_drafts (id, meeting_id, target_kind, base_analysis_id, payload_json, schema_version, content_hash, lock_version, created_at, updated_at) VALUES (?1, ?2, 'transcript', ?3, ?4, 1, ?5, 0, ?6, ?6)",
+            "INSERT INTO working_drafts (id, meeting_id, target_kind, base_analysis_id, payload_json, schema_version, content_hash, lock_version, created_at, updated_at) VALUES (?1, ?2, 'transcript', ?3, ?4, 4, ?5, 0, ?6, ?6)",
             params![id, meeting_id, base_analysis_id, serialized, hash, now],
         ).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
@@ -290,11 +286,7 @@ pub(super) fn validate_payload(
     base_analysis_id: &str,
     mut payload: TranscriptDraftPayload,
 ) -> Result<TranscriptDraftPayload, String> {
-    if !matches!(payload.schema_version, 1 | 2 | 3)
-        || (payload.schema_version == 1
-            && (!payload.manual_speakers.is_empty() || !payload.speaker_merges.is_empty()))
-        || (payload.schema_version < 3 && !payload.utterance_splits.is_empty())
-    {
+    if payload.schema_version != crate::current_formats::TRANSCRIPT_DRAFT {
         return Err("未対応の下書き形式です".into());
     }
     let mut speakers: HashSet<String> = {
@@ -432,7 +424,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manual_speakers_and_merges_round_trip_undo_without_changing_v1_hashes() {
+    fn manual_speakers_and_merges_round_trip_undo_in_current_format() {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().to_owned()).unwrap();
         let meeting = storage.create_meeting("話者編集").unwrap();
@@ -442,11 +434,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             serde_json::to_string(&draft.payload).unwrap(),
-            r#"{"schema_version":1,"speaker_names":[],"utterances":[]}"#
+            r#"{"schema_version":4,"speaker_names":[],"utterances":[],"manual_speakers":[],"speaker_merges":[],"utterance_splits":[]}"#
         );
         let id = format!("manual:{}", Uuid::new_v4());
         let mut payload = draft.payload.clone();
-        payload.schema_version = 2;
+        payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
         payload.manual_speakers.push(ManualSpeaker {
             id: id.clone(),
             label: "手動話者 1".into(),
@@ -488,7 +480,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            1
+            4
         );
         assert_eq!(
             db.query_row(
@@ -511,7 +503,7 @@ mod tests {
             .create_transcript_draft(&meeting.id, "analysis")
             .unwrap();
         let mut valid = draft.payload.clone();
-        valid.schema_version = 2;
+        valid.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
         valid.manual_speakers.push(ManualSpeaker {
             id: format!("manual:{}", Uuid::new_v4()),
             label: "追加".into(),
@@ -615,7 +607,7 @@ mod tests {
             draft
         );
         let payload = TranscriptDraftPayload {
-            schema_version: 1,
+            schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
             speaker_names: vec![SpeakerNameEdit {
                 speaker_id: "speaker-1".into(),
                 display_name: Some("田中".into()),
@@ -671,7 +663,7 @@ mod tests {
             .create_transcript_draft(&meeting.id, "analysis")
             .unwrap();
         let invalid = TranscriptDraftPayload {
-            schema_version: 1,
+            schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
             speaker_names: vec![],
             utterances: vec![UtteranceEdit {
                 utterance_id: "utterance-1".into(),
@@ -705,7 +697,7 @@ mod tests {
             .create_transcript_draft(&meeting.id, "analysis")
             .unwrap();
         let invalid = TranscriptDraftPayload {
-            schema_version: 1,
+            schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
             speaker_names: vec![],
             utterances: vec![UtteranceEdit {
                 utterance_id: "other-utterance".into(),
@@ -738,7 +730,7 @@ mod tests {
                 &original.id,
                 0,
                 TranscriptDraftPayload {
-                    schema_version: 1,
+                    schema_version: crate::current_formats::TRANSCRIPT_DRAFT,
                     speaker_names: vec![],
                     utterances: vec![UtteranceEdit {
                         utterance_id: "utterance-1".into(),

@@ -347,7 +347,7 @@ fn model_deletion_census_job_references_are_information_not_running_process_or_d
         ("history", "failed", "managedModel"),
     ] {
         let profile = serde_json::json!({field:{"package":{"packageId":f.package}}}).to_string();
-        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,'transcription',?3,?1,?4,?5,'{}',?4,1,1)",params![id,meeting,state,"a".repeat(64),profile]).unwrap();
+        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,'transcription',?3,?1,?4,?5,'{\"schemaVersion\":4}',?4,1,1)",params![id,meeting,state,"a".repeat(64),profile]).unwrap();
     }
     drop(db);
     let before = f.evidence();
@@ -385,11 +385,11 @@ fn model_deletion_census_counts_rebound_runtime_reference_once_per_job() {
     let meeting = f.storage.list_meetings().unwrap()[0].id.clone();
     let db = f.storage.connection.lock().unwrap();
     let original = serde_json::json!({"managedModel":{"package":{"packageId":"another-package"}}});
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('parent',?1,'transcription','failed','parent',?2,?3,'{}',?2,1,1)",params![meeting,"a".repeat(64),original.to_string()]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('parent',?1,'transcription','failed','parent',?2,?3,'{\"schemaVersion\":4}',?2,1,1)",params![meeting,"a".repeat(64),original.to_string()]).unwrap();
     let mut runtime = original;
     runtime["runtimeModel"] =
         serde_json::json!({"schemaVersion":1,"package":{"packageId":f.package}});
-    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at,retry_of_job_id,attempt) VALUES('child',?1,'transcription','paused','child',?2,?3,'{}',?2,1,1,'parent',2)",params![meeting,"a".repeat(64),runtime.to_string()]).unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at,retry_of_job_id,attempt) VALUES('child',?1,'transcription','paused','child',?2,?3,'{\"schemaVersion\":4}',?2,1,1,'parent',2)",params![meeting,"a".repeat(64),runtime.to_string()]).unwrap();
     drop(db);
     let before = f.evidence();
     assert_eq!(f.preview().unwrap().job_references, 1);

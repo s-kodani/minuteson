@@ -131,13 +131,30 @@ impl AnalysisController {
             }
             if let Err(error) =
                 crate::analysis_flow::advance(&app.state::<Storage>(), &stopping, &|flow| {
-                    if flow.stage == "review" {
+                    if flow.stage == "review"
+                        && app
+                            .state::<Storage>()
+                            .load_current_analysis(&flow.meeting_id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|v| {
+                                Some(v.id)
+                                    == flow
+                                        .diarization_job
+                                        .as_ref()
+                                        .and_then(|j| j.output_analysis_id.clone())
+                            })
+                    {
                         let _ = app.emit("analysis-version-changed", &flow.meeting_id);
-                        if let Err(error) = crate::voice::enqueue_automatic(
+                        if let Err(error) = crate::speaker_completion::after_analysis(
                             &app.state::<Storage>(),
                             &flow.meeting_id,
                         ) {
-                            crate::internal_logs::report_error("voice_matching", &error);
+                            crate::internal_logs::report_error("speaker_completion", &error);
+                            let _ = app.emit(
+                                "analysis-worker-error",
+                                format!("話者補完の開始を確認できません：{}", error),
+                            );
                         }
                     }
                     let _ = app.emit("analysis-flow-changed", flow);
@@ -184,6 +201,12 @@ impl AnalysisController {
                                 let _ = app.emit("minutes-runtime-progress", runtime);
                             },
                         ),
+                        "speaker_completion" => crate::speaker_completion::process(
+                            &app.state::<Storage>(),
+                            &job.id,
+                            &stopping,
+                            &|job| emit(app, job),
+                        ),
                         "voice_registration" | "voice_matching" => crate::voice::process(
                             &app.state::<Storage>(),
                             &job.id,
@@ -201,6 +224,47 @@ impl AnalysisController {
                         ),
                         _ => Err("未対応の解析工程です".into()),
                     };
+                    if result.is_ok()
+                        && app
+                            .state::<Storage>()
+                            .get_job(&job.id)
+                            .is_ok_and(|j| j.state == "succeeded")
+                    {
+                        if job.kind == "speaker_completion" {
+                            let _ = app.emit("analysis-version-changed", &job.meeting_id);
+                            if let Err(e) = crate::voice::enqueue_automatic(
+                                &app.state::<Storage>(),
+                                &job.meeting_id,
+                            ) {
+                                crate::internal_logs::report_error("voice_matching", &e);
+                            }
+                        } else if job.kind == "diarization"
+                            && app
+                                .state::<Storage>()
+                                .load_current_analysis(&job.meeting_id)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|v| {
+                                    Some(v.id)
+                                        == app
+                                            .state::<Storage>()
+                                            .get_job(&job.id)
+                                            .ok()
+                                            .and_then(|j| j.output_analysis_id)
+                                })
+                        {
+                            if let Err(e) = crate::speaker_completion::after_analysis(
+                                &app.state::<Storage>(),
+                                &job.meeting_id,
+                            ) {
+                                crate::internal_logs::report_error("speaker_completion", &e);
+                                let _ = app.emit(
+                                    "analysis-worker-error",
+                                    format!("話者補完の開始を確認できません：{}", e),
+                                );
+                            }
+                        }
+                    }
                     if result.is_ok()
                         && matches!(job.kind.as_str(), "voice_registration" | "voice_matching")
                         && app
@@ -220,6 +284,7 @@ impl AnalysisController {
                                 Some(match job.kind.as_str() {
                                     "minutes_generation" => "minutes_generation_failed",
                                     "diarization" => "diarization_failed",
+                                    "speaker_completion" => "speaker_completion_failed",
                                     "voice_registration" | "voice_matching" => {
                                         "voice_processing_failed"
                                     }

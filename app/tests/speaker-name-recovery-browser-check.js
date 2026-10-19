@@ -120,7 +120,7 @@ async (page, capturePath, detailUI) => {
   results.push("stale names remain read-only and discard preserves the newer confirmed name");
 
   await boot(); await name("話者A").fill("旧解析の名前"); await savedName("旧解析の名前");
-  await page.evaluate(() => { const f = window.monBrowserFixture,old = structuredClone(f.draft); f.archivedDrafts[old.baseAnalysisId] = old; f.draft = { ...old,id: crypto.randomUUID(),baseAnalysisId: f.candidate.id,lockVersion: 0,payload: { schema_version: 1,speaker_names: [],utterances: [] } }; f.currentId = f.candidate.id; }); await crash();
+  await page.evaluate(() => { const f = window.monBrowserFixture,old = structuredClone(f.draft); f.archivedDrafts[old.baseAnalysisId] = old; f.draft = { ...old,id: crypto.randomUUID(),baseAnalysisId: f.candidate.id,lockVersion: 0,payload: { schema_version:4,speaker_names: [],utterances: [] } }; f.currentId = f.candidate.id; }); await crash();
   await editor.getByRole("button",{ name: "旧下書きを含む回復記録",exact: true }).click(); await dialog().getByRole("button",{ name: "この記録を見る",exact: true }).click();
   check(await dialog().getByRole("button",{ name: "確認した入力の編集を再開",exact: true }).isDisabled() && await dialog().getByRole("textbox",{ name: "未確定の話者名",exact: true }).inputValue() === "旧解析の名前","archived name cannot be read or was resumable");
   const owner = await page.evaluate(() => window.monBrowserFixture.draft.id); await confirmDiscard();

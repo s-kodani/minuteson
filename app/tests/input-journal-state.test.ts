@@ -46,15 +46,15 @@ test("clock reversal permanently invalidates; caller cannot mutate accepted evid
   const s=new InputJournalSession(owner),value=report();s.accept(value,10);value.persistence.state="confirmed";
   assert.equal(s.read(11).state,"pending");assert.equal(s.read(9).state,"unknown");assert.throws(()=>s.accept(report(2),12));
 });
-test("archive page v2 diagnoses final writer failure independently of an absent queue",()=>{
+test("archive page v3 diagnoses final writer failure independently of an absent queue",()=>{
   const row={meetingId:meeting,sessionId:owner,title:"会議",batch:null,issue:null,historySaveIssue:"unconfirmed"};
-  const page={schemaVersion:2,recordings:[row],nextCursor:null};
+  const page={schemaVersion:3,recordings:[row],nextCursor:null};
   assert.equal(checkedArchivedInputPage(page,null).recordings[0].historySaveIssue,"unconfirmed");
   const c=new ArchivedInputController(meeting);c.acceptPage(page,null,0);
   assert.equal(c.paint(0).views[0].historySaveIssue,"unconfirmed");assert.deepEqual(c.paint(0).attempts,[]);
   c.failedRead();assert.equal(c.paint(1).views[0].historySaveIssue,"unconfirmed");
   const {historySaveIssue:_,...legacyRow}=row;
-  c.acceptPage({schemaVersion:1,recordings:[legacyRow],nextCursor:null},null,2);
+  assert.throws(()=>c.acceptPage({schemaVersion:1,recordings:[legacyRow],nextCursor:null},null,2));
   assert.equal(c.paint(2).views[0].historySaveIssue,"unconfirmed");
   assert.throws(()=>checkedArchivedInputPage({...page,schemaVersion:"2"},null));
   for(const bad of [{...page,recordings:[{...row,historySaveIssue:"saved"}]},{...page,schemaVersion:1},

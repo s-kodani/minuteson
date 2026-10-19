@@ -14,6 +14,7 @@ pub(crate) fn input() -> MinutesInput {
                 display_name: Some("田中".into()),
             }],
             utterances: vec![AnalysisUtterance {
+                speaker_identification: None,
                 id: "utterance".into(),
                 track_id: "track".into(),
                 start_us: 120_000_000,

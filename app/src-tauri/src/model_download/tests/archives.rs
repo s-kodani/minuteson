@@ -3,7 +3,7 @@ mod real;
 
 fn archive_recipe(bytes: &[u8]) -> Recipe {
     let mut value = recipe_value();
-    value["schemaVersion"] = json!(2);
+    value["schemaVersion"] = json!(4);
     for source in value["sources"].as_array_mut().unwrap() {
         source["url"] = json!("https://example.com/engine.tar.gz");
         source["archive"] = json!({"format":"tar","expectedSize":bytes.len(),"expectedHash":hash(bytes),"memberPath":format!("upstream/{}", source["relativePath"].as_str().unwrap())});
@@ -22,7 +22,7 @@ fn valid() -> Vec<u8> {
 fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_and_copy() {
     let bytes = tar(&[("bin/whisper-cli", BIN, b'0')]);
     let mut value = recipe_value();
-    value["schemaVersion"] = json!(3);
+    value["schemaVersion"] = json!(4);
     value["manifest"]["engineVersion"] = json!("v1.9.4");
     value["sources"][0]["url"] = json!(crate::model_download_recipe::BUNDLED_WHISPER);
     value["sources"][0]["archive"] = json!({"format":"tar","expectedSize":bytes.len(),"expectedHash":hash(&bytes),"memberPath":"bin/whisper-cli"});
@@ -103,7 +103,7 @@ fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_an
     record.validate().unwrap();
     assert_eq!(
         serde_json::to_value(record.download).unwrap()["recipeSchemaVersion"],
-        3
+        4
     );
     assert_eq!(
         storage.list_model_placements().unwrap()[0].source_type,
@@ -193,7 +193,7 @@ fn archive_is_fetched_once_selected_regular_members_only_and_v2_origin_survives_
     record.validate().unwrap();
     assert!(storage.list_model_placements().unwrap()[0].placement_recorded);
     let origin = serde_json::to_value(&record.download).unwrap();
-    assert_eq!(origin["recipeSchemaVersion"], 2);
+    assert_eq!(origin["recipeSchemaVersion"], 4);
     assert_eq!(
         origin["sources"][0]["archive"]["expectedHash"],
         hash(&bytes)

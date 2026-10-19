@@ -258,7 +258,7 @@ fn restore_global_vocabulary_keeps_meeting_books_and_both_fixed_job_snapshots_un
                     input_analysis_id: None,
                     input_hash: "a".repeat(64),
                     profile_snapshot: serde_json::json!({"qualityStatus":"unverified"}),
-                    parameters: serde_json::json!({"vocabulary":snapshot}),
+                    parameters: serde_json::json!({"schemaVersion":4,"vocabulary":snapshot}),
                     total_units: Some(1),
                 })
             })

@@ -465,7 +465,7 @@ final class MicrophoneRecoveryTests: XCTestCase {
       reading
     }
     var manifest = Manifest(
-      schemaVersion: 2, scenario: "synthetic-microphone-recovery", captureMode: "system",
+      schemaVersion: 4, scenario: "synthetic-microphone-recovery", captureMode: "system",
       backend: "screencapturekit", targetPID: nil, targetPIDs: [],
       startedAtUTC: "2023-11-14T22:13:20Z", requestedDurationSeconds: nil,
       osVersion: "synthetic", architecture: "arm64", state: "saved",

@@ -112,7 +112,7 @@ fn restored_audio_reconfirmation_new_consent_preserves_no_consent_baseline_and_t
         )
         .map(|s| serde_json::from_str(&s).unwrap())
         .unwrap();
-    assert_eq!(json["version"], 2);
+    assert_eq!(json["version"], 3);
     assert_eq!(json["origin"]["operationId"], original);
     execute(&target, &operation, &lease);
     assert!(!path.exists() && unknown.exists());

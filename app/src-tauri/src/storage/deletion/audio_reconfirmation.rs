@@ -567,7 +567,7 @@ fn accept_inner(
     let bytes = review.snapshot.encode()?;
     let saved = Prepared {
         header: Header {
-            version: 2,
+            version: 3,
             subtype: "audioOnlyDeletion".into(),
             operation_id: operation.into(),
             meeting_id: review.source.meeting().into(),

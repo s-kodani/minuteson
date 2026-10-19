@@ -26,7 +26,7 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
             params![meeting.id],
         )
         .unwrap();
-    std::fs::write(directory.join("manifest.json"), b"{\"state\":\"saved\"}").unwrap();
+    std::fs::write(directory.join("manifest.json"), b"{\"schemaVersion\":4,\"inputDiagnosticsState\":\"unavailable\",\"state\":\"saved\",\"recordingOwnerId\":null}").unwrap();
     let manifest = storage
         .register_ready_meeting_asset(
             &meeting.id,
@@ -383,7 +383,7 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(spec.parameters["schemaVersion"], 2);
+    assert_eq!(spec.parameters["schemaVersion"], 4);
     assert_eq!(spec.parameters["recognitionPolicy"], "guardedVocabularyV2");
     assert_eq!(
         spec.parameters.get("accelerationPolicy"),
@@ -723,7 +723,7 @@ fn user_pause_is_not_resumed_by_recording_and_candidate_completion_is_atomic() {
     let input = AnalysisInput {
         audio_manifest_hash: spec.input_hash,
         profile_snapshot: spec.profile_snapshot,
-        config: serde_json::json!({}),
+        config: serde_json::json!({"audioCoverage":{"mode":"known_runs","runCount":1,"missingRangeCount":0,"timeBase":"meeting"}}),
         speakers: vec![],
         segments: vec![],
         utterances: vec![],

@@ -139,7 +139,7 @@ fn audio_reconfirmation_keeps_original_availability_documents_and_postcompletion
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    assert_eq!(saved.header.version, 2);
+    assert_eq!(saved.header.version, 3);
     assert_eq!(saved.header.origin.as_ref().unwrap().operation_id, original);
     assert_eq!(
         saved.snapshot.manifest.root,

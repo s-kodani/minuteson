@@ -5,7 +5,7 @@
     "label": "Qwen 2.5 1.5B · Q4_K_M",
     "description": "Qwen 2.5 1.5B・Q4_K_M。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
     "recipe": {
-      "schemaVersion": 2,
+      "schemaVersion": 4,
       "manifest": {
         "schemaVersion": 1,
         "engine": "llama.cpp",
@@ -53,7 +53,7 @@
     "label": "Pyannote + ERes2Net base",
     "description": "pyannote segmentation 3.0・3D-Speaker ERes2Net base。人数は通常自動推定です。品質・速度は正式評価前で、取得後にCPU動作確認と適用が必要です。",
     "recipe": {
-      "schemaVersion": 2,
+      "schemaVersion": 4,
       "manifest": {
         "schemaVersion": 1,
         "engine": "sherpa-onnx",
@@ -96,7 +96,7 @@
     "label": "Qwen 2.5 1.5B · Q8_0",
     "description": "Qwen 2.5 1.5B・Q8_0。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
     "recipe": {
-      "schemaVersion": 2,
+      "schemaVersion": 4,
       "manifest": {
         "schemaVersion": 1,
         "engine": "llama.cpp",
@@ -188,7 +188,7 @@
     "label": "Pyannote int8 + ERes2Net base",
     "description": "pyannote segmentation 3.0 int8・3D-Speaker ERes2Net base。人数は通常自動推定です。品質・速度は正式評価前で、取得後にCPU動作確認と適用が必要です。",
     "recipe": {
-      "schemaVersion": 2,
+      "schemaVersion": 4,
       "manifest": {
         "schemaVersion": 1,
         "engine": "sherpa-onnx",
@@ -252,7 +252,7 @@
   "label": "Qwen 3 8B · Q4_K_M",
   "description": "Qwen 3 8B・Q4_K_M。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
   "recipe": {
-    "schemaVersion": 2,
+    "schemaVersion": 4,
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
@@ -476,7 +476,7 @@
     "label": "Qwen 3 4B · Q4_K_M",
     "description": "Qwen 3 4B・Q4_K_M。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
     "recipe": {
-      "schemaVersion": 2,
+      "schemaVersion": 4,
       "manifest": {
         "schemaVersion": 1,
         "engine": "llama.cpp",

@@ -65,7 +65,7 @@ fn record<'a>(control: &'a serde_json::Value, operation: &str) -> &'a serde_json
 
 fn flat(control: &serde_json::Value, original_operation: &str, prior_moves: usize) {
     assert_eq!(control["version"], 4);
-    assert_eq!(control["deletion_history"]["version"], 3);
+    assert_eq!(control["deletion_history"]["version"], 4);
     assert_eq!(
         record(control, original_operation)["historicalRoots"]
             .as_array()
@@ -125,7 +125,10 @@ fn deletion_repeat_moves_completed_audio_mixed_current_receipts_and_flat_origins
         let control = select_current(&b, &storage, &next);
         flat(&control, &f.deletion, prior_moves);
         // A new receipt from this actual root does not inherit any older root.
-        assert!(record(&control, &new).get("historicalRoots").is_none());
+        assert_eq!(
+            record(&control, &new)["historicalRoots"],
+            serde_json::json!([])
+        );
         assert!(control["deletion_history"]["historicalDirectories"]
             .as_array()
             .is_some_and(|dirs| !dirs.is_empty()));

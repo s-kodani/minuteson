@@ -26,7 +26,7 @@ fn queued(storage: &Storage, root: &Path, partial: bool) -> (String, JobSnapshot
     if partial {
         draft.payload.utterances = vec![crate::storage::drafts::UtteranceEdit {
             utterance_id: analysis.utterances[0].id.clone(),
-            effective_text: "点検日を確認する。".repeat(130),
+            effective_text: "点検日を確認する。".repeat(2000),
             speaker_ids: vec![],
         }];
         draft = storage

@@ -7,7 +7,7 @@ fn setup(storage: &Storage) -> (TranscriptDraft, SaveRequest, String) {
     let draft = storage.create_transcript_draft(&meeting, &base).unwrap();
     let speaker = format!("manual:{}", Uuid::new_v4());
     let mut payload = draft.payload;
-    payload.schema_version = 2;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     payload.manual_speakers.push(ManualSpeaker {
         id: speaker.clone(),
         label: "名前回復用".into(),
@@ -45,7 +45,7 @@ fn names_survive_cold_reopen_without_publishing_a_name_or_undo() {
     let saved = storage
         .save_transcript_edit_recovery(request.clone())
         .unwrap();
-    assert_eq!(saved.payload.schema_version, 3);
+    assert_eq!(saved.payload.schema_version, 4);
     assert!(saved.payload.buffers.is_empty());
     assert_eq!(saved.payload.name_buffers, request.name_buffers);
     assert!(saved.matches_draft && saved.current_context);
@@ -142,7 +142,7 @@ fn mixed_names_and_text_have_one_cas_and_an_empty_clear_blocks_delayed_names() {
     clear.buffers.clear();
     clear.name_buffers.clear();
     let empty = storage.save_transcript_edit_recovery(clear).unwrap();
-    assert_eq!(empty.payload.schema_version, 1);
+    assert_eq!(empty.payload.schema_version, 4);
     assert_eq!(empty.lock_version, saved.lock_version + 1);
     assert!(empty.payload.buffers.is_empty() && empty.payload.name_buffers.is_empty());
     assert!(storage.save_transcript_edit_recovery(request).is_err());
@@ -229,7 +229,7 @@ fn consented_discard_clears_names_with_exact_proof_and_never_publishes_them() {
     let empty = storage
         .discard_transcript_edit_recovery(request.clone())
         .unwrap();
-    assert_eq!(empty.payload.schema_version, 2);
+    assert_eq!(empty.payload.schema_version, 4);
     assert!(empty.payload.name_buffers.is_empty() && empty.payload.buffers.is_empty());
     assert_eq!(
         empty.payload.discarded_from,
@@ -576,7 +576,9 @@ fn invalid_name_payload_formats_fail_read_and_backup_integrity_checks() {
         let mut json = serde_json::to_value(saved.payload).unwrap();
         match case {
             0 => json["schemaVersion"] = 1.into(),
-            1 => json["nameBuffers"] = serde_json::json!([]),
+            1 => {
+                json.as_object_mut().unwrap().remove("nameBuffers");
+            }
             2 => {
                 json["schemaVersion"] = 2.into();
                 json["discardedFrom"] =
@@ -601,41 +603,22 @@ fn invalid_name_payload_formats_fail_read_and_backup_integrity_checks() {
 }
 
 #[test]
-fn legacy_request_and_v1_v2_json_keep_their_exact_serialization_and_hashes() {
+fn current_recovery_has_explicit_arrays_and_nullable_discard_proof() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let (draft, mut request, _) = setup(&storage);
     request.name_buffers.clear();
-    let raw = serde_json::to_string(&request).unwrap();
-    assert!(!raw.contains("nameBuffers"));
-    let legacy: SaveRequest = serde_json::from_str(&raw).unwrap();
-    let saved = storage.save_transcript_edit_recovery(legacy).unwrap();
-    let json = serde_json::to_string(&saved.payload).unwrap();
-    let expected = format!(
-        "{{\"schemaVersion\":1,\"basePayload\":{},\"buffers\":[]}}",
-        serde_json::to_string(&draft.payload).unwrap()
-    );
-    assert_eq!(json, expected);
-    assert_eq!(saved.content_hash, drafts::draft_hash(&expected));
-    let proof = DiscardProof {
-        content_hash: "b".repeat(64),
-        lock_version: 1,
-    };
-    let payload = Payload {
-        schema_version: 2,
-        base_payload: draft.payload,
-        buffers: vec![],
-        name_buffers: vec![],
-        discarded_from: Some(proof.clone()),
-    };
-    let json = serde_json::to_string(&payload).unwrap();
-    assert_eq!(
-        json,
-        format!(
-            "{{\"schemaVersion\":2,\"basePayload\":{},\"buffers\":[],\"discardedFrom\":{}}}",
-            serde_json::to_string(&payload.base_payload).unwrap(),
-            serde_json::to_string(&proof).unwrap()
-        )
-    );
-    assert_eq!(serde_json::from_str::<Payload>(&json).unwrap(), payload);
+    let raw = serde_json::to_value(&request).unwrap();
+    assert_eq!(raw["nameBuffers"], serde_json::json!([]));
+    let saved = storage.save_transcript_edit_recovery(request).unwrap();
+    let value = serde_json::to_value(&saved.payload).unwrap();
+    assert_eq!(value["schemaVersion"], 4);
+    assert_eq!(value["nameBuffers"], serde_json::json!([]));
+    assert!(value.get("discardedFrom").unwrap().is_null());
+    for version in [1, 2, 3, 5] {
+        let mut payload = saved.payload.clone();
+        payload.schema_version = version;
+        let db = storage.connection.lock().unwrap();
+        assert!(validate(&db, &draft.base_analysis_id, &payload).is_err());
+    }
 }

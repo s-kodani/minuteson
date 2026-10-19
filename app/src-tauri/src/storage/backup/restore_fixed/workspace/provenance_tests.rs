@@ -7,7 +7,7 @@ fn fixture(storage: &Storage, operation: &str) -> String {
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let analysis = storage.load_current_analysis(&meeting).unwrap().unwrap();
     let speaker = format!("manual:{}", Uuid::new_v4());
-    draft.payload.schema_version = 3;
+    draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     draft
         .payload
         .manual_speakers
@@ -150,6 +150,9 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         root: work.stage.path().canonicalize().unwrap(),
         connection: Mutex::new(owned_connection),
         restored_inputs: Mutex::default(),
+        feature_vectors: Mutex::default(),
+        analysis_pcm: Mutex::default(),
+        execution_progress: Mutex::default(),
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
     };

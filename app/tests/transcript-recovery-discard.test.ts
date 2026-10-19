@@ -7,10 +7,10 @@ const h = (n: number) => n.toString(16).padStart(64,"0");
 const old: TranscriptRecovery<{ text: string }> = { meetingId: "meeting",draftId: "draft",baseAnalysisId: "base",operationId: randomUUID(),
   contentHash: h(1),lockVersion: 1,updatedAt: 1,baseDraftLockVersion: 0,baseDraftContentHash: h(100),
   currentDraftLockVersion: 2,currentDraftContentHash: h(102),currentContext: false,matchesDraft: false,
-  payload: { schemaVersion: 1,basePayload: { text: "旧本文" },buffers: [{ utteranceId: "u",text: "旧本文",value: "保持する未確定入力",speakerIds: [],hadOverride: false }] } };
+  payload: { ...{ nameBuffers: [], discardedFrom: null }, schemaVersion: 4,basePayload: { text: "旧本文" },buffers: [{ utteranceId: "u",text: "旧本文",value: "保持する未確定入力",speakerIds: [],hadOverride: false }] } };
 function result(req: RecoveryDiscardRequest) { return { ...structuredClone(old),operationId: req.operationId,lockVersion: req.expectedRecoveryLockVersion + 1,contentHash: h(2),
   baseDraftLockVersion: req.expectedDraftLockVersion,baseDraftContentHash: req.expectedDraftContentHash,
-  payload: { schemaVersion: 2,basePayload: { text: "現在本文" },buffers: [],discardedFrom: { contentHash: req.expectedRecoveryContentHash,lockVersion: req.expectedRecoveryLockVersion } } }; }
+  payload: { ...{ nameBuffers: [], discardedFrom: null }, schemaVersion: 4,basePayload: { text: "現在本文" },buffers: [],discardedFrom: { contentHash: req.expectedRecoveryContentHash,lockVersion: req.expectedRecoveryLockVersion } } }; }
 function fixture() {
   const calls: RecoveryDiscardRequest[] = []; let actual = structuredClone(old), reads = 0;
   const state = { fail: false,lost: false,patch: {} };
@@ -29,7 +29,7 @@ test("explicit stale preview discard uses current draft stamp and exact recovery
 test("name-only consent and lost-ack read-back clear names without another deletion", async () => {
   const f = fixture(); f.state.lost = true;
   const preview = structuredClone(old);
-  preview.payload.schemaVersion = 3; preview.payload.buffers = [];
+  preview.payload.schemaVersion = 4; preview.payload.buffers = [];
   preview.payload.nameBuffers = [{ speakerId: "s",name: null,hadOverride: false,value: "保持する名" }];
   await assert.rejects(f.controller.start(preview),/応答喪失/);
   preview.payload.nameBuffers[0].value = "後から変更";
@@ -39,7 +39,7 @@ test("name-only consent and lost-ack read-back clear names without another delet
 });
 test("discard proof that still contains names never counts as successful deletion", async () => {
   const f = fixture();
-  f.state.patch = { payload: { schemaVersion: 2,basePayload: old.payload.basePayload,buffers: [],
+  f.state.patch = { payload: { ...{ nameBuffers: [], discardedFrom: null }, schemaVersion: 4,basePayload: old.payload.basePayload,buffers: [],
     nameBuffers: [{ speakerId: "s",name: null,hadOverride: false,value: "残っている名" }],
     discardedFrom: { contentHash: old.contentHash,lockVersion: old.lockVersion } } };
   await assert.rejects(f.controller.start(old),/一致しません/);

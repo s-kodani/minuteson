@@ -61,6 +61,12 @@ pub(super) struct OmittedAsset {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Manifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) voice_matching_preferences:
+        Option<crate::storage::voice_preferences::VoiceMatchingPreferences>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) speaker_completion_preferences:
+        Option<crate::storage::completion_preferences::CompletionPreferences>,
     pub format_version: u32,
     pub schema_version: usize,
     pub archive_id: String,
@@ -157,7 +163,7 @@ impl Snapshot<'_> {
         self.verify(cancelled)?;
         let stage = private_stage(self.stage.path())?;
         let db = read_only(&self.database)?;
-        let known = crate::storage::model_metadata::historical(&db)?;
+        let known = crate::storage::model_metadata::retained_files(&db)?;
         let model_catalog =
             crate::storage::model_profiles::portable::history::Bundle::export(&db, cancelled)?;
         let mut references = model_catalog.file_references()?;
@@ -276,8 +282,23 @@ impl Snapshot<'_> {
             },
         );
         sources.insert(0, data);
+        let has_preferences: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='voice_matching')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         let manifest = Manifest {
-            format_version: if deleted_audio.is_empty() { 2 } else { 3 },
+            speaker_completion_preferences: Some(
+                crate::storage::completion_preferences::load(&db)?.payload,
+            ),
+            voice_matching_preferences: if has_preferences {
+                Some(crate::storage::voice_preferences::load(&db)?.payload)
+            } else {
+                None
+            },
+            format_version: crate::current_formats::BACKUP,
             schema_version: MIGRATIONS.len(),
             archive_id: Uuid::new_v4().to_string(),
             created_at: now_ms()?,
@@ -424,7 +445,13 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if !matches!(m.format_version, 2 | 3) || m.schema_version != MIGRATIONS.len() {
+    if let Some(p) = m.speaker_completion_preferences {
+        p.validate()?;
+    }
+    if let Some(p) = m.voice_matching_preferences {
+        p.validate()?;
+    }
+    if m.format_version != crate::current_formats::BACKUP || m.schema_version != MIGRATIONS.len() {
         return Err("現在の形式ではないバックアップは復元できません".into());
     }
     if !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
@@ -449,9 +476,6 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         {
             return Err("バックアップの会議一覧が不正です".into());
         }
-    }
-    if (m.format_version == 3) == m.deleted_audio.is_empty() {
-        return Err("バックアップの形式版と音声削除履歴が一致しません".into());
     }
     let mut deleted_meetings = BTreeSet::new();
     for item in &m.deleted_audio {

@@ -64,6 +64,32 @@ impl FixedData<'_, '_> {
         };
         let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let rebased = match job.kind.as_str() {
+            "speaker_completion" => {
+                let mut v = value;
+                if v["completionResult"].as_bool().is_none() {
+                    return Err("話者補完の再開情報が不正です".into());
+                }
+                if let Some(job) = v["jobId"].as_str() {
+                    v["jobId"] = json!(self.ids.get("processing_jobs", meeting, job)?);
+                }
+                if let Some(id) = v["outputAnalysisId"].as_str() {
+                    v["outputAnalysisId"] =
+                        json!(self.ids.get("analysis_revisions", meeting, id)?);
+                }
+                if let Some(rows) = v["decisions"].as_array_mut() {
+                    for d in rows {
+                        let lineage = d["lineage"].as_str().ok_or("話者補完の発言がありません")?;
+                        d["lineage"] =
+                            json!(self.ids.get("utterance_lineage", meeting, lineage)?);
+                        for key in ["speakerId", "bodyBest"] {
+                            if let Some(id) = d[key].as_str() {
+                                d[key] = json!(self.ids.get("speakers", meeting, id)?);
+                            }
+                        }
+                    }
+                }
+                v
+            }
             "voice_registration" | "voice_matching" => {
                 if value.get("voiceResult").and_then(Value::as_bool).is_none() {
                     return Err("声の処理の再開情報が不正です".into());

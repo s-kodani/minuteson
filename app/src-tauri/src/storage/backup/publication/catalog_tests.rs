@@ -9,14 +9,14 @@ fn source() -> (tempfile::TempDir, tempfile::TempDir, Storage, String) {
 #[test]
 fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installing_or_selecting_models(
 ) {
-    downloaded_history_roundtrip(2);
+    downloaded_history_roundtrip(false);
 }
 #[test]
 fn bundled_runtime_provenance_survives_restore_and_rebackup_without_current_app_resource_or_model_execution(
 ) {
-    downloaded_history_roundtrip(3);
+    downloaded_history_roundtrip(true);
 }
-fn downloaded_history_roundtrip(schema: u32) {
+fn downloaded_history_roundtrip(bundled: bool) {
     let (_root, _models, storage, _) = source();
     let mut record = {
         let db = storage.connection.lock().unwrap();
@@ -32,7 +32,7 @@ fn downloaded_history_roundtrip(schema: u32) {
             .unwrap()
             .0
     };
-    if schema == 3 {
+    if bundled {
         record.manifest.engine_version = "v1.9.4".into();
     }
     record.package_id = Uuid::new_v4().to_string();
@@ -53,7 +53,7 @@ fn downloaded_history_roundtrip(schema: u32) {
     )
     .unwrap();
     let recipe = crate::model_download_recipe::Recipe {
-        schema_version: schema,
+        schema_version: 4,
         manifest: record.manifest.clone(),
         sources: record
             .manifest
@@ -61,7 +61,7 @@ fn downloaded_history_roundtrip(schema: u32) {
             .iter()
             .map(|file| crate::model_download_recipe::DownloadSource {
                 relative_path: file.relative_path.clone(),
-                url: if schema == 3 && file.role == crate::model_inspection::Role::Executable {
+                url: if bundled && file.role == crate::model_inspection::Role::Executable {
                     crate::model_download_recipe::BUNDLED_WHISPER.into()
                 } else {
                     format!("https://example.com/{}", file.relative_path)
@@ -82,7 +82,7 @@ fn downloaded_history_roundtrip(schema: u32) {
             })
             .collect(),
     };
-    record.schema_version = 2;
+    record.schema_version = 3;
     record.download = Some(recipe.origin(&Uuid::new_v4().to_string()).unwrap());
     storage.begin_model_placement(&record).unwrap();
     storage.interrupt_model_placement(&record).unwrap();
@@ -276,7 +276,7 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
     let (_source_root, app_data, storage, meeting) = source();
     let output = tempfile::tempdir().unwrap();
     let mut original = archive(&storage, output.path(), "source.monbackup");
-    assert_eq!(original.manifest.format_version, 2);
+    assert_eq!(original.manifest.format_version, 4);
     let native =
         serde_json::to_value(&original.manifest.model_catalog).unwrap()["catalogs"][0].clone();
     assert_eq!(native["packages"].as_array().unwrap().len(), 4);
@@ -331,7 +331,7 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
         let db = target.connection.lock().unwrap();
         assert!(db.query_row("SELECT NOT EXISTS(SELECT 1 FROM model_packages WHERE source_type='historical_snapshot' AND state!='unavailable') AND NOT EXISTS(SELECT 1 FROM model_files f JOIN model_packages p ON p.id=f.package_id WHERE p.source_type='historical_snapshot' AND f.state!='unavailable')", [], |r| r.get::<_, bool>(0)).unwrap());
         for reference in &original.manifest.file_references {
-            assert!(crate::storage::model_metadata::historical(&db)
+            assert!(crate::storage::model_metadata::retained_files(&db)
                 .unwrap()
                 .contains(reference));
         }

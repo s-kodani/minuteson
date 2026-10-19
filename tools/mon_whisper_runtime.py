@@ -269,7 +269,7 @@ def verify_binary(binary):
 
 
 def build_info():
-    return {"schemaVersion": 1, "engine": "whisper.cpp", "engineVersion": VERSION,
+    return {"schemaVersion": 2, "engine": "whisper.cpp", "engineVersion": VERSION,
             "sourceCommit": COMMIT, "sourceUrl": SOURCE_URL, "sourceBytes": SOURCE_BYTES,
             "sourceSha256": SOURCE_SHA, "target": "macos_aarch64", "minimumMacOS": "15.0",
             "buildOptions": list(OPTIONS), "cpuOnly": False,
@@ -280,7 +280,7 @@ def build_info():
 def signing_metadata(team=None):
     """Packaging metadata only; callers must verify the actual OS signature."""
     if team is None:
-        return {"runtimeSigning": "ad_hoc_only"}
+        return {"runtimeSigning": "ad_hoc_only", "signingTeamId": None}
     import re
     if not isinstance(team, str) or not re.fullmatch(r"[A-Z0-9]{10}", team):
         raise ValueError("runtime signing Team ID is invalid")
@@ -456,6 +456,7 @@ def prepare(cache, supplied, cmake, jobs):
             source = extract_source(source_archive, source_dir)
             build_dir = work / "build"
             clean = environment(cmake)
+            clean["TMPDIR"] = str(work)
             command([str(cmake), "-S", str(source), "-B", str(build_dir), *OPTIONS], env=clean)
             command([str(cmake), "--build", str(build_dir), "--target", "whisper-cli", "--parallel", str(jobs)], env=clean)
             binary = private(build_dir / "bin/whisper-cli")

@@ -35,18 +35,7 @@ struct Index {
     archive: Archive,
     files: Vec<Member>,
     runtime_signing: String,
-    #[serde(
-        default,
-        deserialize_with = "signing_team",
-        skip_serializing_if = "Option::is_none"
-    )]
     signing_team_id: Option<String>,
-}
-fn signing_team<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error> {
-    // An absent legacy field is allowed; a present null/non-string is not.
-    String::deserialize(deserializer).map(Some)
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +89,15 @@ impl Bundle {
         evidence.verify()?;
         if bytes.is_empty() || bytes.len() > 65_536 {
             return Err("同梱情報の容量が不正です".into());
+        }
+        let shape: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| "同梱情報が不正です")?;
+        if shape["schemaVersion"] != 2
+            || !shape
+                .as_object()
+                .is_some_and(|o| o.contains_key("signingTeamId"))
+        {
+            return Err("非対応の同梱ランタイム形式です".into());
         }
         let index: Index =
             serde_json::from_slice(&bytes).map_err(|_| "同梱情報の形式が不正です")?;
@@ -169,7 +167,15 @@ impl Bundle {
             serde_json::from_str(include_str!("../../model-catalog/whisper-variants.json"))
                 .map_err(|_| "文字起こしモデルの候補情報が不正です")?;
         let names: Vec<_> = variants.iter().map(|v| v.name.as_str()).collect();
-        if names != ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+        if names
+            != [
+                "tiny",
+                "base",
+                "small",
+                "medium",
+                "large-v3",
+                "large-v3-turbo",
+            ]
             || variants.iter().any(|v| {
                 v.bytes == 0
                     || v.bytes > 4 * 1024 * 1024 * 1024
@@ -220,13 +226,14 @@ impl Bundle {
                 }),
             });
         }
-        let vad: Network = serde_json::from_str(include_str!("../../model-catalog/whisper-vad-network.json"))
-            .map_err(|_| "VADの固定配布情報が不正です")?;
+        let vad: Network =
+            serde_json::from_str(include_str!("../../model-catalog/whisper-vad-network.json"))
+                .map_err(|_| "VADの固定配布情報が不正です")?;
         network.files.extend(vad.files);
         network.sources.extend(vad.sources);
         files.extend(network.files);
         sources.extend(network.sources);
-        let recipe = Recipe { schema_version: 3, manifest: PackageManifest {
+        let recipe = Recipe { schema_version: 4, manifest: PackageManifest {
             schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
             model_name: format!("Whisper {name}（多言語）"), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
             quantization: None, target: Target::MacosAarch64,

@@ -19,6 +19,7 @@ export function groupTranscriptRows(all: readonly Utterance[], shown: readonly U
       && row.speakerIds[0] === previous.speakerIds[0]
       && !row.sourceUtteranceId && !previous.sourceUtteranceId
       && !row.recognitionIsSource && !previous.recognitionIsSource
+      && !row.speakerIdentification && !previous.speakerIdentification
       && row.startUs >= previous.endUs && row.startUs - previous.endUs <= MAX_PAUSE_US
       && row.endUs - group[0].startUs <= MAX_PARAGRAPH_US;
     if (joins) group.push(row);

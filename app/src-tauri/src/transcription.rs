@@ -186,6 +186,8 @@ pub(crate) fn retry_preflight(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let parameters = checked_parameters(storage, spec, &original.id)?;
+    let optimization =
+        crate::processing_optimization::Scope::enter(parameters.optimization_version)?;
     let decoded = checked_checkpoint(original, checkpoint.cloned())?;
     let runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
     runtime.verify(cancelled)?;
@@ -219,7 +221,8 @@ pub(crate) fn retry_preflight(
         &spec.profile_snapshot,
         Execution::Whisper(&parameters.engine),
         cancelled,
-    )
+    )?;
+    optimization.finish(cancelled)
 }
 
 fn verify_saved_pcm(
@@ -257,7 +260,6 @@ fn verify_saved_pcm(
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum RecognitionPolicy {
-    SuppressNonSpeechV1,
     GuardedVocabularyV2,
 }
 
@@ -280,6 +282,8 @@ impl AccelerationPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    optimization_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     schema_version: u32,
@@ -472,9 +476,12 @@ fn decode_parameters(
     if let Some(runtime) = &parameters.resident_runtime {
         runtime.accepts("whisper")?;
     }
-    if spec.kind != JobKind::Transcription
-        || !matches!(parameters.schema_version, 1 | 2 | 3)
-        || (parameters.schema_version == 3) != parameters.known_input.is_some()
+    if parameters.resident_runtime.is_none()
+        || parameters.optimization_version != Some(crate::current_formats::OPTIMIZATION)
+        || parameters.recognition_policy != Some(RecognitionPolicy::GuardedVocabularyV2)
+        || spec.kind != JobKind::Transcription
+        || parameters.schema_version != crate::current_formats::TRANSCRIPTION
+        || parameters.known_input.is_none()
         || spec.input_hash != parameters.source.manifest_hash
         || spec.total_units != Some(parameters.units.len() as i64)
         || parameters.units != planned_units(&parameters.source, parameters.known_input.as_ref())?
@@ -482,8 +489,9 @@ fn decode_parameters(
         return Err("解析ジョブの入力計画が不正です".into());
     }
     match (&parameters.vocabulary, parameters.schema_version) {
-        (None, 1) => {}
-        (Some(snapshot), 2 | 3) if parameters.engine.prompt == snapshot.actual_prompt => {
+        (Some(snapshot), crate::current_formats::TRANSCRIPTION)
+            if parameters.engine.prompt == snapshot.actual_prompt =>
+        {
             verify(snapshot)?;
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
@@ -561,9 +569,6 @@ fn planned_units(
         return units(source);
     };
     known.validate(source)?;
-    if !known.needed(source) {
-        return Err("連続音声へ保存区間別の固定条件を混在させることはできません".into());
-    }
     let mut units = Vec::new();
     for (run_index, run) in known.runs.iter().enumerate() {
         let rate = u64::from(source.tracks[run.track_index].sample_rate);
@@ -619,10 +624,12 @@ pub(crate) fn enqueue_with_stamp(
     let total = units.len() as i64;
     let resident_runtime =
         crate::local_engine::resident::prepare_job(storage, meeting_id, operation_id, "whisper")?;
+    let optimization_version =
+        storage.optimization_version_for_operation(meeting_id, operation_id)?;
     let extra = engine.prompt.clone();
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let parameters=Parameters{resident_runtime,schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::GuardedVocabularyV2),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
+        let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::GuardedVocabularyV2),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
         Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
@@ -637,6 +644,8 @@ pub(crate) fn process(
 ) -> Result<Option<String>, String> {
     let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
     let parameters = checked_parameters(storage, &spec, job_id)?;
+    let optimization =
+        crate::processing_optimization::Scope::enter(parameters.optimization_version)?;
     let _resident = crate::local_engine::resident::Scope::enter(
         storage.root(),
         parameters.resident_runtime.as_ref(),
@@ -708,6 +717,24 @@ pub(crate) fn process(
                 &directory.join("input.wav"),
                 &cancelled,
             )?;
+            if parameters.optimization_version == Some(1) {
+                let key = crate::analysis_pcm_cache::key(
+                    &parameters.source,
+                    parameters.known_input.as_ref(),
+                    unit.track_index,
+                    unit.run_index,
+                )?;
+                storage.cache_analysis_core(
+                    &key,
+                    &directory.join("input.wav"),
+                    audio.sample_rate,
+                    audio.total_frames(),
+                    unit.window_first,
+                    unit.core_first,
+                    unit.core_end,
+                    &cancelled,
+                );
+            }
             let duration = (frames * 1_000_000 / u64::from(wave::WHISPER_RATE)) as i64;
             managed::verify(
                 &spec.profile_snapshot,
@@ -811,6 +838,7 @@ pub(crate) fn process(
         }
         runtime.verify(&cancelled)?;
         check_source(storage, &spec, &parameters)?;
+        optimization.finish(&cancelled)?;
         let mut utterances = Vec::new();
         managed::verify(
             &spec.profile_snapshot,
@@ -918,25 +946,6 @@ pub(crate) fn process(
 mod recognition_policy_tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn missing_policy_preserves_old_parameter_bytes_and_unknown_policies_are_rejected() {
-        let legacy = json!({"schemaVersion":1,"source":{"manifestAssetId":"manifest","manifestHash":"hash","tracks":[]},"engine":{"executable":{"path":"/cli","size":1,"sha256":"a".repeat(64)},"model":{"path":"/model","size":1,"sha256":"b".repeat(64)},"vadModel":null,"threads":1,"useGpu":false,"prompt":"用語"},"units":[]});
-        let old: Parameters = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(old.recognition_policy, None);
-        assert_eq!(old.acceleration_policy, None);
-        assert_eq!(serde_json::to_value(old).unwrap(), legacy);
-        let mut new = legacy;
-        new["recognitionPolicy"] = json!("suppressNonSpeechV1");
-        let decoded: Parameters = serde_json::from_value(new.clone()).unwrap();
-        assert_eq!(
-            decoded.recognition_policy,
-            Some(RecognitionPolicy::SuppressNonSpeechV1)
-        );
-        assert_eq!(serde_json::to_value(decoded).unwrap(), new);
-        new["recognitionPolicy"] = json!("unknownPolicy");
-        assert!(serde_json::from_value::<Parameters>(new).is_err());
-    }
 
     #[test]
     fn gpu_policy_is_optional_versioned_and_preserves_base_configuration() {

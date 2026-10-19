@@ -3,6 +3,20 @@ use crate::diarization::{self, sherpa::SherpaConfig, TrackSettings};
 use crate::local_engine::Fingerprint;
 use std::os::unix::fs::PermissionsExt;
 
+pub(in crate::storage) fn extraction_fixture(root: &Path) -> Fingerprint {
+    let helper = root.join("test-embedding-helper");
+    std::fs::write(&helper,r#"#!/usr/bin/python3
+import sys,json
+args=sys.argv[1:]
+def arg(k): return int(args[args.index(k)+1])
+print(json.dumps(dict(schemaVersion=1,engine='sherpa-onnx',engineVersion='1.13.8',sampleRate=16000,firstFrame=arg('--first-frame'),endFrame=arg('--end-frame'),dimension=2,status='ready',reason=None,vectorBits=['3f800000','00000000'])))
+"#).unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let library = root.join("libsherpa-onnx-c-api.dylib");
+    std::fs::write(&library, b"test-only extraction library identity").unwrap();
+    Fingerprint::capture(&library, &|| false).unwrap()
+}
+
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -25,7 +39,7 @@ fn manual_split_ranges_text_original_scope_and_explicit_unknown_survive_reinfere
         .clone();
     let chars: Vec<_> = text.chars().collect();
     let mut p = draft.payload.clone();
-    p.schema_version = 3;
+    p.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     p.utterance_splits.push(UtteranceSplit {
         source_utterance_id: u.id.clone(),
         source_effective_text: text.clone(),
@@ -102,7 +116,7 @@ fn merging_into_added_speaker_survives_fixed_diarization_and_manual_preservation
     let original = storage.load_current_analysis(&meeting).unwrap().unwrap();
     let draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let mut payload = draft.payload.clone();
-    payload.schema_version = 2;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     let id = format!("manual:{}", Uuid::new_v4());
     payload.manual_speakers.push(ManualSpeaker {
         id: id.clone(),
@@ -284,6 +298,7 @@ pub(in crate::storage) fn fixture(
     std::fs::write(&segmentation, b"segmentation").unwrap();
     std::fs::write(&embedding, b"embedding").unwrap();
     std::fs::write(&cli, b"fixture").unwrap();
+    let library = extraction_fixture(root);
     let mut config = SherpaConfig {
         executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
         segmentation_model: Fingerprint::capture(
@@ -293,7 +308,7 @@ pub(in crate::storage) fn fixture(
         .unwrap(),
         embedding_model: Fingerprint::capture(&embedding, &crate::test_support::never_cancelled)
             .unwrap(),
-        runtime_libraries: vec![],
+        runtime_libraries: vec![library],
         threads: 1,
         cluster_threshold_milli: 500,
         window_shift_milli: 100,
@@ -362,7 +377,7 @@ fn corrected_diarization_reads_meeting_time_and_rejects_changed_sealed_map() {
         );
         if change {
             let error = result.err().unwrap();
-            assert!(error.contains("固定した録音入力"), "{error}");
+            assert!(error.contains("固定した保存音声・欠損・時計"), "{error}");
             assert_eq!(
                 storage.fixed_job_input(&job.id).unwrap(),
                 (spec, checkpoint)
@@ -484,7 +499,10 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
     assert_eq!(find(2_400_000).effective_text, "保存した修正2400000");
     assert_eq!(find(2_400_000).attribution_state, "overlap");
     assert_eq!(find(2_400_000).speaker_ids.len(), 2);
-    assert_eq!(find(3_500_000).attribution_state, "unknown");
+    // Sequential speakers are now retained together; the manually cleared
+    // 7-second utterance below must still remain unknown.
+    assert_eq!(find(3_500_000).attribution_state, "overlap");
+    assert_eq!(find(3_500_000).speaker_ids.len(), 2);
     assert_eq!(find(7_000_000).attribution_state, "unknown");
     let system = &view
         .utterances

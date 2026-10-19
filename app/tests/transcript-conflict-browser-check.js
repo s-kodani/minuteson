@@ -7,7 +7,7 @@ async (page, capturePath, detailUI) => {
   const counts = () => page.evaluate(() => { const f = window.monBrowserFixture; return [f.calls.filter(c => c.command === "save_transcript_draft").length,f.recovery.calls.filter(c => c.command === "save_transcript_edit_recovery").length]; });
   const advance = () => page.evaluate(() => {
     const f = window.monBrowserFixture; f.failSave = false; f.draft.lockVersion = 2;
-    f.draft.payload = { schema_version: 1,speaker_names: [{ speaker_id: "speaker-a",display_name: "最新確定名" }],utterances: [{ utterance_id: "speech-a",effective_text: "別操作の最新本文",speaker_ids: ["speaker-b"] }] };
+    f.draft.payload = { schema_version:4,speaker_names: [{ speaker_id: "speaker-a",display_name: "最新確定名" }],utterances: [{ utterance_id: "speech-a",effective_text: "別操作の最新本文",speaker_ids: ["speaker-b"] }] };
   });
   const openMeeting = async () => { await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled); await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).waitFor(); };
   const boot = async () => {
@@ -89,7 +89,7 @@ async (page, capturePath, detailUI) => {
   check(await input().inputValue() === "旧確定要求" && JSON.stringify(beforeReloadResume) === JSON.stringify(await counts()),"stale durable restart could not resume without write");
   results.push("reloaded latest body can explicitly resume a stale stored-only buffer without old-version adoption");
 
-  await boot(); await page.evaluate(() => { const f = window.monBrowserFixture; f.draft.payload.schema_version = 2; f.draft.payload.speaker_merges = [{ source_id: "speaker-a",target_id: "speaker-b" }]; }); await compare(); await choose(); await accept();
+  await boot(); await page.evaluate(() => { const f = window.monBrowserFixture; f.draft.payload.schema_version = 4; f.draft.payload.speaker_merges = [{ source_id: "speaker-a",target_id: "speaker-b" }]; }); await compare(); await choose(); await accept();
   await dialog().getByRole("alert").filter({ hasText: "選択した話者" }).waitFor(); check((await counts())[0] === 1,"hidden name partially resumed other text");
   await dialog().getByRole("group",{ name: "未確定話者名 speaker-a",exact: true }).getByRole("combobox",{ name: "再開する入力",exact: true }).selectOption("omit"); await accept(); await dialog().waitFor({ state: "hidden" });
   check(await input().inputValue() === "現在の未確定本文" && await name().count() === 0,"explicit hidden omission failed");

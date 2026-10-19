@@ -234,7 +234,7 @@ impl Storage {
             "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing'))
              OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping'))
              OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting'))
-             OR EXISTS(SELECT 1 FROM model_packages WHERE source_type!='historical_snapshot' AND state='preparing')
+             OR EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')
              OR EXISTS(SELECT 1 FROM export_records WHERE state='writing')
              OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing')
              OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building')

@@ -517,7 +517,7 @@ fn audio_consent_cold_keep_preserves_stale_jobs_and_requires_restart_before_ordi
     save(&f, &op, &census, &lease());
     let meeting = f.meeting.clone();
     reopen(&mut f, |db| {
-        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale-audio',?1,'transcription','running','stale-audio',?2,'{}','{}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
+        db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('stale-audio',?1,'transcription','running','stale-audio',?2,'{}','{\"schemaVersion\":4}',?2,1,1)",params![meeting,"a".repeat(64)]).unwrap();
     });
     let state = |f: &Fixture| {
         f.storage

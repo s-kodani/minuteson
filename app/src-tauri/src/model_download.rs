@@ -5,8 +5,8 @@
 #[cfg(target_os = "macos")]
 mod archive;
 pub(crate) mod catalog;
-mod transport;
 mod reuse;
+mod transport;
 #[cfg(test)]
 use crate::model_download_recipe::MAX_TOTAL;
 use crate::model_download_recipe::{validate_url, Recipe, Review, MAX_RECIPE};
@@ -249,16 +249,28 @@ pub(crate) fn download_with_bundle(
     cancelled: &impl Fn() -> bool,
     progress: &mut impl FnMut(u64, u64),
 ) -> Result<DownloadReceipt, String> {
-    download_with_bundle_reuse(staging_root, bundle_root, None, operation_id, recipe,
-        expected_recipe_hash, cancelled, progress)
+    download_with_bundle_reuse(
+        staging_root,
+        bundle_root,
+        None,
+        operation_id,
+        recipe,
+        expected_recipe_hash,
+        cancelled,
+        progress,
+    )
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn download_with_bundle_reuse(
-    staging_root: &Path, bundle_root: &Path,
+    staging_root: &Path,
+    bundle_root: &Path,
     reusable: Option<(&Path, &[crate::model_placement::CatalogEntry])>,
-    operation_id: &str, recipe: &Recipe, expected_recipe_hash: &str,
-    cancelled: &impl Fn() -> bool, progress: &mut impl FnMut(u64, u64),
+    operation_id: &str,
+    recipe: &Recipe,
+    expected_recipe_hash: &str,
+    cancelled: &impl Fn() -> bool,
+    progress: &mut impl FnMut(u64, u64),
 ) -> Result<DownloadReceipt, String> {
     if !recipe.has_bundled() {
         return download(
@@ -275,7 +287,9 @@ pub(crate) fn download_with_bundle_reuse(
     }
     let mut bundle = crate::model_bundled_runtime::Bundle::open(bundle_root)?;
     bundle.prepare(bundle_root, recipe, cancelled)?;
-    let candidates = reusable.map(|(root, entries)| reuse::candidates(root, entries, recipe)).unwrap_or_default();
+    let candidates = reusable
+        .map(|(root, entries)| reuse::candidates(root, entries, recipe))
+        .unwrap_or_default();
     stage(
         staging_root,
         operation_id,

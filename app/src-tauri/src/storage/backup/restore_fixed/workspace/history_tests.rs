@@ -21,11 +21,6 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
             .storage
             .create_transcript_draft(&f.meeting, &base.id)
             .unwrap();
-        let cli = f.root.path().join("sherpa-cli");
-        let script = std::fs::read_to_string(&cli)
-            .unwrap()
-            .replace("num_clusters=-1", "num_clusters=1");
-        std::fs::write(&cli, script).unwrap();
         let audio = f.storage.recorded_analysis_input(&f.meeting).unwrap().0;
         let request = crate::storage::analysis_flows::regeneration::Request {
             meeting_id: f.meeting.clone(),

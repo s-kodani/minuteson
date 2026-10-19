@@ -12,7 +12,7 @@ fn split_transcript(storage: &Storage) -> String {
     let utterance = &analysis.utterances[0];
     let speaker = format!("manual:{}", Uuid::new_v4());
     let mut payload = draft.payload.clone();
-    payload.schema_version = 3;
+    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
     payload.manual_speakers.push(ManualSpeaker {
         id: speaker.clone(),
         label: "手動話者".into(),
@@ -143,7 +143,7 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_sta
         assert_eq!(loaded.payload.buffers[0].text, part.effective_text);
         assert_eq!(
             loaded.payload.schema_version,
-            if with_names { 3 } else { 1 }
+            crate::current_formats::EDIT_RECOVERY
         );
         if with_names {
             assert_eq!(loaded.payload.name_buffers.len(), 1);
@@ -300,7 +300,10 @@ fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof()
             .transcript_edit_recovery(&new_meeting, &new_draft, &new_base)
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.payload.schema_version, 2);
+        assert_eq!(
+            loaded.payload.schema_version,
+            crate::current_formats::EDIT_RECOVERY
+        );
         assert_eq!(loaded.payload.discarded_from, Some(proof.clone()));
         assert!(loaded.payload.buffers.is_empty());
         assert!(loaded.payload.name_buffers.is_empty());

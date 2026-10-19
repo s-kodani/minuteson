@@ -48,7 +48,7 @@ fn model_archive() -> Vec<u8> {
 }
 fn recipe_value() -> Value {
     let archive = model_archive();
-    json!({"schemaVersion":2,"manifest":{
+    json!({"schemaVersion":4,"manifest":{
         "schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test",
         "modelName":"synthetic","modelVersion":"1","quantization":null,
         "licenseRef":"synthetic fixture only","target":"macos_aarch64",
@@ -205,11 +205,11 @@ fn future_placement_metadata_budget_is_rejected_before_directory_or_fetch() {
 #[test]
 fn recipe_sha_matches_frontend_canonical_unicode_golden_without_io() {
     // The same independently asserted golden exists in frontend unit tests.
-    let value = json!({"schemaVersion":2,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test","modelName":"合成取得素材","modelVersion":"1","quantization":null,"licenseRef":"synthetic fixture only","target":"macos_aarch64","files":[{"relativePath":"cli","role":"executable","expectedSize":16,"expectedHash":"a".repeat(64)},{"relativePath":"model","role":"asr","expectedSize":17,"expectedHash":"b".repeat(64)}]},"sources":[{"relativePath":"cli","url":"https://example.com/cli"},{"relativePath":"model","url":"https://example.com/model.tar","archive":{"format":"tar","expectedSize":100,"expectedHash":"a".repeat(64),"memberPath":"model"}}]});
+    let value = json!({"schemaVersion":4,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test","modelName":"合成取得素材","modelVersion":"1","quantization":null,"licenseRef":"synthetic fixture only","target":"macos_aarch64","files":[{"relativePath":"cli","role":"executable","expectedSize":16,"expectedHash":"a".repeat(64)},{"relativePath":"model","role":"asr","expectedSize":17,"expectedHash":"b".repeat(64)}]},"sources":[{"relativePath":"cli","url":"https://example.com/cli"},{"relativePath":"model","url":"https://example.com/model.tar","archive":{"format":"tar","expectedSize":100,"expectedHash":"a".repeat(64),"memberPath":"model"}}]});
     let recipe = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert_eq!(
         recipe.review().unwrap().recipe_hash,
-        "6f1480c0ec46ee12daef6daa63fd1b53bac6317d3753d7a7236ac8e3c0e95f52"
+        "aeffb9a375e04f37c51d6c2c9c3c5f817ef0c6315893005418523a4892c914e2"
     );
 }
 #[test]
@@ -575,7 +575,7 @@ fn downloaded_placement_is_distinct_idempotent_private_and_persistent_without_ex
         )
         .unwrap();
     let record: Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(record["schemaVersion"], 2);
+    assert_eq!(record["schemaVersion"], 3);
     assert_eq!(record["download"]["operationId"], operation);
     assert_eq!(record["download"]["recipeHash"], receipt.recipe_hash);
     assert_eq!(record["download"]["sources"], recipe_value()["sources"]);
@@ -1003,7 +1003,7 @@ fn download_origin_requires_explicit_current_recipe_schema() {
     let manifest_hash = hash(&serde_json::to_vec(&recipe.manifest).unwrap());
     origin.validate(&recipe.manifest, &manifest_hash).unwrap();
     let value = serde_json::to_value(origin).unwrap();
-    assert_eq!(value["recipeSchemaVersion"], 2);
+    assert_eq!(value["recipeSchemaVersion"], 4);
     let mut missing = value.clone();
     missing
         .as_object_mut()
@@ -1012,7 +1012,7 @@ fn download_origin_requires_explicit_current_recipe_schema() {
     assert!(
         serde_json::from_value::<crate::model_download_recipe::DownloadOrigin>(missing).is_err()
     );
-    for version in [0, 1, 4] {
+    for version in [0, 1, 2, 3, 5] {
         let mut changed = value.clone();
         changed["recipeSchemaVersion"] = json!(version);
         let parsed: crate::model_download_recipe::DownloadOrigin =
@@ -1534,5 +1534,28 @@ fn unwinding_progress_callback_reaps_owned_transport_and_closes_its_connection()
         closed.load(Ordering::SeqCst),
         "{}",
         observation.lock().unwrap()
+    );
+}
+
+#[test]
+fn one_current_recipe_supports_network_archive_and_bundle_without_version_inference() {
+    let mut value = recipe_value();
+    for version in [0, 1, 2, 3, 5] {
+        value["schemaVersion"] = json!(version);
+        assert!(Recipe::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    value["schemaVersion"] = json!(4);
+    // Ordinary direct files use the same contract as archive members.
+    value["sources"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("archive");
+    value["sources"][1]["url"] = json!("https://example.com/model");
+    let current = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(!current.has_bundled());
+    assert_eq!(current.review().unwrap().archive_bytes, 0);
+    assert_eq!(
+        current.review().unwrap().download_bytes,
+        (BIN.len() + MODEL.len()) as u64
     );
 }

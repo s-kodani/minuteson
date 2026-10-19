@@ -116,9 +116,9 @@ pub struct RecordingConfig {
     pub mode: String,
     pub backend: String,
     pub target_pids: Vec<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::current_formats::optional")]
     pub microphone_device_uid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::current_formats::optional")]
     pub target_application_identity: Option<crate::capture_scope::ApplicationIdentity>,
 }
 
@@ -568,9 +568,8 @@ impl Storage {
                     prefix.verify_at(&self.root.join(base), &|| false)?;
                     prefixes.push(prefix);
                 }
-                (None, None) => {} // Native recordings made before raw segment support.
                 (Some(prefix), Some(status))
-                    if manifest.schema_version == 3
+                    if manifest.schema_version == crate::current_formats::CAPTURE
                         && manifest.recording_owner_id.as_deref() == Some(owner)
                         && status.agrees_with_completed(&prefix, track.frames as u64) =>
                 {
@@ -621,7 +620,7 @@ impl Storage {
             .join(session_id);
         let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
         let manifest = self.read_capture_manifest(&manifest_file)?;
-        if !matches!(manifest.schema_version, 1 | 2 | 3)
+        if manifest.schema_version != crate::current_formats::CAPTURE
             || manifest.state != "saved"
             || !manifest.errors.is_empty()
         {
@@ -727,17 +726,13 @@ impl Storage {
         #[cfg(unix)]
         let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
         #[cfg(unix)]
-        let publication = if raw_prefixes.is_empty() {
-            None // Keep the admission rules for pre-segment native recordings.
-        } else {
-            Some(flac::Publication::prepare(
-                self,
-                &base,
-                &manifest_file.hash,
-                &manifest,
-                &raw_prefixes,
-            )?)
-        };
+        let publication = Some(flac::Publication::prepare(
+            self,
+            &base,
+            &manifest_file.hash,
+            &manifest,
+            &raw_prefixes,
+        )?);
         // Conversion can take time. Revalidate the manifest before the DB
         // transition, and keep the conversion lease alive through commit.
         let current_manifest = self.checked_capture_file(&manifest_file.relative, None)?;
@@ -1107,7 +1102,7 @@ pub(in crate::storage) mod tests {
     }
 
     #[test]
-    fn saved_recording_beyond_four_hours_verifies_physical_caf_and_commits_after_restart() {
+    fn unsealed_long_recording_is_not_published_on_restart() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().into()).unwrap();
         let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
@@ -1136,40 +1131,28 @@ pub(in crate::storage) mod tests {
         .unwrap();
         drop(storage);
         let reopened = Storage::open(temp.path().into()).unwrap();
-        assert_eq!(
-            reopened.recover_completed_recordings().unwrap(),
-            vec![session.clone()]
-        );
+        assert!(reopened.recover_completed_recordings().unwrap().is_empty());
         let saved = load_session(&reopened.connection.lock().unwrap(), &session)
             .unwrap()
             .unwrap();
-        assert_eq!(saved.state, "saved");
-        assert_eq!(saved.duration_us, 14_460_000_000);
-        assert_eq!(
+        assert_ne!(saved.state, "saved");
+        assert_ne!(
             reopened.get_meeting(&meeting).unwrap().unwrap().lifecycle,
             "recorded"
         );
-        let connection = reopened.connection.lock().unwrap();
-        let duration: i64 = connection
-            .query_row(
-                "SELECT duration_us FROM meetings WHERE id = ?1",
-                params![meeting],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(duration, 14_460_000_000);
-        let chunks: Vec<(i64, i64, i64, i64, i64, String)> = connection
-            .prepare("SELECT c.frame_count, c.sample_rate, c.channels, c.start_us, c.end_us, t.processing_config_json FROM audio_chunks c JOIN audio_tracks t ON t.id = c.track_id WHERE c.meeting_id = ?1 ORDER BY c.channels")
-            .unwrap().query_map(params![meeting], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))
-            .unwrap().collect::<Result<_, _>>().unwrap();
-        assert_eq!(chunks.len(), 2);
-        for (index, chunk) in chunks.iter().enumerate() {
-            assert_eq!(
-                (chunk.0, chunk.1, chunk.2, chunk.3, chunk.4),
-                (frames, 8000, index as i64 + 1, 0, 14_460_000_000)
-            );
-            assert_eq!(chunk.5, "{\"timeline_alignment\":\"unverified\"}");
+        for name in ["microphone.caf", "system.caf"] {
+            assert!(output.join(name).is_file());
         }
+        assert_eq!(
+            reopened
+                .connection
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM audio_tracks", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     fn caf(channels: u32) -> Vec<u8> {
@@ -1262,18 +1245,69 @@ pub(in crate::storage) mod tests {
         std::fs::create_dir_all(&output).unwrap();
         std::fs::write(output.join("microphone.caf"), caf(1)).unwrap();
         std::fs::write(output.join("system.caf"), caf(2)).unwrap();
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
-            "targetPIDs": [], "state": "saved", "errors": [],
-            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
-            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
+        let mut manifest = serde_json::json!({
+            "schemaVersion": 4, "inputDiagnosticsState":"unavailable", "captureMode": "system", "backend": "screencapturekit",
+            "targetPIDs": [], "state": "saved", "errors": [], "recordingOwnerId":session.id,
+            "captureClock":{"domain":"mach_continuous_time","originUtcMs":1234567890000_i64,"uncertaintyNs":1000000},
+            "captureEnd":{"method":"acquisition_closed","microphoneClosedUs":1000000,"systemClosedUs":1000000,"endUs":1000000},
+            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0,"clockSegments":[{"sourceFrameStart":0,"sourceFrameEnd":48000,"timelineStartUs":0,"timelineEndUs":1000000,"mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"}]},
+            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0,"clockSegments":[{"sourceFrameStart":0,"sourceFrameEnd":48000,"timelineStartUs":0,"timelineEndUs":1000000,"mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"}]},
         });
+        seal_probe_fixture(&output, &mut manifest);
         std::fs::write(
             output.join("manifest.json"),
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
         (meeting.id, session.id, output, manifest)
+    }
+
+    // Make native ownership proofs once, before tests mutate any fields.
+    pub(in crate::storage) fn seal_probe_fixture(output: &Path, manifest: &mut serde_json::Value) {
+        use serde_json::{json, Value};
+        use sha2::{Digest, Sha256};
+        let owner = manifest["recordingOwnerId"].clone();
+        for lane in ["microphone", "system"] {
+            let mut audio = std::fs::read(output.join(format!("{lane}.caf"))).unwrap();
+            // The general CAF fixture includes a free chunk. Native raw CAFs
+            // have the canonical 68-byte header, with identical PCM samples.
+            if audio.get(52..56) == Some(b"free".as_slice()) {
+                audio.drain(52..67);
+            }
+            let track = &manifest[lane];
+            let start = track["clockSegments"][0]["timelineStartUs"]
+                .as_i64()
+                .unwrap();
+            let mut maps = track["clockSegments"].as_array().unwrap().clone();
+            let clocks:Vec<_>=maps.iter().map(|m|json!({"startNanoseconds":9_000_000_000_000_i64+m["timelineStartUs"].as_i64().unwrap()*1000,"endNanoseconds":9_000_000_000_000_i64+m["timelineEndUs"].as_i64().unwrap()*1000})).collect();
+            for map in &mut maps {
+                for key in ["timelineStartUs", "timelineEndUs"] {
+                    map[key] = json!(map[key].as_i64().unwrap() - start);
+                }
+            }
+            let name = format!("raw-{lane}-00000001.caf");
+            std::fs::write(output.join(&name), &audio).unwrap();
+            let entry = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sequence":1,"audioName":name,"sourceFrameStart":0,"frames":track["frames"],"sampleRate":track["sampleRate"],"channels":track["channels"],"captureOriginNanoseconds":9_000_000_000_000_i64+start*1000,"clockSegments":maps,"clockNanoseconds":clocks,"audioBytes":audio.len(),"audioSHA256":format!("{:x}",Sha256::digest(&audio)),"previousEntrySHA256":null});
+            let bytes = serde_json::to_vec(&entry).unwrap();
+            std::fs::write(output.join(format!("raw-{lane}-00000001.json")), &bytes).unwrap();
+            let mut tip = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sealedSegments":1,"sealedFrames":track["frames"],"lastEntrySHA256":format!("{:x}",Sha256::digest(&bytes)),"producerClosed":true});
+            std::fs::write(
+                output.join(format!("raw-{lane}.json")),
+                serde_json::to_vec(&tip).unwrap(),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            for name in [
+                format!("raw-{lane}-00000001.caf"),
+                format!("raw-{lane}-00000001.json"),
+                format!("raw-{lane}.json"),
+            ] {
+                std::fs::set_permissions(output.join(name), std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            tip["failure"] = Value::Null;
+            manifest[lane]["rawSegments"] = tip;
+        }
     }
 
     #[test]
@@ -1369,12 +1403,17 @@ pub(in crate::storage) mod tests {
                 "draft"
             );
         }
-        let legacy = config();
-        let json = serde_json::to_string(&legacy).unwrap();
-        assert!(!json.contains("target_application_identity"));
+        let current = config();
+        let json = serde_json::to_string(&current).unwrap();
+        let fields: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(fields
+            .as_object()
+            .unwrap()
+            .contains_key("target_application_identity"));
+        assert!(fields["target_application_identity"].is_null());
         assert_eq!(
             serde_json::from_str::<RecordingConfig>(&json).unwrap(),
-            legacy
+            current
         );
         let mut cfg = config();
         cfg.mode = "application".into();
@@ -1735,7 +1774,7 @@ pub(in crate::storage) mod tests {
         let fixture = PathBuf::from(std::env::var_os("MON_CAPTURE_TEST_FIXTURE_DIR").unwrap());
         let manifest_bytes = std::fs::read(fixture.join("manifest.json")).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
-        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["schemaVersion"], 4);
         assert_eq!(manifest["state"], "saved");
         assert_eq!(manifest["requestedDurationSeconds"], 5);
         let test = &manifest["captureTest"];
@@ -1926,31 +1965,11 @@ pub(in crate::storage) mod tests {
     fn restart_commits_only_complete_saved_probe_outputs() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let meeting = storage.create_meeting("復旧する録音").unwrap();
-        let session = storage
-            .prepare_recording(&meeting.id, &config(), "recover-start")
+        let (meeting_id, session_id, output, mut manifest) = saved_probe_fixture(&storage);
+        let meeting = storage.get_meeting(&meeting_id).unwrap().unwrap();
+        let session = load_session(&storage.connection.lock().unwrap(), &session_id)
+            .unwrap()
             .unwrap();
-        storage.mark_recording_started(&session.id).unwrap();
-        let output = temp
-            .path()
-            .join("meetings")
-            .join(&meeting.id)
-            .join("audio")
-            .join(&session.id);
-        std::fs::create_dir_all(&output).unwrap();
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
-            "targetPIDs": [], "state": "saved", "errors": [],
-            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
-            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
-        });
-        std::fs::write(
-            output.join("manifest.json"),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
-        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
         drop(storage);
 
         let reopened = Storage::open(temp.path().to_owned()).unwrap();
@@ -2023,31 +2042,12 @@ pub(in crate::storage) mod tests {
     fn failed_registration_keeps_files_retryable() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let meeting = storage.create_meeting("確定再試行").unwrap();
-        let session = storage
-            .prepare_recording(&meeting.id, &config(), "retry-start")
+        let (meeting_id, session_id, output, mut manifest) = saved_probe_fixture(&storage);
+        let meeting = storage.get_meeting(&meeting_id).unwrap().unwrap();
+        let session = load_session(&storage.connection.lock().unwrap(), &session_id)
+            .unwrap()
             .unwrap();
-        storage.mark_recording_started(&session.id).unwrap();
-        let output = temp
-            .path()
-            .join("meetings")
-            .join(&meeting.id)
-            .join("audio")
-            .join(&session.id);
-        std::fs::create_dir_all(&output).unwrap();
-        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
         std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
-            "targetPIDs": [], "state": "saved", "errors": [],
-            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
-            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
-        });
-        std::fs::write(
-            output.join("manifest.json"),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .unwrap();
         assert!(storage.finalize_recording(&session.id).is_err());
         assert_eq!(
             storage.interrupt_recording(&session.id).unwrap().state,
@@ -2082,7 +2082,7 @@ pub(in crate::storage) mod tests {
                 input_analysis_id: None,
                 input_hash: "a".repeat(64),
                 profile_snapshot: serde_json::json!({}),
-                parameters: serde_json::json!({}),
+                parameters: serde_json::json!({"schemaVersion":4}),
                 total_units: None,
             })
             .unwrap();
@@ -2110,27 +2110,13 @@ pub(in crate::storage) mod tests {
     fn saved_probe_outputs_are_registered_together_and_manifest_mismatch_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let meeting = storage.create_meeting("録音").unwrap();
-        let session = storage
-            .prepare_recording(&meeting.id, &config(), "start")
+        let (meeting_id, session_id, output, mut manifest) = saved_probe_fixture(&storage);
+        let meeting = storage.get_meeting(&meeting_id).unwrap().unwrap();
+        let session = load_session(&storage.connection.lock().unwrap(), &session_id)
+            .unwrap()
             .unwrap();
-        storage.mark_recording_started(&session.id).unwrap();
-        let output = temp
-            .path()
-            .join("meetings")
-            .join(&meeting.id)
-            .join("audio")
-            .join(&session.id);
-        std::fs::create_dir_all(&output).unwrap();
-        // Physical CAF frames must also match before this transaction can publish.
-        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
         std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "captureMode": "application", "backend": "screencapturekit",
-            "targetPIDs": [], "state": "saved", "errors": [],
-            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
-            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
-        });
+        manifest["captureMode"] = serde_json::json!("application");
         std::fs::write(
             output.join("manifest.json"),
             serde_json::to_vec(&manifest).unwrap(),

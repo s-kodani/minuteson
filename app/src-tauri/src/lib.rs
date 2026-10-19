@@ -1,4 +1,5 @@
 mod analysis_flow;
+mod analysis_pcm_cache;
 mod analysis_worker;
 mod application_close;
 mod audio;
@@ -10,6 +11,7 @@ mod capture_inputs;
 mod capture_manifest;
 mod capture_scope;
 mod capture_test;
+mod current_formats;
 mod data_controller;
 mod diarization;
 mod exports;
@@ -34,6 +36,7 @@ mod model_official_catalog;
 mod model_placement;
 mod model_rebinding;
 mod playback;
+mod processing_optimization;
 mod recorder;
 mod recorder_info;
 mod recorder_operation_notices;
@@ -49,6 +52,8 @@ mod restored_processing;
 mod rounded_windows;
 mod saved_artifact;
 mod session;
+mod speaker_completion;
+mod speaker_features;
 mod startup_attention;
 mod storage;
 mod transcription;
@@ -990,7 +995,9 @@ async fn publish_regenerated_transcription(
             &result,
             Ok(storage::analysis_flows::regeneration::Publication::Published { .. })
         ) {
-            if let Err(error) = voice::enqueue_automatic(&app.state::<Storage>(), &meeting_id) {
+            if let Err(error) =
+                speaker_completion::after_analysis(&app.state::<Storage>(), &meeting_id)
+            {
                 internal_logs::report_error("voice_matching", &error);
             }
             let _ = AnalysisController::kick(&app);
@@ -1171,7 +1178,11 @@ async fn retry_voice_job(
 ) -> Result<storage::JobSnapshot, String> {
     let app = minutes_app(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let job = voice::retry(&app.state::<Storage>(), &job_id, &operation_id)?;
+        let job = if app.state::<Storage>().get_job(&job_id)?.kind == "speaker_completion" {
+            speaker_completion::retry(&app.state::<Storage>(), &job_id, &operation_id)?
+        } else {
+            voice::retry(&app.state::<Storage>(), &job_id, &operation_id)?
+        };
         AnalysisController::kick(&app)?;
         Ok(job)
     })
@@ -2136,6 +2147,85 @@ async fn get_current_analysis(
 }
 
 #[tauri::command]
+fn get_speaker_completion_preferences(
+    window: WebviewWindow,
+) -> Result<storage::completion_preferences::Snapshot, String> {
+    minutes_app(&window)?;
+    window.state::<Storage>().speaker_completion_preferences()
+}
+#[tauri::command]
+fn save_speaker_completion_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::completion_preferences::CompletionPreferences,
+) -> Result<storage::completion_preferences::Snapshot, String> {
+    minutes_app(&window)?;
+    window
+        .state::<Storage>()
+        .save_speaker_completion_preferences(expected_lock_version, payload)
+}
+#[tauri::command]
+fn get_voice_matching_preferences(
+    window: WebviewWindow,
+) -> Result<storage::voice_preferences::Snapshot, String> {
+    minutes_app(&window)?;
+    window.state::<Storage>().voice_matching_preferences()
+}
+#[tauri::command]
+fn save_voice_matching_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::voice_preferences::VoiceMatchingPreferences,
+) -> Result<storage::voice_preferences::Snapshot, String> {
+    minutes_app(&window)?;
+    window
+        .state::<Storage>()
+        .save_voice_matching_preferences(expected_lock_version, payload)
+}
+#[tauri::command]
+async fn update_speaker_assignments(
+    window: WebviewWindow,
+    request: storage::speaker_assignment_update::Request,
+) -> Result<storage::speaker_assignment_update::Reply, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(reply) = app
+            .state::<Storage>()
+            .assignment_completion_reply(&request)?
+        {
+            AnalysisController::kick(&app)?;
+            return Ok(reply);
+        }
+        let mut reply = app
+            .state::<Storage>()
+            .update_speaker_assignments(&request)?;
+        match app
+            .state::<Storage>()
+            .enqueue_completion_for_assignment(&request)
+        {
+            Ok(job) => {
+                reply.completion_job_id = job.as_ref().map(|j| j.id.clone());
+                if job.is_none() {
+                    if let Err(error) =
+                        voice::enqueue_automatic(&app.state::<Storage>(), &request.meeting_id)
+                    {
+                        reply.matching_error = Some(error);
+                    }
+                }
+                if let Err(error) = AnalysisController::kick(&app) {
+                    reply.matching_error = Some(error);
+                }
+            }
+            Err(error) => reply.matching_error = Some(error),
+        }
+        let _ = app.emit("analysis-version-changed", &request.meeting_id);
+        Ok(reply)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn consolidate_transcript(
     window: WebviewWindow,
     request: storage::transcript_consolidation::Request,
@@ -2404,6 +2494,11 @@ pub fn run() {
                 rename_meeting,
                 get_current_analysis,
                 consolidate_transcript,
+                update_speaker_assignments,
+                get_voice_matching_preferences,
+                get_speaker_completion_preferences,
+                save_speaker_completion_preferences,
+                save_voice_matching_preferences,
                 get_transcript_draft,
                 begin_transcript_draft,
                 save_transcript_draft,

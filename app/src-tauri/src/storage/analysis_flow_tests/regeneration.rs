@@ -23,11 +23,6 @@ fn request(s: &Storage, meeting: &str) -> Request {
 fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
-    let cli = root.path().join("sherpa-cli");
-    let script = std::fs::read_to_string(&cli)
-        .unwrap()
-        .replace("num_clusters=-1", "num_clusters=5");
-    std::fs::write(&cli, script).unwrap();
     let before = s.diarization_preferences().unwrap();
     let track = s.recorded_analysis_input(&m).unwrap().0.tracks[0]
         .id

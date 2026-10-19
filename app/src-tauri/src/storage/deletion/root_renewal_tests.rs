@@ -324,8 +324,7 @@ fn root_renewal_second_generation_handles_another_reserved_rename_without_expand
 }
 
 #[test]
-fn current_v3_renewal_chain_retains_all_reserved_names_and_requires_fresh_consent_on_reappearance()
-{
+fn current_renewal_chain_retains_all_reserved_names_and_requires_fresh_consent_on_reappearance() {
     let f = Fixture::new();
     let (mut r, reserved) = paused_root(&f, "staged");
     let original = snapshot(&f);
@@ -350,7 +349,7 @@ fn current_v3_renewal_chain_retains_all_reserved_names_and_requires_fresh_consen
     let versions: Vec<u32> = db.prepare("SELECT json_extract(target_manifest_json,'$.version') FROM maintenance_operations WHERE kind='delete_meeting' AND json_extract(progress_json,'$.confirmationRecorded')=1 ORDER BY id")
         .unwrap().query_map([], |row| row.get(0))
         .unwrap().collect::<Result<_, _>>().unwrap();
-    assert_eq!(versions, vec![3, 3]);
+    assert_eq!(versions, vec![5, 5]);
     drop(db);
     std::fs::create_dir(&reserved).unwrap();
     std::fs::write(reserved.join("late"), b"CURRENT REAPPEARED UNKNOWN").unwrap();

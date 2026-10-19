@@ -90,6 +90,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
                 const proof = await invoke<unknown>("get_analysis_notification_output", { jobId: job.id });
                 if (disposed) return;
                 const event = tracker.confirmOutput(job, verifiedJobOutput(job, proof));
+                if(event && job.kind==="speaker_completion") event.message += `。${(proof as {warnings:string[]}).warnings.join("。")}`;
                 if (event) publish([event]);
               } catch (cause) { proofError ||= `「${job.meetingTitle}」の${jobName(job.kind)}の保存結果を確認できません: ${String(cause)}`; }
             }

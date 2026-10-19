@@ -35,9 +35,7 @@ struct Progress {
     census_hash: String,
     next: usize,
     pending: Option<Pending>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     confirmation: Option<renewal::Reference>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     previously_completed: bool,
 }
 impl Progress {
@@ -57,8 +55,11 @@ impl Progress {
     }
     fn validate(&self, saved: &Prepared, plan: &Plan) -> Result<(), String> {
         let entries = &plan.observations;
-        if !((self.version == 2 && self.confirmation.is_none() && !self.previously_completed)
-            || (self.version == 3 && self.confirmation.as_ref().is_some_and(|r| r.valid())))
+        if self.version != 4
+            || match &self.confirmation {
+                None => self.previously_completed,
+                Some(r) => !r.valid(),
+            }
             || self.census_hash != saved.header.census_hash
             || self.next > entries.len()
             || (self.phase == Phase::Completed
@@ -519,7 +520,7 @@ pub(crate) fn start(
         return Err("モデル削除の開始対象が保存した同意と一致しません".into());
     }
     let progress = Progress {
-        version: 2,
+        version: 4,
         phase: Phase::Removing,
         census_hash: saved.header.census_hash.clone(),
         next: 0,

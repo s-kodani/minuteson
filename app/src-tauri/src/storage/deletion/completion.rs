@@ -243,7 +243,7 @@ pub(super) fn start(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let file_form: Option<bool> = db.query_row("SELECT json_extract(progress_json,'$.version')=3 FROM maintenance_operations WHERE id=?1", params![files.confirmed().operation()], |r|r.get(0)).map_err(|e|e.to_string())?;
+    let file_form: Option<bool> = db.query_row("SELECT json_extract(progress_json,'$.version')=4 FROM maintenance_operations WHERE id=?1", params![files.confirmed().operation()], |r|r.get(0)).map_err(|e|e.to_string())?;
     if matches!(state.as_str(), "cleanup" | "completed") && file_form != Some(true) {
         let current = Receipt::load(&db, files.confirmed().operation(), check)?;
         files.matches_completion(&current.confirmed, &current.progress.files)?;

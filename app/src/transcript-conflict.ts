@@ -41,7 +41,7 @@ function atoms(payload: DraftPayload) {
 // remain intact. Text and speaker assignment are compared independently.
 export function planTranscriptConflict(base: DraftPayload,local: DraftPayload,latest: DraftPayload): TranscriptConflictPlan {
   const payloads = [base,local,latest].map(value => {
-    if(![1,2,3].includes(value.schema_version)) throw Error("未対応の下書き形式は比較できません");
+    if(value.schema_version !== 4) throw Error("未対応の下書き形式は比較できません");
     return canonicalPayload(value);
   });
   const [before,ours,theirs] = payloads.map(atoms);
@@ -66,7 +66,7 @@ export function resolveTranscriptConflict(plan: TranscriptConflictPlan,choices: 
     const item = (choice === "local" ? local : latest).get(row.key);
     if(item) selected.set(row.key,item); else selected.delete(row.key);
   }
-  const result: DraftPayload = { schema_version: Math.max(plan.local.schema_version,plan.latest.schema_version),speaker_names: [],utterances: [] };
+  const result: DraftPayload = { schema_version: 4,speaker_names: [],utterances: [] };
   const utteranceIds = new Set<string>();
   for(const item of selected.values()) {
     if(["presence","text","assignment"].includes(item.kind)) { utteranceIds.add(item.id); continue; }
