@@ -199,7 +199,10 @@ impl MeetingAudio {
                 || audio.start_us < 0
                 || audio.end_us <= audio.start_us
                 || audio.end_us > end_us
-                || !matches!(audio.track_kind.as_str(), "mic" | "system" | "imported")
+                || !matches!(
+                    audio.track_kind.as_str(),
+                    "mic" | "system" | "imported" | "processed"
+                )
                 || audio.spans.is_empty()
                 || audio.spans.len() > 1024
             {
@@ -257,7 +260,39 @@ impl MeetingAudio {
         })
     }
 
+    /// Analysis preserves meeting time, padding each unavailable source with
+    /// silence independently. Interactive playback continues to reject holes.
+    pub(crate) fn read_analysis_pcm(
+        &mut self,
+        offset: u64,
+        frames: u64,
+    ) -> Result<Vec<u8>, String> {
+        let end = offset.checked_add(frames).ok_or("音声範囲が不正です")?;
+        if frames == 0 || frames > PREVIEW_FRAMES || end > self.total_frames {
+            return Err("会議音声の読出し範囲が不正です".into());
+        }
+        let mut boundaries = vec![offset, end];
+        for gap in &self.missing_ranges {
+            if offset < gap.start_frame && gap.start_frame < end {
+                boundaries.push(gap.start_frame);
+            }
+            if offset < gap.end_frame && gap.end_frame < end {
+                boundaries.push(gap.end_frame);
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let mut result = Vec::with_capacity(frames as usize * 4);
+        for pair in boundaries.windows(2) {
+            result.extend(self.read_pcm_mode(pair[0], pair[1] - pair[0], true)?);
+        }
+        Ok(result)
+    }
+
     pub(crate) fn read_pcm(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
+        self.read_pcm_mode(offset, frames, false)
+    }
+    fn read_pcm_mode(&mut self, offset: u64, frames: u64, pad: bool) -> Result<Vec<u8>, String> {
         if frames == 0
             || frames > PREVIEW_FRAMES
             || offset
@@ -266,7 +301,7 @@ impl MeetingAudio {
         {
             return Err("会議音声の読出し範囲が不正です".into());
         }
-        if self.readable_frames(offset, frames)? != frames {
+        if !pad && self.readable_frames(offset, frames)? != frames {
             return Err("会議音声の読出しが欠損区間を横断しています".into());
         }
         if let Some(cache) = &self.cached {
@@ -281,6 +316,15 @@ impl MeetingAudio {
         // Constant headroom for both: no gain jump when one track starts/ends.
         let gain = 1.0 / self.sources.len() as f64;
         for source in &mut self.sources {
+            if pad
+                && self.missing_ranges.iter().any(|gap| {
+                    gap.track_kind == source.audio.track_kind
+                        && gap.start_frame <= offset
+                        && offset < gap.end_frame
+                })
+            {
+                continue;
+            }
             let mut known_start = 0_u64;
             let mut known_end = self.total_frames;
             for gap in self

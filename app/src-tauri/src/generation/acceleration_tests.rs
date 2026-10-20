@@ -111,7 +111,7 @@ fn every_catalog_model_and_other_model_bytes_are_eligible_for_auto_metal() {
         }
         count += 1;
     }
-    assert_eq!(count, 4);
+    assert_eq!(count, 6);
     let mut c = config();
     c.model.sha256 = "a".repeat(64);
     c.model.size = 123;

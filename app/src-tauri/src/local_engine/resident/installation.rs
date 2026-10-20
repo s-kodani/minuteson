@@ -46,6 +46,13 @@ impl Snapshot {
         Ok(())
     }
     pub(crate) fn resolve(&self, root: &Path) -> Result<Fingerprint, String> {
+        self.resolve_from(root, || Ok(resources()?.join(&self.name)))
+    }
+    fn resolve_from(
+        &self,
+        root: &Path,
+        source: impl FnOnce() -> Result<PathBuf, String>,
+    ) -> Result<Fingerprint, String> {
         self.validate()?;
         let cache = root.join("inference-runtimes");
         ensure_directory(&cache)?;
@@ -53,7 +60,7 @@ impl Snapshot {
         ensure_directory(&directory)?;
         let path = directory.join(&self.name);
         if path.symlink_metadata().is_err() {
-            let source = resources()?.join(&self.name);
+            let source = source()?;
             let proof = Fingerprint {
                 path: source.clone(),
                 size: self.bytes,
@@ -70,12 +77,13 @@ impl Snapshot {
                 let mut output = options.open(&temporary).map_err(|e| e.to_string())?;
                 std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
                 output.sync_all().map_err(|e| e.to_string())?;
-                Fingerprint {
-                    path: temporary.clone(),
-                    size: self.bytes,
-                    sha256: self.sha256.clone(),
+                // The staging name is removed after publication. Verify its
+                // bytes without retaining that name in the operation's final
+                // verification set; resolve() retains the published file.
+                let staged = Fingerprint::capture(&temporary, &|| false)?;
+                if staged.size != self.bytes || staged.sha256 != self.sha256 {
+                    return Err("配置中の推論ワーカーのハッシュが一致しません".into());
                 }
-                .verify(&|| false)?;
                 match std::fs::hard_link(&temporary, &path) {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -238,4 +246,49 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(snapshot)
+}
+
+#[cfg(all(test, unix))]
+mod installation_tests {
+    use super::*;
+    use sha2::Digest;
+
+    #[test]
+    fn first_installation_can_finish_shared_verification_after_staging_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().canonicalize().unwrap();
+        let source = directory.join("bundled-worker");
+        let bytes = b"#!/bin/sh\nexit 0\n";
+        std::fs::write(&source, bytes).unwrap();
+        let snapshot = Snapshot {
+            protocol: 1,
+            engine: "sherpa".into(),
+            name: "mon-sherpa-worker".into(),
+            bytes: bytes.len() as u64,
+            sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+        };
+        let scope = crate::local_engine::verification::Scope::enter(true).unwrap();
+        let proof = snapshot
+            .resolve_from(&directory, || Ok(source.clone()))
+            .unwrap();
+        assert_eq!(std::fs::read(&proof.path).unwrap(), bytes);
+        assert!(!std::fs::read_dir(proof.path.parent().unwrap())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".install-")));
+        scope.finish(&|| false).unwrap();
+        assert_eq!(
+            snapshot
+                .resolve_from(&directory, || panic!("cached worker must be reused"))
+                .unwrap(),
+            proof
+        );
+        scope.finish(&|| false).unwrap();
+        // Retained verification still protects the published executable.
+        std::fs::write(&proof.path, b"tampered").unwrap();
+        assert!(scope.finish(&|| false).is_err());
+    }
 }

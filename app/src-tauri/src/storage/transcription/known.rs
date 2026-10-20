@@ -98,6 +98,16 @@ fn runs(source: &RecordedAudioPlan, duration: i64, gaps: &[Gap]) -> Result<Vec<R
             }
         }
     }
+    if source.tracks.len() == 1 && source.tracks[0].kind == "processed" {
+        let t = &source.tracks[0];
+        return Ok(vec![Run {
+            track_index: 0,
+            start_us: 0,
+            end_us: t.end_us,
+            first_frame: 0,
+            end_frame: t.total_frames()?,
+        }]);
+    }
     let mut result = Vec::new();
     for (track_index, track) in source.tracks.iter().enumerate() {
         if !(1..=8).contains(&track.channels) || track.end_us > duration {

@@ -290,17 +290,31 @@ mod tests {
                 expected_output
             );
             let long = capacity.execution(&e, "system", &"x".repeat(27000));
+            let context = choice["tokenLimits"]["maxContextTokens"].as_u64().unwrap() as u32;
             if expected_output > ADAPTIVE_OUTPUT_RESERVE {
                 let runtime = long.unwrap();
-                assert_eq!(runtime.context_tokens, 40960);
-                assert_eq!(runtime.prediction_tokens, 40960 - 27000 - 6 - 512);
+                assert_eq!(runtime.context_tokens, context);
+                assert_eq!(
+                    runtime.prediction_tokens,
+                    expected_output.min(context - 27000 - 6 - 512)
+                );
             } else {
                 assert!(long.is_err());
+            }
+            if context == 262144 {
+                let limit = capacity.input_limit(&e, 5400).unwrap();
+                assert_eq!(limit, 262144 - 8192 - 512);
+                let runtime = capacity.execution(&e, "", &"x".repeat(limit)).unwrap();
+                assert_eq!(
+                    (runtime.context_tokens, runtime.prediction_tokens),
+                    (262144, 8192)
+                );
+                assert!(capacity.execution(&e, "", &"x".repeat(limit + 1)).is_err());
             }
             e.model.size += 1;
             assert!(Capacity::reviewed(&e.model).is_err());
         }
-        assert_eq!(seen.len(), 4);
+        assert_eq!(seen.len(), 6);
     }
     #[test]
     fn model_input_limit_is_independent_of_context_and_output_limits() {

@@ -679,7 +679,7 @@ impl Storage {
                 "SELECT EXISTS(SELECT 1 FROM audio_gaps WHERE track_id = ?1 AND start_us < ?3 AND end_us > ?2 AND recovered = 0)",
                 params![track, start, end], |row| row.get(0),
             ).map_err(|e| e.to_string())?;
-            if gaps && !whole_meeting {
+            if gaps && !whole_meeting && !(kind == "processed" && direct_playback) {
                 return Err("この発言の音声に欠損区間があります".into());
             }
             let mappings = super::transcription::read_clock_segments(&connection, track)?;

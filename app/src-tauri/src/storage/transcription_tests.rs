@@ -101,7 +101,7 @@ fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape
     let fixed = storage.fixed_job_input(&job.id).unwrap();
     assert_eq!(
         fixed.0.parameters["source"],
-        serde_json::to_value(&mapped).unwrap()
+        serde_json::to_value(storage.recorded_analysis_input(&meeting).unwrap().0).unwrap()
     );
     assert_eq!(fixed.0.parameters["units"][0]["coreEnd"], 70400);
     storage.acquire_next_job().unwrap().unwrap();

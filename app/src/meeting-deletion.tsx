@@ -133,7 +133,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
       completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
-      setToast(receipt.deleted ? "会議の管理データを削除しました。アプリ内では復元できません。" : "ファイル削除を開始せず保持して中止しました。部分削除の復元ではありません。");
+      setToast(receipt.deleted ? "会議の管理データを削除しました。この操作は取り消せません。" : "ファイル削除を開始せず保持して中止しました。部分削除の復元ではありません。");
       if (receipt.deleted) void latest.current.onDeleted(receipt).catch(cause => setError(`削除は完了しています。会議一覧を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }

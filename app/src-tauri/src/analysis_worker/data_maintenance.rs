@@ -74,7 +74,6 @@ impl AnalysisController {
         cancelled: &impl Fn() -> bool,
     ) -> Result<DataMaintenanceLease, String> {
         crate::storage::deletion::operations::authorize_review(storage, Some(operation))?;
-        storage.clear_analysis_pcm();
         self.begin_data_maintenance_inner(
             recording_active,
             import_blocked,

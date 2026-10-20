@@ -192,7 +192,7 @@ fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
 }
 fn tracks(f: &Fixture) -> Vec<crate::diarization::TrackSettings> {
     f.storage
-        .recorded_audio_plan(&f.meeting)
+        .ensure_meeting_mix(&f.meeting, &|| false, &|_, _| {})
         .unwrap()
         .tracks
         .into_iter()

@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 6);
+        assert_eq!(choices.len(), 8);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
             assert!(ids.insert(choice.id.clone()));
@@ -121,7 +121,9 @@ mod tests {
                         limits.max_output_tokens,
                         limits.max_context_tokens
                     ),
-                    if matches!(
+                    if choice.id.contains("qwen35-") {
+                        (262144, 32768, 262144)
+                    } else if matches!(
                         choice.id.as_str(),
                         "llama-b11533-qwen3-8b-q4km" | "llama-b11533-qwen3-4b-q4km"
                     ) {
@@ -150,6 +152,12 @@ mod tests {
                 }
                 "llama-b11533-qwen3-4b-q4km" => {
                     "920cc12b71fdc8d1dc66234050be25d0c577f16a639e4bf55048ca8e634e70b8"
+                }
+                "llama-b11533-qwen35-4b-q4km" => {
+                    "00f77ecbf06bfa6823532998d9a79785097ad153838ee90c5fb85bfe6e7835b7"
+                }
+                "llama-b11533-qwen35-9b-q4km" => {
+                    "a87db4f037d6eb2276580a1a2f296cdbe479025b84b0363a6b969ac78e0f2ac2"
                 }
                 _ => panic!("unverified catalog choice"),
             };

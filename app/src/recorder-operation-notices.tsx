@@ -2,9 +2,8 @@ import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
-import { checkedOperations, emptyOperations, mergeOperations, operationNames, relayOperation, type OperationSnapshot, type OperationSource } from "./recorder-operation-state";
+import { emptyOperations, mergeOperations, operationNames, relayOperation, type OperationSnapshot, type OperationSource } from "./recorder-operation-state";
 
 const bridge = { read: () => invoke("get_recorder_operation_notices"), publish: (source: OperationSource, expectedRevision: number, message: string | null) => invoke("publish_recorder_operation_notice", { source, expectedRevision, message }) };
 const Context = createContext<{ snapshot: OperationSnapshot; error: string; refresh: () => Promise<void>; accept: (value: unknown) => void } | null>(null);
@@ -66,6 +65,6 @@ export function RecorderOperationNotifications() {
   };
   return <>
     {state.snapshot.entries.map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
-    <IssueNotice scope="recorder-operation" type="read" label="録音パネルの操作通知" message={state.error || error} toastMessage="録音パネルの操作通知を確認できません" />
+    <IssueNotice scope="recorder-operation" type="read" label="録音パネルの操作通知" message={state.error || error} />
   </>;
 }

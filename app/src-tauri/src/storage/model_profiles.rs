@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) mod jobs;
 pub(in crate::storage) mod portable;
-pub(crate) use portable::history::HistoryEntry as ModelCatalogHistoryEntry;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

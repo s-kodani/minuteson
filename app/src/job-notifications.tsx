@@ -9,10 +9,48 @@ import { acceptMinutesRuntime, minutesRuntimeDetail, type MinutesRuntime } from 
 import { acceptDiarizationRuntime, diarizationRuntimeProgress, type DiarizationRuntime } from "./diarization-runtime-state";
 import { jobProgress } from "./operation-progress-state";
 import { minutesAdmissions } from "./minutes-generation-admission";
+import { transcriptionAdmissions, type AnalysisPreparation } from "./transcription-admission";
 
 /** One main-window owner, independent of the selected meeting or workspace.
  * Events invalidate authoritative reads; no event can publish a success. */
 export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: (meetingId: string) => Promise<void> }) {
+  const localPreparations=useSyncExternalStore(transcriptionAdmissions.subscribe,transcriptionAdmissions.getSnapshot);
+  const [nativePreparations,setNativePreparations]=useState<AnalysisPreparation[]>([]);
+  const [progressJobs, setProgressJobs] = useState<NotificationJob[]>([]);
+  const preparations=new Map(localPreparations.map(p=>[p.meetingId,p]));
+  for(const p of nativePreparations) {
+    const local=preparations.get(p.meetingId);
+    if(!local || local.operationId===p.operationId || p.startedAtMs>=local.startedAtMs) preparations.set(p.meetingId,{...p,startedAtMs:local?.operationId===p.operationId?local.startedAtMs:p.startedAtMs});
+  }
+  usePublishProgress("transcription-preparation",[...preparations.values()].filter(p=>!progressJobs.some(j=>j.meetingId===p.meetingId && j.kind==="transcription" && (j.analysisOperation?.id===p.operationId || j.operationId===`flow:${p.operationId}:transcription`))).map(p=>({
+    id:`analysis-preparation:${p.operationId}`,meetingId:p.meetingId,target:p.meetingTitle??"会議音声",
+    kind:"transcription",state:p.phase==="waiting"?"queued":"running",startedAtMs:p.startedAtMs,
+    label:({accepting:"受付中",waiting:"ほかの処理を待機中",verifying:"モデルを検証中",mix:"会議音声を準備中"} as Record<string,string>)[p.phase]??"開始準備中",
+    completed:p.phase==="mix"?p.completed:null,total:p.phase==="mix"?p.total:null,
+  })));
+  useEffect(()=>{
+    if(!isTauri())return;
+    let stopped=false,reading=false;
+    const latest=new Map<string,AnalysisPreparation>();
+    const refresh=async()=>{if(stopped||reading)return;reading=true;const readStartedAt=Date.now();try {
+      const rows=await invoke<AnalysisPreparation[]>("get_analysis_preparations");
+      if(!stopped && Array.isArray(rows)){
+        const accepted=rows.map(p=>{
+          const prior=latest.get(p.meetingId);
+          if(prior && (p.startedAtMs<prior.startedAtMs || p.operationId===prior.operationId && p.sequence<prior.sequence))return prior;
+          latest.set(p.meetingId,p);
+          if(!transcriptionAdmissions.flowStarts.has(p.operationId))transcriptionAdmissions.flowStarts.set(p.operationId,p.startedAtMs);
+          const start=transcriptionAdmissions.starts.get(p.meetingId);
+          if(start===undefined || p.startedAtMs>start+1000)transcriptionAdmissions.starts.set(p.meetingId,p.startedAtMs);
+          return p;
+        });
+        transcriptionAdmissions.observePreparations(accepted,readStartedAt);
+        setNativePreparations(accepted);
+      }
+    }catch{/* The authoritative job read reports connectivity errors. */}finally{reading=false;}};
+    void refresh();const timer=window.setInterval(()=>void refresh(),500);
+    return()=>{stopped=true;window.clearInterval(timer);};
+  },[]);
   const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
   const admissionErrors = useRef(new Set<string>());
   useEffect(() => {
@@ -28,13 +66,12 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   const [tracker] = useState(() => new JobNotificationTracker(Date.now()));
   const [notices, setNotices] = useState(new Map<string, JobNotice | null>());
   const [issues, setIssues] = useState<NotificationJob[]>([]);
-  const [progressJobs, setProgressJobs] = useState<NotificationJob[]>([]);
   const [jobReadError, setJobReadError] = useState<string | null>(null);
   usePublishJobReadStatus(jobReadError);
   const [runtime, setRuntime] = useState(new Map<string, MinutesRuntime>());
   const [diarizationRuntime, setDiarizationRuntime] = useState(new Map<string, DiarizationRuntime>());
   const retried = new Set(progressJobs.map(job => job.retryOfJobId));
-  usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? diarizationRuntimeProgress(job, { ...progress, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail }, diarizationRuntime.get(job.id)) : null; }));
+  usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? diarizationRuntimeProgress(job, { ...progress, startedAtMs:job.analysisOperation ? transcriptionAdmissions.flowStarts.get(job.analysisOperation.id)??job.analysisOperation.startedAtMs : progress.startedAtMs, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail }, diarizationRuntime.get(job.id)) : null; }));
   const [readError, setReadError] = useState("");
   const [listenerError, setListenerError] = useState("");
   const [workerError, setWorkerError] = useState("");
@@ -69,6 +106,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
             const rows = await invoke<unknown>("get_analysis_notification_jobs", { watchedJobIds: tracker.watchedIds() });
             if (disposed) return;
             const state = tracker.ingest(rows);
+            transcriptionAdmissions.observe(rows as NotificationJob[]);
             for (const item of minutesAdmissions.getSnapshot()) {
               minutesAdmissions.observe(item.meetingId, (rows as NotificationJob[])
                 .filter(job => job.meetingId === item.meetingId).map(job => job.operationId));

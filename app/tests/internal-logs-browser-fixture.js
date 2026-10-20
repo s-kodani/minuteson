@@ -2,7 +2,7 @@
 await import("./browser-fixture.js");
 const baseInvoke = window.__TAURI_INTERNALS__.invoke;
 const fixture = window.internalLogsFixture = {
-  calls: [], entries: [], fail: false, hold: false, pending: [],
+  calls: [], entries: [], fail: false, failOlder: false, stallOlder: false, hold: false, pending: [], pages: [],
   status: { storageError: null, droppedEntries: 0, historyTruncated: false },
   add(patch = {}) {
     const id = (this.entries.at(-1)?.id ?? 0) + 1;
@@ -19,6 +19,9 @@ window.__TAURI_INTERNALS__.invoke = async (command, args, options) => {
   if (fixture.hold) await new Promise(resolve => fixture.pending.push(resolve));
   if (fixture.fail) throw Error("合成ログ取得エラー");
   const { filter = {}, before, after, limit = 200 } = args.query;
+  if (before !== undefined && fixture.failOlder) throw Error("合成の履歴取得エラー");
+  if (before !== undefined && fixture.stallOlder) return { entries: [], olderCursor: before, newerCursor: 1101, hasMore: true, expired: false, status: structuredClone(fixture.status) };
+  if (fixture.pages.length) return structuredClone(fixture.pages.shift());
   let matches = fixture.entries.filter(entry => (!filter.kind || entry.kind === filter.kind) && (!filter.level || entry.kind === "engine" || entry.level === filter.level) && (!filter.category || entry.category === filter.category) && (!filter.text || entry.message.toLowerCase().includes(filter.text.toLowerCase())) && (!filter.relatedId || [entry.meetingId, entry.jobId, entry.operationId].some(id => id?.includes(filter.relatedId))) && (filter.from === undefined || entry.timestamp >= filter.from) && (filter.to === undefined || entry.timestamp <= filter.to) && (before === undefined || entry.id < before) && (after === undefined || entry.id > after));
   const hasMore = matches.length > limit;
   matches = after === undefined ? matches.slice(-limit) : matches.slice(0, limit);

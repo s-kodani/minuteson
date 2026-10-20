@@ -23,18 +23,18 @@ async page => {
 
   await failedMove(); await changeButton().click(); await modal(changeTitle).waitFor();
   await page.evaluate(() => window.dataFixture.changed({ errorMessage: "確認内容を更新" }));
-  await modal(changeTitle).getByRole("button", { name: "確認内容を変更して選び直す", exact: true }).click(); await modal(changeTitle).getByRole("alert").waitFor();
+  await modal(changeTitle).getByRole("button", { name: "確認内容を変更して選び直す", exact: true }).click(); await modal(changeTitle).locator("p.action-error").waitFor();
   check(await count("select_data_operation") === 1, "changed review accepted stale consent");
   await modal(changeTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
   results.push("changed native review invalidates choice before selection without retry");
 
-  await failedMove(); await page.evaluate(() => window.dataFixture.failSave = true); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await failedMove(); await page.locator(".sidebar").getByRole("button", { name: "プロンプト", exact: true }).click();
+  await page.evaluate(() => window.dataFixture.failSave = true); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
   await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日");
-  await changeButton().click(); await modal(changeTitle).waitFor();
-  await modal(changeTitle).getByRole("button", { name: "確認内容を変更して選び直す", exact: true }).click(); await modal(changeTitle).getByRole("alert").waitFor();
+  await page.locator(".sidebar").getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
   check(await count("select_data_operation") === 1 && await page.getByRole("textbox", { name: "用語（必須）", exact: true }).inputValue() === "点検日", "failed save selected files or lost local input");
-  await modal(changeTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
-  results.push("swallowed navigation save failure is retained by confirmation; no selection or false completion");
+  results.push("failed common-vocabulary save blocks navigation back to data actions and preserves input");
 
   await boot(); await chooseMove(); await page.evaluate(() => window.dataFixture.mode = "delay");
   await moving().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click();
@@ -58,7 +58,7 @@ async page => {
 
   await boot(); await chooseMove(); await page.evaluate(() => { window.dataFixture.mode = "delay"; window.dataFixture.cancelLost = true; });
   await moving().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click();
-  await data().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); await modal(stopTitle).getByRole("alert").waitFor();
+  await data().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); await modal(stopTitle).locator("p.action-error").waitFor();
   check(await count("cancel_data_operation") === 1 && await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).isDisabled(), "lost stop acknowledgement repeated cancellation");
   await modal(stopTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
   check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "uncertain stop removed native write fence");
@@ -68,8 +68,8 @@ async page => {
   await boot(); await chooseMove(); await moving().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click();
   const exit = data().getByRole("button", { name: "終了する（再起動は手動）", exact: true }); await exit.waitFor(); await exit.click();
   const exitTitle = "保存先切替後の終了を確認"; await modal(exitTitle).waitFor(); await page.keyboard.press("Escape"); await modal(exitTitle).waitFor({ state: "hidden" }); check(await count("finish_main_close") === 0, "cancel quit app");
-  await exit.click(); await page.evaluate(() => window.dataFixture.failClose = true); await modal(exitTitle).getByRole("button", { name: "安全に終了する", exact: true }).click(); await modal(exitTitle).getByRole("alert").waitFor();
-  check(await count("finish_main_close") === 1 && (await modal(exitTitle).innerText()).includes("手動で再起動") && await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "exit failure replayed or lost retirement fence");
+  await exit.click(); await page.evaluate(() => window.dataFixture.failClose = true); await modal(exitTitle).getByRole("button", { name: "安全に終了する", exact: true }).click(); await modal(exitTitle).locator("p.action-error").waitFor();
+  check(await count("finish_main_close") === 1 && (await modal(exitTitle).innerText()).includes("手動で再起動") && await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "exit failure replayed or lost retirement fence");
   await modal(exitTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
   results.push("manual restart exit requires consent and retains failed exit plus retirement write protection without retry");
   return { passed: results.length, results };

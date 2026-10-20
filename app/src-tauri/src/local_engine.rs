@@ -23,6 +23,12 @@ impl Fingerprint {
     pub fn capture(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Self, String> {
         Self::capture_mode(path, cancelled, false)
     }
+    pub(crate) fn capture_retained(
+        path: &Path,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::capture_mode(path, cancelled, true)
+    }
     fn capture_mode(
         path: &Path,
         cancelled: &impl Fn() -> bool,

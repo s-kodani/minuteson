@@ -10,10 +10,10 @@ import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
 import {SpeakerCountSelect} from "./speaker-count-select";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onSpeakerCounts,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onNumSpeakers,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
-  onSpeakerCounts:(counts:RecordingPreparation["speakerCounts"])=>void;
+  onNumSpeakers:(counts:RecordingPreparation["numSpeakers"])=>void;
   inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
@@ -54,10 +54,9 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       {inputs}
       {preparation&&<>
         <div className="speaker-count-fields">
-          <SpeakerCountSelect label="マイクの話者数" value={preparation.speakerCounts.mic} disabled={locked||preparation.submitted} onChange={mic=>onSpeakerCounts({...preparation.speakerCounts,mic})}/>
-          <SpeakerCountSelect label="PC音声の話者数" value={preparation.speakerCounts.system} disabled={locked||preparation.submitted} onChange={system=>onSpeakerCounts({...preparation.speakerCounts,system})}/>
+          <SpeakerCountSelect label="会議全体の話者数" value={preparation.numSpeakers} disabled={locked||preparation.submitted} onChange={onNumSpeakers}/>
         </div>
-        <p>録音終了後の話者分離に使います。人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。各音声に実際に入る人数を指定してください。</p>
+        <p>録音終了後の話者分離に使います。人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。会議全体の最大人数を指定してください。</p>
       </>}
       {test}
       <p>録音とAIモデルの準備は別です。モデル未準備でも録音できます。音声保存後の解析にはモデルの準備が必要です。</p>

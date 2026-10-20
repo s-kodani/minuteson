@@ -45,8 +45,8 @@ async function (page) {
   await page.waitForFunction(() => document.querySelector('.model-selection-row button')?.disabled);
   check(await count("start_model_download") === 1 && await count("place_downloaded_model") === 1 && await count("check_model_compatibility") === 1 && await count("apply_model_profile_application") === 1, "one click did not verify and apply the existing download");
   results.push("download response loss blocks writers; verified readback reuses one download and completes setup in one action");
-  const inventory = page.getByRole("region", { name: "導入済みモデル", exact: true });
-  check(await inventory.getByText("使用中", {exact:true}).count() === 1, "selected model missing from inline inventory");
+  const inventory = page.getByRole("region", { name: "導入済みモデル管理", exact: true });
+  check(await inventory.getByText(/ · 使用中$/).count() === 1, "selected model missing from inline inventory");
   results.push("three compact choices and inline installed models replace setup records and review controls");
   await page.evaluate(() => { window.modelDownloadFixture.setVisible(false); });
   await select.waitFor({state:"hidden"}); await page.evaluate(() => window.modelDownloadFixture.setVisible(true));

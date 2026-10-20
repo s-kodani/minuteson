@@ -48,3 +48,12 @@ test("shared timeline publishes changed state only; late old-owner release never
   playbackTimeline.publish({...timeline,timeUs:NaN});assert.equal(calls,2);
   playbackTimeline.release("b");assert.equal(playbackTimeline.snapshot(),null);assert.equal(calls,3);stop();
 });
+
+test('mixed analysis utterances keep meeting time while listening to captured sources',()=>{
+ const mixed=[{id:'mix-speech',trackId:'mixed-native-id',startUs:500000,endUs:1500000}];
+ const kinds=new Map([['mixed-native-id','processed']]);
+ for(const trackKind of ['mic','system','both','imported','processed']) {
+  assert.deepEqual(playingRows(mixed,{...timeline,scope:'meeting',analysisId:null,utteranceId:null,trackKind},'m','analysis',kinds),[0]);
+ }
+ assert.deepEqual(playingRows(mixed,{...timeline,scope:'meeting',trackKind:'foreign'},'m','analysis',kinds),[]);
+});

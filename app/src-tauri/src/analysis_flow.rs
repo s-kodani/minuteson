@@ -29,7 +29,7 @@ pub(crate) struct Plan {
 pub(crate) fn checked_speaker_counts(
     values: &[crate::diarization::TrackSettings],
 ) -> Result<Vec<crate::diarization::TrackSettings>, String> {
-    if values.len() > 2
+    if values.len() > 1
         || values.iter().any(|v| {
             v.track_id.is_empty()
                 || v.track_id.len() > 256
@@ -38,7 +38,7 @@ pub(crate) fn checked_speaker_counts(
                     .is_some_and(|n| !(1..=crate::diarization::sherpa::MAX_SPEAKERS).contains(&n))
         })
     {
-        return Err("話者数は音声ごとに1〜100人、または自動で指定してください".into());
+        return Err("会議全体の話者数は1〜100人、または自動で指定してください".into());
     }
     let mut result = values.to_vec();
     result.sort_by(|a, b| a.track_id.cmp(&b.track_id));
@@ -88,6 +88,7 @@ pub(crate) fn prepare(
     profile: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Plan, String> {
+    let verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
     let w = storage.analysis_preferences()?.payload;
     let d = storage.diarization_preferences()?.payload;
     let (w, d) = match profile {
@@ -107,7 +108,7 @@ pub(crate) fn prepare(
     {
         return Err("話者分離モデルが未導入です。設定のローカルAIでモデルを選び、ダウンロードして使用してください。保存済み音声は保持しています".into());
     }
-    let capture = |path: &str| Fingerprint::capture(std::path::Path::new(path), cancelled);
+    let capture = |path: &str| Fingerprint::capture_retained(std::path::Path::new(path), cancelled);
     let whisper = WhisperConfig {
         executable: capture(&w.executable_path)?,
         model: capture(&w.model_path)?,
@@ -139,6 +140,7 @@ pub(crate) fn prepare(
         storage.prepare_model_selection(profile, Execution::Whisper(&whisper), cancelled)?;
     let sherpa_managed =
         storage.prepare_model_selection(profile, Execution::Sherpa(&sherpa), cancelled)?;
+    verification.finish(cancelled)?;
     Ok(Plan {
         schema_version: 1,
         profile: profile.into(),
@@ -158,6 +160,11 @@ pub(crate) fn advance(
     changed: &impl Fn(AnalysisFlow),
 ) -> Result<(), String> {
     for mut flow in storage.pending_analysis_flows()? {
+        let _verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
+        let _audio_verification = crate::audio::reuse::Scope::join_or_enter()?;
+        let _preparing = (flow.stage == "pending"
+            || flow.stage == "transcription" && flow.transcription_job.is_none())
+        .then(|| crate::analysis_preparation::begin(&flow.meeting_id, &flow.id));
         for _ in 0..4 {
             if cancelled() {
                 return Ok(());
@@ -204,6 +211,16 @@ fn step(
             .map(Some)
     };
     if flow.stage == "pending" {
+        storage.ensure_meeting_mix(&flow.meeting_id, cancelled, &|done, total| {
+            crate::analysis_preparation::update(
+                &flow.meeting_id,
+                &flow.id,
+                "mix",
+                Some(done),
+                Some(total),
+            )
+        })?;
+        crate::analysis_preparation::update(&flow.meeting_id, &flow.id, "verifying", None, None);
         let mut plan = prepare(storage, &flow.profile, cancelled)?;
         let input = storage.recorded_analysis_input(&flow.meeting_id)?.0;
         plan.speaker_counts = storage.initial_speaker_counts(&flow.meeting_id, &input.tracks)?;

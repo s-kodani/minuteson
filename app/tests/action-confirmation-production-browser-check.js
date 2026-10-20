@@ -70,7 +70,7 @@ async (page, capturePath, detailUI) => {
   for (const scope of ["meeting", "global"]) {
     await boot();
     let panel;
-    if (scope === "global") { await page.getByRole("button", { name: "設定", exact: true }).click(); panel = page.getByRole("region", { name: "共通用語", exact: true }); }
+    if (scope === "global") { await page.getByRole("button", { name: "プロンプト", exact: true }).click(); panel = page.getByRole("region", { name: "共通用語", exact: true }); }
     else { panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "会議の用語", exact: true }) }); await panel.getByText("会議別用語（任意）", { exact: true }).click(); }
     const term = panel.getByRole("textbox", { name: "用語（必須）", exact: true });
     await term.fill("未保存の点検日"); await panel.getByRole("button", { name: "用語を再読込", exact: true }).click();

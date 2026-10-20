@@ -107,6 +107,7 @@ impl Storage {
             .map_err(|_| "DBロックを取得できません")?;
         load(&db)
     }
+    #[cfg(test)]
     pub(crate) fn save_diarization_preferences(
         &self,
         expected: i64,

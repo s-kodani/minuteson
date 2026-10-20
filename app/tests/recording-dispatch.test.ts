@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 const lib=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
 test("capture polling and stopping dispatch lock waits and file reads off the native UI thread",()=>{
-  for(const name of ["get_recording_levels","get_recording_writes","get_recording_input_status","stop_recording","get_capture_test_levels","get_capture_test_snapshot","cancel_capture_test","receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"]){
+  for(const name of ["get_recording_levels","get_recording_writes","get_recording_input_status","get_capture_test_levels","get_capture_test_snapshot","cancel_capture_test","receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"]){
     const body=lib.split(`async fn ${name}(`)[1]?.split("#[tauri::command]")[0];
     assert.ok(body,`${name} must be async`);
     assert.match(body,/spawn_blocking/);

@@ -36,7 +36,7 @@ async (page) => {
   check(before.operationId === after.operationId && before.confirmationId !== after.confirmationId, "refresh lost operation or retained stale confirmation");
   await publish(); await finished();
   check(await region().getByRole("button", { name: "バックアップを作成", exact: true }).isDisabled(), "backup enabled after retirement");
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled after retirement");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "editing enabled after retirement");
   check((await region().innerText()).includes("/safe/app-data/models"), "model root lost");
   check(await page.evaluate(() => window.dataFixture.published) === 1, "move duplicated");
   await page.screenshot({ path: "output/playwright/storage-move-restart.png" });
@@ -44,14 +44,14 @@ async (page) => {
 
   await boot(); await set({ mode: "lostDelay", suppressEvents: true }); await choose(); await publish();
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "copying");
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "lost RPC unlocked running copy");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "lost RPC unlocked running copy");
   await page.evaluate(() => window.dataFixture.complete()); await finished();
   check(await page.evaluate(() => window.dataFixture.published) === 1 && await count() === 1, "lost response resubmitted or duplicated");
   results.push("lost response and suppressed events recover through snapshot without duplicate");
 
   await boot(); await set({ mode: "delay" }); await choose(); await publish();
   await stop();
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked running copy");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "cancellation unlocked running copy");
   await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
   await region().getByRole("alert").filter({ hasText: "未完了の保存先変更があります" }).waitFor();
   await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "旧保存先と途中コピーを保持します" }).waitFor();
@@ -75,7 +75,7 @@ async (page) => {
 
   await boot(); await set({ mode: "forged" }); await choose(); await publish();
   await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "forged receipt unlocked writes");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "forged receipt unlocked writes");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "forged receipt published");
   results.push("foreign receipt rejected, unknown IPC state locks writes");
 
@@ -106,7 +106,7 @@ async (page) => {
   await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
   await waitMoveAvailable();
   check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "keep did not release pending move");
-  check(!await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "keep incorrectly retires old root");
+  check(!await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "keep incorrectly retires old root");
   await region().getByText("保持した途中コピー（1 件）", { exact: true }).click();
   check((await region().innerText()).includes("/safe/chosen/retained-copy") && (await region().innerText()).includes("保持して中止済み"), "kept copy history lost");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "keep selected old partial copy");

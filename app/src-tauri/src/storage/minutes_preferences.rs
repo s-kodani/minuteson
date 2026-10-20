@@ -95,6 +95,7 @@ impl Storage {
             .map_err(|_| "DBロックを取得できません")?;
         load(&db)
     }
+    #[cfg(test)]
     pub(crate) fn save_minutes_preferences(
         &self,
         expected: i64,

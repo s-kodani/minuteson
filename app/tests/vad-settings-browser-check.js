@@ -8,13 +8,11 @@ async function(page) {
   const panel=page.getByRole('region',{name:'発話区間検知（VAD）',exact:true});
   await panel.waitFor();
   const toggle=panel.getByRole('checkbox',{name:'発話区間検知（VAD）',exact:true});
-  const details=panel.getByRole('button',{name:'VAD詳細設定',exact:true});
   const apply=panel.getByRole('button',{name:'VAD設定を適用',exact:true});
   const reset=panel.getByRole('button',{name:'標準値に戻す',exact:true});
   const field=label=>panel.getByLabel(label,{exact:true});
   check(await toggle.isChecked(),'VAD not enabled by default');
-  check(await details.getAttribute('aria-expanded')==='false','details not initially collapsed');
-  await details.click();
+  check(await panel.getByRole('button',{name:'VAD詳細設定',exact:true}).count()===0,'obsolete disclosure exists');
   check(await panel.getByRole('spinbutton').count()===6,'six options missing');
   check(await field('発話判定の閾値').inputValue()==='0.60','wrong default threshold');
   check(await field('最小発話時間（ms）').inputValue()==='300','wrong minimum speech default');
@@ -31,8 +29,6 @@ async function(page) {
   await field('最小発話時間（ms）').fill('450');
   await apply.click();
   await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli===750);
-  await details.waitFor();
-  if(await details.getAttribute('aria-expanded')==='false')await details.click();
   check(await field('最小発話時間（ms）').inputValue()==='450','saved value lost');
   results.push('default-on, six fields, invalid values and explicit integer-valued save');
   const callsBefore=await page.evaluate(()=>window.modelDownloadFixture.calls.filter(c=>['start_model_download','check_model_compatibility'].includes(c.command)).length);
@@ -40,11 +36,9 @@ async function(page) {
   check(await field('発話判定の閾値').isDisabled(),'off leaves numeric input active');
   await apply.click();
   await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.enabled===false);
-  await details.waitFor(); if(await details.getAttribute('aria-expanded')==='false')await details.click();
   check(await field('発話判定の閾値').inputValue()==='0.75','turning off reset numeric options');
   await toggle.check(); await apply.click();
   await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.enabled===true);
-  await details.waitFor(); if(await details.getAttribute('aria-expanded')==='false')await details.click();
   await reset.click();
   check(await page.evaluate(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli)===750,'reset saved automatically');
   await apply.click();
@@ -58,7 +52,6 @@ async function(page) {
   await page.evaluate(()=>window.modelDownloadFixture.setVisible(false)); await panel.waitFor({state:'hidden'});
   await page.evaluate(()=>window.modelDownloadFixture.setVisible(true)); await panel.waitFor();
   check(await toggle.isChecked(),'reopening or switching model lost enabled state');
-  if(await details.getAttribute('aria-expanded')==='false')await details.click();
   for(const width of [1280,390])for(const theme of ['light','dark']){
     await page.setViewportSize({width,height:1000});
     await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);

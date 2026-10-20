@@ -1,5 +1,4 @@
-//! Explicit reviewed retries keep logical inputs fixed and resolve only the
-//! identical installed bytes. Preview never runs inference or changes state.
+//! Test-only fixture builder for persisted model bindings and restore invariants.
 use crate::storage::model_profiles::jobs::rebinding::{self, Binding};
 use crate::storage::{retry_source_permitted, JobKind, JobSnapshot, JobSpec, Storage};
 use serde::{Deserialize, Serialize};

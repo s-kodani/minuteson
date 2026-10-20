@@ -1,8 +1,14 @@
 //! Reuse saved evidence without changing text, timing or detector output.
+#[cfg(test)]
 pub(crate) use super::transcript_consolidation::Request;
 use super::*;
-use rusqlite::{Transaction, TransactionBehavior};
-use std::collections::{BTreeSet, HashMap};
+use rusqlite::Transaction;
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Reply {
@@ -99,6 +105,7 @@ pub(super) fn manual_lineages(
 }
 // A known-run result is evidence only inside its frozen continuous runs.
 // Explicit gaps alone cannot describe every clock discontinuity.
+#[cfg(test)]
 fn saved_runs(
     tx: &Transaction<'_>,
     analysis: &str,
@@ -139,11 +146,13 @@ fn saved_runs(
             .collect(),
     ))
 }
+#[cfg(test)]
 fn within_run(runs: &[(String, i64, i64)], track: &str, start: i64, end: i64) -> bool {
     runs.iter()
         .any(|(id, from, to)| id == track && start >= *from && end <= *to)
 }
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn update_speaker_assignments(&self, request: &Request) -> Result<Reply, String> {
         self.require_data_writable()?;
         if Uuid::parse_str(&request.operation_id).is_err() {

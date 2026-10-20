@@ -81,6 +81,14 @@ pub(crate) struct NotificationJob {
     #[serde(flatten)]
     pub job: JobSnapshot,
     pub meeting_title: String,
+    pub analysis_operation: Option<AnalysisOperation>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnalysisOperation {
+    pub id: String,
+    pub started_at_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -575,7 +583,15 @@ impl Storage {
     }
 
     fn decorate_execution_progress(&self, job: &mut JobSnapshot) {
-        if job.kind == "speaker_completion" && job.state == "running" {
+        if matches!(
+            job.kind.as_str(),
+            "speaker_completion"
+                | "voice_matching"
+                | "voice_registration"
+                | "transcription"
+                | "diarization"
+        ) && job.state == "running"
+        {
             job.execution_progress = self
                 .execution_progress
                 .lock()
@@ -595,7 +611,15 @@ impl Storage {
             return Err("話者補完の表示進捗が不正です".into());
         }
         let mut job = self.get_job(id)?;
-        if job.kind != "speaker_completion" || job.state != "running" {
+        if !matches!(
+            job.kind.as_str(),
+            "speaker_completion"
+                | "voice_matching"
+                | "voice_registration"
+                | "transcription"
+                | "diarization"
+        ) || job.state != "running"
+        {
             return Ok(job);
         }
         let mut map = self
@@ -681,6 +705,7 @@ impl Storage {
                 Ok(NotificationJob {
                     job: job_from_row(row)?,
                     meeting_title: row.get(17)?,
+                    analysis_operation: None,
                 })
             })
             .map_err(|error| error.to_string())?;
@@ -699,6 +724,17 @@ impl Storage {
                 &job.job.kind,
                 &serde_json::from_str(&parameters).map_err(|e| e.to_string())?,
             )?;
+            // Follow immutable retry ancestry and explicit automatic-stage tags;
+            // a nearby timestamp or the same meeting never proves ownership.
+            job.analysis_operation=connection.query_row(
+                "WITH RECURSIVE parents(id,depth) AS (SELECT ?1,0 UNION ALL SELECT j.retry_of_job_id,p.depth+1 FROM processing_jobs j JOIN parents p ON j.id=p.id WHERE j.retry_of_job_id IS NOT NULL AND p.depth<64)
+                 SELECT f.id,f.created_at FROM analysis_flows f WHERE f.meeting_id=?2 AND (
+                   f.transcription_job_id IN (SELECT id FROM parents) OR f.diarization_job_id IN (SELECT id FROM parents)
+                   OR EXISTS(SELECT 1 FROM processing_jobs j JOIN processing_jobs d ON d.id=f.diarization_job_id WHERE j.id=?1 AND json_extract(j.parameters_json,'$.automaticAnalysisProgress')=1 AND (j.input_analysis_id=d.output_analysis_id OR EXISTS(
+                     SELECT 1 FROM analysis_revisions r JOIN processing_jobs c ON c.id=json_extract(r.config_json,'$.speakerCompletion.jobId')
+                     WHERE r.id=j.input_analysis_id AND r.meeting_id=j.meeting_id AND c.meeting_id=j.meeting_id AND c.kind='speaker_completion' AND c.state='succeeded'
+                     AND json_extract(c.parameters_json,'$.automaticAnalysisProgress')=1 AND c.input_analysis_id=d.output_analysis_id)))) LIMIT 1",
+                params![job.job.id,job.job.meeting_id],|r|Ok(AnalysisOperation{id:r.get(0)?,started_at_ms:r.get(1)?})).optional().map_err(|e|e.to_string())?;
             self.decorate_execution_progress(&mut job.job);
         }
         Ok(jobs)
@@ -737,6 +773,7 @@ impl Storage {
     // The facade verifies native inputs/outputs, current model bytes and trial
     // artifacts off the transaction, then commits this separately reviewed
     // attempt. Original logical parameters and historical assets stay fixed.
+    #[cfg(test)]
     pub(crate) fn enqueue_rebound_retry_job(
         &self,
         source: &JobSnapshot,
@@ -873,6 +910,7 @@ impl Storage {
 
     // Lost-response lookup is read-only and never rechecks today's profile or
     // filesystem. It cannot enqueue, change source state or dispatch inference.
+    #[cfg(test)]
     pub(crate) fn rebound_retry_result(
         &self,
         source: &JobSnapshot,

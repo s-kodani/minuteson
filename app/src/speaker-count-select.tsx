@@ -3,6 +3,6 @@ export function SpeakerCountSelect({label,value,disabled,onChange}:{
 }) {
   return <label>{label}<select value={value??""} disabled={disabled} onChange={event=>onChange(event.target.value===""?null:Number(event.target.value))}>
     <option value="">自動</option>
-    {Array.from({length:100},(_,i)=><option key={i+1} value={i+1}>{i+1}人</option>)}
+    {Array.from({length:100},(_,i)=><option key={i+1} value={i+1}>最大{i+1}人</option>)}
   </select></label>;
 }

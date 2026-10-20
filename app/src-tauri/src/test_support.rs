@@ -5,3 +5,6 @@
 pub(crate) fn never_cancelled() -> bool {
     false
 }
+
+// Fixture construction only; no product retry entry point.
+pub(crate) mod model_retry;

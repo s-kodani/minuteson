@@ -1,3 +1,8 @@
+import { VoiceMatchingSettings } from "./voice-matching-settings";
+import { SpeakerCompletionSettings } from "./speaker-completion-settings";
+import type { ModelDeletionControl } from "./model-deletion";
+import { OptionsModal } from "./options-modal";
+import { bytesLabel } from "./import-state";
 import { VadSettings } from "./vad-settings";
 import { checkedVadOptions, defaultVadOptions, type VadOptions } from "./vad-state";
 import type { AnalysisPreferences, EnginePreferences } from "./analysis-state";
@@ -11,7 +16,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, installedModelGroups, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel } from "./model-selection-state";
+import { modelChoices, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel } from "./model-selection-state";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -20,7 +25,7 @@ let unresolved: Pending | null = null;
 const downloads = new Map<string, DownloadReceipt>();
 const automaticMergeChoices = [{value:500,label:"従来（分けやすい）"},{value:900,label:"ややまとめる"},{value:1100,label:"まとめる"},{value:1300,label:"強くまとめる"},{value:1500,label:"さらに強くまとめる"}];
 const engines = [{ engine: "whisper.cpp", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; compact?: boolean; visible?: boolean; stopRequested?: boolean }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>({});
@@ -61,8 +66,8 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (mounted.current) { setOptions(official); setEntries(current.placed); setProfiles(current.catalog); }
     }).catch(cause => { if (mounted.current) setError(String(cause)); });
   }, [visible]);
-  useEffect(() => { if (refreshEpoch && isTauri()) void load().catch(cause => setError(String(cause))); }, [refreshEpoch]);
-  const selectedDiarization = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "sherpa-onnx");
+  useEffect(() => { if (refreshEpoch && isTauri()) { downloads.clear(); setSelection({}); void load().catch(cause => setError(String(cause))); } }, [refreshEpoch]);
+  const selectedDiarization = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "sherpa-onnx" && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
   const profileId = profiles.find(item => item.name === "standard")?.id;
   useEffect(() => {
     let active = true;
@@ -76,7 +81,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }).catch(cause => { if (active) setError(String(cause)); });
     return () => { active = false; };
   }, [visible, profileId, selectedDiarization?.packageId]);
-  const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "whisper.cpp");
+  const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "whisper.cpp" && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
   useEffect(() => {
     let active = true;
     setWhisperPreferences(null);
@@ -225,9 +230,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   });
   const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
   const installed = entries.filter(item => item.placementRecorded && item.bodyRemoved !== true);
-  const inventory = installedModelGroups(installed, profiles);
+
   const selectedProfile = profiles.find(item => item.name === "standard");
-  return <section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
+  return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
       const used = selectedProfile?.components.find(item => item.engine === engine);
@@ -243,6 +248,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || !!entry && used?.packageId === entry.packageId && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{needsVad ? "VADを追加して使用" : available ? "使用" : "ダウンロードして使用"}</button></div>;
     })}</div>
+    <ModelIssue label="モデルの準備" message={error} />
+    {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}
+  </section>
+  <section className="analysis-card local-ai-settings" aria-label="ローカルAI詳細設定" hidden={!visible}>
+    <h2>ローカルAI詳細設定</h2>
+    <section className="ai-settings-group" aria-label="発話検知設定"><h3>発話検知設定</h3>
     {selectedWhisper && whisperPreferences && <VadSettings
       value={whisperPreferences.vadOptions ?? { ...defaultVadOptions, enabled: !!whisperPreferences.vadModelPath }}
       available={!!whisperPreferences.vadModelPath}
@@ -252,7 +263,10 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         if (!entry || !canReviewApplication(entry)) throw Error("使用中の文字起こしモデルを確認できません。");
         setTarget("発話区間検知（VAD）"); await apply(entry, undefined, undefined, options);
       })} />}
-    {selectedDiarization && <div className="diarization-performance">
+    {(!selectedWhisper || !whisperPreferences) && <p>文字起こしモデルを選択すると設定できます。読込エラーは「ローカルAI」を確認してください。</p>}
+    </section>
+    <section className="ai-settings-group" aria-label="話者分離のCPU使用量"><h3>話者分離のCPU使用量</h3>
+    {selectedDiarization ? <div className="diarization-performance">
       <div className="model-selection-row"><label>話者分離のCPU使用量<select aria-label="話者分離のCPU使用量" value={threadChoice} disabled={disabled || cpuThreads === null} onChange={event => setThreadChoice(event.target.value)}>
         {cpuThreads !== null && ![4, 8].includes(cpuThreads) && <option value={cpuThreads}>現在の設定（{cpuThreads}スレッド）</option>}
         <option value="4">標準（4スレッド）</option><option value="8">多め（8スレッド）</option>
@@ -262,6 +276,10 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         setTarget("話者分離"); await apply(entry, Number(threadChoice));
       })}>CPU使用量を適用</button></div>
       <p>同じモデルでCPUの使用量を調整します。変更は次に開始する処理から適用します。</p>
+    </div> : <p>話者分離モデルを選択すると設定できます。</p>}
+    </section>
+    <section className="ai-settings-group" aria-label="自動の話者統合"><h3>自動の話者統合</h3>
+    {selectedDiarization ? <div className="diarization-performance">
       <div className="model-selection-row"><label>自動の話者統合<select aria-label="自動の話者統合" value={thresholdChoice} disabled={disabled || clusterThreshold === null} onChange={event => setThresholdChoice(event.target.value)}>
         {clusterThreshold !== null && !automaticMergeChoices.some(choice => choice.value === clusterThreshold) && <option value={clusterThreshold}>現在の設定（{clusterThreshold / 1000}）</option>}
         {automaticMergeChoices.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
@@ -271,9 +289,33 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         setTarget("自動の話者統合"); await apply(entry, undefined, Number(thresholdChoice));
       })}>統合の強さを適用</button></div>
       <p>人数が「自動」のときのまとめやすさを調整します。強くすると話者の増えすぎを抑えられますが、別人を同じ話者にまとめる場合があります。次に開始する処理から適用します。</p>
-    </div>}
-    {!!inventory.length && <section className="model-inventory" aria-label="導入済みモデル"><h3>導入済みモデル</h3><ul>{inventory.map(({ entry: item, entries: group }) => <li key={item.packageId}><strong>{modelDisplayName(item, options)}</strong><span>{isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => group.some(entry => entry.packageId === component.packageId) && component.settingsMatch && component.compatibilityCurrent) ? "使用中" : "導入済み"}</span></li>)}</ul></section>}
-    <ModelIssue label="モデルの準備" message={error} />
-    {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}
-  </section>;
+    </div> : <p>話者分離モデルを選択すると設定できます。</p>}
+    </section>
+    <VoiceMatchingSettings embedded locked={disabled} />
+    <SpeakerCompletionSettings embedded locked={disabled} />
+  </section>
+  <section className="analysis-card model-inventory" aria-label="導入済みモデル管理" hidden={!visible}>
+    <h2 tabIndex={-1}>導入済みモデル管理</h2>
+    {!installed.length && <p>導入済みモデルはありません。「ローカルAI」からモデルを導入できます。</p>}
+    <ul>{installed.map(item => {
+      const selected = selectedProfile?.components.some(component => component.packageId === item.packageId);
+      const status = isRetired(item) ? "選択対象外" : selected ? "使用中" : "導入済み";
+      const purpose = engines.find(e => e.engine === item.engine)?.label ?? item.engine;
+      return <li key={item.packageId}><div className="model-inventory-summary"><strong>{modelDisplayName(item, options)}</strong>
+        <span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span><span className="model-copy-id">コピー {item.packageId.slice(0, 8)}</span></div>
+        <div className="model-inventory-actions"><OptionsModal label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">
+          <h3>{modelDisplayName(item, options)}</h3><dl className="import-info"><dt>用途</dt><dd>{purpose}</dd>
+            <dt>モデル名</dt><dd>{item.modelName || "不明"}</dd><dt>バージョン</dt><dd>{item.modelVersion || "不明"}</dd>
+            <dt>量子化</dt><dd>{item.quantization || "不明"}</dd><dt>エンジン</dt><dd>{item.engine || "不明"} · {item.engineVersion || "不明"}</dd>
+            <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
+            <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
+            <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>
+        </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
+      </li>;
+    })}</ul>
+    {deletion?.listing?.items.map(item => <div key={item.operationId} className="model-deletion-pending"><p>{item.modelName ?? "モデル"}：削除の確認が必要です。{item.errorMessage}</p>
+      {item.reviewAllowed && <button type="button" className="small-secondary" disabled={!deletion.canReviewPending} onClick={() => void deletion.reviewPending(item.operationId)}>残りの削除を確認</button>}</div>)}
+    {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}
+    {deletion?.unknown && <button type="button" disabled={deletion.rpcBusy} onClick={() => void deletion.retryUnknown()}>同じ削除操作の結果を確認</button>}
+  </section></>;
 }

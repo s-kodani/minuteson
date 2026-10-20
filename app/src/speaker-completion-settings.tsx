@@ -11,7 +11,7 @@ function checkedSnapshot(value: Snapshot): Snapshot {
   }
   return value;
 }
-export function SpeakerCompletionSettings({ locked = false }: { locked?: boolean }) {
+export function SpeakerCompletionSettings({ locked = false, embedded = false }: { locked?: boolean; embedded?: boolean }) {
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [similarity, setSimilarity] = useState("0.80"), [margin, setMargin] = useState("0.10");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [uncertain, setUncertain] = useState(false);
@@ -47,8 +47,8 @@ export function SpeakerCompletionSettings({ locked = false }: { locked?: boolean
     } catch (e) { if (mounted.current) { setError(String(e)); setUncertain(true); } }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
-  return <section className="analysis-card voice-matching-settings" aria-label="未検出発言の話者補完">
-    <h2>未検出発言の話者補完</h2>
+  return <section className={embedded ? "voice-matching-settings ai-settings-group" : "analysis-card voice-matching-settings"} aria-label="未検出発言の話者補完">
+    {embedded ? <h3>未検出発言の話者補完</h3> : <h2>未検出発言の話者補完</h2>}
     <p>話者不明の発言を、文字起こし区間の声の特徴量が最も近い同じトラックの話者に割り当てます。以下の閾値は「要確認」の判定基準です。類似度または次点との差が基準未達の場合や同点の場合は、要確認の印を付けて適用します。類似度は確率ではありません。候補が1人の場合は次点との差を使いません。</p>
     <fieldset className="vad-fields" disabled={locked || busy || !saved || uncertain}>
       <label><span>類似度の下限</span><input type="number" min="0" max="1" step="0.01" value={similarity} onChange={e => setSimilarity(e.target.value)} /></label>

@@ -8,11 +8,11 @@ const job: AnalysisJob = { id: "job", kind: "diarization", state: "running", spe
 const runtime: DiarizationRuntime = { jobId: "job", specHash: "hash", attempt: 1, unitIndex: 1, invocationOrder: 2, sequence: 3, engineBasisPoints: 1250, finishing: false };
 const render = (value = runtime, current = job) => diarizationRuntimeProgress(current, jobProgress(current, "会議A")!, value);
 
-test("the bar displays the current engine unit percentage with a clear unit label", () => {
+test("the bar displays feature extraction progress for the whole meeting", () => {
   const progress = render();
   assert.equal(progressPercent(progress.completed, progress.total), 12);
-  assert.match(progress.detail!, /2 \/ 2 処理単位.*この処理単位のエンジン進捗/);
-  assert.match(progress.label, /エンジンで処理中/);
+  assert.match(progress.detail!, /会議全体/);
+  assert.match(progress.label, /特徴抽出中/);
   assert.equal(job.completedUnits, 1);
   assert.equal(progressPercent(render({ ...runtime, engineBasisPoints: 9999 }).completed, 10000), 99);
 });
@@ -21,8 +21,8 @@ test("100 percent and postprocessing stay indeterminate until authoritative comp
   for (const value of [{ ...runtime, engineBasisPoints: 10000 }, { ...runtime, engineBasisPoints: 10000, finishing: true }]) {
     const progress = render(value);
     assert.equal(progress.total, null);
-    assert.match(progress.label, /結果を照合・保存中/);
-    assert.match(progress.detail!, /エンジン処理 100%/);
+    assert.match(progress.label, /クラスタリング中|結果を保存中/);
+    assert.match(progress.detail!, /会議全体/);
   }
   assert.equal(jobProgress({ ...job, state: "succeeded" }, "会議A"), null);
 });
@@ -50,5 +50,5 @@ test("resume and the next unit can restart their own engine percentage", () => {
   assert.deepEqual(acceptDiarizationRuntime(runtime, next), next);
   const nextUnit = { ...next, unitIndex: 2 };
   assert.deepEqual(acceptDiarizationRuntime(runtime, nextUnit), nextUnit);
-  assert.equal(render(next).completed, 0);
+  assert.equal(render(next).completed, null);
 });

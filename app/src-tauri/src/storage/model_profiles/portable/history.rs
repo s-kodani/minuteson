@@ -262,6 +262,7 @@ pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
 }
 
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn model_catalog_history(&self) -> Result<Vec<HistoryEntry>, String> {
         let db = self
             .connection

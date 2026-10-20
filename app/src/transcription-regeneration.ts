@@ -15,7 +15,7 @@ export interface RegenerationRequest {
   meetingId: string;
   operationId: string;
   expected: RegenerationTarget;
-  speakerCounts?: {trackId:string;numSpeakers:number|null}[];
+  numSpeakers?: number | null;
 }
 // Release the edit barrier before showing the modal, then save and compare the
 // confirmed draft again on acceptance. No model execution is needed here.

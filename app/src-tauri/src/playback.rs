@@ -77,7 +77,7 @@ impl PlaybackMissingRange {
         reason: &str,
         total_us: i64,
     ) -> Result<Self, String> {
-        if !matches!(kind, "mic" | "system" | "imported")
+        if !matches!(kind, "mic" | "system" | "imported" | "processed")
             || start < 0
             || end <= start
             || end > total_us

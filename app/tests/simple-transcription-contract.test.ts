@@ -7,14 +7,15 @@ const native = (name: string) => readFileSync(new URL(`../src-tauri/src/${name}`
 test("meeting UI has no candidates, model preferences or global editing options", () => {
   const view = source("analysis.tsx") + source("transcript.tsx");
   assert.doesNotMatch(view, /adopt_analysis|restore_analysis|save_analysis_preferences|save_diarization_preferences|undo_transcript_edit|TranscriptRecovery|DiarizationPanel|文字起こしの編集オプション|編集オプション/);
-  assert.match(source("analysis.tsx"), /start_analysis_flow.*meetingId/);
+  assert.match(source("analysis.tsx"), /regenerate_transcription/);
   assert.match(source("analysis.tsx"), /await flushPendingEdits\("transcription"\)/);
   assert.doesNotMatch(source("analysis.tsx"),/retryOperations|retry_transcription|retry_diarization|>再試行<\/button>/);
 });
 test("removed editing and candidate commands are not exposed by the application", () => {
+  assert.doesNotMatch(source("analysis.tsx"), /get_analysis_jobs|setJobs/);
   const ipc = native("lib.rs");
-  for (const name of ["adopt_analysis_candidate", "restore_analysis_version", "get_analysis_preview", "get_analysis_version_draft", "undo_transcript_edit", "save_transcript_edit_recovery", "start_transcription", "start_diarization", "get_speaker_reviews"]) assert.ok(!ipc.includes(name), name);
-  for (const file of ["diarization-panel.tsx", "analysis-flow.tsx", "speaker-review.tsx", "transcript-recovery-panel.tsx", "transcript-conflict-panel.tsx", "version-publication.tsx"]) assert.equal(existsSync(new URL(`../src/${file}`, import.meta.url)), false, file);
+  for (const name of ["adopt_analysis_candidate", "restore_analysis_version", "get_analysis_preview", "get_analysis_version_draft", "undo_transcript_edit", "save_transcript_edit_recovery", "start_transcription", "start_diarization", "get_speaker_reviews", "preview_job_model_rebinding", "apply_job_model_rebinding", "get_job_model_rebinding_result", "get_model_catalog_history", "review_model_download", "save_analysis_preferences", "save_diarization_preferences", "save_minutes_preferences", "async fn get_recording_input_history(", "async fn stop_recording", "async fn update_speaker_assignments"]) assert.ok(!ipc.includes(name), name);
+  for (const file of ["diarization-panel.tsx", "analysis-flow.tsx", "speaker-review.tsx", "transcript-recovery-panel.tsx", "transcript-conflict-panel.tsx", "version-publication.tsx", "input-method.ts", "model-inventory.tsx", "model-inventory-state.ts", "model-notification-state.ts", "model-rebinding.tsx", "model-rebinding-state.ts", "settings-disclosure.tsx", "speaker-name-edit.ts", "transcript-conflict-input.ts", "transcript-conflict.ts", "transcript-recovery-discard.ts", "transcript-recovery-editor.ts", "transcript-recovery-save.ts", "version-publication-state.ts"]) assert.equal(existsSync(new URL(`../src/${file}`, import.meta.url)), false, file);
   assert.doesNotMatch(native("storage.rs"), /mod speaker_review|use speaker_review/);
   assert.equal(existsSync(new URL("../src-tauri/src/storage/speaker_review.rs", import.meta.url)), false);
   for (const file of ["browser-fixture.js", "audio-deletion-browser-fixture.js"]) assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), "utf8"), /get_speaker_reviews/);

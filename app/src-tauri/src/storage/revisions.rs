@@ -1,6 +1,9 @@
 use super::*;
-use rusqlite::{types::ValueRef, Params, Transaction, TransactionBehavior};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{types::ValueRef, Params, Transaction};
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommittedAnalysis {
@@ -12,6 +15,7 @@ pub struct CommittedAnalysis {
 
 impl Storage {
     #[allow(dead_code)]
+    #[cfg(test)]
     pub fn commit_analysis_candidate(
         &self,
         meeting_id: &str,
@@ -28,6 +32,7 @@ impl Storage {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn commit_analysis_inner(
         &self,
         meeting_id: &str,
@@ -127,6 +132,7 @@ impl Storage {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub fn verify_analysis_content_hash(&self, revision_id: &str) -> Result<bool, String> {
         let mut connection = self
             .connection
@@ -149,6 +155,7 @@ impl Storage {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub fn restore_previous_analysis(
         &self,
         meeting_id: &str,
@@ -157,6 +164,7 @@ impl Storage {
         self.restore_analysis_inner(meeting_id, expected_meeting_lock_version, None)
     }
 
+    #[cfg(test)]
     pub(super) fn restore_analysis_inner(
         &self,
         meeting_id: &str,

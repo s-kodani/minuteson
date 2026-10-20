@@ -29,7 +29,9 @@ async page => {
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="transcription");
   await page.evaluate(async()=>{const f=window.monBrowserFixture;await f.emitNotification();f.releaseOldRead();});
   await page.waitForFunction(()=>!document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-  await page.getByRole("status").filter({hasText:"文字起こし中"}).waitFor();
+  await tools.waitFor({state:"hidden"});
+  await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).click();
+  await page.getByRole("status").filter({hasText:"文字起こしの開始を準備"}).waitFor();
   await page.getByRole("alert").filter({hasText:"模擬遅延状態読込失敗"}).waitFor({state:"hidden"});
   check(await regen.isDisabled(),"running generation can be started twice");
   results.push("late read failure after a new action is resolved by a verified fresh read, not left as a persistent toast");
@@ -51,9 +53,38 @@ async page => {
   await regen.click();
   const action=page.getByRole("alert").filter({hasText:"模擬再生成操作失敗"});
   await action.waitFor();
+  await page.waitForFunction(()=>{
+    const card=[...document.querySelectorAll('.toast-card')].find(e=>e.textContent.includes('模擬再生成操作失敗'));
+    if(!card)return false;
+    const r=card.getBoundingClientRect();
+    return !!card.closest('dialog[open]') && card.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+  });
+  await action.locator('xpath=ancestor::section[contains(@class,"toast-card")]').getByRole('button',{name:'エラー通知を閉じる',exact:true}).click();
+  await action.waitFor({state:'hidden'});
+  check(await tools.isVisible(),'dismissing error closed the meeting tools');
+  results.push('action errors appear above the native modal and can be dismissed without closing it');
   await page.evaluate(()=>window.monBrowserFixture.emitNotification());
-  check(await action.isVisible(),"successful polling hid a real action failure");
+  check(await action.count()===0,"polling resurrected a dismissed action failure");
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length)===1,"error refresh sent a second generation");
   results.push("a real action failure survives successful polling; recovery does not resend generation");
+  await page.evaluate(async()=>{
+    const f=window.monBrowserFixture,invoke=window.__TAURI_INTERNALS__.invoke;
+    f.analysisFlow={...f.analysisFlow,stage:'attention',errorMessage:'模擬話者分離への引き渡し失敗',transcriptionJob:{id:'saved-transcription',state:'succeeded',outputAnalysisId:f.currentId},diarizationJob:null};
+    window.__TAURI_INTERNALS__.invoke=async(command,args)=>{
+      if(command==='continue_analysis_flow'){
+        if(args.expectedLockVersion!==f.analysisFlow.lockVersion)throw Error('模擬再開対象不一致');
+        f.calls.push({command,args});
+        f.analysisFlow={...f.analysisFlow,stage:'diarization',errorMessage:null,lockVersion:f.analysisFlow.lockVersion+1};
+        await f.emitNotification();return structuredClone(f.analysisFlow);
+      }
+      return invoke(command,args);
+    };
+    await f.emitNotification();
+  });
+  await tools.getByRole('button',{name:'話者分離を再開',exact:true}).click();
+  await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==='diarization');
+  check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='regenerate_transcription').length)===1,'handoff recovery reran transcription');
+  check(await page.evaluate(()=>window.monBrowserFixture.analysisFlow.transcriptionJob.id)==='saved-transcription','handoff recovery discarded saved transcription');
+  results.push('speaker handoff failures resume from the successful transcription without regenerating it');
   return {passed:results.length,results};
 }

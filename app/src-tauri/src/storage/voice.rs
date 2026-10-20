@@ -456,6 +456,12 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())
     }
     pub(crate) fn start_voice(&self, request: Start) -> Result<JobSnapshot, String> {
+        self.start_voice_observed(request, false)
+    }
+    pub(crate) fn start_automatic_voice(&self, request: Start) -> Result<JobSnapshot, String> {
+        self.start_voice_observed(request, true)
+    }
+    fn start_voice_observed(&self, request: Start, automatic: bool) -> Result<JobSnapshot, String> {
         self.require_data_writable()?;
         Uuid::parse_str(&request.operation_id).map_err(|_| "声の処理の操作IDが不正です")?;
         // Read-back of an uncertain submission must not create a second person/job.
@@ -583,7 +589,7 @@ impl Storage {
                 serde_json::json!({"profile":"standard","engine":"sherpa-onnx"}),
                 managed,
             )?,
-            parameters: serde_json::json!({"voice":plan,"voiceRequest":request}),
+            parameters: serde_json::json!({"voice":plan,"voiceRequest":request,"automaticAnalysisProgress":automatic}),
             total_units: Some(1),
         };
         let job = jobs::enqueue_in_transaction(&tx, &spec)?;
@@ -720,7 +726,20 @@ impl Storage {
                 tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,'confirmed',NULL,?7,'manual_enrollment_v1',?8) ON CONFLICT(analysis_revision_id,speaker_id) DO UPDATE SET person_id=excluded.person_id,name_snapshot=excluded.name_snapshot,state='confirmed',similarity=NULL,model_hash=excluded.model_hash,policy_version=excluded.policy_version,created_at=excluded.created_at",params![Uuid::new_v4().to_string(),spec.meeting_id,spec.input_analysis_id,speaker,person,name,plan.engine.embedding_model.sha256,now_ms()?]).map_err(|e|e.to_string())?;
             }
         } else {
-            publish_matches(&tx, spec, plan, features)?;
+            publish_matches_observed(&tx, spec, plan, features, &|done, total| {
+                if let Ok(mut map) = self.execution_progress.lock() {
+                    map.insert(
+                        job_id.into(),
+                        ExecutionProgress {
+                            phase: if done == total { "saving" } else { "matching" }.into(),
+                            completed: plan.windows.len() + done,
+                            total: plan.windows.len() + total + 1,
+                            phase_completed: done,
+                            phase_total: total,
+                        },
+                    );
+                }
+            })?;
         }
         let checkpoint = "{\"voiceResult\":true}";
         let sequence: i64 = tx
@@ -890,11 +909,21 @@ fn apply_names(
     drafts::save_in_transaction(tx, &draft.id, draft.lock_version, draft.payload)?;
     Ok(())
 }
+#[cfg(test)]
 fn publish_matches(
     tx: &Transaction<'_>,
     spec: &JobSpec,
     plan: &Plan,
     features: Vec<(Window, Vec<f32>)>,
+) -> Result<(), String> {
+    publish_matches_observed(tx, spec, plan, features, &|_, _| {})
+}
+fn publish_matches_observed(
+    tx: &Transaction<'_>,
+    spec: &JobSpec,
+    plan: &Plan,
+    features: Vec<(Window, Vec<f32>)>,
+    observe: &impl Fn(usize, usize),
 ) -> Result<(), String> {
     let (view, _, _) = working(tx, &spec.meeting_id)?;
     let old = matches(tx, &view.id)?;
@@ -936,7 +965,22 @@ fn publish_matches(
         queries.entry(w.speaker_id).or_default().push(v);
     }
     let mut ranked = Vec::new();
-    for (speaker, vectors) in queries {
+    let speakers = plan
+        .windows
+        .iter()
+        .map(|w| w.speaker_id.clone())
+        .collect::<BTreeSet<_>>();
+    let total = speakers.len();
+    observe(0, total);
+    for (index, speaker) in speakers.into_iter().enumerate() {
+        struct Observation<'a, F: Fn(usize, usize)>(&'a F, usize, usize);
+        impl<F: Fn(usize, usize)> Drop for Observation<'_, F> {
+            fn drop(&mut self) {
+                (self.0)(self.1, self.2);
+            }
+        }
+        let _observation = Observation(observe, index + 1, total);
+        let vectors = queries.remove(&speaker).unwrap_or_default();
         if old.iter().any(|m| {
             m.speaker_id == speaker
                 && (matches!(m.state.as_str(), "confirmed" | "dismissed")

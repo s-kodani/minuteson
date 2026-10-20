@@ -1,6 +1,6 @@
 // Development-only IPC simulation. Never invokes native audio/file operations.
 import { mockIPC } from "./startup-ready-mocks.ts";
-import { recoveryFixture,stampFixtureDraft } from "./transcript-recovery-browser-fixture.js";
+import { stampFixtureDraft } from "./transcript-draft-fixture.js";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const f = window.dataFixture;
@@ -29,10 +29,7 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
   tracks: [{ id: "11111111-1111-4111-8111-111111111111", kind: "mic", state: "ready", chunks: 2, durationUs: 60000000 }, { id: "21111111-1111-4111-8111-111111111111", kind: "system", state: "ready", chunks: 2, durationUs: 60000000 }], priorDeletionCompleted: phase === "awaiting_ack" });
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
 d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
-d.recovery = recoveryFixture({ drafts: () => [d.draft],current: () => d.draft,blocked: () => d.blocked });
 export const audioDeletionIPC = async (command, args) => {
-  const recovery = await d.recovery.invoke(command,args);
-  if(recovery !== undefined) { f.calls.push({ command,args: structuredClone(args) }); return recovery; }
   if (["get_audio_deletion_items", "review_meeting_audio_deletion", "review_pending_audio_deletion", "get_audio_deletion_paths"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "audio_deletion")) f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_deletion_items") return { items: [], deletingMeetingIds: [], writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? "音声削除のため書込停止" : null };
@@ -52,7 +49,7 @@ export const audioDeletionIPC = async (command, args) => {
   }
   if (command === "get_analysis_versions") return { meetingLockVersion: 0, currentId: analysis.id, previousId: null, draft: { id: d.draft.id, lockVersion: d.draft.lockVersion }, versions: [{ id: analysis.id, revisionNo: 1, contentHash: analysis.contentHash, publicationState: "committed", utteranceCount: 1, createdAt: 1791160000000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } }] };
   if (command === "get_diarization_preferences") { const engine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 1000, windowShiftMilli: 500, minDurationOnMs: 0, minDurationOffMs: 0 }; return { id: "profiles", payload: { standard: engine, highAccuracy: engine }, lockVersion: 0 }; }
-  if (command === "get_diarization_tracks") return { tracks: d.deleted ? [] : [{ id: analysis.utterances[0].trackId, kind: "mic", startUs: 0, endUs: 1000000 }] };
+  if (command === "get_meeting_analysis_audio") return { tracks: d.deleted ? [] : [{ id: analysis.utterances[0].trackId, kind: "mic", startUs: 0, endUs: 1000000 }] };
   if (["get_analysis_jobs", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_flow") return null;
   if (command === "get_minutes_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };

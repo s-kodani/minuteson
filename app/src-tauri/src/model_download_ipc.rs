@@ -62,33 +62,6 @@ where
 }
 
 #[tauri::command]
-pub(crate) fn review_model_download(
-    window: WebviewWindow,
-    definition: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = definition;
-        Err("Windowsのモデル取得は保留中です".into())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let recipe = Recipe::parse(definition.as_bytes())?;
-        if recipe.has_bundled() {
-            let root = window
-                .app_handle()
-                .path()
-                .resource_dir()
-                .map_err(|e| e.to_string())?
-                .join("asr-runtime");
-            crate::model_bundled_runtime::Bundle::open(&root)?.bind(&recipe)?;
-        }
-        json(recipe.review()?)
-    }
-}
-
-#[tauri::command]
 pub(crate) async fn start_model_download(
     window: WebviewWindow,
     token: String,

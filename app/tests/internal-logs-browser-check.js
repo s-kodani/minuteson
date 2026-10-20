@@ -1,11 +1,46 @@
 // Run with playwright-cli run-code. No native process or user storage is used.
 async page => {
-  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const results = [], check = (condition, message) => { if (!condition) throw Error(message); };
+  try {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("http://127.0.0.1:1420/tests/internal-logs-browser.html");
   await page.getByRole("button", { name: "内部ログ", exact: true }).click();
   const logs = page.getByRole("region", { name: "内部ログ", exact: true });
   const rows = () => logs.locator("tbody tr");
+  const list = logs.getByLabel("ログ一覧", { exact: true });
+  const top = () => list.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+  const idle = () => page.waitForFunction(() => !document.querySelector('.internal-logs-toolbar button[aria-label="更新"]')?.disabled);
+  const reset = async () => {
+    await page.goto("http://127.0.0.1:1420/tests/internal-logs-browser.html");
+    await page.waitForFunction(() => !!window.internalLogsFixture);
+  };
+  const open = async () => { await page.getByRole("button", { name: "内部ログ", exact: true }).click(); await idle(); };
+  const setTheme = async theme => {
+    await page.evaluate(async theme => { const f = window.monBrowserFixture; f.uiPreferences = {id:"ui_preferences",payload:{schemaVersion:1,theme,colorTheme:"monochrome"},lockVersion:(f.uiPreferences?.lockVersion??0)+1}; await f.emitUiPreferences(); }, theme);
+    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
+  };
+  const toolbar = logs.locator(".internal-logs-toolbar");
+  check(await logs.getByRole("tablist", { name:"ログの種類" }).count() === 1, "log kind is not a tablist");
+  const process = logs.getByRole("tab", {name:"処理経過",exact:true}), engine = logs.getByRole("tab", {name:"エンジンログ",exact:true});
+  check(await process.getAttribute("aria-selected") === "true" && await engine.getAttribute("tabindex") === "-1", "tab selection semantics missing");
+  check(await process.getAttribute("aria-controls") === await logs.getByRole("tabpanel").getAttribute("id"), "tab panel is not associated");
+  await process.focus(); await page.keyboard.press("ArrowRight");
+  check(await engine.evaluate(el => el === document.activeElement) && await process.getAttribute("aria-selected") === "true", "arrow did not move tab focus without activation");
+  await page.keyboard.press("Enter"); await logs.getByText(/using device MTL0/).waitFor();
+  await page.keyboard.press("Home"); await page.keyboard.press("Space");
+  await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 200);
+  results.push("underlined tabs expose selection and a labelled panel, with keyboard activation");
+  for (const name of ["自動更新を一時停止","更新","表示中ログをコピー"]) {
+    const button = toolbar.getByRole("button", {name,exact:true});
+    check(await button.innerText() === "" && await button.locator("svg").count() === 1 && await button.getAttribute("title") === name, "toolbar icon is missing its accessible name or tooltip");
+  }
+  check(await toolbar.evaluate(el => { const centers = [...el.children].map(child => { const r=child.getBoundingClientRect(); return r.y+r.height/2; }); return Math.max(...centers)-Math.min(...centers)<2; }), "toolbar is not one row at normal width");
+  check(await toolbar.locator("button").allTextContents().then(text => text.length === 4 && text[3] === "最新ログを表示"), "toolbar button order changed");
+  check(await logs.getByRole("button", {name:"古いログを読み込む",exact:true}).count() === 0, "manual history button remains");
+  await setTheme("light"); await page.screenshot({path:"output/playwright/internal-logs-light.png"});
+  await setTheme("dark"); await page.screenshot({path:"output/playwright/internal-logs-dark.png"});
+  await setTheme("light");
+  results.push("pause, refresh and copy are named icons on one toolbar row, in light and dark themes");
   const filterToggle = logs.getByRole("button", { name:"ログを絞り込み", exact:true });
   const filterPanel = logs.getByRole("region", { name:"ログの絞り込み", exact:true });
   check(await filterToggle.getAttribute("aria-expanded") === "false" && !await filterPanel.isVisible(), "filters must start collapsed");
@@ -19,26 +54,59 @@ async page => {
   check(await logs.getByText("一時停止中の追記", { exact: true }).count() === 0, "paused viewer updated");
   await logs.getByRole("button", { name: "自動更新を再開", exact: true }).click();
   await logs.getByText("一時停止中の追記", { exact: true }).waitFor();
-  await logs.getByLabel("ログ一覧", { exact: true }).evaluate(element => { element.scrollTop = 0; });
-  await page.evaluate(() => window.internalLogsFixture.add({ message: "読んでいる途中の追記" }));
-  await logs.getByText("読んでいる途中の追記", { exact: true }).waitFor();
-  check(await logs.getByLabel("ログ一覧", { exact: true }).evaluate(element => element.scrollTop < 40), "automatic update stole reading position");
-  await logs.getByRole("button", { name: "自動更新を一時停止", exact: true }).click();
-  for (let i = 0; i < 5; i++) {
-    const previous = await rows().count();
-    await logs.getByRole("button", { name: "古いログを読み込む", exact: true }).click();
-    await page.waitForFunction(previous => { const rows = document.querySelectorAll(".internal-logs tbody tr"); return rows.length > previous || document.querySelector(".internal-logs-notice")?.textContent.includes("1,000"); }, previous);
+  await page.evaluate(() => { window.internalLogsFixture.hold = true; });
+  await top();
+  await page.waitForFunction(() => window.internalLogsFixture.pending.length === 1);
+  await logs.getByText("古いログを読み込んでいます…", {exact:true}).waitFor();
+  const anchor = await list.evaluate(el => {
+    const r=el.getBoundingClientRect(), header=el.querySelector("thead").getBoundingClientRect().height;
+    const row=[...el.querySelectorAll("tr[data-log-id]")].find(row=>row.getBoundingClientRect().bottom>r.top+header);
+    return {id:row.dataset.logId,offset:row.getBoundingClientRect().top-r.top};
+  });
+  const heldCalls = await page.evaluate(() => window.internalLogsFixture.calls.length);
+  await top(); await top();
+  check(await page.evaluate(() => window.internalLogsFixture.calls.length) === heldCalls, "history requests overlap");
+  await page.evaluate(() => window.internalLogsFixture.release());
+  await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 400);
+  check(await list.evaluate((el,anchor) => Math.abs(el.querySelector(`tr[data-log-id="${anchor.id}"]`).getBoundingClientRect().top-el.getBoundingClientRect().top-anchor.offset)<2,anchor), "prepending history moved the visible row");
+  check(await toolbar.getByRole("button", {name:"自動更新を再開",exact:true}).count() === 1, "history did not pause updates");
+  await page.evaluate(() => window.internalLogsFixture.add({message:"読んでいる途中の追記"}));
+  await page.waitForTimeout(1200);
+  check(await logs.getByText("読んでいる途中の追記", {exact:true}).count() === 0, "history reading admitted live updates");
+  results.push("top scrolling loads older logs once, pauses live updates and preserves the visible row");
+  for (let i=0;i<5 && await rows().first().getAttribute("data-log-id")!=="1";i++) {
+    const previous=await rows().first().getAttribute("data-log-id");
+    await top();
+    await page.waitForFunction(previous => document.querySelector(".internal-logs tbody tr")?.dataset.logId!==previous,previous);
+    await idle();
   }
-  check(await rows().count() === 1000, "viewer exceeded its row limit");
+  check(await rows().count() === 1000 && await rows().first().getAttribute("data-log-id") === "1", "history cap or oldest cursor failed");
   await logs.getByText(/画面の上限1,000件/).waitFor();
-  await logs.getByRole("button", { name: "エンジンログ", exact: true }).click();
+  await logs.getByText("これより古いログはありません。", {exact:true}).waitFor();
+  const endCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
+  await top(); await page.waitForTimeout(1200);
+  check(await page.evaluate(() => window.internalLogsFixture.calls.length) === endCalls, "exhausted history kept requesting");
+  await toolbar.getByRole("button", {name:"最新ログを表示",exact:true}).click();
+  await logs.getByText("読んでいる途中の追記", {exact:true}).waitFor();
+  check(await rows().count() === 200 && await toolbar.getByRole("button",{name:"自動更新を一時停止",exact:true}).count() === 1, "latest did not resume newest view");
+  results.push("oldest boundary stops paging, the 1000-row cap holds, and latest resumes live following");
+  await logs.getByRole("tab", { name: "エンジンログ", exact: true }).click();
   await logs.getByText(/using device MTL0/).first().waitFor();
   check(await page.evaluate(() => window.logMarkupExecuted) === undefined, "raw HTML executed");
-  await logs.getByRole("button", { name: /のログ詳細/ }).click();
-  await logs.getByRole("region", { name: "ログ詳細", exact: true }).getByText("job-synthetic", { exact: true }).waitFor();
-  check(await logs.getByRole("region", { name: "ログ詳細", exact: true }).evaluate(element => element === document.activeElement), "details did not receive focus");
-  await logs.getByRole("button", { name: "詳細を閉じる", exact: true }).click();
-  check(await logs.getByRole("button", { name: /のログ詳細/ }).evaluate(element => element === document.activeElement), "closing details lost trigger focus");
+  const details = page.getByRole("dialog", {name:"ログ詳細",exact:true});
+  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  await details.getByText("job-synthetic", {exact:true}).waitFor();
+  check(await details.evaluate(el => el.contains(document.activeElement)), "details did not receive focus");
+  await page.screenshot({path:"output/playwright/internal-logs-detail.png"});
+  await page.keyboard.press("Escape"); await details.waitFor({state:"hidden"});
+  check(await logs.getByRole("button", {name:/のログ詳細/}).evaluate(el => el===document.activeElement), "closing details lost trigger focus");
+  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  await details.getByRole("button", {name:"詳細を閉じる",exact:true}).click();
+  await details.waitFor({state:"hidden"});
+  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  const bounds=await details.boundingBox();
+  await page.mouse.click(bounds.x-8,bounds.y+20); await details.waitFor({state:"hidden"});
+  results.push("details use a modal with raw text, focus containment, Escape, close and backdrop dismissal");
   await logs.getByRole("button", { name: "表示中ログをコピー", exact: true }).click();
   await logs.getByText("1件のログをコピーしました。", { exact: true }).waitFor();
   check((await page.evaluate(() => navigator.clipboard.readText())).includes("会議本文🦀"), "copy lost raw output");
@@ -50,10 +118,12 @@ async page => {
   check(await logs.getByRole("searchbox", { name: "文字列", exact: true }).inputValue() === "does-not-exist", "reopening filters lost the input");
   await page.setViewportSize({width:390,height:900});
   check(await filterPanel.evaluate(el => { const r=el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }), "expanded filters overflow narrow screen");
+  check(await toolbar.locator("button").evaluateAll(buttons => buttons.every(el => {const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;})), "toolbar controls overflow narrow screen");
+  await page.screenshot({path:"output/playwright/internal-logs-narrow.png"});
   await page.setViewportSize({width:1200,height:900});
   await logs.getByRole("searchbox", { name: "文字列", exact: true }).fill("");
   await logs.getByText(/using device MTL0/).first().waitFor();
-  await logs.getByRole("button", { name: "処理経過", exact: true }).click();
+  await logs.getByRole("tab", { name: "処理経過", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 200);
   await logs.getByRole("combobox", { name: "重要度", exact: true }).selectOption("warn");
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 110);
@@ -118,8 +188,58 @@ async page => {
     await logs.getByText(`ログの工程 ${Math.min(50 + (i + 1) * 200, 1150)}`, { exact: true }).waitFor();
   }
   check(await rows().count() === 1000, "live delta cap failed");
-  await logs.getByRole("button", { name: "古いログを読み込む", exact: true }).click();
+  await top();
   await logs.getByText("ログの工程 1", { exact: true }).waitFor();
   check(await rows().count() === 1000, "trimmed history could not be recovered");
-  return { status: "passed", checks: ["filter disclosure, keyboard, retained values and narrow layout", "sidebar and history", "initial page and pagination cap", "pause/resume", "raw details, copy and inert markup", "text, ID and level filtering", "fetch failure retains rows", "storage loss notices", "reading position", "stale filter replies", "date/category filters", "unsaved edit protection", "history recovery after live row trimming"] };
+  await reset(); await open();
+  await page.evaluate(() => { window.internalLogsFixture.failOlder = true; });
+  await top();
+  await logs.getByRole("alert").filter({hasText:"合成の履歴取得エラー"}).waitFor();
+  const failedCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
+  await top(); await page.waitForTimeout(1200);
+  check(await page.evaluate(() => window.internalLogsFixture.calls.length) === failedCalls && await rows().count() === 200, "failed history retried itself or cleared rows");
+  await page.evaluate(() => { window.internalLogsFixture.failOlder = false; });
+  await toolbar.getByRole("button",{name:"更新",exact:true}).click();
+  await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 400);
+  results.push("history errors retain rows, stop automatic retries and retry the same cursor with refresh");
+  await page.evaluate(() => { window.internalLogsFixture.stallOlder = true; });
+  await top(); await logs.getByRole("alert").filter({hasText:"読み込み位置が進みません"}).waitFor();
+  const stalledCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
+  await page.waitForTimeout(1200);
+  check(await page.evaluate(() => window.internalLogsFixture.calls.length) === stalledCalls, "nonadvancing cursor looped");
+  results.push("a nonadvancing history cursor stops rather than looping");
+  await reset();
+  await page.evaluate(() => {
+    const f=window.internalLogsFixture,status=f.status;
+    f.pages=[
+      {entries:[],olderCursor:900,newerCursor:1101,hasMore:true,expired:false,status},
+      {entries:[],olderCursor:700,newerCursor:1101,hasMore:true,expired:false,status},
+      {entries:[{...f.entries[499],message:"空ページの先の一致ログ"}],olderCursor:500,newerCursor:1101,hasMore:false,expired:false,status},
+    ];
+  });
+  await open(); await logs.getByText("空ページの先の一致ログ", {exact:true}).waitFor();
+  check(await page.evaluate(() => {const c=window.internalLogsFixture.calls;return c.length===3&&c[1].query.before===900&&c[2].query.before===700;}), "empty scan pages did not advance by cursor");
+  results.push("empty native scan pages continue by cursor until a match or the history boundary");
+  // An in-flight automatic poll must not swallow a simultaneous top request.
+  await reset(); await open();
+  await page.evaluate(() => { window.internalLogsFixture.hold=true; });
+  await page.waitForFunction(() => window.internalLogsFixture.pending.length===1);
+  await top();
+  await page.evaluate(() => window.internalLogsFixture.release());
+  await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length===400);
+  results.push("history loading queues behind a live poll and discards its paused acknowledgement");
+  // A detail snapshot remains readable even after its row leaves the cap.
+  await reset(); await open(); await engine.click();
+  await logs.getByText(/using device MTL0/).first().waitFor();
+  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  await page.evaluate(() => {for(let i=0;i<1100;i++)window.internalLogsFixture.add({kind:"engine",level:"raw",message:`新着エンジンログ ${i}`});});
+  await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length===1000 && !document.querySelector('.internal-logs tr[data-log-id="1101"]'));
+  await details.getByText(/会議本文🦀/).waitFor();
+  check(await details.evaluate(el => el.contains(document.activeElement)), "detail snapshot lost modal focus on trimming");
+  await page.keyboard.press("Escape"); await details.waitFor({state:"hidden"});
+  check(await list.evaluate(el => el===document.activeElement), "removed detail trigger did not fall back to the log list");
+  results.push("detail snapshot survives automatic row eviction and closes with a usable fallback focus");
+  results.push("filter disclosure, keyboard, retained values and narrow layout", "sidebar and history", "initial page and pagination cap", "pause/resume", "raw details, copy and inert markup", "text, ID and level filtering", "fetch failure retains rows", "storage loss notices", "reading position", "stale filter replies", "date/category filters", "unsaved edit protection", "history recovery after live row trimming");
+  return {passed:results.length,results};
+  } catch (cause) { throw Error(`After ${results.length} checks (${results.at(-1)??"startup"}): ${String(cause)}`); }
 }

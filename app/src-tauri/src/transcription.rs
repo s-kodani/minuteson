@@ -22,11 +22,7 @@ use serde::{Deserialize, Serialize};
 use whisper::WhisperConfig;
 
 fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
-    let current = if p.known_input.is_some() {
-        storage.recorded_analysis_input(&spec.meeting_id)?
-    } else {
-        (storage.recorded_audio_plan(&spec.meeting_id)?, None)
-    };
+    let current = storage.recorded_analysis_input(&spec.meeting_id)?;
     if current != (p.source.clone(), p.known_input.clone()) {
         return Err("固定した録音入力・欠損・時刻補正が変更されています".into());
     }
@@ -40,6 +36,9 @@ fn verify_sources(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     check_source(storage, spec, p)?;
+    if p.source.tracks.len() == 1 && p.source.tracks[0].kind == "processed" {
+        storage.verify_meeting_mix_sources(&spec.meeting_id, cancelled)?;
+    }
     for track in &p.source.tracks {
         if p.known_input.is_some() {
             storage.prepare_analysis_track(&spec.meeting_id, track, cancelled)?;
@@ -178,6 +177,7 @@ impl RetryRequest {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn retry_preflight(
     storage: &Storage,
     original: &JobSnapshot,
@@ -608,6 +608,8 @@ pub(crate) fn enqueue_with_stamp(
     profile: &str,
     expected: Option<crate::storage::VocabularyStamp>,
 ) -> Result<JobSnapshot, String> {
+    let verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
+    let audio_verification = crate::audio::reuse::Scope::join_or_enter()?;
     if !matches!(profile, "standard" | "high_accuracy") {
         return Err("解析プロファイルが不正です".into());
     }
@@ -618,7 +620,11 @@ pub(crate) fn enqueue_with_stamp(
         profile,
         Execution::Whisper(&engine),
     )?;
+    storage.ensure_meeting_mix(meeting_id, &|| false, &|_, _| {})?;
     let (source, known_input) = storage.recorded_analysis_input(meeting_id)?;
+    if source.tracks.len() != 1 || source.tracks[0].kind != "processed" {
+        return Err("共通会議音声が必要です".into());
+    }
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
     let units = planned_units(&source, known_input.as_ref())?;
     let total = units.len() as i64;
@@ -627,6 +633,8 @@ pub(crate) fn enqueue_with_stamp(
     let optimization_version =
         storage.optimization_version_for_operation(meeting_id, operation_id)?;
     let extra = engine.prompt.clone();
+    audio_verification.verify()?;
+    verification.finish(&|| false)?;
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
         let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::GuardedVocabularyV2),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
@@ -651,6 +659,24 @@ pub(crate) fn process(
         parameters.resident_runtime.as_ref(),
     )?;
     let job = storage.get_job(job_id)?;
+    storage.clear_completion_progress(job_id);
+    struct ProgressScope<'a>(&'a Storage, &'a str);
+    impl Drop for ProgressScope<'_> {
+        fn drop(&mut self) {
+            self.0.clear_completion_progress(self.1);
+        }
+    }
+    let _progress_scope = ProgressScope(storage, job_id);
+    progress(storage.set_completion_progress(
+        job_id,
+        crate::storage::ExecutionProgress {
+            phase: "preparing".into(),
+            completed: 0,
+            total: 1,
+            phase_completed: 0,
+            phase_total: 0,
+        },
+    )?);
     let mut checkpoint = checked_checkpoint(&job, checkpoint)?;
     let cancelled = || {
         stopping()
@@ -693,6 +719,7 @@ pub(crate) fn process(
         // At most one prepared run, not all gap-separated runs in memory.
         let mut prepared: Option<(usize, Option<usize>, crate::playback::PreparedAudio)> = None;
         for index in checkpoint.outputs.len()..parameters.units.len() {
+            storage.clear_completion_progress(job_id);
             if cancelled() {
                 return Ok(None);
             }
@@ -717,30 +744,47 @@ pub(crate) fn process(
                 &directory.join("input.wav"),
                 &cancelled,
             )?;
-            if parameters.optimization_version == Some(1) {
-                let key = crate::analysis_pcm_cache::key(
-                    &parameters.source,
-                    parameters.known_input.as_ref(),
-                    unit.track_index,
-                    unit.run_index,
-                )?;
-                storage.cache_analysis_core(
-                    &key,
-                    &directory.join("input.wav"),
-                    audio.sample_rate,
-                    audio.total_frames(),
-                    unit.window_first,
-                    unit.core_first,
-                    unit.core_end,
-                    &cancelled,
-                );
-            }
             let duration = (frames * 1_000_000 / u64::from(wave::WHISPER_RATE)) as i64;
             managed::verify(
                 &spec.profile_snapshot,
                 Execution::Whisper(&parameters.engine),
                 &cancelled,
             )?;
+            let first_native_unit =
+                index == checkpoint.outputs.len() && index == job.completed_units as usize;
+            let loading = std::cell::Cell::new(first_native_unit);
+            if first_native_unit {
+                progress(storage.set_completion_progress(
+                    job_id,
+                    crate::storage::ExecutionProgress {
+                        phase: "loading".into(),
+                        completed: 0,
+                        total: 1,
+                        phase_completed: 0,
+                        phase_total: 0,
+                    },
+                )?);
+            }
+            let observed_cancelled = || {
+                if loading.get() {
+                    use std::io::Read;
+                    let ready = std::fs::File::open(directory.join("stderr.log"))
+                        .ok()
+                        .is_some_and(|file| {
+                            let mut log = String::new();
+                            file.take(65536).read_to_string(&mut log).is_ok()
+                                && log.contains("mon_model_load: whisper=1")
+                        });
+                    if ready {
+                        loading.set(false);
+                        storage.clear_completion_progress(job_id);
+                        if let Ok(snapshot) = storage.get_job(job_id) {
+                            progress(snapshot);
+                        }
+                    }
+                }
+                cancelled()
+            };
             let Some(outcome) = guard::run(
                 &runtime,
                 &directory,
@@ -748,11 +792,12 @@ pub(crate) fn process(
                 parameters.recognition_policy.is_some(),
                 parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2),
                 parameters.vocabulary.as_ref(),
-                &cancelled,
+                &observed_cancelled,
             )?
             else {
                 return Ok(None);
             };
+            storage.clear_completion_progress(job_id);
             if cancelled() {
                 return Ok(None);
             }
@@ -836,6 +881,7 @@ pub(crate) fn process(
                 return Ok(None);
             }
         }
+        storage.clear_completion_progress(job_id);
         runtime.verify(&cancelled)?;
         check_source(storage, &spec, &parameters)?;
         optimization.finish(&cancelled)?;

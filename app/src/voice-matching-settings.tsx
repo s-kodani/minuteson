@@ -11,7 +11,7 @@ function checkedSnapshot(value: Snapshot): Snapshot {
   }
   return value;
 }
-export function VoiceMatchingSettings({ locked = false }: { locked?: boolean }) {
+export function VoiceMatchingSettings({ locked = false, embedded = false }: { locked?: boolean; embedded?: boolean }) {
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [similarity, setSimilarity] = useState("0.80"), [margin, setMargin] = useState("0.10");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [uncertain, setUncertain] = useState(false);
@@ -47,8 +47,8 @@ export function VoiceMatchingSettings({ locked = false }: { locked?: boolean }) 
     } catch (e) { if (mounted.current) { setError(String(e)); setUncertain(true); } }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
-  return <section className="analysis-card voice-matching-settings" aria-label="登録した声の自動適用">
-    <h2>登録した声の自動適用</h2>
+  return <section className={embedded ? "voice-matching-settings ai-settings-group" : "analysis-card voice-matching-settings"} aria-label="登録した声の自動適用">
+    {embedded ? <h3>登録した声の自動適用</h3> : <h2>登録した声の自動適用</h2>}
     <p>両方の条件を満たした場合、名前が未設定の話者に登録した名前を自動適用します。類似度は確率ではありません。登録が1人の場合は類似度の下限だけで判定します。</p>
     <fieldset className="vad-fields" disabled={locked || busy || !saved || uncertain}>
       <label><span>類似度の下限</span><input type="number" min="0" max="1" step="0.01" value={similarity} onChange={e => setSimilarity(e.target.value)} /></label>

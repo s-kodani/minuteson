@@ -18,6 +18,12 @@ pub(in crate::storage::backup) fn migration_database(db: Connection, version: us
 }
 
 pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
+    meeting_source(storage, operation, false)
+}
+pub(in crate::storage::backup) fn meeting_with_mix(storage: &Storage, operation: &str) -> String {
+    meeting_source(storage, operation, true)
+}
+fn meeting_source(storage: &Storage, operation: &str, mixed: bool) -> String {
     let options = ImportOptions {
         meeting_vocabulary: vec![VocabularyEntry {
             id: Uuid::new_v4().to_string(),
@@ -32,14 +38,23 @@ pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) ->
     let (import, _, _) =
         super::super::super::imports::tests::pending_configured(storage, operation, &options);
     let saved = storage.finalize_audio_import(&import.id).unwrap();
+    let mixed_track = mixed.then(|| {
+        storage
+            .ensure_meeting_mix(&saved.meeting_id, &|| false, &|_, _| {})
+            .unwrap()
+            .tracks[0]
+            .id
+            .clone()
+    });
     let db = storage.connection.lock().unwrap();
-    let track: String = db
-        .query_row(
+    let track: String = mixed_track.unwrap_or_else(|| {
+        db.query_row(
             "SELECT id FROM audio_tracks WHERE meeting_id=?1",
             params![saved.meeting_id],
             |r| r.get(0),
         )
-        .unwrap();
+        .unwrap()
+    });
     let manifest_hash: String = db
         .query_row(
             "SELECT manifest_hash FROM audio_import_commits WHERE import_id=?1",
@@ -121,13 +136,14 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
     let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
     let mut versions = (0..MIGRATIONS.len())
         .chain([MIGRATIONS.len() + 1])
-        .map(|schema| (4, schema))
+        .map(|schema| (crate::current_formats::BACKUP, schema))
         .collect::<Vec<_>>();
     versions.extend([
         (1, MIGRATIONS.len()),
         (0, MIGRATIONS.len()),
         (3, MIGRATIONS.len()),
-        (5, MIGRATIONS.len()),
+        (4, MIGRATIONS.len()),
+        (crate::current_formats::BACKUP + 1, MIGRATIONS.len()),
     ]);
     for (format, schema) in versions {
         let mut manifest = source.manifest.clone();

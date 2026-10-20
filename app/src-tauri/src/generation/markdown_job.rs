@@ -752,6 +752,7 @@ fn replay_with(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn retry_preflight(
     storage: &Storage,
     job: &JobSnapshot,

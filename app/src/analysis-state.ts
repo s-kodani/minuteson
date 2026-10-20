@@ -33,7 +33,7 @@ export interface VersionState {
 }
 
 export interface ExecutionProgress {
-  phase: "preparing" | "references" | "matching" | "saving";
+  phase: "loading" | "preparing" | "references" | "matching" | "saving";
   completed: number;
   total: number;
   phaseCompleted: number;

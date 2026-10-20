@@ -21,8 +21,9 @@ async page => {
 
   await boot({ failOpen: true }); await open(); await modal.getByRole("button", { name: "取り込む", exact: true }).click();
   await modal.getByRole("alert").filter({ hasText: "音声は保存済みですが会議を開けません" }).waitFor();
-  check(await page.evaluate(() => !!window.monImportFixture.import.saved) && await modal.getByRole("button", { name: "保存した会議を開く", exact: true }).isEnabled(), "navigation failure erased saved receipt or retry");
-  await page.evaluate(() => { window.monImportFixture.failOpen = false; }); await modal.getByRole("button", { name: "保存した会議を開く", exact: true }).click(); await modal.waitFor({ state: "hidden" });
+  const reopen = modal.locator('.common-modal-body').getByRole("button", { name: "保存した会議を開く", exact: true });
+  check(await page.evaluate(() => !!window.monImportFixture.import.saved) && await reopen.isEnabled(), "navigation failure erased saved receipt or retry");
+  await page.evaluate(() => { window.monImportFixture.failOpen = false; }); await reopen.click(); await modal.waitFor({ state: "hidden" });
   check(await calls("start_audio_import") === 1, "opening saved meeting retried audio import");
   results.push("saved audio with failed meeting navigation retains modal cause and explicit reopen, without false navigation success or re-import");
 

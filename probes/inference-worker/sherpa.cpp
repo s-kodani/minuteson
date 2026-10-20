@@ -37,6 +37,11 @@ static int progress(int32_t done,int32_t total,void *) {
 }
 static int diarize(std::map<std::string,std::string> &o) {
     load(o.at("--library"));
+    // The C ABI treats zero as "use default" for these settings. Echo and
+    // freeze the effective configuration, rather than claiming a disabled filter.
+    if (std::stof(o.at("--min-duration-on"))==0) o["--min-duration-on"]="0.3";
+    if (std::stof(o.at("--min-duration-off"))==0) o["--min-duration-off"]="0.5";
+    if (std::stof(o.at("--clustering.cluster-threshold"))==0) o["--clustering.cluster-threshold"]="0.5";
     SherpaOnnxOfflineSpeakerDiarizationConfig c{};
     c.segmentation.pyannote.model=o.at("--segmentation.pyannote-model").c_str();
     c.segmentation.pyannote.window_shift_ratio=std::stof(o.at("--segmentation.pyannote-window-shift-ratio"));

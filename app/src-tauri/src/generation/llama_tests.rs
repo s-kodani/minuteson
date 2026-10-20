@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn model_qwen3_exact_bytes_use_non_thinking_template_and_recommended_sampling() {
+fn model_qwen3_and_qwen35_exact_bytes_use_non_thinking_template_and_recommended_sampling() {
     for (size, sha256) in [
         (
             5_027_783_488,
@@ -11,6 +11,14 @@ fn model_qwen3_exact_bytes_use_non_thinking_template_and_recommended_sampling() 
         (
             2_497_280_256,
             "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+        ),
+        (
+            2_740_937_888,
+            "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        ),
+        (
+            5_680_522_464,
+            "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
         ),
     ] {
         let mut model = Fingerprint {
@@ -212,6 +220,35 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
     )
     .is_err());
     assert!(!second.join("result.json").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn long_context_input_reaches_completion_without_truncation() {
+    let (dir, mut config) = fake("printf '%s\\n' \"$@\" > args.log\nprintf '{\"items\":[]}'");
+    config.context_tokens = 262144;
+    config.prediction_tokens = 32768;
+    let path = unit(dir.path(), "long-context");
+    let prompt = "会議の発言。".repeat(5000);
+    assert!(prompt.len() > 64 * 1024);
+    run_unit(
+        &config,
+        &path,
+        "fixed",
+        &prompt,
+        &json!({}),
+        Duration::from_secs(5),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("prompt.txt")).unwrap(),
+        prompt
+    );
+    let args = std::fs::read_to_string(path.join("args.log")).unwrap();
+    assert!(args.contains("--ctx-size\n262144") && args.contains("--predict\n32768"));
+    config.context_tokens += 1;
+    assert!(config.validate().is_err());
 }
 
 #[test]

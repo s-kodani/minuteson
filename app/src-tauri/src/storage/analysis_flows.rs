@@ -123,18 +123,10 @@ impl Storage {
                     params![session, meeting], |r| r.get(0),
                 ).map_err(|e| e.to_string())?;
                 let config: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                let selected: super::recordings::SpeakerCounts = config
-                    .get("speakerCounts")
-                    .map(|v| serde_json::from_value(v.clone()))
-                    .transpose()
-                    .map_err(|e| e.to_string())?
-                    .unwrap_or_default();
-                selected.validate()?;
-                match track.kind.as_str() {
-                    "mic" => selected.mic,
-                    "system" => selected.system,
-                    _ => return Err("人数指定の録音トラックが不正です".into()),
-                }
+                serde_json::from_value::<Option<u32>>(
+                    config.get("numSpeakers").cloned().unwrap_or(Value::Null),
+                )
+                .map_err(|_| "保存した会議全体の話者数が不正です")?
             } else {
                 return Err("人数指定の保存音声がありません".into());
             };
@@ -290,6 +282,34 @@ impl Storage {
         let flow = read_flow(&tx, meeting)?.ok_or("解析工程がありません")?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(flow)
+    }
+    pub(crate) fn preparation_progress(
+        &self,
+    ) -> Result<Vec<crate::analysis_preparation::Progress>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut q=db.prepare("SELECT f.meeting_id,f.id,m.title,f.created_at,f.transcription_job_id IS NOT NULL FROM analysis_flows f JOIN meetings m ON m.id=f.meeting_id LEFT JOIN processing_jobs j ON j.id=f.transcription_job_id WHERE f.stage IN ('pending','transcription') AND (f.transcription_job_id IS NULL OR j.state IN ('queued','running'))").map_err(|e|e.to_string())?;
+        let rows = q
+            .query_map([], |r| {
+                Ok(crate::analysis_preparation::Progress {
+                    meeting_id: r.get(0)?,
+                    operation_id: r.get(1)?,
+                    meeting_title: r.get(2)?,
+                    started_at_ms: r.get(3)?,
+                    phase: "waiting".into(),
+                    completed: None,
+                    total: None,
+                    sequence: if r.get::<_, bool>(4)? {
+                        u32::MAX as u64
+                    } else {
+                        0
+                    },
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
     pub(crate) fn pending_analysis_flows(&self) -> Result<Vec<AnalysisFlow>, String> {
         let db = self

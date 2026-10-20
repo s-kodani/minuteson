@@ -27,6 +27,7 @@ struct Entry {
 }
 pub(crate) struct Scope {
     enabled: bool,
+    owns: bool,
     started: std::time::Instant,
     final_bytes: std::cell::Cell<u64>,
     final_ms: std::cell::Cell<u128>,
@@ -44,10 +45,21 @@ impl Scope {
         }
         Ok(Self {
             enabled,
+            owns: enabled,
             started: std::time::Instant::now(),
             final_bytes: std::cell::Cell::new(0),
             final_ms: std::cell::Cell::new(0),
         })
+    }
+    /// Admission helpers share the enclosing operation's evidence. Each
+    /// commit still invokes finish(), which physically checks retained files.
+    pub(crate) fn join_or_enter(enabled: bool) -> Result<Self, String> {
+        if enabled && CACHE.with(|c| c.borrow().is_some()) {
+            let mut scope = Self::enter(false)?;
+            scope.enabled = true;
+            return Ok(scope);
+        }
+        Self::enter(enabled)
     }
     pub(crate) fn finish(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         if !self.enabled {
@@ -85,7 +97,7 @@ impl Scope {
 }
 impl Drop for Scope {
     fn drop(&mut self) {
-        if self.enabled {
+        if self.owns {
             if let Some(c) = CACHE.with(|c| c.borrow_mut().take()) {
                 crate::internal_logs::detail(crate::internal_logs::current_context("analysis"),"stopped","info",self.started.elapsed(),&serde_json::json!({"event":"ファイル検証共有終了","fileCount":c.entries.len(),"verificationHits":c.hits,"physicalHashBytes":c.bytes+self.final_bytes.get(),"hashReusedBytes":c.reused_bytes,"initialHashMs":c.hash_ms,"finalVerificationMs":self.final_ms.get()}).to_string());
             }

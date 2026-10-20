@@ -31,11 +31,6 @@ export async function installPlainMinutesWindowFixture(page) {
           const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");
           return dataIdleRead(cmd);
         }
-        if(["get_transcript_edit_recovery","save_transcript_edit_recovery","discard_transcript_edit_recovery","list_transcript_edit_recoveries"].includes(cmd)) {
-          const { recoveryFixture } = await import("/tests/transcript-recovery-browser-fixture.js");
-          data.recovery ??= recoveryFixture({ drafts: () => [data.td],current: () => data.td });
-          return data.recovery.invoke(cmd,args);
-        }
         if (cmd === "plugin:event|listen") { const id=++sequence; listeners.set(id,args); return id; }
         if (cmd === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
         if (cmd === "get_recording_snapshot") return {revision:1,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};
@@ -47,7 +42,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
-        if (cmd === "get_archived_recording_input_notices") return {schemaVersion:1,recordings:[],nextCursor:null};
+        if (cmd === "get_archived_recording_input_notices") return {schemaVersion:3,recordings:[],nextCursor:null};
         if (cmd === "get_ui_preferences") return copy(data.ui);
         if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(cmd)) return null;
         if (cmd === "save_ui_preferences") {
@@ -62,10 +57,10 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_analysis_flow") return null;
         if (cmd === "get_meeting_audio_summary") return {schemaVersion:1,durationUs:3600000000,modes:["mic","system","both"]};
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
-        if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-recovery-browser-fixture.js")).stampFixtureDraft(data.td);
-        if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return (await import("/tests/transcript-recovery-browser-fixture.js")).stampFixtureDraft(data.td); }
+        if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td);
+        if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td); }
         if (cmd === "get_analysis_preferences") return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
-        if (cmd === "get_diarization_tracks") return {tracks:[]};
+        if (cmd === "get_meeting_analysis_audio") return {tracks:[]};
         if (cmd === "get_diarization_preferences") {const engine={executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:800,windowShiftMilli:500,minDurationOnMs:0,minDurationOffMs:0};return {id:"sherpa_profiles",lockVersion:0,payload:{standard:copy(engine),highAccuracy:copy(engine)}};}
         if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
         if (cmd === "get_minutes_preferences") return copy(data.pref);

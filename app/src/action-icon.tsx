@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "copy" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
@@ -21,6 +21,7 @@ export function ActionIcon({ name }: { name: ActionIconName }) {
     {name === "restart" && <><path d="M5 5v14m14-14L8 12l11 7V5Z" /></>}
     {name === "more" && <><circle cx="5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="19" cy="12" r="1" fill="currentColor" /></>}
     {name === "refresh" && <><path d="M20 7a8 8 0 0 0-14-1L3 9m0-5v5h5M4 17a8 8 0 0 0 14 1l3-3m0 5v-5h-5" /></>}
+    {name === "copy" && <><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V3H3v13h5" /></>}
     {name === "undo" && <><path d="M8 5 3 10l5 5M3 10h10a7 7 0 0 1 7 7v2" /></>}
     {name === "plus" && <path d="M12 5v14M5 12h14" />}
     {name === "previous" && <path d="m15 5-7 7 7 7" />}

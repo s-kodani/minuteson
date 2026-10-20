@@ -151,7 +151,6 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         connection: Mutex::new(owned_connection),
         restored_inputs: Mutex::default(),
         feature_vectors: Mutex::default(),
-        analysis_pcm: Mutex::default(),
         execution_progress: Mutex::default(),
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),

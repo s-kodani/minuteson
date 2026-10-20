@@ -1,11 +1,9 @@
-import { SpeakerCompletionSettings } from "./speaker-completion-settings";
-import { VoiceMatchingSettings } from "./voice-matching-settings";
+import { ModelDeletionDialog, useModelDeletion } from "./model-deletion";
 import { VoicePeopleSettings } from "./voice";
 import { MinutesPromptSettings } from "./minutes-prompt-settings";
 import { InternalLogs } from "./internal-logs";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { InfoPopover } from "./info-popover";
 import { OptionsModal } from "./options-modal";
 import { SettingsModalScope } from "./settings-modal-scope";
 import { useAnalysisPublication } from "./analysis-publication";
@@ -48,7 +46,7 @@ import type { RecordingSnapshot } from "./session";
 import "./style.css";
 import "./prototype-alignment.css";
 import "./recorder-panel.css";
-import { ThemeProvider, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications, useTheme } from "./theme";
+import { ThemeProvider, ThemeSettingsPanel, ThemeNotifications, useTheme } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
@@ -266,9 +264,12 @@ function MainWindow() {
       // their local buffers, including when recovery deliberately skipped writes.
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
-  const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const [modelRefreshEpoch, setModelRefreshEpoch] = useState(0);
+  const modelDeletion = useModelDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || captureBusy || closingBusy || recordingDecision.visible || recordingDecision.requestBusy || state.kind !== "ready" || !["idle", "error"].includes(state.snapshot.phase), withSavedEdits,
+    onDeleted: async () => { setModelRefreshEpoch(value => value + 1); } });
+  const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
   const baseNavigationLocked=operationNavigationLocked||captureTest.blocked;
-  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
+  const deletionBlocked = !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   const operationWriteLocked=operationNavigationLocked||deletionBlocked||!!dataOperation.snapshot?.restartRequired;
   const startConfirm = useActionConfirmation(baseWriteLocked || closingBusy);
@@ -277,7 +278,7 @@ function MainWindow() {
   const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
   // Navigation saves temporarily lock writes, but must not cancel background
   // model preparation. Recording, maintenance and shutdown still stop it.
-  const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || closingBusy || startConfirm.pending;
+  const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || closingBusy || startConfirm.pending;
   const publication = useAnalysisPublication(writeLocked, action => withSavedEdits(action, "transcription"));
   const root = useRef({ selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state });
   root.current = { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state };
@@ -450,7 +451,7 @@ function MainWindow() {
       const applications=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
       checkedCaptureScope(scope,applications);
       const application=captureApplicationScope(scope,applications);
-      const countsMessage=local?`\n録音後の話者数: マイク ${local.speakerCounts.mic===null?"自動":local.speakerCounts.mic+"人"}、PC音声 ${local.speakerCounts.system===null?"自動":local.speakerCounts.system+"人"}。`:"";
+      const countsMessage=local?`\n録音後の会議全体の話者数: ${local.numSpeakers===null?"自動":"最大"+local.numSpeakers+"人"}。`:"";
       const scopeMessage=scope.mode==="system"?"PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。":`PC音声は選択したアプリ（${application?.name}）を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。終了・再起動時は全体取得や別アプリに切り替えません。`;
       if (!expected || expected.lifecycle !== "draft" || expected.sourceType != null || !ownerUnchanged()) throw Error("録音対象の会議を再確認してください。");
       await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphoneUID===null?"自動（会議アプリの使用マイクを優先し、不明なときはOSの既定入力）":microphone.name}。${scopeMessage}` + countsMessage + (expectedTest ? "\n前のテスト音声の再生を停止し、一時音声を破棄してから録音を開始します。保存済み会議の音声は変更しません。" : "") + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.mode===microphoneMode&&(microphoneUID===null||root.current.captureInputs.uid===microphoneUID)&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
@@ -467,7 +468,7 @@ function MainWindow() {
         if((currentTest?.runId??null)!==(expectedTest?.runId??null)||currentTest?.busy)throw Error("録音前テストの対象・状態が変更されました。録音は開始していません。");
         if(currentTest)await captureTest.client.discard(currentTest.runId);
         if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true}:current);
-        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, speakerCounts:local?.speakerCounts??null });
+        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers:local?.numSpeakers??null });
         const accepted=await invoke<Meeting | null>("get_meeting", { id: expected.id });
         if(!accepted||accepted.id!==expected.id)throw Error("録音の会議保存結果を確認できません。開始は再送していません。");
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");
@@ -721,20 +722,21 @@ function MainWindow() {
             setSelectedMeeting(meeting);setMeetingToolsOpen(false);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
           {screen === "settings" && <><h1>設定</h1><p className="lead">録音環境、ローカルAI、表示を管理します。</p></>}
-          {screen === "settings" && <ThemeSettingsPanel compact locked={writeLocked} />}
-          <ModelInspectionPanel compact visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />
-          {screen === "prompts" && <><h1>プロンプト</h1><p className="lead">議事録の作成・統合に使うプロンプトを管理します。</p></>}
+          {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
+          <ModelInspectionPanel deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />
+          {screen === "prompts" && <><h1>プロンプト</h1><p className="lead">議事録の作成・統合に使うプロンプトと共通用語を管理します。</p></>}
           <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
-          {screen !== "settings" && <ThemeReadNotice />}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <ModelDeletionDialog operation={dataOperation} control={modelDeletion} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
-          {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><VoiceMatchingSettings locked={writeLocked} /><SpeakerCompletionSettings locked={writeLocked} /><VoicePeopleSettings locked={writeLocked} /><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></> : screen === "prompts" ? null : screen === "voices" ? <VoicePeopleSettings standalone locked={writeLocked} /> : screen === "logs" ? <InternalLogs /> : screen === "jobs" ? <JobList locked={navigationLocked} onOpenMeeting={openNotifiedMeeting} onOpenModels={() => { if (!navigationLocked) void withSavedEdits(() => setScreen("settings")); }} /> : screen==="recording" ? <>
+          {screen === "settings" ? null : screen === "prompts" ? null : screen === "voices" ? <VoicePeopleSettings standalone locked={writeLocked} /> : screen === "logs" ? <InternalLogs /> : screen === "jobs" ? <JobList locked={navigationLocked} onOpenMeeting={openNotifiedMeeting} onOpenModels={() => { if (!navigationLocked) void withSavedEdits(() => setScreen("settings")); }} /> : screen==="recording" ? <>
             <RecordingWorkspace preparation={preparation} title={selectedMeeting?.title??preparation?.title??"録音対象を確認してください"} state={state} owner={captureOwner} locked={writeLocked}
               canStart={isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?!preparation.submitted&&validRecordingTitle(preparation.title):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}
               canStop={!captureBusy&&!navigationBusy&&!recordingDecision.requestBusy&&!recordingDecision.visible&&recordingDecision.connected&&state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)}
               onTitle={title=>setPreparation(current=>current&&!current.submitted?{...current,title}:current)} onStart={()=>void startRecording()} onStop={source=>void stopRecording(source)}
-              onSpeakerCounts={speakerCounts=>setPreparation(current=>current&&!current.submitted?{...current,speakerCounts}:current)}
+              onNumSpeakers={numSpeakers=>setPreparation(current=>current&&!current.submitted?{...current,numSpeakers}:current)}
               onBack={()=>void withSavedEdits(()=>{setSelectedMeeting(null);setPreparation(null);setRestoredFilter(null);setScreen("meetings");})} onSettings={()=>void withSavedEdits(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
               inputs={captureAvailable?<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||!!preparation?.submitted||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>:<p>録音ヘルパーが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
               activeMicrophone={captureAvailable&&activeMicrophoneInput?<ActiveMicrophoneSelection control={captureInputs} locked={writeLocked||!captureInputs.inputs} onSelect={value=>void selectRecordingMicrophone(value)} status={microphoneSelection} pending={microphoneSelection?.source==="pending"||microphoneRequest?.owner===microphoneSession&&(!microphoneSelection||microphoneSelection.requestRevision<microphoneRequest.revision)}/>:null}
@@ -743,7 +745,7 @@ function MainWindow() {
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {selectedMeeting ? <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} renderTools={renderMeetingTools} onHeadChanged={async () => {
+          {selectedMeeting ? <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onGenerationStarted={() => setMeetingToolsOpen(false)} renderTools={renderMeetingTools} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);

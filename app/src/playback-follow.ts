@@ -20,13 +20,13 @@ export function playingRows(rows: readonly FollowRow[], timeline: PlaybackTimeli
   if(!timeline?.playing||timeline.meetingId!==meetingId||!Number.isSafeInteger(timeline.timeUs)||timeline.timeUs<0)return [];
   if(timeline.scope==="utterance"&&timeline.analysisId!==analysisId)return [];
   const selected = timeline.trackKind === "both" ? ["mic","system"] : [timeline.trackKind];
-  if(timeline.scope==="meeting"&&selected.some(kind=>!["mic","system","imported"].includes(kind)))return [];
+  if(timeline.scope==="meeting"&&selected.some(kind=>!["mic","system","imported","processed"].includes(kind)))return [];
   const matches:number[]=[];
   rows.forEach((row,index)=>{
     if(!Number.isSafeInteger(row.startUs)||!Number.isSafeInteger(row.endUs)||row.startUs<0||row.endUs<=row.startUs
       ||row.startUs>timeline.timeUs||timeline.timeUs>=row.endUs)return;
     if(timeline.scope==="utterance" ? row.id===timeline.utteranceId||row.sourceUtteranceId===timeline.utteranceId
-      : !!row.trackId&&!!trackKinds&&selected.includes(trackKinds.get(row.trackId)??""))matches.push(index);
+      : !!row.trackId&&!!trackKinds&&(trackKinds.get(row.trackId)==="processed" || selected.includes(trackKinds.get(row.trackId)??"")))matches.push(index);
   });
   return matches;
 }

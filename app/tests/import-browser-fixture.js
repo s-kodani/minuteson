@@ -55,7 +55,7 @@ mockIPC(async(command,args)=>{
     case "get_meeting_vocabulary":return {global:structuredClone(f.global),meeting:structuredClone(f.books[args.meetingId]??{id:`meeting:${args.meetingId}`,payload:[],lockVersion:0})};
     case "get_analysis_flow":return f.meetings.find(m=>m.id===args.meetingId)?.lifecycle==="imported"?{id:"flow",meetingId:args.meetingId,profile:"high_accuracy",stage:"configuration",lockVersion:1,transcriptionJob:null,diarizationJob:null,errorMessage:"高精度モデルが未準備です"}:null;
     case "get_analysis_jobs":case "get_minutes_exports":return [];
-    case "get_diarization_tracks":return {tracks:[{id:"imported-track",kind:"imported",startUs:0,endUs:4000000,sampleRate:16000,channels:2}]};
+    case "get_meeting_analysis_audio":return {tracks:[{id:"imported-track",kind:"imported",startUs:0,endUs:4000000,sampleRate:16000,channels:2}]};
     case "get_analysis_versions":case "get_minutes_versions":return {meetingLockVersion:1,currentId:null,previousId:null,draft:null,versions:[]};
     case "get_current_analysis":case "get_transcript_draft":case "get_current_minutes":case "get_minutes_draft":case "finish_main_close":return null;
     default:throw Error(`Unexpected import fixture command: ${command}`);

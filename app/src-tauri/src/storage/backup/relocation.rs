@@ -514,7 +514,6 @@ impl NativeSnapshot<'_> {
             return Err("旧保存先の検証済み書込停止を確認できません".into());
         }
         db.flush_prepared_statement_cache();
-        storage.clear_analysis_pcm();
         storage.retired.store(true, Ordering::Release);
         Ok(())
     }

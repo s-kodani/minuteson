@@ -180,7 +180,7 @@ fn invalid_combinations_metadata_and_spans_are_rejected() {
             5 => source.spans[0].first_frame = u64::MAX,
             6 => source.spans[0].frames = 0,
             7 => source.spans[0].frames = 100,
-            8 => source.track_kind = "processed".into(),
+            8 => source.track_kind = "foreign".into(),
             _ => source.spans.clear(),
         }
         assert!(

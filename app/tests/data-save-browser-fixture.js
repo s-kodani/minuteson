@@ -34,6 +34,8 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_ui_preferences") return dataIdleRead(command);
   if (["get_capture_test_snapshot","get_capture_test_recovery"].includes(command)) return dataIdleRead(command);
   if (["get_analysis_notification_jobs","get_archived_recording_input_notices"].includes(command)) return dataIdleRead(command);
+  if (command === "get_voice_matching_preferences") return { id: "voice_matching", lockVersion: 0, payload: { similarityThresholdMilli: 800, marginThresholdMilli: 100 } };
+  if (command === "get_speaker_completion_preferences") return { id: "speaker_completion", lockVersion: 0, payload: { similarityThresholdMilli: 800, marginThresholdMilli: 100 } };
   if (command === "get_ready_analysis_flows") return dataIdleRead(command);
   if (command === "get_application_close_activity") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }

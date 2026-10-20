@@ -5,9 +5,9 @@ fn retry_preview(
     f: &Fixture,
     job: &JobSnapshot,
     target: usize,
-) -> Result<crate::model_rebinding::Preview, String> {
+) -> Result<crate::test_support::model_retry::Preview, String> {
     let p = &f.packages[target];
-    crate::model_rebinding::preview(
+    crate::test_support::model_retry::preview(
         &f.storage,
         &f.models(),
         &f.meeting,
@@ -68,16 +68,24 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
         let cancelled_op = Uuid::new_v4().to_string();
         let guard = inspector.begin(&cancelled_op).unwrap();
         inspector.cancel(&cancelled_op).unwrap();
-        let pending =
-            crate::model_rebinding::receipt(&f.storage, &inspector, &cancelled_op, &preview)
-                .unwrap();
+        let pending = crate::test_support::model_retry::receipt(
+            &f.storage,
+            &inspector,
+            &cancelled_op,
+            &preview,
+        )
+        .unwrap();
         assert!(pending.active && pending.cancelled && pending.job.is_none());
         drop(guard);
-        let ended =
-            crate::model_rebinding::receipt(&f.storage, &inspector, &cancelled_op, &preview)
-                .unwrap();
+        let ended = crate::test_support::model_retry::receipt(
+            &f.storage,
+            &inspector,
+            &cancelled_op,
+            &preview,
+        )
+        .unwrap();
         assert!(!ended.active && ended.cancelled && ended.job.is_none());
-        let next = crate::model_rebinding::apply(
+        let next = crate::test_support::model_retry::apply(
             &f.storage,
             &f.models(),
             &op,
@@ -136,23 +144,30 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
         let counts = (f.count("processing_jobs"), f.count("job_checkpoints"));
         inspector.cancel(&op).unwrap();
         let receipt =
-            crate::model_rebinding::receipt(&f.storage, &inspector, &op, &preview).unwrap();
+            crate::test_support::model_retry::receipt(&f.storage, &inspector, &op, &preview)
+                .unwrap();
         assert!(!receipt.active && receipt.cancelled);
         assert_eq!(receipt.job, Some(completed.clone()));
         assert_eq!(
-            crate::model_rebinding::result(&f.storage, &op, &preview).unwrap(),
+            crate::test_support::model_retry::result(&f.storage, &op, &preview).unwrap(),
             Some(completed.clone())
         );
         assert_eq!(
-            crate::model_rebinding::apply(&f.storage, &f.models(), &op, &preview, &|| true)
-                .unwrap(),
+            crate::test_support::model_retry::apply(
+                &f.storage,
+                &f.models(),
+                &op,
+                &preview,
+                &|| true
+            )
+            .unwrap(),
             completed
         );
         assert_eq!(
             (f.count("processing_jobs"), f.count("job_checkpoints")),
             counts
         );
-        assert!(crate::model_rebinding::apply(
+        assert!(crate::test_support::model_retry::apply(
             &f.storage,
             &f.models(),
             &Uuid::new_v4().to_string(),
@@ -234,7 +249,7 @@ fn model_rebinding_rejects_changed_review_state_cancelled_or_stale_trial_without
         let cps = f.count("job_checkpoints");
         let calls = calls_in(f.root.path()) + calls_in(f.app_data.path());
         assert!(
-            crate::model_rebinding::apply(
+            crate::test_support::model_retry::apply(
                 &f.storage,
                 &f.models(),
                 &Uuid::new_v4().to_string(),
@@ -506,7 +521,7 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
         assert_eq!(f.storage.fixed_job_input(id).unwrap(), original);
         assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
         let preview = retry_preview(&f, &source, destination).unwrap();
-        let next = crate::model_rebinding::apply(
+        let next = crate::test_support::model_retry::apply(
             &f.storage,
             &f.models(),
             &Uuid::new_v4().to_string(),

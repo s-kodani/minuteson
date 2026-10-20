@@ -8,7 +8,7 @@ pub(crate) const COMPLETION: u32 = 2;
 pub(crate) const CAPTURE: u32 = 4;
 pub(crate) const TRANSCRIPT_DRAFT: u32 = 4;
 pub(crate) const EDIT_RECOVERY: u32 = 4;
-pub(crate) const BACKUP: u32 = 4;
+pub(crate) const BACKUP: u32 = 5;
 pub(crate) const OPTIMIZATION: u32 = 1;
 
 pub(crate) fn job(kind: &str, parameters: &Value) -> Result<(), String> {

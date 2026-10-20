@@ -35,6 +35,8 @@ mod jobs;
 pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 pub(crate) mod markdown_generation_tests;
+pub(crate) mod meeting_mix;
+mod meeting_mix_reset;
 mod meeting_playback;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
@@ -68,15 +70,18 @@ pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
 pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
 pub(crate) use analysis::{SpeakerInput, SpeakerSegmentInput};
-pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
+#[cfg(test)]
+pub(crate) use analysis_ui::AdoptRequest;
+pub(crate) use analysis_ui::{DraftStamp, VersionState};
 pub(crate) use diarization::DiarizationInput;
 pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPreferencesSnapshot};
 pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::ExportRecord;
+#[cfg(test)]
+pub(crate) use jobs::retry_source_permitted;
 pub(crate) use jobs::{
-    retry_source_permitted, ExecutionProgress, JobKind, JobSnapshot, JobSpec, NotificationJob,
-    NotificationOutput,
+    ExecutionProgress, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
 pub(crate) use meeting_playback::{
     MeetingAudioSummary, MeetingIntervalRequest, MeetingPlaybackMode, MeetingPlaybackRequest,
@@ -86,6 +91,7 @@ pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnaps
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub(crate) use recordings::valid_microphone_uid;
 pub use recordings::RecordingConfig;
+#[cfg(test)]
 pub(crate) use revisions::CommittedAnalysis;
 pub(crate) use transcription::RecordedAudioPlan;
 pub(crate) use ui_preferences::{UiPreferences, UiPreferencesSnapshot};
@@ -156,7 +162,6 @@ pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
     restored_inputs: Mutex<restored_input::Registry>,
-    pub(crate) analysis_pcm: Mutex<crate::analysis_pcm_cache::Cache>,
     pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     maintenance: std::sync::atomic::AtomicBool,
@@ -338,6 +343,7 @@ impl Storage {
             "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
             params![now_ms()?],
         )?;
+            meeting_mix_reset::initialize(&mut connection, &root)?;
             connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
             connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
             #[cfg(unix)]
@@ -364,7 +370,6 @@ impl Storage {
             connection: Mutex::new(connection),
             restored_inputs: Mutex::new(restored_input::Registry::default()),
             feature_vectors: Mutex::default(),
-            analysis_pcm: Mutex::default(),
             execution_progress: Mutex::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),

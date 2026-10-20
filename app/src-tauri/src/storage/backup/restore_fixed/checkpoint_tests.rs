@@ -67,7 +67,7 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
     let (spec, _) = storage.fixed_job_input(&diarization.id).unwrap();
     let params = &spec.parameters["diarization"];
     let track = &params["source"]["tracks"][0];
-    let result = json!({"schemaVersion":2,"originOperationId":spec.parameters["request"]["operationId"],"inputAnalysisId":spec.input_analysis_id,"inputHash":spec.input_hash,"sourceManifestHash":params["source"]["manifestHash"],"trackId":track["id"],"trackStartUs":track["startUs"],"durationUs":4_000_000,"engine":params["engine"],"numSpeakers":null,"run":params["knownInput"]["runs"][0],"extractor":params["extractor"],"matching":params["matching"],"features":[{"speaker":0,"firstFrame":0,"endFrame":16000,"output":{"schemaVersion":1,"engine":"sherpa-onnx","engineVersion":"1.13.8","sampleRate":16000,"firstFrame":0,"endFrame":16000,"dimension":2,"status":"ready","reason":null,"vectorBits":["3f800000","00000000"]}}],"segments":[{"startUs":0,"endUs":1_000_000,"speaker":0}]});
+    let result = json!({"schemaVersion":2,"originOperationId":spec.parameters["request"]["operationId"],"inputAnalysisId":spec.input_analysis_id,"inputHash":spec.input_hash,"sourceManifestHash":params["source"]["manifestHash"],"trackId":track["id"],"trackStartUs":track["startUs"],"durationUs":4_000_000,"engine":params["engine"],"numSpeakers":params["tracks"][0]["numSpeakers"],"speakerMerges":[],"run":params["knownInput"]["runs"][0],"matching":params["matching"],"segments":[{"startUs":0,"endUs":1_000_000,"speaker":0}]});
     let dwav = artifact(
         &storage,
         &meeting,

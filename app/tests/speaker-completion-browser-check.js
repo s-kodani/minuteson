@@ -34,5 +34,5 @@ async page => {
   await page.getByRole('button',{name:'会議一覧',exact:true}).first().click();await page.getByRole('button',{name:'会議A',exact:true}).click();
   check(await page.getByRole('button',{name:'話者割り当てを更新',exact:true}).count()===0,'retired assignment update button remains');
   check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(c=>c.command==='update_speaker_assignments')),'opening a meeting starts a manual assignment update');
-  return {settings:'passed',independentThresholds:true,invalidIncrements:'rejected',lostResponseReadback:'passed',narrowWidth:390,manualAssignmentUpdate:'removed'};
+  return {passed:6,settings:'passed',independentThresholds:true,invalidIncrements:'rejected',lostResponseReadback:'passed',narrowWidth:390,manualAssignmentUpdate:'removed'};
 }

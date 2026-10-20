@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Toaster, toast as sonnerToast } from "sonner";
+import { createPortal } from "react-dom";
 import { notificationCapacity, notificationPresenterId, presentationId, presentationStamp, removedPresentationIds, stackCardExposed } from "./toast-presentation";
 import { InfoPopover } from "./info-popover";
 import { ActionIcon } from "./action-icon";
@@ -28,20 +29,13 @@ export function ToastNotice({ scope, type, message, level = "success", important
   return null;
 }
 
-export function IssueNotice({ scope, type, message, label, action, historyOnly }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction; toastMessage?: string; historyOnly?: boolean }) {
+export function IssueNotice({ scope, type, message, label, action, historyOnly }: { scope: string; type: string; message: string | null | undefined; label: string; action?: ToastAction; historyOnly?: boolean }) {
   return <ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} historyOnly={historyOnly} />;
-}
-
-/** Retained state for sources whose one notification owner outlives a view. */
-export function IssueStatus(_props: { message: string | null | undefined; label: string; children?: ReactNode }) {
-  // Its originating notification owner publishes the same operation error.
-  // Do not duplicate it as an inline banner when a view opens.
-  return null;
 }
 
 export function NotificationList({ visible, onOpen, locked=false }: { visible: boolean; onOpen?:(meetingId:string)=>Promise<void>;locked?:boolean }) {
   const history = useSyncExternalStore(toasts.subscribe, toasts.getHistorySnapshot);
-  const current = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
+  useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
   const restore = useRef(() => document.querySelector<HTMLButtonElement>('.notifications-popover:popover-open [data-notification-close]')?.focus({ preventScroll: true })).current;
   return visible ? <section className="notification-list" aria-label="通知一覧の内容">
     {history.length===0?<p className="notification-empty">通知はありません。</p>:<div className="notification-rows">{history.map(notice=><NotificationHistoryRow key={notice.id} notice={notice} active={toasts.isActive(notice.key,notice.id)} onOpen={onOpen} locked={locked} restoreFocus={restore}/>)}</div>}
@@ -94,11 +88,13 @@ export function noticeElementVisible(element:HTMLElement|null){
   const modal=topOpenModal(); if(modal&&!modal.contains(element))return false;
   const r=element.getBoundingClientRect();
   if(r.width<=0||r.height<=0||r.top<0||r.left<0||r.bottom>innerHeight||r.right>innerWidth)return false;
+  let fixed = false;
   for(let node:HTMLElement|null=element;node;node=node.parentElement){
     if(node.hasAttribute("data-sonner-toast") && !stackCardExposed(node.dataset))return false;
     const style=getComputedStyle(node);
     if(style.visibility!=="visible"||style.display==="none"||Number(style.opacity)===0)return false;
-    if(node!==element){const bounds=node.getBoundingClientRect();
+    if(style.position==="fixed")fixed=true;
+    if(node!==element&&!fixed){const bounds=node.getBoundingClientRect();
       if(["hidden","clip","scroll","auto"].includes(style.overflowX)&&(r.left<bounds.left||r.right>bounds.right))return false;
       if(["hidden","clip","scroll","auto"].includes(style.overflowY)&&(r.top<bounds.top||r.bottom>bounds.bottom))return false;
     }
@@ -107,6 +103,8 @@ export function noticeElementVisible(element:HTMLElement|null){
 }
 
 export function ToastHost({ docked = false }: { docked?: boolean }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [container] = useState(() => { const node = document.createElement("div"); node.style.display = "contents"; return node; });
   const notices = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
   const [focused, setFocused] = useState(false);
   const [top, setTop] = useState(76);
@@ -116,9 +114,22 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
   const host = useRef<HTMLElement>(null), previous = useRef<HTMLElement | null>(null), restore = useRef(() => {});
   restore.current = () => {
     const target = previous.current;
-    if (target?.isConnected && !target.matches(":disabled") && target.getClientRects().length && !target.closest("[hidden], [inert], dialog:not([open])") && !document.querySelector("dialog[open]")) target.focus({ preventScroll: true });
+    const modal = topOpenModal();
+    if (target?.isConnected && !target.matches(":disabled") && target.getClientRects().length && !target.closest("[hidden], [inert], dialog:not([open])") && (!modal || modal.contains(target))) target.focus({ preventScroll: true });
   };
   const stableRestore = useRef(() => restore.current()).current;
+  useLayoutEffect(() => {
+    // A native modal makes the workspace inert, regardless of z-index. Keep
+    // the single presenter in its active boundary, without resetting notices.
+    const place = () => {
+      const destination = topOpenModal() ?? anchor.current;
+      if (destination && container.parentElement !== destination) destination.append(container);
+    };
+    place();
+    const observer = new MutationObserver(place);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
+    return () => { observer.disconnect(); container.remove(); };
+  }, [container]);
   const pauseStack = (reason: "hover" | "focus", paused: boolean) => {
     reading.current[reason] = paused;
     for (const toast of toasts.getSnapshot()) toasts.pause(toast.key, `stack-${reason}`, paused, toast.id);
@@ -152,8 +163,8 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
   }, []);
   useEffect(() => {
     const fit = () => {
-      const headerBottom = host.current?.closest('.topbar')?.getBoundingClientRect().bottom ?? 64;
-      const progressBottom = host.current?.closest('.main-column')?.querySelector('.common-operation-progress')?.getBoundingClientRect().bottom ?? 0;
+      const headerBottom = anchor.current?.closest('.topbar')?.getBoundingClientRect().bottom ?? 64;
+      const progressBottom = anchor.current?.closest('.main-column')?.querySelector('.common-operation-progress')?.getBoundingClientRect().bottom ?? 0;
       const top = Math.ceil(Math.max(headerBottom, progressBottom)) + 12;
       setTop(top);
       const player = document.querySelector<HTMLElement>('.meeting-playback-dock:not([hidden]), .toast-fixture-player');
@@ -167,7 +178,7 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     };
     fit(); window.addEventListener("resize", fit);
     const observer = new ResizeObserver(fit);
-    const column = host.current?.closest('.main-column'); if (column) observer.observe(column);
+    const column = anchor.current?.closest('.main-column'); if (column) observer.observe(column);
     const layoutChanges = new MutationObserver(fit); if (column) layoutChanges.observe(column, { childList: true, subtree: true });
     const player = document.querySelector('.meeting-playback-dock, .toast-fixture-player'); if (player) observer.observe(player);
     return () => { window.removeEventListener("resize", fit); observer.disconnect(); layoutChanges.disconnect(); };
@@ -188,14 +199,15 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
       if (reading.current.hover !== hovered) pauseStack("hover", hovered);
     };
     const modal = () => {
-      const covered = !!document.querySelector("dialog[open]");
+      const modal = topOpenModal();
+      const covered = !!modal && !modal.contains(host.current);
       toasts.pauseAll("modal", covered);
       // Removing a hovered card or opening a native modal can suppress
       // pointerleave. Do not carry that old pause into the next notification.
       if (covered && reading.current.hover) pauseStack("hover", false);
     };
     const shortcut = (event: KeyboardEvent) => {
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.code !== "KeyT" || event.isComposing || document.hidden || document.querySelector("dialog[open]")) return;
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.code !== "KeyT" || event.isComposing || document.hidden || topOpenModal() && !topOpenModal()!.contains(host.current)) return;
       const target = host.current?.querySelector<HTMLButtonElement>('[data-sonner-toast][data-front=true]:not([data-removed=true]) button:not(:disabled)');
       if (target) { event.preventDefault(); target.focus({ preventScroll: true }); }
     };
@@ -203,7 +215,7 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus, true); document.addEventListener("pointermove", hover, true); document.addEventListener("keydown", shortcut);
     return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus, true); document.removeEventListener("pointermove", hover, true); document.removeEventListener("keydown", shortcut); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
   }, []);
-  return <aside ref={host} className="toast-host" data-docked={docked} data-pending-count={toasts.pendingCount} aria-label="通知"
+  return <><span ref={anchor} style={{ display: "contents" }} />{createPortal(<aside ref={host} className="toast-host" data-docked={docked} data-pending-count={toasts.pendingCount} aria-label="通知"
     onPointerEnter={() => pauseStack("hover", true)} onPointerLeave={() => pauseStack("hover", false)}
     onFocusCapture={() => { setFocused(true); pauseStack("focus", true); }}
     onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setFocused(false); pauseStack("focus", false); } }}>
@@ -212,5 +224,5 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
       customAriaLabel="通知（Option + Tで移動）" className="mon-notification-stack"
       offset={{ top: `${top}px`, right: "16px" }} mobileOffset={{ top: `${top}px`, right: "16px" }}
       style={{ "--width": "min(380px, calc(100vw - 96px))" } as CSSProperties} />
-  </aside>;
+  </aside>, container)}</>;
 }

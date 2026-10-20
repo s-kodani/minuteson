@@ -34,6 +34,7 @@ impl Resolved {
 }
 
 impl Binding {
+    #[cfg(test)]
     pub(crate) fn recheck(
         &self,
         storage: &Storage,
@@ -304,6 +305,7 @@ pub(in crate::storage) fn validate_spec(spec: &JobSpec) -> Result<(), String> {
 }
 
 // Path-free review data. Never include the vocabulary text or transcript.
+#[cfg(test)]
 pub(crate) fn conditions(spec: &JobSpec) -> Result<Value, String> {
     with_execution(spec, |e| {
         e.validate_settings()?;
@@ -374,6 +376,7 @@ pub(crate) fn llama(
 /// rerun here. The entire package and trial artifacts are reread off the DB
 /// lock. A final reread detects intervening trial changes; retry admission
 /// must recheck the current destination proof again at its commit boundary.
+#[cfg(test)]
 pub(crate) fn prepare(
     storage: &Storage,
     models_root: &Path,

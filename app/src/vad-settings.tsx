@@ -15,7 +15,7 @@ export function VadSettings({ value, available, disabled, onApply }: {
   value: VadOptions; available: boolean; disabled: boolean; onApply: (options: VadOptions) => void;
 }) {
   const [draft, setDraft] = useState(() => draftFor(value)), [enabled, setEnabled] = useState(value.enabled);
-  const [open, setOpen] = useState(false), [touched, setTouched] = useState(false);
+  const [touched, setTouched] = useState(false);
   const id = useId();
   useEffect(() => { setDraft(draftFor(value)); setEnabled(value.enabled); setTouched(false); }, [value]);
   let options: VadOptions | null = null, error = "";
@@ -32,16 +32,13 @@ export function VadSettings({ value, available, disabled, onApply }: {
     <label className="vad-enabled"><input type="checkbox" checked={enabled} disabled={disabled || !available} onChange={e => { setEnabled(e.target.checked); setTouched(true); }} />発話区間検知（VAD）</label>
     <p>無音や雑音を除外して文字起こしします。短い発話や小声が除外される場合があります。変更は次に開始する処理から適用します。</p>
     {!available && <p>モデル選択欄の「VADを追加して使用」から導入できます。</p>}
-    <div className="settings-disclosure">
-      <button type="button" className="small-secondary settings-disclosure-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>VAD詳細設定</button>
-      <div id={id} className="settings-disclosure-body" hidden={!open}>
+    <div className="vad-detail-fields">
         <fieldset className="vad-fields" disabled={disabled || !available || !enabled}>
           {fields.map(f => <label key={f.key} htmlFor={`${id}-${f.key}`}><span>{f.label}{f.unit && `（${f.unit}）`}</span>
             <input id={`${id}-${f.key}`} type="number" aria-label={`${f.label}${f.unit ? `（${f.unit}）` : ""}`} min={f.min} max={f.max} step={f.step} value={draft[f.key]} aria-describedby={`${id}-${f.key}-help`} aria-invalid={touched && !!error} onChange={e => { setDraft(d => ({ ...d, [f.key]: e.target.value })); setTouched(true); }} />
             <span className="vad-field-help" id={`${id}-${f.key}-help`}>{f.help}</span>
           </label>)}
         </fieldset>
-      </div>
     </div>
     <ModelIssue label="VAD設定" message={touched ? error : null} />
     <div className="analysis-actions vad-actions">

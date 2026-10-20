@@ -148,7 +148,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
       {(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
       {openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
       <fieldset disabled={disabled||!!snapshot?.saved}><label><span className="import-field-label">会議名</span><input value={title} maxLength={200} onChange={e=>setTitle(e.target.value)}/></label>
-        <div className="speaker-count-fields"><SpeakerCountSelect label="話者数" value={numSpeakers} onChange={setNumSpeakers}/></div>
+        <div className="speaker-count-fields"><SpeakerCountSelect label="会議全体の話者数" value={numSpeakers} onChange={setNumSpeakers}/></div>
         <p>人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。この音声の初回の話者分離に適用します。</p>
         <p>音声の保存後、全体設定で選んだモデルで文字起こしと話者分離を進めます。モデルが未導入でも音声は保持します。</p>
         <div className="import-vocabulary-entry"><button ref={vocabularyTrigger} type="button" className="small-secondary" aria-haspopup="dialog" aria-controls={scope?.id??"audio-import-dialog"} aria-expanded={vocabularyOpen} onClick={event=>{event.currentTarget.focus({preventScroll:true});setVocabularyOpen(true);}}>会議の用語（任意）</button><InfoPopover label="取り込みの用語" details={<p>開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。登録は認識ヒントであり、自動置換・精度向上の保証ではありません。実際の解析開始時の用語をジョブに固定し、後からの編集は過去の結果を変更しません。</p>}>登録した用語を会議別の認識ヒントとして保存します。自動置換・精度向上の保証ではありません。後からの編集は過去の結果を変更しません。</InfoPopover></div>

@@ -67,7 +67,7 @@ mockIPC(async (command, args) => {
   f.calls.push({ command, args: clone(args) });
   if(command==="get_archived_recording_input_notices")return archivedPage(f,args);
   if(command==="acknowledge_archived_recording_input_notice")return archivedAction(f,args.request);
-  if(command==="get_diarization_tracks"&&f.archived.rows.some(row=>row.meetingId===args.meetingId))return {tracks:[]};
+  if(command==="get_meeting_analysis_audio"&&f.archived.rows.some(row=>row.meetingId===args.meetingId))return {tracks:[]};
   if(command==="get_ui_preferences")return clone(f.uiPreferences);
   if(command==="save_ui_preferences"){
     if(args.expectedLockVersion!==f.uiPreferences.lockVersion||data.snapshot.busy||data.snapshot.restartRequired)throw Error("模擬表示設定競合／書込停止");

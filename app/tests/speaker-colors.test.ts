@@ -26,7 +26,8 @@ test("every light and dark speaker label pair exceeds the 4.5 contrast design ta
 test("transcript source kinds require bounded, distinct native IDs and supported source kinds",()=>{
   assert.deepEqual([...transcriptTrackKinds({tracks:[{id:"not-a-prefix",kind:"mic"},{id:"system-id",kind:"system"}]})],[["not-a-prefix","mic"],["system-id","system"]]);
   assert.equal(transcriptTrackKinds({tracks:[{id:"source",kind:"imported"}]}).get("source"),"imported");
+  assert.equal(transcriptTrackKinds({tracks:[{id:"meeting-mix",kind:"processed"}]}).get("meeting-mix"),"processed");
   for(const value of [null,{}, {tracks:[]},{tracks:new Array(1025).fill({id:"x",kind:"mic"})},
-    {tracks:[{id:"x",kind:"mic"},{id:"x",kind:"system"}]},{tracks:[{id:"mic",kind:"processed"}]},
+    {tracks:[{id:"x",kind:"mic"},{id:"x",kind:"system"}]},{tracks:[{id:"mic",kind:"foreign"}]},
     {tracks:[{id:"",kind:"mic"}]},{tracks:[{id:"x".repeat(257),kind:"system"}]},{tracks:[null]}])assert.throws(()=>transcriptTrackKinds(value));
 });

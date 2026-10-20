@@ -463,7 +463,7 @@ impl Fixture {
         );
         assert!(self.f.storage.get_meeting(&self.f.other).unwrap().is_some());
         let db = self.f.storage.connection.lock().unwrap();
-        for (table, n) in [("app_settings", 1), ("model_packages", 1)] {
+        for (table, n) in [("app_settings", 2), ("model_packages", 1)] {
             assert_eq!(
                 db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
                     .get::<_, i64>(0))

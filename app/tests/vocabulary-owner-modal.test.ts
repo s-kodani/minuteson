@@ -13,7 +13,7 @@ test("vocabulary presentation preserves persistence and explicit destructive dec
   assert.match(view, /action: async \(\) => \{ queue.edit\(value => value.filter/);
   assert.match(view, /if \(validVocabulary\(queue.snapshot\(\).payload \?\? \[\]\)\) await queue.flush\(\)/);
   const persistent = view.slice(view.indexOf("const persistentEditor"), view.indexOf("const view: ModalReplacement"));
-  assert.match(persistent, /<IssueStatus/);
+  assert.doesNotMatch(persistent, /<IssueStatus/);
   assert.doesNotMatch(persistent, /\{issue\}|<IssueNotice/);
   assert.equal((view.match(/new DraftSaveQueue/g) ?? []).length, 1);
 });

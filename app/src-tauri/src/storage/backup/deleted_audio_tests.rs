@@ -282,7 +282,10 @@ fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_wit
     let markdown = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     deleted(&storage, &meeting);
     let (archive, receipt) = write(&storage, output.path());
-    assert_eq!(archive.manifest.format_version, 4);
+    assert_eq!(
+        archive.manifest.format_version,
+        crate::current_formats::BACKUP
+    );
     assert_eq!(receipt.deleted_audio_meeting_count, 1);
     assert_eq!(receipt.deleted_audio_asset_count, asset_ids.len());
     assert_eq!(receipt.omitted_pcm_count, 0);
@@ -354,7 +357,10 @@ fn deleted_audio_normal_export_keeps_current_format_and_no_deletion_claim() {
     let (_root, storage, _meeting) = fixture();
     let output = tempfile::tempdir().unwrap();
     let (archive, receipt) = write(&storage, output.path());
-    assert_eq!(archive.manifest.format_version, 4);
+    assert_eq!(
+        archive.manifest.format_version,
+        crate::current_formats::BACKUP
+    );
     assert!(archive.deleted_audio.is_empty());
     assert_eq!(
         (
@@ -709,4 +715,27 @@ fn deleted_audio_export_cancellation_does_not_publish_or_mutate_source_history()
         .unwrap(),
         1
     );
+}
+
+#[test]
+fn deleted_audio_common_wave_retains_its_fixed_metadata_and_can_be_backed_up() {
+    let (_root, storage, meeting) = fixture();
+    let input = storage
+        .ensure_meeting_mix(&meeting, &|| false, &|_, _| {})
+        .unwrap();
+    deleted(&storage, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    let (archive, _) = write(&storage, output.path());
+    let historical = super::super::super::meeting_mix::read_historical(
+        &archive.database,
+        &meeting,
+        &archive.deleted_audio,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        historical.tracks[0].chunks[0].hash,
+        input.tracks[0].chunks[0].hash
+    );
+    assert_eq!(historical.tracks[0].kind, "processed");
 }

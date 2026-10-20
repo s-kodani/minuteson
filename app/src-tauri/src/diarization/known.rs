@@ -1,5 +1,4 @@
-//! Version 2 diarization: independent saved runs, model-bound speaker matching.
-//! Never concatenate/pad gaps or use equal local labels as voice identities.
+//! One native diarization call over the shared, time-aligned meeting WAV.
 use super::*;
 use crate::saved_artifact::{RestoreAssets, Role};
 use crate::storage::KnownInput;
@@ -15,19 +14,10 @@ pub(super) struct Policy {
 impl Policy {
     fn fixed() -> Self {
         Self {
-            algorithm: clustering::ALGORITHM.into(),
-            windows: clustering::WINDOW_SELECTION.into(),
+            algorithm: "sherpa_meeting_mix_v1".into(),
+            windows: "native".into(),
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct SavedFeature {
-    speaker: u32,
-    first_frame: u64,
-    end_frame: u64,
-    output: embedding::Output,
 }
 
 pub(crate) fn helper_path() -> Result<PathBuf, String> {
@@ -68,25 +58,6 @@ pub(crate) fn helper_path() -> Result<PathBuf, String> {
     Err("署名済み話者特徴量ヘルパーがありません。Mac用ビルドまたはprobes/speaker-embedding/build.shを実行してください".into())
 }
 
-fn fingerprint(proof: &Fingerprint) -> Result<(), String> {
-    if proof.size == 0
-        || proof.sha256.len() != 64
-        || !proof
-            .sha256
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        || proof
-            .path
-            .to_str()
-            .is_none_or(|path| path.len() > 4096 || path.contains(['\0', '\n', '\r']))
-        || (!proof.path.is_absolute()
-            && proof.path.to_str() != Some(format!("mon-unavailable:{}", proof.sha256).as_str()))
-    {
-        return Err("保存区間の抽出器指紋が不正です".into());
-    }
-    Ok(())
-}
-
 fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
     super::validate_attribution_policy(parameters)?;
     if let Some(runtime) = &parameters.resident_runtime {
@@ -108,19 +79,11 @@ fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
             return Err("保存区間の人数適用先が不正です".into());
         }
     }
-    let extractor = parameters
-        .extractor
-        .as_ref()
-        .ok_or("固定抽出器がありません")?;
-    fingerprint(&extractor.helper)?;
-    fingerprint(&extractor.library)?;
-    if parameters
-        .engine
-        .runtime_libraries
-        .get(extractor.library_index)
-        != Some(&extractor.library)
+    if parameters.source.tracks.len() != 1
+        || parameters.source.tracks[0].kind != "processed"
+        || known.runs.len() != 1
     {
-        return Err("固定抽出ランタイムがエンジンと一致しません".into());
+        return Err("会議全体の共通音声が必要です".into());
     }
     for index in 0..known.runs.len() {
         run_frames(parameters, index)?;
@@ -168,17 +131,13 @@ pub(crate) fn enqueue(
     transcription_job: Option<&str>,
     source: RecordedAudioPlan,
     known: KnownInput,
-    helper: Option<&Path>,
+    _helper: Option<&Path>,
 ) -> Result<JobSnapshot, String> {
+    let verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
     if !matches!(profile, "standard" | "high_accuracy") {
         return Err("話者分離のプロファイルが不正です".into());
     }
     engine.verify(&|| false)?;
-    let helper = helper
-        .map(Path::to_owned)
-        .map(Ok)
-        .unwrap_or_else(helper_path)?;
-    let extractor = embedding::ExtractorConfig::capture(&helper, &engine)?;
     let selected = storage.job_model_selection(
         &request.meeting_id,
         &request.operation_id,
@@ -214,7 +173,6 @@ pub(crate) fn enqueue(
         tracks,
         manual_assignment_hash: String::new(),
         known_input: Some(known),
-        extractor: Some(extractor),
         matching: Some(Policy::fixed()),
     };
     let known = validate(&parameters)?;
@@ -223,6 +181,7 @@ pub(crate) fn enqueue(
         serde_json::json!({"profile":profile,"engine":"sherpa-onnx","segmentationSha256":parameters.engine.segmentation_model.sha256,"embeddingSha256":parameters.engine.embedding_model.sha256,"qualityStatus":"unverified"}),
         selected,
     )?;
+    verification.finish(&|| false)?;
     storage.enqueue_diarization_source_version(
         request,
         profile,
@@ -276,33 +235,19 @@ pub(crate) fn fixed_coverage(spec: &JobSpec) -> Result<(RecordedAudioPlan, Known
     ))
 }
 
-// Charge decoded results before retaining them or constructing vectors. Limits
-// apply per track, including unavailable features, not only ready embeddings.
+// Bound decoded native output before constructing the candidate.
 #[derive(Default)]
 struct SavedLimits {
-    tracks: BTreeMap<usize, (usize, usize, usize)>,
+    segments: usize,
 }
 impl SavedLimits {
     fn add(&mut self, result: &ResultFile) -> Result<(), String> {
-        let run = result.run.as_ref().ok_or("保存結果に区間がありません")?;
-        let features = result.features.as_ref().ok_or("保存特徴量がありません")?;
-        let counts = self.tracks.entry(run.track_index).or_default();
-        counts.0 = counts
-            .0
+        self.segments = self
+            .segments
             .checked_add(result.segments.len())
             .ok_or("話者区間件数が範囲外です")?;
-        counts.1 = counts
-            .1
-            .checked_add(features.len())
-            .ok_or("特徴量件数が範囲外です")?;
-        for feature in features {
-            counts.2 = counts
-                .2
-                .checked_add(feature.output.dimension)
-                .ok_or("特徴量容量が範囲外です")?;
-        }
-        if counts.0 > 100_000 || counts.1 > 8192 || counts.2 > 8 * 1024 * 1024 {
-            return Err("保存区間全体の話者・特徴量が安全上限を超えています".into());
+        if self.segments > 100_000 {
+            return Err("会議全体の話者区間が上限を超えています".into());
         }
         Ok(())
     }
@@ -324,49 +269,6 @@ pub(super) fn checked_parameters(
     Ok(envelope.diarization)
 }
 
-fn runtime_extractor(
-    parameters: &Parameters,
-    runtime: &SherpaConfig,
-    cancelled: &impl Fn() -> bool,
-) -> Result<embedding::ExtractorConfig, String> {
-    let fixed = parameters
-        .extractor
-        .as_ref()
-        .ok_or("固定抽出器がありません")?;
-    let library = runtime
-        .runtime_libraries
-        .get(fixed.library_index)
-        .filter(|p| p.size == fixed.library.size && p.sha256 == fixed.library.sha256)
-        .ok_or("再結合した抽出ランタイムの指紋が一致しません")?;
-    let path = if fixed.helper.path.is_absolute() && fixed.helper.path.is_file() {
-        fixed.helper.path.clone()
-    } else {
-        #[cfg(test)]
-        let fixture = runtime
-            .executable
-            .path
-            .ancestors()
-            .skip(1)
-            .take(5)
-            .map(|p| p.join("test-embedding-helper"))
-            .find(|p| p.is_file());
-        #[cfg(test)]
-        let path = fixture.map(Ok).unwrap_or_else(helper_path)?;
-        #[cfg(not(test))]
-        let path = helper_path()?;
-        path
-    };
-    let helper = Fingerprint::capture(&path, cancelled)?;
-    if helper.size != fixed.helper.size || helper.sha256 != fixed.helper.sha256 {
-        return Err("固定した抽出ヘルパーと現在の実行ファイルが一致しません".into());
-    }
-    Ok(embedding::ExtractorConfig {
-        library_index: fixed.library_index,
-        helper,
-        library: library.clone(),
-    })
-}
-
 pub(super) fn preflight(
     storage: &Storage,
     spec: &JobSpec,
@@ -376,7 +278,6 @@ pub(super) fn preflight(
     let known = validate(parameters)?;
     let runtime = managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?;
     runtime.verify(cancelled)?;
-    runtime_extractor(parameters, &runtime, cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
         Execution::Sherpa(&parameters.engine),
@@ -391,6 +292,7 @@ pub(super) fn preflight(
         &parameters.source.manifest_asset_id,
         &parameters.source.manifest_hash,
     )?;
+    storage.verify_meeting_mix_sources(&spec.meeting_id, cancelled)?;
     let mut prepared = Vec::new();
     // Verify each physical source once at admission, not one open/hash scan for
     // every gap. A new unit opens only its restricted run, retaining bounded FDs.
@@ -401,70 +303,6 @@ pub(super) fn preflight(
         return Err("準備中に固定保存区間が変更されています".into());
     }
     Ok(prepared)
-}
-
-fn support(
-    parameters: &Parameters,
-    index: usize,
-    segments: &[Segment],
-    cancelled: &impl Fn() -> bool,
-) -> Result<clustering::Support, String> {
-    let frames = run_frames(parameters, index)?;
-    let duration = (frames * 1_000_000 / 16000) as i64;
-    sherpa::validate_saved_segments(segments, None, duration)?;
-    let timeline = Timeline::build(segments, duration)?;
-    let mut turns = Vec::new();
-    for interval in &timeline.intervals {
-        if interval.speakers.len() != 1 {
-            continue;
-        }
-        let first = ((interval.start_us as u128 * 16000).div_ceil(1_000_000)) as u64;
-        let end = (interval.end_us as u128 * 16000 / 1_000_000) as u64;
-        if end <= first {
-            // Preserve the native interval and local group but do not invent
-            // PCM for sub-sample turns; they have no eligible feature window.
-            continue;
-        }
-        turns.push(clustering::Turn {
-            run: index,
-            first,
-            end,
-            speaker: interval.speakers[0],
-        });
-    }
-    turns.sort_unstable();
-    turns.dedup();
-    let mut selected = clustering::support(&[(index, frames)], &turns, cancelled)?;
-    selected.groups = segments
-        .iter()
-        .map(|segment| clustering::LocalSpeaker {
-            run: index,
-            speaker: segment.speaker,
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    // Cannot-link uses original microsecond intervals, not rounded feature
-    // samples. Even overlap shorter than one sample must prohibit a merge.
-    let mut overlaps: BTreeSet<_> = selected.overlaps.into_iter().collect();
-    for interval in timeline.intervals {
-        for (position, left) in interval.speakers.iter().enumerate() {
-            for right in &interval.speakers[position + 1..] {
-                overlaps.insert((
-                    clustering::LocalSpeaker {
-                        run: index,
-                        speaker: *left,
-                    },
-                    clustering::LocalSpeaker {
-                        run: index,
-                        speaker: *right,
-                    },
-                ));
-            }
-        }
-    }
-    selected.overlaps = overlaps.into_iter().collect();
-    Ok(selected)
 }
 
 fn validate_result(
@@ -486,30 +324,16 @@ fn validate_result(
         || result.track_start_us != run.start_us
         || result.duration_us != (run_frames(parameters, index)? * 1_000_000 / 16000) as i64
         || result.engine != parameters.engine
-        || result.num_speakers.is_some()
+        || result.num_speakers != parameters.tracks[run.track_index].num_speakers
         || result.run.as_ref() != Some(run)
-        || result.extractor != parameters.extractor
         || result.matching != parameters.matching
     {
         return Err("保存区間の話者結果・抽出条件の由来が一致しません".into());
     }
-    let support = support(parameters, index, &result.segments, cancelled)?;
-    let features = result.features.as_ref().ok_or("保存特徴量がありません")?;
-    if features.len() != support.windows.len() {
-        return Err("保存特徴量と選択した音声範囲が一致しません".into());
+    if cancelled() {
+        return Err("話者結果の検証を中断しました".into());
     }
-    let mut dimension = None;
-    for (feature, window) in features.iter().zip(support.windows) {
-        if feature.speaker != window.speaker.speaker
-            || feature.first_frame != window.first
-            || feature.end_frame != window.end
-            || dimension.is_some_and(|dimension| dimension != feature.output.dimension)
-        {
-            return Err("保存特徴量の所属・範囲・次元が不正です".into());
-        }
-        dimension = Some(feature.output.dimension);
-        feature.output.vector(window.first, window.end)?;
-    }
+    sherpa::validate_saved_segments(&result.segments, result.num_speakers, result.duration_us)?;
     Ok(())
 }
 
@@ -533,9 +357,9 @@ pub(super) fn load_output(
         &output.wav_hash,
         cancelled,
         |path| {
-            let mut audio =
-                storage.prepare_analysis_run(&spec.meeting_id, track, run, cancelled)?;
-            crate::transcription::wave::write_track(&mut audio, path, cancelled).map(|_| ())
+            storage
+                .copy_meeting_mix(&spec.meeting_id, track, path, cancelled)
+                .map(|_| ())
         },
     )?;
     let bytes = storage.read_analysis_result(
@@ -561,8 +385,12 @@ pub(super) fn load_output(
             "text/plain",
             16 * 1024 * 1024,
         )?;
-        if sherpa::parse_output(&bytes, &parameters.engine, None, result.duration_us)?
-            != result.segments
+        if sherpa::parse_with_merges(
+            &bytes,
+            &parameters.engine,
+            result.num_speakers,
+            result.duration_us,
+        )? != (result.segments.clone(), result.speaker_merges.clone())
         {
             return Err("保存区間の話者結果と元出力が一致しません".into());
         }
@@ -605,7 +433,6 @@ pub(super) fn process_observed(
     };
     let attempt = (|| {
         let runtime = managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?;
-        let extractor = runtime_extractor(&parameters, &runtime, &cancelled)?;
         preflight(storage, &spec, &parameters, &cancelled)?;
         let known = validate(&parameters)?;
         let mut results = Vec::new();
@@ -620,35 +447,19 @@ pub(super) fn process_observed(
                 return Ok(None);
             }
             let track = &parameters.source.tracks[run.track_index];
-            let mut audio =
-                storage.prepare_analysis_run(&spec.meeting_id, track, run, &cancelled)?;
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
             let wave_path = directory.join("input.wav");
-            let key = crate::analysis_pcm_cache::key(
-                &parameters.source,
-                parameters.known_input.as_ref(),
-                run.track_index,
-                Some(index),
-            )?;
-            let cached = if parameters.optimization_version == Some(1) {
-                storage.write_cached_analysis_pcm(&key, &wave_path, &cancelled)?
-            } else {
-                None
-            };
-            let frames = match cached {
-                Some(n) => n,
-                None => {
-                    crate::transcription::wave::write_track(&mut audio, &wave_path, &cancelled)?
-                }
-            };
+            let frames =
+                storage.copy_meeting_mix(&spec.meeting_id, track, &wave_path, &cancelled)?;
             if frames != run_frames(&parameters, index)? {
                 return Err("変換した保存区間のフレームが一致しません".into());
             }
             let native_duration = (frames * 1_000_000 / 16000) as i64;
             let observer = super::runtime::Observer::new(&job, index, runtime_progress);
+            observer.emit(0, false);
             let Some(segments) = sherpa::run_track_observed(
                 &runtime,
-                None,
+                parameters.tracks[run.track_index].num_speakers,
                 &directory,
                 native_duration,
                 Duration::from_secs(24 * 3600),
@@ -659,35 +470,17 @@ pub(super) fn process_observed(
                 return Ok(None);
             };
             observer.emit(10_000, true);
-            let wave = Fingerprint::capture(&wave_path, &cancelled)?;
-            let mut features = Vec::new();
-            for (feature_index, window) in support(&parameters, index, &segments, &cancelled)?
-                .windows
-                .into_iter()
-                .enumerate()
-            {
-                let feature_dir = directory.join(format!("feature-{feature_index}"));
-                std::fs::create_dir(&feature_dir).map_err(|e| e.to_string())?;
-                let Some(output) = embedding::run(
-                    &extractor,
-                    &runtime,
-                    &wave,
-                    window.first,
-                    window.end,
-                    &feature_dir,
-                    Duration::from_secs(3600),
-                    &cancelled,
-                )?
-                else {
-                    return Ok(None);
-                };
-                features.push(SavedFeature {
-                    speaker: window.speaker.speaker,
-                    first_frame: window.first,
-                    end_frame: window.end,
-                    output,
-                });
-            }
+            let native_output = crate::restored_processing::read_local(
+                &directory.join("stdout.log"),
+                16 * 1024 * 1024,
+                &cancelled,
+            )?;
+            let (_, speaker_merges) = sherpa::parse_with_merges(
+                &native_output,
+                &runtime,
+                parameters.tracks[run.track_index].num_speakers,
+                native_duration,
+            )?;
             let result = ResultFile {
                 schema_version: 2,
                 origin_operation_id: spec.parameters["request"]["operationId"]
@@ -704,11 +497,10 @@ pub(super) fn process_observed(
                 track_start_us: run.start_us,
                 duration_us: native_duration,
                 engine: parameters.engine.clone(),
-                num_speakers: None,
+                num_speakers: parameters.tracks[run.track_index].num_speakers,
                 segments,
+                speaker_merges,
                 run: Some(run.clone()),
-                extractor: parameters.extractor.clone(),
-                features: Some(features),
                 matching: parameters.matching.clone(),
             };
             validate_result(&result, &spec, &parameters, index, &cancelled)?;
@@ -731,7 +523,7 @@ pub(super) fn process_observed(
                     &bytes,
                     &runtime,
                     &parameters.engine,
-                    None,
+                    parameters.tracks[run.track_index].num_speakers,
                     native_duration,
                 )?;
                 stdout_path = directory.join("logical-stdout.log");
@@ -832,153 +624,76 @@ fn build_candidate(
     for result in results {
         limits.add(result)?;
     }
-    let mut speakers: Vec<_> = input
-        .analysis
-        .speakers
+    let track = &parameters.source.tracks[0];
+    let result = results.first().ok_or("会議全体の話者結果がありません")?;
+    let labels: Vec<_> = result
+        .segments
         .iter()
-        .map(|speaker| SpeakerInput {
-            key: format!("prior:{}", speaker.id),
-            label: speaker.label.clone(),
+        .map(|s| s.speaker)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let keys: Vec<_> = labels
+        .iter()
+        .map(|id| format!("meeting:speaker_{id:02}"))
+        .collect();
+    let has_text = input
+        .analysis
+        .utterances
+        .iter()
+        .any(|u| !u.recognized_text.trim().is_empty());
+    let mut speakers: Vec<_> = labels
+        .iter()
+        .zip(&keys)
+        .map(|(id, key)| SpeakerInput {
+            key: key.clone(),
+            label: format!("話者{}", id + 1),
         })
         .collect();
-    let mut raw_segments = Vec::new();
-    let mut timelines = BTreeMap::new();
-    let mut observed = Vec::new();
-    let mut unresolved = Vec::new();
-    for (track_index, track) in parameters.source.tracks.iter().enumerate() {
-        let mut groups = Vec::new();
-        let mut overlaps = Vec::new();
-        let mut features = Vec::new();
-        for (index, result) in results
+    if !has_text {
+        speakers.clear();
+    }
+    for speaker in &input.analysis.speakers {
+        if input
+            .analysis
+            .utterances
             .iter()
-            .enumerate()
-            .filter(|(index, _)| known.runs[*index].track_index == track_index)
+            .any(|u| input.manual_utterances.contains(&u.id) && u.speaker_ids.contains(&speaker.id))
         {
-            validate_result(result, spec, parameters, index, cancelled)?;
-            let support = support(parameters, index, &result.segments, cancelled)?;
-            if groups.len() + support.groups.len() > 4096 {
-                return Err("保存区間全体の話者候補が安全上限を超えています".into());
-            }
-            groups.extend(support.groups);
-            overlaps.extend(support.overlaps);
-            for feature in result.features.as_ref().unwrap() {
-                if let Some(vector) = feature
-                    .output
-                    .vector(feature.first_frame, feature.end_frame)?
-                {
-                    features.push(clustering::Feature {
-                        speaker: clustering::LocalSpeaker {
-                            run: index,
-                            speaker: feature.speaker,
-                        },
-                        samples: feature.end_frame - feature.first_frame,
-                        vector,
-                    });
-                }
-            }
-        }
-        let mapping = clustering::cluster(
-            &groups,
-            &features,
-            &overlaps,
-            parameters.tracks[track_index].num_speakers,
-            parameters.engine.cluster_threshold_milli,
-            cancelled,
-        )?;
-        observed.push(mapping.observed_speakers);
-        unresolved.push(mapping.unresolved_groups);
-        let key = |run: usize, speaker: u32| -> Result<String, String> {
-            let index = mapping
-                .groups
-                .binary_search_by_key(&clustering::LocalSpeaker { run, speaker }, |(group, _)| {
-                    *group
-                })
-                .map_err(|_| "保存区間の話者対応がありません")?;
-            Ok(mapping.groups[index].1.map_or_else(
-                || format!("{}:run_{run}:unmatched_{speaker}", track.id),
-                |group| format!("{}:speaker_{group:02}", track.id),
-            ))
-        };
-        let keys: Vec<_> = mapping
-            .groups
-            .iter()
-            .map(|(group, _)| key(group.run, group.speaker))
-            .collect::<Result<BTreeSet<_>, _>>()?
-            .into_iter()
-            .collect();
-        if keys.len() > 100 {
-            return Err(
-                "未照合区間の話者を含む候補が安全上限を超えています。人物を推測して統合できません"
-                    .into(),
-            );
-        }
-        let prefix = match track.kind.as_str() {
-            "mic" => "マイク",
-            "system" => "PC音声",
-            _ => "取り込み音声",
-        };
-        for name in &keys {
-            let (group, mapped) = mapping
-                .groups
-                .iter()
-                .find(|(group, _)| key(group.run, group.speaker).as_ref() == Ok(name))
-                .ok_or("候補話者がありません")?;
-            let label = mapped.map_or_else(
-                || {
-                    format!(
-                        "{prefix} 区間{} 未照合話者{}",
-                        group.run + 1,
-                        group.speaker + 1
-                    )
-                },
-                |speaker| format!("{prefix} 話者{}", speaker + 1),
-            );
             speakers.push(SpeakerInput {
-                key: name.clone(),
-                label,
+                key: format!("prior:{}", speaker.id),
+                label: speaker.label.clone(),
             });
         }
-        let mut segments = Vec::new();
-        for (index, result) in results
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| known.runs[*index].track_index == track_index)
-        {
-            let run = &known.runs[index];
-            for segment in &result.segments {
-                let start = run.start_us + segment.start_us;
-                let end = (run.start_us + segment.end_us).min(run.end_us);
-                if end <= start {
-                    continue;
-                }
-                let key = key(index, segment.speaker)?;
-                let speaker = keys
-                    .binary_search(&key)
-                    .map_err(|_| "候補話者がありません")? as u32;
-                segments.push(Segment {
-                    start_us: start - track.start_us,
-                    end_us: end - track.start_us,
-                    speaker,
-                });
-                raw_segments.push(SpeakerSegmentInput {
-                    track_id: track.id.clone(),
-                    speaker_key: Some(key),
-                    start_us: start,
-                    end_us: end,
-                    overlap_group: None,
-                    confidence: None,
-                });
-            }
-        }
-        timelines.insert(
-            track.id.clone(),
-            (
-                track.start_us,
-                Timeline::build(&segments, track.end_us - track.start_us)?,
-                keys,
-            ),
-        );
     }
+    let segments: Vec<_> = result
+        .segments
+        .iter()
+        .map(|s| Segment {
+            start_us: s.start_us,
+            end_us: s.end_us,
+            speaker: labels.binary_search(&s.speaker).unwrap() as u32,
+        })
+        .collect();
+    let raw_segments = result
+        .segments
+        .iter()
+        .map(|s| SpeakerSegmentInput {
+            track_id: track.id.clone(),
+            speaker_key: has_text.then(|| format!("meeting:speaker_{:02}", s.speaker)),
+            start_us: s.start_us,
+            end_us: s.end_us,
+            overlap_group: None,
+            confidence: None,
+        })
+        .collect();
+    let mut timelines = BTreeMap::new();
+    timelines.insert(
+        track.id.clone(),
+        (0, Timeline::build(&segments, result.duration_us)?, keys),
+    );
+    let observed = vec![labels.len()];
+    let unresolved = vec![0_usize];
     let mut utterances = Vec::new();
     for original in &input.analysis.utterances {
         let (offset, timeline, keys) = timelines
@@ -1023,7 +738,7 @@ fn build_candidate(
     Ok(AnalysisInput {
         audio_manifest_hash: parameters.source.manifest_hash.clone(),
         profile_snapshot: spec.profile_snapshot.clone(),
-        config: serde_json::json!({"jobId":job.id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"inputAnalysisId":input.analysis.id,"inputContentHash":spec.input_hash,"diarization":"sherpa-onnx","tracks":parameters.tracks,"estimatedSpeakers":observed,"unmatchedRunGroups":unresolved,"speakerScope":"track_local_feature_matched","speakerMatching":parameters.matching,"overlapDetection":"same_track_interval_intersection","ambiguousTurns":parameters.attribution_policy.as_deref().unwrap_or("keep_text_unknown_needs_split"),"manualAssignments":"preserved","timelineAlignment":"unverified","audioCoverage":{"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"}}),
+        config: serde_json::json!({"jobId":job.id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"inputAnalysisId":input.analysis.id,"inputContentHash":spec.input_hash,"diarization":"sherpa-onnx","tracks":parameters.tracks,"requestedSettings":parameters.engine,"effectiveSettings":{"numClusters":parameters.tracks[0].num_speakers.map_or(-1,|n|n as i32),"clusterThresholdMilli":if parameters.engine.cluster_threshold_milli==0 {500}else{parameters.engine.cluster_threshold_milli},"minDurationOnMs":if parameters.engine.min_duration_on_ms==0 {300}else{parameters.engine.min_duration_on_ms},"minDurationOffMs":if parameters.engine.min_duration_off_ms==0 {500}else{parameters.engine.min_duration_off_ms}},"speakerMerges":results.iter().flat_map(|r|r.speaker_merges.iter()).collect::<Vec<_>>(),"estimatedSpeakers":observed,"unmatchedRunGroups":unresolved,"speakerScope":"meeting_mix","speakerMatching":parameters.matching,"overlapDetection":"same_track_interval_intersection","ambiguousTurns":parameters.attribution_policy.as_deref().unwrap_or("keep_text_unknown_needs_split"),"manualAssignments":"preserved","timelineAlignment":"unverified","audioCoverage":{"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"}}),
         speakers,
         segments: raw_segments,
         utterances,
@@ -1040,7 +755,6 @@ fn validate_restore(
         || before.diarization.attribution_policy != after.diarization.attribution_policy
         || before.diarization.resident_runtime != after.diarization.resident_runtime
         || before.diarization.engine != after.diarization.engine
-        || before.diarization.extractor != after.diarization.extractor
         || before.diarization.known_input != after.diarization.known_input
         || before.diarization.matching != after.diarization.matching
         || old.profile_snapshot != new.profile_snapshot

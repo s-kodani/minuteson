@@ -19,17 +19,19 @@
 
 | 用途 | 選択肢 |
 | --- | --- |
-| 文字起こし | Whisper tiny / base / small / medium（多言語） |
+| 文字起こし | Whisper tiny / base / small / medium / large-v3 / large-v3-turbo（多言語） |
 | 話者分離 | Pyannote + ERes2Net base / Pyannote int8 + ERes2Net base |
-| 議事録生成 | Qwen 2.5 1.5B · Q4_K_M / Q8_0、Qwen 3 8B / 4B · Q4_K_M |
+| 議事録生成 | Qwen 2.5 1.5B · Q4_K_M / Q8_0、Qwen 3 8B / 4B · Q4_K_M、Qwen 3.5 4B / 9B · Q4_K_M |
 
-合計10候補。選択肢と導入済み一覧には、導入前後で量子化形式を含む同じ名前を表示する。導入済みの同じモデルを選ぶと再ダウンロードせずに使用でき、同じ本体が複数ある場合も1候補にまとめる。Qwen 0.5Bは出力反復・未完成JSONのため新規選択対象から外している。以前の導入済み本体がある場合は一覧だけに「選択対象外」と出るが、予防的に本体を削除しない。
+合計14候補。選択肢と導入済み一覧には、導入前後で量子化形式を含む同じ名前を表示する。導入済みの同じモデルを選ぶと再ダウンロードせずに使用でき、同じ本体が複数ある場合も1候補にまとめる。Qwen 0.5Bは出力反復・未完成JSONのため新規選択対象から外している。以前の導入済み本体がある場合は一覧だけに「選択対象外」と出るが、予防的に本体を削除しない。
 
 固定版の配布元・サイズ・SHA・必要な実行依存・利用条件資料はアプリの[モデル定義](../app/model-catalog/)に結び付く。モデル名だけから入力・出力トークン上限を推測せず、議事録生成は登録された能力上限に従う。入力の余裕だけで出力上限を増やさない。
 
 Qwen3以外の従来候補は短い合成発話・設定切替の[Mac統合確認](verification/remaining-model-integration-2026-10-14.md)を行ったが、正式品質・多話者・60分性能の合格ではない。[Qwen3追加と表示修正の確認範囲](verification/qwen3-and-model-choice-labels-2026-10-16.md)には、実モデルの生成試験を含めていない。Qwen3 4Bも実モデルの生成品質・速度の評価は未実施。小さいモデルを品質保証付きの推奨と表示しない。Windows固有部分と正式評価は保留。
 
 Qwen3 4Bは[公式GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF)のQ4_K_Mを使用する。本体は2,497,280,256 bytes（約2.50 GB）、固定版は`bc640142c66e1fdd12af0bd68f40445458f3869b`、SHA256は`7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5`。8Bと同様に非思考モードを使用し、共有コンテキスト40,960・最大出力32,768の範囲で入力量に応じて配分する。標準対応長32,768とYaRN拡張時131,072とは区別する。
+
+Qwen3.5はUnsloth配布の[4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523)・[9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5)のQ4_K_Mを使用する。本体はそれぞれ2,740,937,888 bytesと5,680,522,464 bytes。SHA256・取得URL・公式Apache-2.0本文も固定する。[公式4B](https://huggingface.co/Qwen/Qwen3.5-4B/tree/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a)・[公式9B](https://huggingface.co/Qwen/Qwen3.5-9B/tree/c202236235762e1c871ad0ccb60c8ee5ba337b9a)の設定とGGUFメタデータに基づき、共有コンテキスト262,144・最大出力32,768を登録する。既存の固定版llama.cpp b11533は`qwen35`に対応している。議事録のテキスト入力は非思考モードを使用し、画像用のmmprojは取得しない。2026-10-20時点の確認は固定メタデータ、生成引数・容量配分、合成IPCによる選択・導入・切替までであり、実モデルの生成品質・速度は未評価。
 
 ## 通信・保存と空き容量
 

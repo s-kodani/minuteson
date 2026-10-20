@@ -17,6 +17,9 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["internal-logs", null, "internal-logs-browser-check.js"],
+  ["speaker-count", "browser-fixture.js", "speaker-count-browser-check.js"],
+  ["meeting-mix-progress", "browser-fixture.js", "meeting-mix-progress-browser-check.js"],
   ["voice", "voice-browser-fixture.js", "voice-browser-check.js"],
   ["voice-selection", "voice-browser-fixture.js", "voice-selection-browser-check.js"],
   ["voice-library", "voice-browser-fixture.js", "voice-library-browser-check.js"],
@@ -29,7 +32,12 @@ const suites = [
   ["speaker-structure", "browser-fixture.js", "speaker-structure-browser-check.js"],
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
+  ["model-management", "model-management-browser-fixture.tsx", "model-management-browser-check.js"],
+  ["settings-layout", "browser-fixture.js", "settings-layout-browser-check.js"],
+  ["vad-settings", "model-download-browser-fixture.tsx", "vad-settings-browser-check.js"],
+  ["speaker-completion-settings", "browser-fixture.js", "speaker-completion-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
+  ["qwen35-models", "model-download-browser-fixture.tsx", "qwen35-models-browser-check.js"],
   ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
   ["minutes-audio-tags", "plain-minutes-interval-browser-fixture.js", "minutes-audio-tags-browser-check.js"],
   ["plain-minutes-interval", "plain-minutes-interval-browser-fixture.js", "plain-minutes-interval-browser-check.js"],
@@ -110,15 +118,14 @@ const readiness = {
   "import-browser-fixture.js": "monImportFixture", "model-deletion-browser-fixture.js": "modelDeletionFixture",
   "data-save-browser-fixture.js": "dataFixture", "deletion-browser-fixture.js": "deletionFixture",
   "model-profile-browser-fixture.js": "modelProfileFixture",
-  "model-rebinding-browser-fixture.js": "rebindingFixture",
-  "model-download-browser-fixture.tsx": "modelDownloadFixture",
+  "model-download-browser-fixture.tsx": "modelDownloadFixture", "model-management-browser-fixture.tsx": "modelDownloadFixture",
   "audio-deletion-browser-fixture.js": "audioDeletionFixture", "theme-browser-fixture.js": "themeFixture",
   "toast-browser-fixture.tsx": "toastFixture",
   "capture-scope-browser-fixture.tsx": "scopeFixture",
 };
 for (const [name, fixture, source] of suites) {
   const check = localPort(readFileSync(resolve(tests, source), "utf8"));
-  const setup = fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("${origin}/");` : "";
+  const setup = fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("${origin}/${["vad-settings", "qwen35-models"].includes(name) ? "?official=1" : ""}");` : "";
   const ready = readiness[fixture] ? `await page.waitForFunction(name=>!!window[name],${JSON.stringify(readiness[fixture])});` : "";
   // The browser daemon's cwd can differ from this runner's cwd. Always route
   // generated captures to the explicit output directory, not the repo root.

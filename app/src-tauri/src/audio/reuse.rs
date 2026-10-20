@@ -17,7 +17,9 @@ struct Entry {
     audit: std::sync::Arc<File>,
     identity: String,
 }
-pub(crate) struct Scope;
+pub(crate) struct Scope {
+    owns: bool,
+}
 impl Scope {
     pub(crate) fn enter() -> Result<Self, String> {
         CACHE.with(|c| {
@@ -25,8 +27,15 @@ impl Scope {
                 return Err("音声検証セッションが重複しています".into());
             }
             *c.borrow_mut() = Some(Cache::default());
-            Ok(Self)
+            Ok(Self { owns: true })
         })
+    }
+    pub(crate) fn join_or_enter() -> Result<Self, String> {
+        if CACHE.with(|c| c.borrow().is_some()) {
+            Ok(Self { owns: false })
+        } else {
+            Self::enter()
+        }
     }
     pub(crate) fn verify(&self) -> Result<(), String> {
         CACHE.with(|c| {
@@ -46,6 +55,9 @@ impl Scope {
 }
 impl Drop for Scope {
     fn drop(&mut self) {
+        if !self.owns {
+            return;
+        }
         CACHE.with(|c| {
             c.borrow_mut().take();
         });

@@ -65,7 +65,6 @@ button:disabled { opacity:.5; }
 .meeting-list .deletion-trigger { background:transparent; color:var(--danger-text); border-color:transparent; }
 .import-entry { padding:0 0 18px; border:0; border-radius:0; margin-bottom:0; }
 .draft-meeting-tools[hidden] { display:none; }
-.content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
 .meeting-detail-status { padding:18px 28px 12px; background:var(--surface); max-height:20dvh; }
 .meeting-detail-status h1 { margin:0; font-size:24px; font-weight:650; line-height:1.4; overflow-wrap:anywhere; }
@@ -379,17 +378,6 @@ button:disabled { opacity:.5; }
 .split-preview :is(h4,p) { margin:0; }
 .split-dialog .transcript-actions { justify-content:flex-end; gap:8px; }
 @media(max-width:600px) { .split-field-row { grid-template-columns:minmax(0,1fr); } }
-.transcript-recovery-view:not([hidden]),.transcript-recovery-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
-:is(.transcript-recovery-view,.transcript-recovery-dialog) :is(h3,p) { margin:0; overflow-wrap:anywhere; }
-:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory { display:grid; gap:16px; }
-:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory p { display:block; padding:0; border:0; }
-:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory-item { display:grid; justify-items:start; gap:12px; padding:16px 0; border-top:1px solid var(--border); }
-:is(.transcript-recovery-view,.transcript-recovery-dialog) :is(.recovery-pagination,.recovery-actions) { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0; }
-.transcript-recovery-view label { display:grid; gap:8px; margin:16px 0; font-size:13px; }
-.transcript-recovery-view textarea { width:100%; min-width:0; min-height:80px; resize:vertical; padding:10px; font:inherit; font-size:15px; line-height:1.7; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
-.transcript-recovery-view textarea:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
-.transcript-recovery-view button { max-width:100%; white-space:normal; }
-:is(.transcript-recovery-view,.transcript-recovery-dialog>.common-modal-body)>button { justify-self:start; }
 .common-modal.analysis-dialog .preview-columns { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .preview-columns>section { min-width:0; }
 .card-actions { flex-wrap:wrap; }
@@ -603,16 +591,6 @@ button:disabled { opacity:.5; }
   .meeting-playback-dock { padding-block:8px; }
 }
 /* Guided imports share the compact modal control rhythm; long names wrap. */
-.model-import-guide { display: grid; gap: 16px; }
-.model-import-guide > p { margin: 0; }
-.model-import-guide > .heading-with-info > p { margin: 0; }
-.model-import-file-list { display: grid; gap: 12px; }
-.model-import-file { display: flex; align-items: center; gap: 16px; }
-.model-import-file > span { flex: 1; min-width: 0; }
-.model-import-file small { display: block; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
-.model-import-file > button { flex: 0 0 auto; }
-.model-import-guide > button { justify-self: start; }
-.model-import-legacy { margin-top: 20px; }
 .model-setup-entrypoints {display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0 24px;}
 .model-inspection>h2 {font-size:17px; margin-top:0;}
 .model-setup-entrypoints>.model-download {margin:0; padding:0; border:0;}
@@ -621,14 +599,11 @@ button:disabled { opacity:.5; }
 .model-inventory ul {display:grid; gap:0; list-style:none; padding:0; margin:0;}
 .model-inventory li {display:flex; align-items:center; justify-content:space-between; gap:20px; padding:16px 0; border-bottom:1px solid var(--border);}
 .model-inventory li:last-child {border-bottom:0;}
-.model-inventory-name {display:grid; gap:6px; min-width:0; overflow-wrap:anywhere;}
-.model-inventory-name span,.model-inventory-state {color:var(--muted); font-size:13px; line-height:1.5;}
-.model-inventory-state {flex-shrink:0;}
 .model-setup-steps,.model-application-review,.model-download-review {display:grid; gap:16px; margin-top:16px;}
 .model-setup-steps label {display:grid; gap:8px;}
 .model-setup-steps label:has(input[type=checkbox]) {display:flex; align-items:flex-start; gap:8px;}
 .model-setup-steps select {width:100%; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit;}
-@media(max-width:700px) {.model-inventory li {align-items:flex-start; flex-direction:column; gap:8px;}.model-inventory-state {flex-shrink:1;}}
+@media(max-width:700px) {.model-inventory li {align-items:flex-start; flex-direction:column; gap:8px;}}
 .model-selection-list { display:grid; gap:16px; margin-block:20px; }
 .model-selection-row { display:flex; align-items:flex-end; gap:12px; }
 .model-selection-row>label { display:grid; gap:8px; flex:1; min-width:0; }
@@ -689,3 +664,20 @@ button:disabled { opacity:.5; }
 .vad-field-help { color:var(--muted); font-size:13px; line-height:1.5; }
 .vad-actions { display:flex; flex-wrap:wrap; gap:12px; margin:0; }
 @media(max-width:600px) { .vad-fields { grid-template-columns:minmax(0,1fr); } }
+
+/* Settings groups share one card; model management keeps each installed copy explicit. */
+.local-ai-settings { display:grid; gap:24px; }
+.local-ai-settings[hidden], .model-inventory[hidden] { display:none; }
+.local-ai-settings>h2, .ai-settings-group h3 { margin:0; }
+.ai-settings-group { display:grid; gap:16px; min-width:0; }
+.ai-settings-group+.ai-settings-group { border-top:1px solid var(--border); padding-top:24px; }
+.ai-settings-group>p { margin:0; color:var(--muted); font-size:13px; line-height:1.6; }
+.ai-settings-group .vad-settings { margin:0; }
+.model-inventory-summary { display:grid; gap:6px; min-width:0; overflow-wrap:anywhere; }
+.model-inventory-summary>span { color:var(--muted); font-size:13px; }
+.model-inventory-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; flex-shrink:0; }
+.model-inventory-actions .options-modal { margin:0; }
+.model-details .options-dialog { max-width:680px; }
+.model-details dd { overflow-wrap:anywhere; }
+.model-deletion-pending { border-top:1px solid var(--border); padding-top:16px; }
+@media(max-width:700px) { .model-inventory-actions { width:100%; } }

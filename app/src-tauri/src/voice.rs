@@ -181,7 +181,40 @@ pub(crate) fn process(
                 .get_job(job_id)
                 .map_or(true, |j| j.state != "running")
     };
+    storage.clear_completion_progress(job_id);
+    struct ProgressScope<'a>(&'a Storage, &'a str);
+    impl Drop for ProgressScope<'_> {
+        fn drop(&mut self) {
+            self.0.clear_completion_progress(self.1);
+        }
+    }
+    let _progress_scope = ProgressScope(storage, job_id);
+    let speaker_count = plan
+        .windows
+        .iter()
+        .map(|w| &w.speaker_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let total = plan.windows.len() + speaker_count + 1;
+    let update = |phase: &str,
+                  completed: usize,
+                  phase_completed: usize,
+                  phase_total: usize|
+     -> Result<(), String> {
+        progress(storage.set_completion_progress(
+            job_id,
+            crate::storage::ExecutionProgress {
+                phase: phase.into(),
+                completed,
+                total,
+                phase_completed,
+                phase_total,
+            },
+        )?);
+        Ok(())
+    };
     let result = (|| {
+        update("preparing", 0, 0, 0)?;
         storage.check_voice_plan(&spec, &plan)?;
         crate::storage::model_profiles::jobs::verify(
             &spec.profile_snapshot,
@@ -219,7 +252,7 @@ pub(crate) fn process(
             if let Some(vector) = feature_session.extract(window, &dir, &cancelled)? {
                 features.push((window.clone(), normalize(&vector)?));
             }
-            progress(storage.get_job(job_id)?);
+            update("references", i + 1, i + 1, plan.windows.len())?;
         }
         feature_session.finish(&cancelled)?;
         storage.check_voice_plan(&spec, &plan)?;
@@ -303,7 +336,7 @@ pub(crate) fn enqueue_automatic(storage: &Storage, meeting: &str) -> Result<(), 
     {
         return Ok(());
     }
-    storage.start_voice(crate::storage::voice::Start {
+    storage.start_automatic_voice(crate::storage::voice::Start {
         meeting_id: meeting.into(),
         operation_id: uuid::Uuid::new_v4().to_string(),
         analysis_id: context.analysis_id,

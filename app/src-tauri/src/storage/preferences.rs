@@ -50,6 +50,7 @@ impl Storage {
         load(&connection)
     }
 
+    #[cfg(test)]
     pub(crate) fn save_analysis_preferences(
         &self,
         expected_version: i64,

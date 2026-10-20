@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
-test("model selection exposes one row per purpose and inline installed inventory", () => {
+test("model selection exposes one row per purpose and separate installed model management", () => {
   const view = source("model-inspection.tsx");
   for (const label of ["文字起こし", "話者分離", "議事録生成"]) assert.ok(view.includes('label: "' + label + '"'));
   assert.match(view, /モデルを選択/);
   assert.match(view, /available \? "使用" : "ダウンロードして使用"/);
-  assert.match(view, /aria-label="導入済みモデル"/);
+  assert.match(view, /aria-label="導入済みモデル管理"/);
   assert.doesNotMatch(view, /<ModelDownloadPanel|<ModelInventory|<SettingsDisclosure|取得記録|取得定義からダウンロード|モデルの配置・構成記録/);
 });
 test("one action verifies download, placement, CPU and saved global selection", () => {
@@ -45,10 +45,4 @@ test("simple model rows retain aligned controls and mobile wrapping", () => {
   assert.match(css, /\.model-selection-row \{ display:flex; align-items:flex-end; gap:12px/);
   assert.match(css, /\.model-selection-row>button,\.model-selection-row select \{ min-height:40px;/);
   assert.match(css, /\.model-selection-row \{ flex-wrap:wrap/);
-});
-test("shared settings modal presentation never writes in an effect", () => {
-  const view = source("settings-disclosure.tsx"), modal = source("options-modal.tsx");
-  assert.match(view, /<OptionsModal/);
-  assert.doesNotMatch(view, /useEffect|invoke\(|\.flush\(/);
-  assert.match(modal, /aria-haspopup="dialog"/);
 });

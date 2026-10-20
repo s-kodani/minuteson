@@ -171,13 +171,6 @@
 .model-inspection .prompt-label input { font:inherit; width:100%; border:1px solid var(--input-border); border-radius:8px; padding:10px; background:var(--surface); }
 .model-application-dialog { width:min(960px,calc(100vw - 48px)); max-height:calc(100vh - 64px); overflow:auto; padding:24px; border:1px solid var(--input-border); border-radius:16px; color:var(--text); }
 .model-application-dialog::backdrop { background:var(--backdrop); }
-.model-rebinding-dialog { width:min(960px,92vw); }
-.model-rebinding-dialog select { width:100%; padding:10px; font:inherit; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); }
-.model-rebinding-dialog h3 { font-size:15px; margin-top:24px; }
-.model-rebinding-dialog li { display:block; padding:10px 0; font-size:13px; }
-.model-rebinding-dialog li>div { display:grid; gap:5px; }
-.model-rebinding-dialog h2:focus { outline:2px solid var(--focus); outline-offset:4px; }
-.model-rebinding-dialog .card-head button { flex-shrink:0; white-space:nowrap; }
 .model-application-changes { width:100%; table-layout:fixed; border-collapse:collapse; font-size:12px; }
 .model-application-changes caption { text-align:left; font-weight:700; margin:14px 0; }
 .model-application-changes th,.model-application-changes td { text-align:left; vertical-align:top; border:1px solid var(--border); padding:10px; overflow-wrap:anywhere; white-space:pre-wrap; }
@@ -293,20 +286,6 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .speaker-name-editor input { width:100%; max-width:100%; font:inherit; font-size:14px; }
 .speaker-name-editor .transcript-actions { margin:10px 0 0; flex-wrap:wrap; }
 .speaker-name-editor .transcript-actions span { flex-basis:100%; }
-.transcript-recovery-dialog p { font-size:14px; line-height:1.7; }
-.transcript-recovery-dialog label { display:grid; gap:8px; margin:16px 0; font-size:13px; color:var(--secondary-text); }
-.transcript-recovery-dialog textarea { width:100%; min-width:0; min-height:80px; resize:vertical; padding:10px; font:inherit; font-size:15px; line-height:1.7; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
-.transcript-recovery-dialog textarea:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
-.transcript-recovery-dialog button { max-width:100%; white-space:normal; }
-.transcript-conflict-dialog { width:min(980px, calc(100vw - 32px)); max-width:980px; }
-.transcript-conflict-dialog p { font-size:14px; line-height:1.7; }
-.conflict-item { min-width:0; border:1px solid var(--input-border); border-radius:8px; padding:12px; margin:16px 0; }
-.conflict-item legend { overflow-wrap:anywhere; font-size:14px; }
-.conflict-values { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr)); gap:12px; }
-.transcript-conflict-dialog label { display:grid; gap:8px; min-width:0; margin:12px 0; font-size:13px; color:var(--secondary-text); }
-.transcript-conflict-dialog textarea { width:100%; min-width:0; resize:vertical; padding:10px; font:inherit; line-height:1.6; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
-.transcript-conflict-dialog pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
-.transcript-conflict-dialog button { max-width:100%; white-space:normal; }
 /* Reserve actual space below the workspace, rather than overlaying its last row. */
 .meeting-playback-dock { flex:none; min-width:0; min-height:72px; max-height:40dvh; overflow:auto; overscroll-behavior:contain; padding:8px 24px; border-top:1px solid var(--input-border); background:var(--surface); }
 .meeting-playback-dock[hidden] { display:none; }

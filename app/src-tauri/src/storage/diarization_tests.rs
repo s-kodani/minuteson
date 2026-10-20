@@ -198,7 +198,10 @@ pub(in crate::storage) fn fixture(
         db.execute("INSERT INTO audio_tracks (id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) SELECT 'system-track',meeting_id,session_id,'system',format,sample_rate,channels,state,created_at,updated_at FROM audio_tracks WHERE id='track'",[]).unwrap();
         db.execute("INSERT INTO audio_chunks (id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'system-chunk',meeting_id,'system-track',?1,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE id='chunk'",params![asset.id]).unwrap();
     }
-    let source = storage.recorded_audio_plan(&meeting).unwrap();
+    let source = storage
+        .ensure_meeting_mix(&meeting, &|| false, &|_, _| {})
+        .unwrap();
+    let mixed_track = source.tracks[0].id.clone();
     let mut utterances: Vec<_> = [
         (0, 1_000_000),
         (2_400_000, 3_200_000),
@@ -208,7 +211,7 @@ pub(in crate::storage) fn fixture(
     .into_iter()
     .enumerate()
     .map(|(i, (start_us, end_us))| UtteranceInput {
-        track_id: "track".into(),
+        track_id: mixed_track.clone(),
         start_us,
         end_us,
         text: format!("元の認識本文{i}"),
@@ -220,16 +223,6 @@ pub(in crate::storage) fn fixture(
         confidence: Some(0.8),
     })
     .collect();
-    if two {
-        utterances.push(UtteranceInput {
-            track_id: "system-track".into(),
-            start_us: 0,
-            end_us: 1_000_000,
-            text: "PC音声の元本文".into(),
-            speaker_keys: vec![],
-            confidence: None,
-        });
-    }
     utterances.sort_by(|a, b| (a.start_us, &a.track_id).cmp(&(b.start_us, &b.track_id)));
     let current = storage
         .create_analysis_candidate(
@@ -261,7 +254,7 @@ pub(in crate::storage) fn fixture(
             display_name: Some("確定した氏名".into()),
         });
     for utterance in &original.utterances {
-        if utterance.track_id != "track" {
+        if utterance.track_id != mixed_track {
             continue;
         }
         if [0, 2_400_000, 7_000_000].contains(&utterance.start_us) {
@@ -325,74 +318,11 @@ pub(in crate::storage) fn fixture(
     (storage, meeting, config, request)
 }
 
-#[test]
-fn corrected_diarization_reads_meeting_time_and_rejects_changed_sealed_map() {
-    for change in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let (storage, meeting, config, request) = fixture(root.path(), false);
-        let original = storage.load_current_analysis(&meeting).unwrap();
-        let draft = storage.load_transcript_draft(&meeting).unwrap();
-        {
-            let db = storage.connection.lock().unwrap();
-            db.execute(
-                "UPDATE audio_chunks SET end_us=10500000 WHERE id='chunk'",
-                [],
-            )
-            .unwrap();
-            for (id, first, last, start, end) in [
-                ("one", 0, 80000, 0, 5500000),
-                ("two", 80000, 160000, 5500000, 10500000),
-            ] {
-                db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track','chunk',?2,?3,?4,?5,?6)",params![id,first,last,start,end,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
-            }
-        }
-        let job = enqueue(&storage, request, config);
-        let (spec, checkpoint) = storage.fixed_job_input(&job.id).unwrap();
-        assert_eq!(
-            spec.parameters["diarization"]["source"]["tracks"][0]["chunks"][0]["clockSegments"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        if change {
-            let db = storage.connection.lock().unwrap();
-            db.execute(
-                "UPDATE track_clock_segments SET timeline_end_us=5600000 WHERE id='one'",
-                [],
-            )
-            .unwrap();
-            db.execute(
-                "UPDATE track_clock_segments SET timeline_start_us=5600000 WHERE id='two'",
-                [],
-            )
-            .unwrap();
-        }
-        storage.acquire_local_inference_job().unwrap().unwrap();
-        let result = diarization::process(
-            &storage,
-            &job.id,
-            &crate::test_support::never_cancelled,
-            &|_| {},
-        );
-        if change {
-            let error = result.err().unwrap();
-            assert!(error.contains("固定した保存音声・欠損・時計"), "{error}");
-            assert_eq!(
-                storage.fixed_job_input(&job.id).unwrap(),
-                (spec, checkpoint)
-            );
-        } else {
-            assert!(result.unwrap().is_some());
-        }
-        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), original);
-        assert_eq!(storage.load_transcript_draft(&meeting).unwrap(), draft);
-    }
-}
 fn tracks(storage: &Storage, meeting: &str) -> Vec<TrackSettings> {
     storage
-        .recorded_audio_plan(meeting)
+        .recorded_analysis_input(meeting)
         .unwrap()
+        .0
         .tracks
         .iter()
         .map(|t| TrackSettings {
@@ -430,7 +360,7 @@ pub(in crate::storage) fn pause_after_first(storage: &Storage, job: &str) {
 }
 
 #[test]
-fn fixed_speaker_count_is_applied_to_each_explicit_track_without_a_quality_claim() {
+fn fixed_speaker_count_is_applied_once_to_the_whole_meeting_without_a_quality_claim() {
     let root = tempfile::tempdir().unwrap();
     let (s, m, c, r) = fixture(root.path(), true);
     let mut settings = tracks(&s, &m);
@@ -442,7 +372,7 @@ fn fixed_speaker_count_is_applied_to_each_explicit_track_without_a_quality_claim
     let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
-    assert_eq!(calls(root.path()), 2);
+    assert_eq!(calls(root.path()), 1);
     let config = s
         .analysis_versions(&m)
         .unwrap()
@@ -452,7 +382,7 @@ fn fixed_speaker_count_is_applied_to_each_explicit_track_without_a_quality_claim
         .unwrap()
         .config;
     assert_eq!(config["tracks"], serde_json::to_value(settings).unwrap());
-    assert_eq!(config["estimatedSpeakers"], json!([2, 2]));
+    assert_eq!(config["estimatedSpeakers"], json!([2]));
     assert_eq!(config["timelineAlignment"], "unverified");
 }
 
@@ -482,7 +412,7 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
     let find = |start| {
         view.utterances
             .iter()
-            .find(|u| u.track_id == "track" && u.start_us == start)
+            .find(|u| u.track_id == view.utterances[0].track_id && u.start_us == start)
             .unwrap()
     };
     assert_eq!(find(0).effective_text, "保存した修正0");
@@ -504,13 +434,10 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
     assert_eq!(find(3_500_000).attribution_state, "overlap");
     assert_eq!(find(3_500_000).speaker_ids.len(), 2);
     assert_eq!(find(7_000_000).attribution_state, "unknown");
-    let system = &view
+    assert!(view
         .utterances
         .iter()
-        .find(|u| u.track_id == "system-track")
-        .unwrap()
-        .speaker_ids[0];
-    assert_ne!(system, &find(2_400_000).speaker_ids[0]);
+        .all(|u| u.track_id == view.utterances[0].track_id));
     assert_eq!(s.get_job(&job.id).unwrap().state, "succeeded");
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), original);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), draft);
@@ -527,7 +454,7 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        8
+        4
     );
     assert_eq!(
         db.query_row(
@@ -546,43 +473,11 @@ fn fixed_edited_input_publishes_candidate_without_changing_current_or_draft() {
 }
 
 #[test]
-fn whole_track_checkpoint_reopens_and_runs_only_the_remaining_track() {
-    let root = tempfile::tempdir().unwrap();
-    let (s, m, c, r) = fixture(root.path(), true);
-    let job = enqueue(&s, r, c);
-    let fixed = s.load_diarization_input(&job.id).unwrap().analysis;
-    pause_after_first(&s, &job.id);
-    assert_eq!(calls(root.path()), 1);
-    let saved = s.fixed_job_input(&job.id).unwrap();
-    drop(s);
-    let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.load_diarization_input(&job.id).unwrap().analysis, fixed);
-    s.resume_job(&job.id).unwrap();
-    s.acquire_local_inference_job().unwrap().unwrap();
-    assert!(
-        diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(calls(root.path()), 2);
-    assert_eq!(s.get_job(&job.id).unwrap().completed_units, 2);
-    assert_eq!(
-        s.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0],
-        saved.1.unwrap()["outputs"][0]
-    );
-    assert!(s.load_transcript_draft(&m).unwrap().is_some());
-}
-
-#[test]
 fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
     let root = tempfile::tempdir().unwrap();
     let (s, m, c, r) = fixture(root.path(), true);
     let job = enqueue(&s, r, c);
-    std::fs::write(root.path().join("fail-second"), b"fail").unwrap();
-    s.acquire_local_inference_job().unwrap().unwrap();
-    let failure = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
-        .unwrap_err();
-    assert!(failure.contains("sherpa-onnxが失敗"), "{failure}");
+    pause_after_first(&s, &job.id);
     let failed = s
         .finish_job(&job.id, 1, "failed", Some("engine_failed"))
         .unwrap();
@@ -592,7 +487,6 @@ fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
         .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
     let fixed = s.load_diarization_input(&job.id).unwrap().analysis;
-    std::fs::remove_file(root.path().join("fail-second")).unwrap();
     let request = || diarization::RetryRequest {
         meeting_id: m.clone(),
         job_id: job.id.clone(),
@@ -603,7 +497,7 @@ fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
     assert_eq!(request().enqueue(&s).unwrap().id, retry.id);
     assert_eq!(retry.completed_units, 1);
     assert_eq!(s.load_diarization_input(&retry.id).unwrap().analysis, fixed);
-    assert_eq!(calls(root.path()), 2);
+    assert_eq!(calls(root.path()), 1);
     s.acquire_local_inference_job().unwrap().unwrap();
     let id = diarization::process(
         &s,
@@ -613,13 +507,13 @@ fn retry_inherits_verified_tracks_and_the_original_input_despite_later_edits() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(calls(root.path()), 3);
+    assert_eq!(calls(root.path()), 1);
     assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), edited);
     let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
     assert_eq!(
         view.utterances
             .iter()
-            .find(|u| u.track_id == "track" && u.start_us == 2_400_000)
+            .find(|u| u.start_us == 2_400_000)
             .unwrap()
             .effective_text,
         "保存した修正2400000"
@@ -851,7 +745,7 @@ fn candidate_playback_rejects_changed_speaker_segments() {
     let u = view
         .utterances
         .iter()
-        .find(|u| u.track_id == "track" && u.start_us == 2_400_000)
+        .find(|u| u.start_us == 2_400_000)
         .unwrap();
     let audio = s.prepare_utterance_audio(&m, &id, &u.id).unwrap();
     assert_eq!(audio.total_frames(), 12_800);

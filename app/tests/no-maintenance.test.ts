@@ -22,9 +22,10 @@ test("normal meeting/audio deletion keeps consent modals without administrative 
   }
 });
 
-test("manual recovery/model deletion IPC is removed and startup maintenance is off the UI thread", () => {
+test("manual recovery IPC remains removed and scoped model deletion uses shared admission", () => {
   const native = read("../src-tauri/src/lib.rs");
-  for (const name of ["get_recovery_items", "review_recovery_item", "get_partial_recording_items", "review_partial_recording", "get_partial_recording_results", "review_model_body_deletion", "review_pending_model_deletion", "get_model_deletion_paths", "preview_model_deletion"]) assert.doesNotMatch(native, new RegExp(`\\b${name}\\b`));
+  for (const name of ["get_recovery_items", "review_recovery_item", "get_partial_recording_items", "review_partial_recording", "get_partial_recording_results", "preview_model_deletion"]) assert.doesNotMatch(native, new RegExp(`\\b${name}\\b`));
+  for (const name of ["review_model_body_deletion", "review_pending_model_deletion", "get_model_deletion_paths"]) assert.match(native, new RegExp(`\\b${name}\\b`));
   assert.match(native, /std::thread::spawn\(move \|\| \{\s*#\[cfg\(unix\)\]\s*if let Err\(error\) = data_controller::finish_interrupted_deletions/);
   const automatic = read("../src-tauri/src/data_controller/automatic.rs");
   assert.match(automatic, /guard.selection.is_some\(\)/);

@@ -95,8 +95,8 @@ impl SherpaConfig {
             "OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationModelConfig(pyannote=OfflineSpeakerSegmentationPyannoteModelConfig(model=\"{}\", window_shift_ratio={}), num_threads={}, debug=False, provider=\"cpu\"), embedding=SpeakerEmbeddingExtractorConfig(model=\"{}\", num_threads={}, debug=False, provider=\"cpu\"), clustering=FastClusteringConfig(num_clusters={}, threshold={}, compute_confidence=False), min_duration_on={}, min_duration_off={})",
             self.segmentation_model.path.display(), decimal(self.window_shift_milli),
             self.threads, self.embedding_model.path.display(), self.threads,
-            num_speakers.map_or(-1, |n| n as i32), decimal(self.cluster_threshold_milli),
-            decimal(self.min_duration_on_ms), decimal(self.min_duration_off_ms)
+            num_speakers.map_or(-1, |n| n as i32), decimal(if self.cluster_threshold_milli==0 {500}else{self.cluster_threshold_milli}),
+            decimal(if self.min_duration_on_ms==0 {300}else{self.min_duration_on_ms}), decimal(if self.min_duration_off_ms==0 {500}else{self.min_duration_off_ms})
         )
     }
 }
@@ -145,6 +145,15 @@ pub(crate) fn parse_output(
     num_speakers: Option<u32>,
     duration_us: i64,
 ) -> Result<Vec<Segment>, String> {
+    parse_with_merges(bytes, config, num_speakers, duration_us).map(|(segments, _)| segments)
+}
+
+pub(crate) fn parse_with_merges(
+    bytes: &[u8],
+    config: &SherpaConfig,
+    num_speakers: Option<u32>,
+    duration_us: i64,
+) -> Result<(Vec<Segment>, Vec<SpeakerMerge>), String> {
     config.validate_settings(num_speakers)?;
     // Fixed logical conditions can be unavailable after restore. Accept only
     // exact fingerprint placeholders in this pure parser, never at execution.
@@ -203,7 +212,6 @@ pub(crate) fn parse_output(
             // Native cluster labels can be sparse. Their numeric value is
             // not the number of speakers; bound labels and count separately.
             || speaker as usize >= MAX_SEGMENTS
-            || num_speakers.is_some_and(|n| speaker >= n)
             || start_us >= duration_us
             || end_us <= start_us
             // float32 seconds plus the printed millisecond rounding can
@@ -223,6 +231,11 @@ pub(crate) fn parse_output(
             speaker,
         });
     }
+    let merges = limit_speakers(&mut result, num_speakers);
+    if !merges.is_empty() {
+        let mut unique = HashSet::new();
+        result.retain(|s| unique.insert((s.start_us, s.end_us, s.speaker)));
+    }
     let labels: BTreeSet<_> = result.iter().map(|s| s.speaker).collect();
     if labels.len() > MAX_SPEAKERS as usize {
         return Err(format!(
@@ -240,7 +253,76 @@ pub(crate) fn parse_output(
     }
     // Empty output may legitimately be silence. Stored IDs remain bounded.
     validate_saved_segments(&result, num_speakers, duration_us)?;
-    Ok(result)
+    Ok((result, merges))
+}
+
+/// The native short-input path bypasses clustering. Enforce the product's
+/// maximum without inventing a speaker or attributing an undetected interval.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct SpeakerMerge {
+    pub start_us: i64,
+    pub end_us: i64,
+    pub from_speaker: u32,
+    pub into_speaker: u32,
+}
+
+pub(crate) fn limit_speakers(
+    segments: &mut [Segment],
+    requested: Option<u32>,
+) -> Vec<SpeakerMerge> {
+    let Some(limit) = requested else {
+        return vec![];
+    };
+    let mut durations = std::collections::BTreeMap::<u32, i64>::new();
+    for s in segments.iter() {
+        *durations.entry(s.speaker).or_default() += s.end_us - s.start_us;
+    }
+    if durations.len() <= limit as usize && durations.keys().all(|id| *id < limit) {
+        return vec![];
+    }
+    let mut ranked: Vec<_> = durations.into_iter().collect();
+    ranked.sort_by_key(|(id, duration)| (std::cmp::Reverse(*duration), *id));
+    let retained: BTreeSet<_> = ranked
+        .into_iter()
+        .take(limit as usize)
+        .map(|(id, _)| id)
+        .collect();
+    let originals = segments.to_vec();
+    let mut destinations = std::collections::BTreeMap::<u32, (i64, u32)>::new();
+    for s in originals.iter().filter(|s| !retained.contains(&s.speaker)) {
+        if let Some(closest) = originals
+            .iter()
+            .filter(|v| retained.contains(&v.speaker))
+            .map(|v| {
+                let distance = (s.start_us - v.end_us).max(v.start_us - s.end_us).max(0);
+                (distance, v.speaker)
+            })
+            .min()
+        {
+            destinations
+                .entry(s.speaker)
+                .and_modify(|v| *v = (*v).min(closest))
+                .or_insert(closest);
+        }
+    }
+    let mut merges = Vec::new();
+    for s in segments.iter_mut() {
+        if let Some((_, target)) = destinations.get(&s.speaker) {
+            merges.push(SpeakerMerge {
+                start_us: s.start_us,
+                end_us: s.end_us,
+                from_speaker: s.speaker,
+                into_speaker: *target,
+            });
+            s.speaker = *target;
+        }
+    }
+    let retained: Vec<_> = retained.into_iter().collect();
+    for s in segments {
+        s.speaker = retained.binary_search(&s.speaker).unwrap() as u32;
+    }
+    merges
 }
 
 pub(crate) fn validate_saved_segments(
@@ -469,9 +551,15 @@ fn run_track_inner(
         if let Some(file) = &mut progress_file {
             log_progress.poll(file, progress);
         }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| failure_detail(&stderr_path, &e.to_string()))?
+        {
             if !status.success() {
-                return Err(format!("sherpa-onnxが失敗しました: {status}"));
+                return Err(failure_detail(
+                    &stderr_path,
+                    &format!("sherpa-onnxが失敗しました: {status}"),
+                ));
             }
             if let Some(file) = &mut progress_file {
                 log_progress.poll(file, progress);
@@ -504,6 +592,33 @@ fn run_track_inner(
         num_speakers,
         duration_us,
     )?))
+}
+
+fn failure_detail(stderr: &Path, error: &str) -> String {
+    let log = std::fs::File::open(stderr)
+        .ok()
+        .and_then(|f| {
+            let mut text = String::new();
+            f.take(MAX_LOG_BYTES)
+                .read_to_string(&mut text)
+                .ok()
+                .map(|_| text)
+        })
+        .unwrap_or_default();
+    let combined = format!("{error} {log}").to_ascii_lowercase();
+    if [
+        "bad_alloc",
+        "out of memory",
+        "failed to allocate memory",
+        "not enough memory",
+        "memory allocation failed",
+    ]
+    .iter()
+    .any(|s| combined.contains(s))
+    {
+        return "話者分離に必要なメモリを確保できませんでした。会議全体の処理を停止しました。元音声と保存済みの本文は保持しています".into();
+    }
+    format!("会議全体の話者分離を完了できませんでした: {error}")
 }
 
 fn check_wav(

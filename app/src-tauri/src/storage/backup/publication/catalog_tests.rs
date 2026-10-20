@@ -276,7 +276,10 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
     let (_source_root, app_data, storage, meeting) = source();
     let output = tempfile::tempdir().unwrap();
     let mut original = archive(&storage, output.path(), "source.monbackup");
-    assert_eq!(original.manifest.format_version, 4);
+    assert_eq!(
+        original.manifest.format_version,
+        crate::current_formats::BACKUP
+    );
     let native =
         serde_json::to_value(&original.manifest.model_catalog).unwrap()["catalogs"][0].clone();
     assert_eq!(native["packages"].as_array().unwrap().len(), 4);

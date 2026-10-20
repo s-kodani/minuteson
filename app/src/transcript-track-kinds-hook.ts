@@ -8,7 +8,7 @@ export function useTranscriptTrackKinds(meetingId: string, analysisId: string | 
   useEffect(()=>{
     let disposed=false;
     setState({meetingId,analysisId,kinds:null,error:""});
-    if(analysisId&&isTauri())void invoke("get_diarization_tracks",{meetingId})
+    if(analysisId&&isTauri())void invoke("get_meeting_analysis_audio",{meetingId})
       .then(value=>{const kinds=transcriptTrackKinds(value);if(!disposed)setState({meetingId,analysisId,kinds,error:""});})
       .catch(cause=>{if(!disposed)setState({meetingId,analysisId,kinds:null,error:String(cause)});});
     return()=>{disposed=true;};

@@ -66,6 +66,17 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     }));
     return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review: await reviewed(f.definition) }];
   }
+  if (["get_voice_matching_preferences", "get_speaker_completion_preferences"].includes(command)) {
+    const id = command === "get_voice_matching_preferences" ? "voice_matching" : "speaker_completion";
+    f[id] ??= { id, lockVersion: 0, payload: { similarityThresholdMilli: 800, marginThresholdMilli: 100 } };
+    return structuredClone(f[id]);
+  }
+  if (["save_voice_matching_preferences", "save_speaker_completion_preferences"].includes(command)) {
+    const id = command === "save_voice_matching_preferences" ? "voice_matching" : "speaker_completion";
+    if (args.expectedLockVersion !== f[id].lockVersion) throw Error("stale settings");
+    f[id] = { id, lockVersion: f[id].lockVersion + 1, payload: structuredClone(args.payload) };
+    return structuredClone(f[id]);
+  }
   if (command === "get_model_placements") return structuredClone(f.entries);
   if (command === "get_model_profiles") return structuredClone(f.profiles);
   if (command === "get_analysis_preferences") return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
@@ -107,10 +118,6 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     f.settingsByEngine[entry.engine] = structuredClone(preview.after.settings);
     if (f.mode === "applyLost") throw Error("模擬選択保存応答喪失");
     return structuredClone(profile);
-  }
-  if (command === "review_model_download") {
-    const result = await reviewed(args.definition);
-    return f.mode === "forgedReview" ? { ...result, recipeHash: "a".repeat(64) } : result;
   }
   if (command === "get_model_download_catalog") {
     if (f.failCatalog) throw Error("模擬取得一覧の読込失敗");

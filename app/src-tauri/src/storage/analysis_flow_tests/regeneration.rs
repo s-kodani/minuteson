@@ -15,7 +15,7 @@ fn request(s: &Storage, meeting: &str) -> Request {
         meeting_id: meeting.into(),
         operation_id: Uuid::new_v4().to_string(),
         expected: s.regeneration_admission(meeting).unwrap(),
-        speaker_counts: vec![],
+        num_speakers: None,
     }
 }
 
@@ -28,10 +28,7 @@ fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
         .id
         .clone();
     let mut r = request(&s, &m);
-    r.speaker_counts = vec![crate::diarization::TrackSettings {
-        track_id: track,
-        num_speakers: Some(5),
-    }];
+    r.num_speakers = Some(5);
     let flow = s
         .regenerate_analysis(&r, &crate::test_support::never_cancelled)
         .unwrap();
@@ -40,7 +37,7 @@ fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
         5
     );
     assert_eq!(s.regeneration_replay(&r).unwrap().unwrap().id, flow.id);
-    r.speaker_counts[0].num_speakers = Some(4);
+    r.num_speakers = Some(4);
     assert!(s.regeneration_replay(&r).is_err());
     advance(&s);
     transcribe(&s);
@@ -70,31 +67,13 @@ fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
 }
 
 #[test]
-fn regeneration_invalid_speaker_counts_and_foreign_tracks_never_start_a_flow() {
+fn regeneration_invalid_meeting_counts_never_start_a_flow() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
-    let track = s.recorded_analysis_input(&m).unwrap().0.tracks[0]
-        .id
-        .clone();
-    for values in [
-        vec![(track.clone(), Some(0))],
-        vec![(track.clone(), Some(101))],
-        vec![("foreign".into(), Some(5))],
-        vec![(track.clone(), Some(5)), (track.clone(), Some(4))],
-    ] {
+    for count in [0, 101, u32::MAX] {
         let mut r = request(&s, &m);
-        r.speaker_counts = values
-            .into_iter()
-            .map(
-                |(track_id, num_speakers)| crate::diarization::TrackSettings {
-                    track_id,
-                    num_speakers,
-                },
-            )
-            .collect();
-        assert!(s
-            .regenerate_analysis(&r, &crate::test_support::never_cancelled)
-            .is_err());
+        r.num_speakers = Some(count);
+        assert!(s.regenerate_analysis(&r, &|| false).is_err());
         assert!(s.analysis_flow(&m).unwrap().is_none());
     }
 }

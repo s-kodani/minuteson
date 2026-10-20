@@ -56,7 +56,7 @@ fn assert_missing_sources(a: &VerifiedArchive, ids: &RestoreIds<'_>, sealed: &Se
 fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sources_atomically() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().join("root")).unwrap();
-    let meeting = tests::meeting(&storage, "deleted-fixed-workspace");
+    let meeting = tests::meeting_with_mix(&storage, "deleted-fixed-workspace");
     let analysis = storage.load_current_analysis(&meeting).unwrap().unwrap();
     let draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let request = crate::storage::MinutesJobRequest {
@@ -128,7 +128,10 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
             lock_version: draft.lock_version,
         }),
     };
-    let track = storage.recorded_audio_plan(&meeting).unwrap().tracks[0]
+    let track = storage
+        .ensure_meeting_mix(&meeting, &|| false, &|_, _| {})
+        .unwrap()
+        .tracks[0]
         .id
         .clone();
     let diarization = crate::diarization::enqueue(
@@ -147,7 +150,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .unwrap();
     let neighbor = tests::meeting(&storage, "available-workspace-neighbor");
     let old_content = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
-    let old_plan = storage.recorded_audio_plan(&meeting).unwrap();
+    let old_plan = storage.recorded_analysis_input(&meeting).unwrap().0;
     deleted(&storage, &meeting);
     let output = tempfile::tempdir().unwrap();
     let (source, _) = write(&storage, output.path());

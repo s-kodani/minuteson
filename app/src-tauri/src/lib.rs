@@ -1,5 +1,5 @@
 mod analysis_flow;
-mod analysis_pcm_cache;
+mod analysis_preparation;
 mod analysis_worker;
 mod application_close;
 mod audio;
@@ -34,7 +34,6 @@ mod model_download_recipe;
 mod model_inspection;
 mod model_official_catalog;
 mod model_placement;
-mod model_rebinding;
 mod playback;
 mod processing_optimization;
 mod recorder;
@@ -117,19 +116,6 @@ fn get_model_placements(
         return Err("Only the main window can read model placements".into());
     }
     window.state::<Storage>().list_model_placements()
-}
-
-#[tauri::command]
-async fn get_model_catalog_history(
-    window: WebviewWindow,
-) -> Result<Vec<storage::model_profiles::ModelCatalogHistoryEntry>, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read portable model history".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().model_catalog_history())
-        .await
-        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -219,116 +205,6 @@ async fn apply_model_profile_application(
                     &|| guard.cancelled() || lease.cancelled(),
                 )
             },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn preview_job_model_rebinding(
-    window: WebviewWindow,
-    token: String,
-    meeting_id: String,
-    job_id: String,
-    expected_spec_hash: String,
-    package_id: String,
-    expected_review_hash: String,
-    check_operation_id: String,
-) -> Result<model_rebinding::Preview, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can review job model rebinding".into());
-    }
-    let app = window.app_handle().clone();
-    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-    let models_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(
-            &app,
-            Some(&token),
-            &|| guard.cancelled(),
-            |lease| {
-                model_rebinding::preview(
-                    &app.state::<Storage>(),
-                    &models_root,
-                    &meeting_id,
-                    &job_id,
-                    &expected_spec_hash,
-                    &package_id,
-                    &expected_review_hash,
-                    &check_operation_id,
-                    &|| guard.cancelled() || lease.cancelled(),
-                )
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn apply_job_model_rebinding(
-    window: WebviewWindow,
-    token: String,
-    preview: model_rebinding::Preview,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can apply job model rebinding".into());
-    }
-    let app = window.app_handle().clone();
-    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-    let models_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(job) = model_rebinding::result(&app.state::<Storage>(), &token, &preview)? {
-            return Ok(job);
-        }
-        let job = AnalysisController::with_model_preparation(
-            &app,
-            Some(&token),
-            &|| guard.cancelled(),
-            |lease| {
-                model_rebinding::apply(
-                    &app.state::<Storage>(),
-                    &models_root,
-                    &token,
-                    &preview,
-                    &|| guard.cancelled() || lease.cancelled(),
-                )
-            },
-        )?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn get_job_model_rebinding_result(
-    window: WebviewWindow,
-    operation_id: String,
-    preview: model_rebinding::Preview,
-) -> Result<model_rebinding::Receipt, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read job model rebinding results".into());
-    }
-    let app = window.app_handle().clone();
-    // Receipt lookup must not acquire a preparation lease, run inference,
-    // enqueue work, or reject a token previously used for cancellation.
-    tauri::async_runtime::spawn_blocking(move || {
-        model_rebinding::receipt(
-            &app.state::<Storage>(),
-            &app.state::<model_inspection::Inspector>(),
-            &operation_id,
-            &preview,
         )
     })
     .await
@@ -470,6 +346,44 @@ async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View,
     tauri::async_runtime::spawn_blocking(move || app.state::<bootstrap::Bootstrap>().view())
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[cfg(unix)]
+#[tauri::command]
+fn review_model_body_deletion(
+    window: WebviewWindow,
+    package_id: String,
+    expected_review_hash: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_model_deletion(
+        &data_app(&window)?,
+        data_controller::ModelTarget::Fresh {
+            package: package_id,
+            review: expected_review_hash,
+        },
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_pending_model_deletion(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_model_deletion(
+        &data_app(&window)?,
+        data_controller::ModelTarget::Pending(operation_id),
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn get_model_deletion_paths(
+    window: WebviewWindow,
+    confirmation_id: String,
+    offset: usize,
+) -> Result<storage::deletion::models::operations::PathPage, String> {
+    data_app(&window)?
+        .state::<DataController>()
+        .model_deletion_page(&confirmation_id, offset)
 }
 
 #[cfg(unix)]
@@ -687,34 +601,6 @@ fn get_diarization_preferences(
     window.state::<Storage>().diarization_preferences()
 }
 #[tauri::command]
-fn save_diarization_preferences(
-    window: WebviewWindow,
-    expected_lock_version: i64,
-    payload: storage::DiarizationPreferences,
-) -> Result<storage::DiarizationPreferencesSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can edit diarization settings".into());
-    }
-    window
-        .state::<Storage>()
-        .save_diarization_preferences(expected_lock_version, payload)
-}
-
-#[tauri::command]
-fn save_analysis_preferences(
-    window: WebviewWindow,
-    expected_lock_version: i64,
-    payload: storage::AnalysisPreferences,
-) -> Result<storage::PreferencesSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can edit analysis settings".into());
-    }
-    window
-        .state::<Storage>()
-        .save_analysis_preferences(expected_lock_version, payload)
-}
-
-#[tauri::command]
 async fn get_analysis_versions(
     window: WebviewWindow,
     meeting_id: String,
@@ -837,17 +723,6 @@ async fn get_minutes_preferences(
 }
 
 #[tauri::command]
-fn save_minutes_preferences(
-    window: WebviewWindow,
-    expected_lock_version: i64,
-    payload: storage::MinutesPreferences,
-) -> Result<storage::MinutesPreferencesSnapshot, String> {
-    minutes_app(&window)?
-        .state::<Storage>()
-        .save_minutes_preferences(expected_lock_version, payload)
-}
-
-#[tauri::command]
 async fn get_minutes_prompt_preferences(
     window: WebviewWindow,
 ) -> Result<storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot, String> {
@@ -943,6 +818,7 @@ async fn regenerate_transcription(
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _preparing = analysis_preparation::begin(&request.meeting_id, &request.operation_id);
         if let Some(flow) = app.state::<Storage>().regeneration_replay(&request)? {
             return Ok(flow);
         }
@@ -957,6 +833,58 @@ async fn regenerate_transcription(
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+fn get_analysis_preparations(
+    window: WebviewWindow,
+) -> Result<Vec<analysis_preparation::Progress>, String> {
+    if window.label() != "main" {
+        return Err("解析準備はメイン画面から確認してください".into());
+    }
+    let mut entries = window.state::<Storage>().preparation_progress()?;
+    for current in analysis_preparation::snapshot() {
+        if let Some(saved) = entries
+            .iter_mut()
+            .find(|p| p.meeting_id == current.meeting_id)
+        {
+            let started = if saved.operation_id == current.operation_id {
+                saved.started_at_ms.min(current.started_at_ms)
+            } else {
+                current.started_at_ms
+            };
+            *saved = current;
+            saved.started_at_ms = started;
+        } else {
+            entries.push(current);
+        }
+    }
+    for p in &mut entries {
+        p.meeting_title = window
+            .state::<Storage>()
+            .get_meeting(&p.meeting_id)?
+            .map(|m| m.title)
+            .unwrap_or_else(|| "会議音声".into());
+    }
+    Ok(entries)
+}
+#[tauri::command]
+async fn get_meeting_analysis_audio(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::RecordedAudioPlan, String> {
+    if window.label() != "main" {
+        return Err("解析音声はメイン画面から確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .recorded_analysis_input(&meeting_id)
+            .map(|(source, _)| source)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn get_ready_analysis_flows(
     window: WebviewWindow,
@@ -1047,24 +975,6 @@ fn continue_analysis_flow(
         .map_err(|e| e.to_string())?;
     AnalysisController::kick(window.app_handle())?;
     Ok(flow)
-}
-
-#[tauri::command]
-async fn get_diarization_tracks(
-    window: WebviewWindow,
-    meeting_id: String,
-) -> Result<storage::RecordedAudioPlan, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read diarization tracks".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .recorded_analysis_input(&meeting_id)
-            .map(|(source, _)| source)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1748,24 +1658,6 @@ async fn get_recording_input_history_status(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn get_recording_input_history(
-    window: WebviewWindow,
-    meeting_id: String,
-    session_id: String,
-) -> Result<input_status::journal::Retained, String> {
-    if window.label() != "main" {
-        return Err("保存した録音入力履歴はメイン画面から確認してください".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .recording_input_history(&meeting_id, &session_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 async fn get_archived_recording_input_notices(
     window: WebviewWindow,
     after_session_id: Option<String>,
@@ -1934,13 +1826,13 @@ async fn start_recording(
     microphone_uid: Option<String>,
     capture_scope: capture_scope::CaptureScope,
     new_title: Option<String>,
-    speaker_counts: Option<storage::recordings::SpeakerCounts>,
+    num_speakers: Option<u32>,
 ) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
     }
     let app = window.app_handle().clone();
-    let speaker_counts = speaker_counts.unwrap_or_default();
+    let speaker_counts = storage::recordings::SpeakerCounts { num_speakers };
     speaker_counts.validate()?;
     tauri::async_runtime::spawn_blocking(move || {
         RecorderController::with_transition(&app, || {
@@ -2040,32 +1932,6 @@ async fn get_capture_applications(
     tauri::async_runtime::spawn_blocking(move || RecorderController::applications(&app))
         .await
         .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, String> {
-    if !matches!(window.label(), "main" | "recorder") {
-        return Err("Only the recording windows can stop recording".into());
-    }
-    if window.state::<StopDecisionStore>().snapshot().visible() {
-        return Err("開いている録音確認で決定してください。停止は重複送信していません".into());
-    }
-    // Bind the request before dispatch: a delayed stop must not target a later
-    // session that replaced the one visible when the user pressed the button.
-    let session = window
-        .state::<SessionStore>()
-        .snapshot()
-        .session_id
-        .ok_or("停止できる録音がありません")?;
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if app.state::<StopDecisionStore>().snapshot().visible() {
-            return Err("開いている録音確認で決定してください。停止は重複送信していません".into());
-        }
-        RecorderController::stop_session(&app, &session)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2182,49 +2048,6 @@ fn save_voice_matching_preferences(
         .state::<Storage>()
         .save_voice_matching_preferences(expected_lock_version, payload)
 }
-#[tauri::command]
-async fn update_speaker_assignments(
-    window: WebviewWindow,
-    request: storage::speaker_assignment_update::Request,
-) -> Result<storage::speaker_assignment_update::Reply, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(reply) = app
-            .state::<Storage>()
-            .assignment_completion_reply(&request)?
-        {
-            AnalysisController::kick(&app)?;
-            return Ok(reply);
-        }
-        let mut reply = app
-            .state::<Storage>()
-            .update_speaker_assignments(&request)?;
-        match app
-            .state::<Storage>()
-            .enqueue_completion_for_assignment(&request)
-        {
-            Ok(job) => {
-                reply.completion_job_id = job.as_ref().map(|j| j.id.clone());
-                if job.is_none() {
-                    if let Err(error) =
-                        voice::enqueue_automatic(&app.state::<Storage>(), &request.meeting_id)
-                    {
-                        reply.matching_error = Some(error);
-                    }
-                }
-                if let Err(error) = AnalysisController::kick(&app) {
-                    reply.matching_error = Some(error);
-                }
-            }
-            Err(error) => reply.matching_error = Some(error),
-        }
-        let _ = app.emit("analysis-version-changed", &request.meeting_id);
-        Ok(reply)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
 async fn consolidate_transcript(
     window: WebviewWindow,
@@ -2404,7 +2227,6 @@ pub fn run() {
                 internal_logs::get_internal_logs,
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
-                model_download_ipc::review_model_download,
                 model_official_catalog::get_official_model_options,
                 model_download_ipc::start_model_download,
                 model_download_ipc::get_model_download_lifetime,
@@ -2415,12 +2237,8 @@ pub fn run() {
                 cancel_model_inspection,
                 get_model_placements,
                 get_model_profiles,
-                get_model_catalog_history,
                 preview_model_profile_application,
                 apply_model_profile_application,
-                preview_job_model_rebinding,
-                apply_job_model_rebinding,
-                get_job_model_rebinding_result,
                 check_model_compatibility,
                 get_audio_import,
                 select_audio_import,
@@ -2437,6 +2255,9 @@ pub fn run() {
                 get_deletion_paths,
                 #[cfg(unix)]
                 get_model_deletion_items,
+                review_model_body_deletion,
+                review_pending_model_deletion,
+                get_model_deletion_paths,
                 #[cfg(unix)]
                 get_audio_deletion_items,
                 #[cfg(unix)]
@@ -2458,7 +2279,6 @@ pub fn run() {
                 get_recording_writes,
                 get_recording_input_status,
                 get_recording_input_history_status,
-                get_recording_input_history,
                 get_archived_recording_input_notices,
                 acknowledge_archived_recording_input_notice,
                 receive_recording_input_notice,
@@ -2477,7 +2297,6 @@ pub fn run() {
                 start_recording,
                 select_recording_microphone,
                 get_recording_microphone_selection,
-                stop_recording,
                 get_recording_confirmation,
                 request_recording_confirmation,
                 decide_recording_confirmation,
@@ -2494,7 +2313,6 @@ pub fn run() {
                 rename_meeting,
                 get_current_analysis,
                 consolidate_transcript,
-                update_speaker_assignments,
                 get_voice_matching_preferences,
                 get_speaker_completion_preferences,
                 save_speaker_completion_preferences,
@@ -2519,8 +2337,9 @@ pub fn run() {
                 get_ready_analysis_flows,
                 publish_regenerated_transcription,
                 start_analysis_flow,
+                get_analysis_preparations,
+                get_meeting_analysis_audio,
                 continue_analysis_flow,
-                get_diarization_tracks,
                 start_markdown_minutes_generation,
                 get_minutes_markdown,
                 save_minutes_markdown,
@@ -2529,8 +2348,6 @@ pub fn run() {
                 get_minutes_preferences,
                 get_minutes_prompt_preferences,
                 save_minutes_prompt_preferences,
-                save_minutes_preferences,
-                get_analysis_jobs,
                 get_voice_people,
                 prepare_voice_sample_playback,
                 get_voice_context,
@@ -2538,6 +2355,7 @@ pub fn run() {
                 manage_voice_person,
                 decide_voice_match,
                 retry_voice_job,
+                get_analysis_jobs,
                 get_analysis_notification_jobs,
                 get_analysis_notification_output,
                 pause_analysis_job,
@@ -2547,11 +2365,9 @@ pub fn run() {
                 get_ui_preferences,
                 save_ui_preferences,
                 get_diarization_preferences,
-                save_diarization_preferences,
                 get_vocabulary_book,
                 get_meeting_vocabulary,
                 save_vocabulary_book,
-                save_analysis_preferences,
                 get_analysis_versions,
             ];
             handler(invoke)

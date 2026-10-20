@@ -160,15 +160,31 @@ impl<'a> Session<'a> {
             return Ok(Some(vector));
         }
         std::fs::create_dir(directory).map_err(|e| e.to_string())?;
-        let path = directory.join("input.wav");
-        let frames = crate::transcription::wave::write_track(&mut audio, &path, cancelled)?;
-        let wave = Fingerprint::capture(&path, cancelled)?;
+        let track = self
+            .source
+            .tracks
+            .iter()
+            .find(|t| t.id == window.track_id)
+            .ok_or("声の参照先が共通音声にありません")?;
+        let direct = track.kind == "processed";
+        let (path, first, end) = if direct {
+            (
+                self.storage.meeting_mix_path(self.meeting, track)?,
+                crate::audio_clock::frame_at(window.start_us, 16000)?,
+                crate::audio_clock::frame_at(window.end_us, 16000)?,
+            )
+        } else {
+            let path = directory.join("input.wav");
+            let frames = crate::transcription::wave::write_track(&mut audio, &path, cancelled)?;
+            (path, 0, frames)
+        };
+        let wave = Fingerprint::capture_retained(&path, cancelled)?;
         let output = embedding::run(
             self.extractor,
             self.engine,
             &wave,
-            0,
-            frames,
+            first,
+            end,
             directory,
             Duration::from_secs(300),
             cancelled,
@@ -178,13 +194,15 @@ impl<'a> Session<'a> {
         }
         self.verify()?;
         self.extractions += 1;
-        let vector = output.map(|o| o.vector(0, frames)).transpose()?.flatten();
+        let vector = output.map(|o| o.vector(first, end)).transpose()?.flatten();
         if let Some(v) = &vector {
             self.storage.cache_feature(key, v.clone());
         }
         // The resident worker still checks its first startup log on later requests.
         // Retain that bounded log until the job-owned temp directory is dropped.
-        crate::local_engine::verification::release(&path)?;
+        if !direct {
+            crate::local_engine::verification::release(&path)?;
+        }
         for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if entry.file_name() != "worker-startup.log" {

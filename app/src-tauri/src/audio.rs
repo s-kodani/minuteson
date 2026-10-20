@@ -124,6 +124,36 @@ impl VerifiedAudio {
         let (format, flac) = if &magic == b"fLaC" {
             let (format, audio) = flac::FlacAudio::open(&mut file, expected_size, cancelled)?;
             (format, Some(audio))
+        } else if &magic == b"RIFF" {
+            let mut header = [0_u8; 44];
+            file.rewind().map_err(|e| e.to_string())?;
+            file.read_exact(&mut header).map_err(|e| e.to_string())?;
+            let u32_at = |i| u32::from_le_bytes(header[i..i + 4].try_into().unwrap());
+            if &header[8..16] != b"WAVEfmt "
+                || &header[36..40] != b"data"
+                || u32_at(16) != 16
+                || &header[20..24] != [1, 0, 1, 0]
+                || u32_at(24) != 16000
+                || u32_at(28) != 32000
+                || header[32..36] != [2, 0, 16, 0]
+                || u32_at(40) % 2 != 0
+                || u64::from(u32_at(40)) + 44 != expected_size
+                || u64::from(u32_at(4)) + 8 != expected_size
+            {
+                return Err("会議音声WAVの形式・容量が不正です".into());
+            }
+            (
+                PcmFormat {
+                    sample_rate: 16000,
+                    channels: 1,
+                    frames: u64::from(u32_at(40) / 2),
+                    data_offset: 44,
+                    bytes_per_frame: 2,
+                    float: false,
+                    little_endian: true,
+                },
+                None,
+            )
         } else {
             (read_caf_format(&mut file, expected_size)?, None)
         };

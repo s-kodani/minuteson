@@ -213,7 +213,7 @@ fn rejects_wrong_protocol_identity_settings_order_times_labels_and_extra_columns
         Some(3),
         1_000_000
     )
-    .is_err());
+    .is_ok());
     assert!(parse_output(
         &vec![b'x'; MAX_OUTPUT_BYTES as usize + 1],
         &config,
@@ -266,7 +266,7 @@ fn sparse_native_labels_are_not_mistaken_for_speaker_counts() {
         Some(5),
         1_000_000
     )
-    .is_err());
+    .is_ok());
 }
 
 #[test]

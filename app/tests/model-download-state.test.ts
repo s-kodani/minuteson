@@ -178,7 +178,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 6);
+  assert.equal(options.length, 8);
   assert.equal(options[0].review.manifest.engine, "llama.cpp");
   assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
   assert.equal(options[1].tokenLimits, null);
@@ -195,7 +195,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     "a8f5330b3cd2a0c700b81b0d0402473c441dad3faa3814060162ec132d1fdd59",
     "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96",
   ]);
-  for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && !o.id.includes("qwen3-"))) {
+  for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && o.id.includes("qwen25-"))) {
     assert.deepEqual(option.tokenLimits, options[0].tokenLimits);
     assert.match(option.label, /Qwen.*Q[48]/);
   }
@@ -212,6 +212,20 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const model4b = qwen3_4b.review.manifest.files.find(file => file.role === "llm")!;
   assert.equal(model4b.expectedHash, "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5");
   assert.equal(model4b.expectedSize, 2_497_280_256);
+  for (const [size, bytes, hash, recipeHash] of [
+    ["4B", 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "00f77ecbf06bfa6823532998d9a79785097ad153838ee90c5fb85bfe6e7835b7"],
+    ["9B", 5_680_522_464, "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "a87db4f037d6eb2276580a1a2f296cdbe479025b84b0363a6b969ac78e0f2ac2"],
+  ] as const) {
+    const option = options.find(o => o.id === `llama-b11533-qwen35-${size.toLowerCase()}-q4km`)!;
+    assert.equal(option.label, `Qwen 3.5 ${size} · Q4_K_M`);
+    assert.deepEqual(option.tokenLimits, { maxInputTokens: 262144, maxOutputTokens: 32768, maxContextTokens: 262144, tokenizer: "utf8_byte_bpe" });
+    assert.equal(option.review.recipeHash, recipeHash);
+    const file = option.review.manifest.files.find(f => f.role === "llm")!;
+    assert.equal(file.expectedHash, hash);
+    assert.equal(file.expectedSize, bytes);
+    const source = option.review.sources.find(f => f.relativePath === file.relativePath)!;
+    assert.match(source.url!, new RegExp(`^https://huggingface.co/unsloth/Qwen3\\.5-${size}-GGUF/resolve/[0-9a-f]{40}/`));
+  }
   assert.equal(options[3].review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
     "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d");
   await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));

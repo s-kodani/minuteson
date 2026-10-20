@@ -1,3 +1,5 @@
+import { playbackTimeline } from "../src/playback-follow";
+import { transcriptionAdmissions } from "/src/transcription-admission.ts";
 import {projectTranscript} from "../src/transcript-state";
 import {groupTranscriptRows,transcriptFragmentSeparator} from "../src/transcript-groups";
 // Development-only browser fixture. Not imported by the application or build.
@@ -6,7 +8,7 @@ import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { toasts } from "../src/toast";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
-import { recoveryFixture,stampFixtureDraft } from "./transcript-recovery-browser-fixture.js";
+import { stampFixtureDraft } from "./transcript-draft-fixture.js";
 
 const meetings = ["会議A", "会議B"].map((title, index) => ({ id: `meeting-${index}`, title, lifecycle: "recorded", sourceType:"recording", createdAt: 1791028800000, updatedAt: 1791028800000, lockVersion: 1 }));
 const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: "speaker-a", label: "話者A", displayName: "田中" }, { id: "speaker-b", label: "話者B", displayName: "佐藤" }], utterances: [
@@ -29,15 +31,15 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
     { id: "job-failed", kind: "transcription", state: "failed", completedUnits: 2, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "b".repeat(64), retryOfJobId: null, attempt: 1 }],
   currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
 };
+fixture.publishPlaybackTimeline=value=>playbackTimeline.publish(value);
+fixture.releasePlaybackTimeline=owner=>playbackTimeline.release(owner);
+fixture.beginTranscriptionAdmission=(meeting,title,operation)=>transcriptionAdmissions.begin(meeting,title,operation);
+fixture.endTranscriptionAdmission=meeting=>transcriptionAdmissions.end(meeting);
 const promptDefaults = {schemaVersion:1,extractPrompt:"既定の作成用プロンプト",mergePrompt:"既定の統合用プロンプト"};
 fixture.promptPreferences = {id:"minutes_prompt_preferences",lockVersion:0,payload:structuredClone(promptDefaults),defaults:promptDefaults};
 fixture.failPromptSave = false;
 fixture.losePromptResponse = false;
 const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
-fixture.recovery = recoveryFixture({ drafts: () => [fixture.draft,...Object.values(fixture.archivedDrafts)],current: () => fixture.draft });
-const recoveredSeed = sessionStorage.getItem("MON_TRANSCRIPT_RECOVERY_FIXTURE");
-if(recoveredSeed) { sessionStorage.removeItem("MON_TRANSCRIPT_RECOVERY_FIXTURE"); const seed = JSON.parse(recoveredSeed); Object.assign(fixture,seed.fixture); fixture.recovery.records = seed.records; if(seed.utterances) analysis.utterances = seed.utterances; }
-fixture.crashSeed = () => sessionStorage.setItem("MON_TRANSCRIPT_RECOVERY_FIXTURE",JSON.stringify({ fixture: { draft: fixture.draft,archivedDrafts: fixture.archivedDrafts,currentId: fixture.currentId,previousId: fixture.previousId },records: fixture.recovery.records,utterances: analysis.utterances }));
 const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
   versions: [analysis, fixture.candidate,...(fixture.consolidationHistory??[])].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
 const switchDraft = (nextId) => {
@@ -112,8 +114,7 @@ mockIPC(async (command, args) => {
     }
     return null;
   }
-  const recovery = await fixture.recovery.invoke(command,args);
-  if(recovery !== undefined) { fixture.calls.push({ command,args: structuredClone(args) }); return recovery; }
+  if (command === "get_analysis_preparations") return fixture.analysisPreparations??[];
   if (command === "get_analysis_notification_jobs") {
     fixture.calls.push({ command, args: structuredClone(args) });
     if (fixture.notificationReadFail) throw Error("模擬解析通知読込失敗");
@@ -185,14 +186,8 @@ mockIPC(async (command, args) => {
       fixture.analysisFlow={...fixture.analysisFlow,stage:"review",lockVersion:4,readyToPublish:false,replacementReady:false,errorMessage:null};
       await emit("analysis-flow-changed",{});return {status:"published",flow:structuredClone(fixture.analysisFlow)};
     }
-    case "get_diarization_tracks": if (fixture.failTracks) throw Error("模擬トラック読込失敗"); return fixture.trackPlan??{ tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
+    case "get_meeting_analysis_audio": if (fixture.failTracks) throw Error("模擬トラック読込失敗"); return fixture.trackPlan??{ tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
     case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
-    case "save_diarization_preferences":
-      await new Promise(resolve => setTimeout(resolve, fixture.persistenceDelayMs));
-      if (fixture.failDiarizationPreferences) throw Error("模擬話者分離設定の保存失敗");
-      if (args.expectedLockVersion !== fixture.diarizationPreferences.lockVersion) throw Error("模擬話者分離設定競合");
-      fixture.diarizationPreferences = { ...fixture.diarizationPreferences, payload: structuredClone(args.payload), lockVersion: fixture.diarizationPreferences.lockVersion + 1 };
-      return structuredClone(fixture.diarizationPreferences);
     case "rename_meeting": {
       const meeting=meetings.find(item=>item.id===args.id);
       if(fixture.failRename)throw Error("合成の会議名保存失敗");
@@ -241,12 +236,6 @@ mockIPC(async (command, args) => {
       fixture.vocabulary[key] = { ...book, payload: structuredClone(args.payload), lockVersion: book.lockVersion + 1 };
       return structuredClone(fixture.vocabulary[key]);
     }
-    case "save_analysis_preferences":
-      await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
-      if (fixture.failPreferences) throw new Error("模擬設定保存競合");
-      if (args.expectedLockVersion !== fixture.preferences.lockVersion) throw new Error("設定版番号不一致");
-      fixture.preferences = { ...fixture.preferences, payload: structuredClone(args.payload), lockVersion: fixture.preferences.lockVersion + 1 };
-      return structuredClone(fixture.preferences);
     case "get_analysis_jobs": return args.meetingId === meetings[0].id ? structuredClone(fixture.jobs) : [];
     case "get_analysis_versions": return args.meetingId === meetings[0].id ? structuredClone(versions()) : { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
     case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);

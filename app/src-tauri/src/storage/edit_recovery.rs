@@ -1,11 +1,13 @@
 //! Unconfirmed text and names are durable without publishing an edit or an undo
 //! entry. A versioned empty record is a tombstone against delayed older writes.
 use super::*;
+#[cfg(test)]
 use rusqlite::TransactionBehavior;
 use std::collections::HashSet;
 
 pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+#[cfg(test)]
 pub(crate) mod review;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +70,7 @@ pub(crate) struct Recovery {
     pub current_context: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct SaveRequest {
@@ -253,6 +256,7 @@ pub(super) fn read(db: &Connection, draft: &TranscriptDraft) -> Result<Option<Re
 }
 
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn transcript_edit_recovery(
         &self,
         meeting: &str,
@@ -271,6 +275,7 @@ impl Storage {
         read(&db, &draft)
     }
 
+    #[cfg(test)]
     pub(crate) fn save_transcript_edit_recovery(
         &self,
         request: SaveRequest,
@@ -340,6 +345,7 @@ impl Storage {
     }
 }
 
+#[cfg(test)]
 fn write_record(
     tx: &rusqlite::Transaction<'_>,
     draft: &TranscriptDraft,

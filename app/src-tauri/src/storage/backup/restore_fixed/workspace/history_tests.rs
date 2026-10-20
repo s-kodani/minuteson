@@ -26,10 +26,7 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
             meeting_id: f.meeting.clone(),
             operation_id: Uuid::new_v4().to_string(),
             expected: f.storage.regeneration_admission(&f.meeting).unwrap(),
-            speaker_counts: vec![crate::diarization::TrackSettings {
-                track_id: audio.tracks[0].id.clone(),
-                num_speakers: Some(1),
-            }],
+            num_speakers: Some(2),
         };
         f.storage
             .regenerate_analysis(&request, &crate::test_support::never_cancelled)
@@ -88,7 +85,7 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
         assert_eq!(flow.stage, "attention");
         assert!(!flow.ready_to_publish);
         let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
-        assert_eq!(plan.speaker_counts[0].num_speakers, Some(1));
+        assert_eq!(plan.speaker_counts[0].num_speakers, Some(2));
         assert_eq!(
             plan.speaker_counts[0].track_id,
             ids.get("audio_tracks", &f.meeting, &audio.tracks[0].id)

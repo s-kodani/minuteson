@@ -193,6 +193,14 @@ pub(super) fn read_analysis_audio_plan(
     meeting: &str,
     historical: Option<&super::backup::DeletedAudioHistory>,
 ) -> Result<RecordedAudioPlan, String> {
+    let mixed = if let Some(history) = historical {
+        super::meeting_mix::read_historical(db, meeting, history)?
+    } else {
+        super::meeting_mix::read(db, meeting)?
+    };
+    if let Some(plan) = mixed {
+        return Ok(plan);
+    }
     let state = if let Some(history) = historical {
         history.verify_meeting(db, meeting)?;
         AudioMetadataState::Deleted
@@ -202,6 +210,22 @@ pub(super) fn read_analysis_audio_plan(
         AudioMetadataState::Available
     };
     read_audio_metadata(db, meeting, state, true)
+}
+
+pub(super) fn read_original_analysis_audio_plan(
+    db: &Connection,
+    meeting: &str,
+) -> Result<RecordedAudioPlan, String> {
+    read_audio_metadata(db, meeting, AudioMetadataState::Available, true)
+}
+
+pub(super) fn read_original_historical_analysis_audio_plan(
+    db: &Connection,
+    meeting: &str,
+    history: &super::backup::DeletedAudioHistory,
+) -> Result<RecordedAudioPlan, String> {
+    history.verify_meeting(db, meeting)?;
+    read_audio_metadata(db, meeting, AudioMetadataState::Deleted, true)
 }
 
 enum AudioMetadataState {

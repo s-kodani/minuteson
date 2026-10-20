@@ -30,6 +30,7 @@ pub(crate) struct Summary {
     pub tail_loss_us: Option<i64>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Item {
@@ -39,6 +40,7 @@ pub(crate) struct Item {
     pub state: String,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Listing {
@@ -46,12 +48,14 @@ pub(crate) struct Listing {
     pub next: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResultItem {
     pub title: String,
     pub summary: Summary,
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResultListing {
@@ -119,6 +123,7 @@ pub(super) fn input_hash(review: &str, origin: i64, prefixes: &[Prefix]) -> Resu
 impl Storage {
     /// DB-owned unresolved native sessions only; never scan the filesystem or
     /// turn restored provenance into authority. Pagination never hides a tail.
+    #[cfg(test)]
     pub(crate) fn partial_recording_listing(&self, after: Option<&str>) -> Result<Listing, String> {
         self.managed_anchor.verify()?;
         if after.is_some_and(|id| !crate::input_levels::valid_owner(id)) {
@@ -150,6 +155,7 @@ impl Storage {
     /// Durable result, not new recovery authority. This remains readable after
     /// restart/restore or intentional audio deletion and says only what commit
     /// recorded, not whether the current bodies are still playable.
+    #[cfg(test)]
     pub(crate) fn partial_recovery_result(
         &self,
         session_id: &str,
@@ -169,6 +175,7 @@ impl Storage {
     /// Startup notification/history only, including restored logical records
     /// and intentionally deleted audio. Never mints a native review or reads
     /// original PCM. A listed commit must validate, rather than silently vanish.
+    #[cfg(test)]
     pub(crate) fn partial_recovery_listing(
         &self,
         after: Option<&str>,
@@ -208,6 +215,7 @@ impl Storage {
         self.review_partial_recording_checked(session_id, &crate::test_support::never_cancelled)
     }
 
+    #[cfg(test)]
     pub(crate) fn review_partial_recording_checked(
         &self,
         session_id: &str,
@@ -381,6 +389,7 @@ impl Storage {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn recover_partial_recording_checked(
         &self,
         reviewed: &Review,
@@ -494,12 +503,14 @@ impl Storage {
     }
 }
 
+#[cfg(test)]
 fn valid_result_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
+#[cfg(test)]
 fn read_result(
     db: &Connection,
     session_id: &str,
@@ -595,6 +606,7 @@ fn read_result(
     Ok(Some(summary))
 }
 
+#[cfg(test)]
 impl Summary {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.lanes.len() != 2

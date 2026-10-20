@@ -42,7 +42,7 @@ export function useDataOperation() {
       const audioSupported = Object.hasOwn(next, "audioDeletionPreview");
       const audioListing = audioSupported ? await invoke<AudioDeletionListing>("get_audio_deletion_items") : null;
       if (audioListing) assertAudioDeletionListing(audioListing);
-      if (epoch === readEpoch.current && current.current?.revision === next.revision) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setConnected(true); setError(""); }
+      if (epoch === readEpoch.current && current.current?.revision === next.revision) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(Object.hasOwn(next, "modelDeletionPreview")); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setConnected(true); setError(""); }
     } catch (cause) {
       if (epoch === readEpoch.current) { setAvailability(null); setConnected(false); setError(String(cause)); }
       throw cause;

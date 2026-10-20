@@ -1,12 +1,9 @@
-//! Independent saved-run native diarization for continuous and interrupted audio. Local numeric
-//! labels alone never identify a person across runs, tracks or meetings.
+//! One native diarization call over the shared meeting audio. Meeting-local
+//! labels never identify a registered person without voice matching.
 mod restore;
 pub(crate) mod runtime;
 pub(crate) mod sensitivity;
-// Feature matching is limited to one track.
-mod clustering;
 // The feature extractor has its own fixed helper identity.
-// The saved-run worker persists these additional immutable conditions.
 pub(crate) mod embedding;
 pub(crate) mod known;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
@@ -111,6 +108,7 @@ impl RetryRequest {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn retry_preflight(
     storage: &Storage,
     job: &JobSnapshot,
@@ -155,8 +153,6 @@ struct Parameters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     known_input: Option<crate::storage::KnownInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    extractor: Option<embedding::ExtractorConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     matching: Option<known::Policy>,
 }
 #[derive(Deserialize)]
@@ -197,12 +193,10 @@ struct ResultFile {
     engine: SherpaConfig,
     num_speakers: Option<u32>,
     segments: Vec<Segment>,
+    #[serde(default)]
+    speaker_merges: Vec<sherpa::SpeakerMerge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     run: Option<crate::storage::KnownRun>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    extractor: Option<embedding::ExtractorConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    features: Option<Vec<known::SavedFeature>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     matching: Option<known::Policy>,
 }
@@ -334,10 +328,7 @@ fn validate_attribution_policy(p: &Parameters) -> Result<(), String> {
     {
         return Err("未対応の処理最適化です".into());
     }
-    if p.attribution_policy
-        .as_deref()
-        .is_some_and(|p| p != "all_detected_v1")
-    {
+    if p.attribution_policy.as_deref() != Some("all_detected_v1") {
         return Err("話者割り当ての固定条件が不正です".into());
     }
     Ok(())

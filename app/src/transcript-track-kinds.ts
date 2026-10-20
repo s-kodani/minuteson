@@ -5,7 +5,7 @@ export function transcriptTrackKinds(value: unknown): ReadonlyMap<string,string>
   const result = new Map<string,string>();
   for(const track of tracks){
     if(!track||typeof track.id!=="string"||!track.id.length||track.id.length>256||result.has(track.id)
-      ||!["mic","system","imported"].includes(track.kind))throw Error("音声トラックの対応が不正です");
+      ||!["mic","system","imported","processed"].includes(track.kind))throw Error("音声トラックの対応が不正です");
     result.set(track.id,track.kind);
   }
   return result;

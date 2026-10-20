@@ -67,6 +67,14 @@ fn evidence(
             }
         }
     }
+    for gap in known.gaps.iter().filter(|g| !g.recovered) {
+        segments.push(Segment {
+            track: source.tracks[gap.track_index].id.clone(),
+            speaker: None,
+            start: gap.start_us,
+            end: gap.end_us,
+        });
+    }
     let mut solo: BTreeMap<(String, String), Vec<(i64, i64)>> = BTreeMap::new();
     // Sweep each continuous run; an unknown detector label also prevents solo use.
     for run in &known.runs {
@@ -140,6 +148,15 @@ fn evidence(
     let mut excluded = BTreeMap::new();
     for u in &view.utterances {
         if !u.speaker_ids.is_empty() {
+            continue;
+        }
+        if known.gaps.iter().any(|g| {
+            !g.recovered
+                && source.tracks[g.track_index].id == u.track_id
+                && g.start_us < u.end_us
+                && u.start_us < g.end_us
+        }) {
+            *excluded.entry("missing_audio".into()).or_default() += 1;
             continue;
         }
         let lineage = lineages.get(&u.id).unwrap_or(&u.id);
@@ -256,6 +273,7 @@ impl Storage {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn assignment_completion_reply(
         &self,
         request: &transcript_consolidation::Request,
@@ -318,6 +336,7 @@ impl Storage {
     pub(crate) fn enqueue_completion(&self, meeting: &str) -> Result<Option<JobSnapshot>, String> {
         self.enqueue_completion_for(meeting, None)
     }
+    #[cfg(test)]
     pub(crate) fn enqueue_completion_for_assignment(
         &self,
         request: &transcript_consolidation::Request,
@@ -426,7 +445,7 @@ impl Storage {
                 serde_json::json!({"profile":"standard","engine":"sherpa-onnx"}),
                 managed,
             )?,
-            parameters: serde_json::json!({"completion":plan,"assignmentRequest":request}),
+            parameters: serde_json::json!({"completion":plan,"assignmentRequest":request,"automaticAnalysisProgress":request.is_none()}),
             total_units: Some(1),
         };
         let job = jobs::enqueue_in_transaction(&tx, &spec)?;

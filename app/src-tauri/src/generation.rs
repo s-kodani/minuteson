@@ -83,6 +83,7 @@ impl RetryRequest {
         storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
     }
 }
+#[cfg(test)]
 pub(crate) fn retry_preflight(
     storage: &Storage,
     original: &JobSnapshot,

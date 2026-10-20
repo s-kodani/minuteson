@@ -52,18 +52,28 @@ export function jobProgress(job: AnalysisJob, target: string, meetingId?: string
   if (!["transcription", "diarization", "minutes_generation", "voice_registration", "voice_matching", "speaker_completion"].includes(job.kind) || !["queued", "running", "pausing", "paused", "interrupted"].includes(job.state)) return null;
   const kind = job.kind as OperationProgress["kind"], state = job.state as OperationProgress["state"];
   const name = operationName(kind);
+  if(kind==="transcription" && job.state==="running" && ["loading","preparing"].includes(job.executionProgress?.phase??"")) {
+    return {id:`job:${job.id}`,target,kind,state,meetingId,startedAtMs:job.createdAt,label:job.executionProgress?.phase==="loading"?"文字起こし · モデルを読み込み中":"文字起こし · モデルを検証中",completed:null,total:null};
+  }
+  if((kind==="voice_matching" || kind==="voice_registration") && job.state==="running" && job.executionProgress) {
+    const p=job.executionProgress;
+    const matching=p.phase==="matching";
+    return {id:`job:${job.id}`,target,kind,state,meetingId,startedAtMs:job.createdAt,
+      label:matching?`人物を照合 ${p.phaseCompleted}／${p.phaseTotal}話者`:p.phase==="saving"?"声の照合結果を保存中":"声の参照音声を準備中",
+      completed:matching?p.phaseCompleted:null,total:matching?p.phaseTotal:null};
+  }
   if (kind === "speaker_completion") {
     const p = job.executionProgress;
     const valid = job.state === "running" && p && ["preparing", "references", "matching", "saving"].includes(p.phase)
       && [p.completed, p.total, p.phaseCompleted, p.phaseTotal].every(v => Number.isSafeInteger(v) && v >= 0)
       && p.total > 0 && p.completed < p.total && p.phaseCompleted <= p.phaseTotal;
-    const stage = valid ? ({ preparing: "準備中", references: "参照音声を準備中", matching: "発言照合中", saving: "結果を保存中" })[p.phase] : operationStatus(state);
+    const stage = valid ? ({ loading:"モデルを読み込み中", preparing: "準備中", references: "参照音声を準備中", matching: "発言照合中", saving: "結果を保存中" })[p.phase] : operationStatus(state);
     const detail = valid ? p.phase === "references" ? `参照音声 ${p.phaseCompleted}／${p.phaseTotal}区間`
       : p.phase === "matching" ? `発言照合 ${p.phaseCompleted}／${p.phaseTotal}件` : undefined : undefined;
     return { id: `job:${job.id}`, target, label: `${name} · ${stage}`, kind, state, meetingId,
       startedAtMs: job.createdAt, paused: ["paused", "interrupted"].includes(state),
-      completed: valid ? Math.min(99, Math.floor(p.completed * 100 / p.total)) : null,
-      total: valid ? 100 : null, detail };
+      completed: valid && (p.phase === "references" || p.phase === "matching") ? p.phaseCompleted : null,
+      total: valid && (p.phase === "references" || p.phase === "matching") ? p.phaseTotal : null, detail };
   }
   const paused = ["paused", "interrupted"].includes(job.state);
   const minutes = kind === "minutes_generation";
@@ -74,12 +84,12 @@ export function jobProgress(job: AnalysisJob, target: string, meetingId?: string
   const finishing = job.state === "running" && known && job.completedUnits === job.totalUnits;
   const unit = job.kind === "transcription" ? "区間" : "処理単位";
   const count = known ? `${job.completedUnits} / ${job.totalUnits} ${unit}完了` : "";
-  const counting = known && (minutes || !finishing);
+  const counting = known && kind !== "diarization" && (minutes || !finishing);
   return {
     id: `job:${job.id}`, target, label: `${name} · ${finishing ? "結果を保存中" : status}${minutes && known ? ` ${job.completedUnits} / ${job.totalUnits}` : ""}`,
     kind, state, meetingId, startedAtMs: job.createdAt,
     completed: counting ? job.completedUnits : null, total: counting ? job.totalUnits : null, paused,
-    detail: minutes ? known ? "解析が完了するごとに更新" : "" : [count, job.kind === "transcription" ? "約2分の音声区間が完了するごとに更新" : ""].filter(Boolean).join(" · "),
+    detail: kind==="diarization"?"会議全体の音声を処理しています。":minutes ? known ? "解析が完了するごとに更新" : "" : [count, job.kind === "transcription" ? "約2分の音声区間が完了するごとに更新" : ""].filter(Boolean).join(" · "),
   };
 }
 

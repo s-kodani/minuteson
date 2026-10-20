@@ -1,7 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { ThemeReadNotice } from "./theme";
 import { acceptRecordingDecision, recordingDecisionVisible, type RecordingDecision } from "./recording-confirmation-state";
 
 export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
@@ -87,7 +86,6 @@ export function RecordingConfirmationWindow() {
       <p>{value?.preparing?"録音準備を中止します。音声が保存されない場合があります。":quit?"ここまでの音声と未保存の編集を保存してからアプリを閉じます。保存後、この録音は再開できません。":"ここまでの音声を保存して解析を開始します。保存後、この録音は再開できません。"}</p>
       {stopping&&<p role="status">録音を停止・保存しています。保存完了を確認するまでお待ちください。</p>}
       {(value?.errorMessage||decision.error)&&<p role="alert" className="action-error">{value?.errorMessage||decision.error}</p>}
-      <ThemeReadNotice />
       <div className="analysis-actions"><button ref={cancelButton} type="button" className="small-secondary" disabled={stopping||decision.decisionBusy||!decision.connected} onClick={cancel}>{failed?"確認を閉じる":"録音を続ける"}</button><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{quit?value?.preparing?"録音準備を中止して閉じる":"録音を終了して閉じる":value?.preparing?"録音準備を中止する":"録音を終了する"}</button></div>
     </section>}
   </main>;

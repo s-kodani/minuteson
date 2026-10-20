@@ -63,36 +63,37 @@ test("Whisper keeps its model name but prepares the current engine instead of re
 test("duplicate packages collapse and preserve the package currently selected by the profile", () => {
   const current = entry(options[0], "current"), newer = entry(options[0], "newer");
   const choices = modelChoices("llama.cpp", [newer, current], options, profile("current"));
-  assert.equal(choices.length, 4);
+  assert.equal(choices.length, 6);
   assert.equal(choices[0].entry?.packageId, "current");
   assert.deepEqual(choices[0].packageIds, ["newer", "current"]);
   assert.equal(installedModelGroups([newer, current], profile("current")).length, 1);
   assert.equal(installedModelGroups([newer, current], profile("current"))[0].entry.packageId, "current");
 });
-test("Q4, Q8, Qwen3 8B and Qwen3 4B remain independent even if stored names are identical", () => {
-  const installed = [entry(options[0], "q4"), entry(options[2], "q8"), entry(options[4], "qwen3-8b"), entry(options[5], "qwen3-4b")];
+test("all Qwen sizes, generations and quantizations remain independent even if stored names are identical", () => {
+  const llms = options.filter(o => o.review.manifest.engine === "llama.cpp");
+  const installed = llms.map(o => entry(o, o.id));
   installed.forEach(item => { item.modelName = "same-name"; });
   const choices = modelChoices("llama.cpp", installed, options, []);
-  assert.deepEqual(choices.map(c => c.entry?.packageId), ["q4", "q8", "qwen3-8b", "qwen3-4b"]);
-  assert.deepEqual(choices.map(c => c.label), [options[0].label, options[2].label, options[4].label, options[5].label]);
+  assert.deepEqual(choices.map(c => c.entry?.packageId), llms.map(o => o.id));
+  assert.deepEqual(choices.map(c => c.label), llms.map(o => o.label));
 });
 test("removed and unfinished packages do not hide the official download choice", () => {
   for (const patch of [{ bodyRemoved: true }, { placementRecorded: false }]) {
     const choices = modelChoices("llama.cpp", [{ ...entry(), ...patch }], options, []);
     assert.equal(choices[0].entry, undefined);
-    assert.equal(choices.length, 4);
+    assert.equal(choices.length, 6);
   }
 });
 test("matching bytes never make an unchecked manual executable reusable", () => {
   const manual = { ...entry(), sourceType: "manual_import" as const, download: null };
   const choices = modelChoices("llama.cpp", [manual], options, []);
-  assert.equal(choices.length, 4);
+  assert.equal(choices.length, 6);
   assert.equal(choices[0].entry, undefined);
 });
 test("unknown imported model keeps its own name and quantization", () => {
   const other = { ...entry(), modelFiles: [{ role: "llm", size: 10, sha256: "f".repeat(64) }], modelName: "Local model", download: null, sourceType: "manual_import" as const };
   assert.equal(modelDisplayName(other, options), "Local model · Q4_K_M");
-  assert.equal(modelChoices("llama.cpp", [other], options, []).length, 5);
+  assert.equal(modelChoices("llama.cpp", [other], options, []).length, 7);
 });
 
 test("Sherpa keeps model identity but reacquires the package with the voice C API", () => {

@@ -688,5 +688,453 @@
         }
       ]
     }
+  },
+  {
+    "id": "llama-b11533-qwen35-4b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 262144,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3.5 4B · Q4_K_M",
+    "description": "Qwen 3.5 4B・Q4_K_M（Unsloth配布）。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "recipe": {
+      "schemaVersion": 4,
+      "manifest": {
+        "schemaVersion": 1,
+        "engine": "llama.cpp",
+        "engineVersion": "b11533",
+        "modelName": "Qwen3.5-4B",
+        "modelVersion": "e87f176479d0855a907a41277aca2f8ee7a09523",
+        "quantization": "Q4_K_M",
+        "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+        "target": "macos_aarch64",
+        "files": [
+          {
+            "relativePath": "llama-completion",
+            "role": "executable",
+            "expectedSize": 33472,
+            "expectedHash": "e3d5205729cb4c1e176d5c8e39796aefbe361a2300d0593586db9503dd0d63d1"
+          },
+          {
+            "relativePath": "libllama-completion-impl.dylib",
+            "role": "runtime_library",
+            "expectedSize": 121648,
+            "expectedHash": "12ab2c7cb42adc1442ceb91e48629a345c9ffd77e4c5c7bc4d2b6efcadb050d8"
+          },
+          {
+            "relativePath": "libllama-common.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 7741864,
+            "expectedHash": "180e1dc0fc1a462a6ebde387b7e738113411a15c12574babcdb947bf25017639"
+          },
+          {
+            "relativePath": "libllama.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 3339872,
+            "expectedHash": "7d0a3deaf876e147203cf932974751df1cc017db344a27739cc53df7ea90abc0"
+          },
+          {
+            "relativePath": "libggml.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 60128,
+            "expectedHash": "85ac40d540a5cc86f28a70270ddcdde677e92eb585c3bacd1b7e82270fe8934b"
+          },
+          {
+            "relativePath": "libggml-base.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 751368,
+            "expectedHash": "cfe82e8d44074f27b5696d03b037f0e85aef1ffd97e7c6d26387cedddc62b245"
+          },
+          {
+            "relativePath": "libggml-cpu.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 957408,
+            "expectedHash": "937073375f79a187d8fda2e3900a9095e979593b691d6bbb146956743ceddd82"
+          },
+          {
+            "relativePath": "libggml-blas.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 58776,
+            "expectedHash": "6526259e8f70a5b3a394df3ba082050c290d7653846efbdc84b3710b22fb4eac"
+          },
+          {
+            "relativePath": "libggml-metal.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 5554552,
+            "expectedHash": "4f4eb885627ad43ed484b5b8aaf0549c9ba4af6819ba339d358039e7a6a10311"
+          },
+          {
+            "relativePath": "libggml-rpc.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 219808,
+            "expectedHash": "48c13b7c2c56e2b569b636e6a28d1c0853ad2d1db1980c0afd374651c6e897d0"
+          },
+          {
+            "relativePath": "model.gguf",
+            "role": "llm",
+            "expectedSize": 2740937888,
+            "expectedHash": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+          },
+          {
+            "relativePath": "notices/llama-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1078,
+            "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+          },
+          {
+            "relativePath": "notices/Qwen-Apache-2.0.txt",
+            "role": "notice",
+            "expectedSize": 11544,
+            "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+          }
+        ]
+      },
+      "sources": [
+        {
+          "relativePath": "llama-completion",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/llama-completion"
+          }
+        },
+        {
+          "relativePath": "libllama-completion-impl.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama-completion-impl.dylib"
+          }
+        },
+        {
+          "relativePath": "libllama-common.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama-common.0.6.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libllama.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama.0.6.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-base.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-base.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-cpu.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-cpu.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-blas.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-blas.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-metal.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-metal.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-rpc.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-rpc.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "model.gguf",
+          "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf"
+        },
+        {
+          "relativePath": "notices/llama-MIT.txt",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/LICENSE"
+          }
+        },
+        {
+          "relativePath": "notices/Qwen-Apache-2.0.txt",
+          "url": "https://huggingface.co/Qwen/Qwen3.5-4B/resolve/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE"
+        }
+      ]
+    }
+  },
+  {
+    "id": "llama-b11533-qwen35-9b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 262144,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3.5 9B · Q4_K_M",
+    "description": "Qwen 3.5 9B・Q4_K_M（Unsloth配布）。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "recipe": {
+      "schemaVersion": 4,
+      "manifest": {
+        "schemaVersion": 1,
+        "engine": "llama.cpp",
+        "engineVersion": "b11533",
+        "modelName": "Qwen3.5-9B",
+        "modelVersion": "3885219b6810b007914f3a7950a8d1b469d598a5",
+        "quantization": "Q4_K_M",
+        "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+        "target": "macos_aarch64",
+        "files": [
+          {
+            "relativePath": "llama-completion",
+            "role": "executable",
+            "expectedSize": 33472,
+            "expectedHash": "e3d5205729cb4c1e176d5c8e39796aefbe361a2300d0593586db9503dd0d63d1"
+          },
+          {
+            "relativePath": "libllama-completion-impl.dylib",
+            "role": "runtime_library",
+            "expectedSize": 121648,
+            "expectedHash": "12ab2c7cb42adc1442ceb91e48629a345c9ffd77e4c5c7bc4d2b6efcadb050d8"
+          },
+          {
+            "relativePath": "libllama-common.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 7741864,
+            "expectedHash": "180e1dc0fc1a462a6ebde387b7e738113411a15c12574babcdb947bf25017639"
+          },
+          {
+            "relativePath": "libllama.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 3339872,
+            "expectedHash": "7d0a3deaf876e147203cf932974751df1cc017db344a27739cc53df7ea90abc0"
+          },
+          {
+            "relativePath": "libggml.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 60128,
+            "expectedHash": "85ac40d540a5cc86f28a70270ddcdde677e92eb585c3bacd1b7e82270fe8934b"
+          },
+          {
+            "relativePath": "libggml-base.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 751368,
+            "expectedHash": "cfe82e8d44074f27b5696d03b037f0e85aef1ffd97e7c6d26387cedddc62b245"
+          },
+          {
+            "relativePath": "libggml-cpu.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 957408,
+            "expectedHash": "937073375f79a187d8fda2e3900a9095e979593b691d6bbb146956743ceddd82"
+          },
+          {
+            "relativePath": "libggml-blas.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 58776,
+            "expectedHash": "6526259e8f70a5b3a394df3ba082050c290d7653846efbdc84b3710b22fb4eac"
+          },
+          {
+            "relativePath": "libggml-metal.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 5554552,
+            "expectedHash": "4f4eb885627ad43ed484b5b8aaf0549c9ba4af6819ba339d358039e7a6a10311"
+          },
+          {
+            "relativePath": "libggml-rpc.0.dylib",
+            "role": "runtime_library",
+            "expectedSize": 219808,
+            "expectedHash": "48c13b7c2c56e2b569b636e6a28d1c0853ad2d1db1980c0afd374651c6e897d0"
+          },
+          {
+            "relativePath": "model.gguf",
+            "role": "llm",
+            "expectedSize": 5680522464,
+            "expectedHash": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+          },
+          {
+            "relativePath": "notices/llama-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1078,
+            "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+          },
+          {
+            "relativePath": "notices/Qwen-Apache-2.0.txt",
+            "role": "notice",
+            "expectedSize": 11544,
+            "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+          }
+        ]
+      },
+      "sources": [
+        {
+          "relativePath": "llama-completion",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/llama-completion"
+          }
+        },
+        {
+          "relativePath": "libllama-completion-impl.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama-completion-impl.dylib"
+          }
+        },
+        {
+          "relativePath": "libllama-common.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama-common.0.6.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libllama.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libllama.0.6.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-base.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-base.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-cpu.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-cpu.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-blas.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-blas.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-metal.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-metal.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "libggml-rpc.0.dylib",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/libggml-rpc.0.26.0.dylib"
+          }
+        },
+        {
+          "relativePath": "model.gguf",
+          "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
+        },
+        {
+          "relativePath": "notices/llama-MIT.txt",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 12075871,
+            "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+            "memberPath": "llama-b11533/LICENSE"
+          }
+        },
+        {
+          "relativePath": "notices/Qwen-Apache-2.0.txt",
+          "url": "https://huggingface.co/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE"
+        }
+      ]
+    }
   }
 ]

@@ -3,6 +3,7 @@ import type { ToastLevel } from "./toast-state.ts";
 
 export type JobKind = "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
 export interface NotificationJob extends AnalysisJob {
+  analysisOperation?:{id:string;startedAtMs:number}|null;
   kind: JobKind; meetingId: string; meetingTitle: string; operationId: string; inputHash: string;
   createdAt: number; updatedAt: number; outputMinutesId: string | null;
 }

@@ -72,11 +72,17 @@ async page => {
 
   await page.getByRole("button", { name: "変更の確認を開く", exact: true }).click();
   const modal = page.getByRole("dialog", { name: "変更の確認", exact: true }); await modal.waitFor();
-  await show({ key: "under-modal", level: "info", message: "確認中に届いた情報" }); await page.waitForTimeout(4300);
-  check(await host.locator(".toast-card").count() === 1 && await page.evaluate(() => !!document.activeElement?.closest("dialog[open]")), "notification expired beneath confirmation or stole its focus");
+  await show({ key: "under-modal", level: "error", message: "確認中に届いたエラー" });
+  await host.getByRole("alert").waitFor();
+  await page.waitForFunction(()=>{const e=document.querySelector('.toast-host .toast-card'),r=e?.getBoundingClientRect();return e?.closest('dialog[open]')&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));});
+  check(await page.evaluate(() => !!document.activeElement?.closest("dialog[open]")), "notification stole modal focus");
+  await host.getByRole('button',{name:'エラー通知を閉じる',exact:true}).click();
+  check(await modal.isVisible(), 'dismissing a notification closed the modal');
+  await show({ key: "modal-info", level: "info", message: "確認中に届いた情報" });
+  await host.getByRole('status').waitFor();
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" }); await page.mouse.move(8, 8);
   await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
-  results.push("confirmation stays above notifications with focus intact; dismissal time starts when the confirmation closes");
+  results.push("errors remain visible and dismissible inside native modals; notifications survive returning to the workspace without stealing focus");
 
   await page.evaluate(() => window.toastFixture.showAction()); await page.waitForTimeout(4300);
   check(await host.getByRole("button", { name: "元に戻す", exact: true }).isVisible(), "action notice used the ordinary four-second timeout");

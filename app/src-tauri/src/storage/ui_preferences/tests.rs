@@ -8,7 +8,7 @@ fn payload(theme: Theme) -> UiPreferences {
     }
 }
 fn rows(storage: &Storage) -> String {
-    storage.connection.lock().unwrap().query_row("SELECT coalesce(json_group_array(json_array(key,value_json,content_hash,lock_version,updated_at)),'[]') FROM app_settings", [], |r| r.get(0)).unwrap()
+    storage.connection.lock().unwrap().query_row("SELECT coalesce(json_group_array(json_array(key,value_json,content_hash,lock_version,updated_at)),'[]') FROM app_settings WHERE key='ui_preferences'", [], |r| r.get(0)).unwrap()
 }
 
 #[test]

@@ -384,7 +384,12 @@ impl Storage {
                         return Err("手動の話者割り当ては保持する必要があります".into());
                     }
                 }
-                for original in &source.analysis.speakers {
+                for original in source.analysis.speakers.iter().filter(|speaker| {
+                    source.analysis.utterances.iter().any(|u| {
+                        source.manual_utterances.contains(&u.id)
+                            && u.speaker_ids.contains(&speaker.id)
+                    })
+                }) {
                     if !input.speakers.iter().any(|s| {
                         s.key == super::diarization::prior_speaker_key(&original.id)
                             && s.label == original.label

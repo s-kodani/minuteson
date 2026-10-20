@@ -86,7 +86,7 @@ export function RecorderInfoWindow() {
     <p>マイクとPCの音声は別々の入力です。無音、切断、欠損は区別して表示します。入力状態や保存の要対応は、メイン画面で詳細と対処方法を確認してください。</p>
     <p>文字起こし・話者分離は録音終了後に行います。説明を閉じても、録音の停止やデータの変更は行いません。</p>
     {error && <p role="alert">説明画面を閉じられません：{error}。閉じる操作を再試行できます。</p>}
-    <ThemeReadNotice compact />
+    <ThemeReadNotice />
     <RecorderOperationDetails />
   </main>;
 }

@@ -36,6 +36,7 @@ pub struct VersionState {
     pub versions: Vec<VersionSummary>,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AdoptRequest {
@@ -97,6 +98,7 @@ impl Storage {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn adopt_analysis(
         &self,
         request: AdoptRequest,
@@ -113,6 +115,7 @@ impl Storage {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn restore_analysis_checked(
         &self,
         meeting_id: &str,
@@ -132,6 +135,7 @@ impl Storage {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn visible_analysis_draft(
         &self,
         meeting_id: &str,
@@ -149,6 +153,7 @@ impl Storage {
     }
 }
 
+#[cfg(test)]
 pub(super) fn switch_draft(
     connection: &Connection,
     meeting_id: &str,

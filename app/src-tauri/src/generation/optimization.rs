@@ -236,7 +236,7 @@ pub(super) fn fits(system: &str, prompt: &str) -> Option<bool> {
     COUNTER.with(|c| {
         let mut c = c.borrow_mut();
         let c = c.as_mut()?;
-        if system.len() + prompt.len() > 64 * 1024 {
+        if system.len() + prompt.len() > super::llama::MAX_PROMPT_BYTES {
             return Some(false);
         };
         match c.count(system, prompt) {
@@ -273,7 +273,7 @@ impl Counter {
         if self.cache.len() >= 4096 {
             return Err("トークン算定記録の件数上限です".into());
         }
-        if system.len() + prompt.len() > 64 * 1024 {
+        if system.len() + prompt.len() > super::llama::MAX_PROMPT_BYTES {
             return Err("トークン算定の入力上限です".into());
         }
         let dir = self.directory.path().join(self.calls.to_string());
@@ -358,6 +358,18 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn long_context_packing_accepts_inputs_above_the_previous_byte_limit() {
+        let (_scope, _, _) = Scope::fixture();
+        COUNTER.with(|c| c.borrow_mut().as_mut().unwrap().engine.context_tokens = 262144);
+        assert_eq!(fits("system", &"会議の発言。".repeat(5000)), Some(true));
+        assert_eq!(fits("system", &"x".repeat(262144)), Some(false));
+        assert_eq!(
+            fits("system", &"x".repeat(super::super::llama::MAX_PROMPT_BYTES)),
+            Some(false)
+        );
+    }
+
     #[test]
     fn optimization_evidence_requires_quality_and_ten_percent_median_gain() {
         let mut e = Evidence {

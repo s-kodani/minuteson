@@ -85,9 +85,9 @@ test("model waiting and unresolved steps remain visible without a stale download
   assert.equal(interrupted.paused, true);
 });
 
-test("diarization is a distinct stage with its own denominator", () => {
+test("diarization waits for measured native progress", () => {
   const progress = jobProgress({ ...job, kind: "diarization", totalUnits: 2 }, "会議A")!;
-  assert.equal(progressPercent(progress.completed, progress.total), 50);
+  assert.equal(progressPercent(progress.completed, progress.total), null);
   assert.match(progress.label, /話者分離/);
   assert.doesNotMatch(progress.detail!, /約2分/);
 });
@@ -212,11 +212,11 @@ test("speaker completion shows transient work separately from durable result uni
   const completion = { ...job, kind: "speaker_completion", completedUnits: 0, totalUnits: 1,
     executionProgress: { phase: "matching" as const, completed: 14, total: 33, phaseCompleted: 12, phaseTotal: 30 } };
   const p = jobProgress(completion, "会議A")!;
-  assert.equal(progressPercent(p.completed, p.total), 42);
+  assert.equal(progressPercent(p.completed, p.total), 40);
   assert.match(p.detail!, /発言照合 12／30件/);
   assert.match(p.label, /発言照合中/);
   const saving = jobProgress({ ...completion, executionProgress: { ...completion.executionProgress, phase: "saving", completed: 32, phaseCompleted: 0, phaseTotal: 1 } }, "会議A")!;
-  assert.equal(progressPercent(saving.completed, saving.total), 96);
+  assert.equal(progressPercent(saving.completed, saving.total), null);
   assert.match(saving.label, /結果を保存中/);
   for (const state of ["paused", "interrupted", "failed", "cancelled", "queued"]) {
     const view = jobProgress({ ...completion, state }, "会議A");
@@ -229,5 +229,5 @@ test("speaker completion shows transient work separately from durable result uni
     assert.equal(jobProgress({ ...completion, executionProgress: { ...completion.executionProgress, ...patch } }, "会議A")!.total, null);
   }
   const large = jobProgress({ ...completion, executionProgress: { phase: "saving", completed: 999, total: 1000, phaseCompleted: 0, phaseTotal: 1 } }, "会議A")!;
-  assert.equal(progressPercent(large.completed, large.total), 99);
+  assert.equal(progressPercent(large.completed, large.total), null);
 });

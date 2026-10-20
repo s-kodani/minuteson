@@ -48,7 +48,13 @@ fn corrected_clock_proof_survives_archive_id_rebinding_and_fixed_job_rebuild() {
         let plan = value
             .get("source")
             .unwrap_or(&value["diarization"]["source"]);
-        assert_eq!(*plan, serde_json::to_value(&rebuilt).unwrap());
+        let mixed = super::super::super::super::transcription::read_analysis_audio_plan(
+            &workspace.database,
+            &new_meeting,
+            None,
+        )
+        .unwrap();
+        assert_eq!(*plan, serde_json::to_value(&mixed).unwrap());
     }
     assert_eq!(storage.recorded_audio_plan(&meeting).unwrap(), original);
 }
@@ -144,7 +150,7 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(assets.len(), 3);
+    assert_eq!(assets.len(), 4);
     for (relative, size, hash) in assets {
         assert!(relative.starts_with(&format!("meetings/{new_meeting}/restored/")));
         assert!(!relative.contains(&meeting));

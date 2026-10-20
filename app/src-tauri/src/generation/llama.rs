@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 
 const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_PROMPT_BYTES: usize = 64 * 1024;
+// Covers the Qwen3.5 context, including multibyte text when token packing is enabled.
+pub(super) const MAX_PROMPT_BYTES: usize = 1024 * 1024;
 
-// Qwen3's published non-thinking ChatML generation prefix. b11533 completion
+// Qwen3 and Qwen3.5's published text-only non-thinking ChatML prefix. b11533 completion
 // does not pass its --reasoning option into the initial template application,
 // so fix the no-thinking prefix explicitly rather than stripping model output.
 const QWEN3_NON_THINKING_TEMPLATE: &str = r#"{%- for message in messages %}{{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' }}{%- endif %}"#;
@@ -26,6 +27,12 @@ pub(super) fn model_arguments(model: &Fingerprint) -> &'static [&'static str] {
         ) | (
             2_497_280_256,
             "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+        ) | (
+            2_740_937_888,
+            "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+        ) | (
+            5_680_522_464,
+            "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
         )
     ) {
         &[
@@ -124,7 +131,7 @@ pub(crate) struct LlamaConfig {
 impl LlamaConfig {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.threads)
-            || !(2048..=40960).contains(&self.context_tokens)
+            || !(2048..=262144).contains(&self.context_tokens)
             || !(64..=32768).contains(&self.prediction_tokens)
             || self.prediction_tokens > self.context_tokens - 256
             || self.gpu_layers > 256

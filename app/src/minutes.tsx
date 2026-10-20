@@ -221,8 +221,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost} inputRef={editorInput}
       durationUs={audioSummary?.modes.length ? audioSummary.durationUs : null}
       onPlay={audio?.canPlay && !audio.locked && audioSummary ? interval => { void audio.playReference({ kind:"interval", ...interval, expectedDurationUs:audioSummary.durationUs }); } : undefined} />}
-    <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。入力を保持しています" />
-    <IssueNotice scope={meetingId} type="plain-minutes-export-error" label="議事録の書き出し" message={exportState.error} toastMessage="議事録の書き出し結果を確認してください" />
+    <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} />
+    <IssueNotice scope={meetingId} type="plain-minutes-export-error" label="議事録の書き出し" message={exportState.error} />
     <ToastNotice scope={meetingId} type="plain-minutes-export" eventId={exportedEvent} message={exportedEvent ? "議事録をMarkdownで保存しました" : ""} />
   </section>;
 }

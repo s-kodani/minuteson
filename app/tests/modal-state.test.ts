@@ -30,7 +30,8 @@ test("all common modal key routes use the same conversion and Escape-repeat guar
   assert.match(source, /const guard = modalKeyGuard\(event\)/);
   assert.match(source, /guard === "consume"\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); return; \}/);
   assert.doesNotMatch(source, /externalContent && (?:event\.repeat|\(event\.isComposing)/);
-  assert.match(source, /element\.addEventListener\("keydown",keyDown\)/);
+  assert.match(source, /element\.addEventListener\("keydown",handle\)/);
+  assert.match(source, /externalContent \|\| event\.target instanceof Element && event\.target\.closest\("\.toast-host"\)\) keyDown\(event\)/);
   assert.match(source, /isComposing:event\.nativeEvent\.isComposing/);
 });
 

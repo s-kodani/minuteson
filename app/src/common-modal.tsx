@@ -264,9 +264,12 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     // Portals bubble React events through their owner, not their DOM parent.
     // A reparented workspace must trap keys at its native dialog boundary.
     const element = ref.current;
-    if (!externalContent || !element) return;
-    element.addEventListener("keydown",keyDown);
-    return () => element.removeEventListener("keydown",keyDown);
+    if (!element) return;
+    const handle = (event: KeyboardEvent) => {
+      if (externalContent || event.target instanceof Element && event.target.closest(".toast-host")) keyDown(event);
+    };
+    element.addEventListener("keydown",handle);
+    return () => element.removeEventListener("keydown",handle);
   }, [externalContent,ref,owned?.id,owned?.phase,effectiveBlocked]);
   const dialog = <dialog {...attributes} ref={ref} data-common-modal aria-label={owned || replacement ? undefined : attributes["aria-label"]} aria-labelledby={owned ? `${owned.id}-title` : replacement?.labelledBy ?? attributes["aria-labelledby"]} className={`common-modal ${className} ${replacement?.className ?? ""}`}
     onCancel={event => { event.preventDefault(); dismiss(); }}

@@ -22,12 +22,28 @@ async page => {
   await page.evaluate(()=>{window.monBrowserFixture.regenerationMissingModels=true;});
   await start();await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
   await page.getByText("設定のローカルAIでモデルを導入してください",{exact:false}).first().waitFor();
-  await page.getByRole("button",{name:"確認を閉じる",exact:true}).click();
+  await tools().waitFor({state:"hidden"});
   check(await page.evaluate(()=>window.monBrowserFixture.currentId==="analysis"&&window.monBrowserFixture.analysisFlow.stage==="review"),"missing models changed head");
   results.push("missing models preserve current transcript and permit a new explicit attempt");
   await page.evaluate(()=>{window.monBrowserFixture.regenerationMissingModels=false;window.monBrowserFixture.preferences.payload.standard.threads=7;});
-  await start();await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
+  await page.evaluate(()=>{
+    const f=window.monBrowserFixture,invoke=window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke=(command,args)=>command==="regenerate_transcription"
+      ? new Promise((resolve,reject)=>{f.releaseRegeneration=()=>{window.__TAURI_INTERNALS__.invoke=invoke;invoke(command,args).then(resolve,reject);};})
+      : invoke(command,args);
+  });
+  await openTools();await start();await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
+  await page.waitForFunction(()=>!!window.monBrowserFixture.releaseRegeneration);
+  await tools().waitFor({state:"hidden"});
+  check(await page.locator("dialog[open]").count()===0,"slow admission kept a confirmation modal open");
+  check(await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).evaluate(el=>el===document.activeElement),"closing did not restore focus to meeting tools entry");
+  await openTools();
+  check(await regen().isDisabled(),"pending admission can be duplicated");
+  await closeTools();
+  await page.evaluate(()=>window.monBrowserFixture.releaseRegeneration());
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="transcription");
+  results.push("confirmation and meeting tools close before delayed admission responds, restoring focus and guarding duplicate starts");
+  await openTools();
   check(await regen().isDisabled(),"running regeneration can be duplicated");
   check(await page.evaluate(()=>window.monBrowserFixture.regenerationGlobalThreads===7),"global settings ignored");
   await closeTools();
@@ -63,7 +79,7 @@ async page => {
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="transcription");
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length)===before+1,"lost acknowledgement duplicated start");
   results.push("lost start response is read back with the same operation identity, without another generation");
-  await closeTools();
+  await tools().waitFor({state:"hidden"});
   // Background publication must not depend on the target meeting being open.
   await page.getByRole("button",{name:"会議一覧",exact:true}).last().click();
   await page.getByRole("button",{name:"会議B",exact:true}).click();
@@ -77,10 +93,10 @@ async page => {
   await openTools();const unknownBefore=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length);
   await start();await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
   await page.getByRole("alert").filter({hasText:"模擬再生成受付応答喪失"}).waitFor();
-  check(await page.getByRole("alert").filter({hasText:"模擬再生成受付応答喪失"}).count()===1,"confirmation failure was duplicated in a toast");
-  await page.getByRole("button",{name:"確認を閉じる",exact:true}).click();
+  check(await page.getByRole("alert").filter({hasText:"模擬再生成受付応答喪失"}).count()===1,"admission failure was duplicated");
+  await tools().waitFor({state:"hidden"});
   await page.evaluate(()=>{window.monBrowserFixture.regenerationReadFail=false;});
-  await regen().click();
+  await openTools();await regen().click();
   await page.waitForFunction(()=>!document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length)===unknownBefore+1,"unreadable acceptance minted or resent generation");
   results.push("unknown acceptance retains the original request; recovered readback proves acceptance without a second start");

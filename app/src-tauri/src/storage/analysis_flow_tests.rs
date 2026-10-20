@@ -49,7 +49,7 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     std::fs::write(
         &cli,
         format!(
-            "#!/bin/sh\nif test -f '{}'; then exit 42; fi\nprintf '%s' '{quoted}'\n",
+            "#!/bin/sh\nif test -f '{}'; then exit 42; fi\ncount=-1\nfor arg in \"$@\"; do case \"$arg\" in --clustering.num-clusters=*) count=${{arg#*=}};; esac; done\nprintf '%s' '{quoted}' | /usr/bin/sed \"s/num_clusters=-1/num_clusters=$count/\"\n",
             root.join("fail-diarization").display()
         ),
     )
@@ -130,7 +130,7 @@ fn imported_audio_saves_utterances_and_freezes_explicit_minutes_input() {
     let candidate = s.load_visible_analysis(&m, &final_id).unwrap().unwrap();
     assert_eq!(candidate.utterances[0].effective_text, "点検日です");
     assert_eq!(candidate.speakers.len(), 1);
-    assert_eq!(candidate.speakers[0].label, "取り込み音声 話者1");
+    assert_eq!(candidate.speakers[0].label, "話者1");
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap().id, final_id);
     assert_eq!(s.list_jobs(&m).unwrap().len(), 2); // No automatic minutes job.
     let current = s.get_meeting(&m).unwrap().unwrap();
@@ -153,7 +153,7 @@ fn imported_audio_saves_utterances_and_freezes_explicit_minutes_input() {
     assert_ne!(fixed.analysis.id, final_id); // A private immutable input revision.
     assert_eq!(s.load_current_analysis(&m).unwrap().unwrap().id, final_id);
     assert_eq!(fixed.analysis.utterances[0].effective_text, "点検日です");
-    assert_eq!(fixed.analysis.speakers[0].label, "取り込み音声 話者1");
+    assert_eq!(fixed.analysis.speakers[0].label, "話者1");
     assert_eq!(s.get_meeting(&old_meeting).unwrap().unwrap(), before);
     assert!(s.list_jobs(&old_meeting).unwrap().is_empty());
 }
@@ -328,7 +328,7 @@ fn failed_diarization_keeps_saved_input_and_requires_a_fresh_global_generation()
         meeting_id: m.clone(),
         operation_id: Uuid::new_v4().to_string(),
         expected: s.regeneration_admission(&m).unwrap(),
-        speaker_counts: vec![],
+        num_speakers: None,
     };
     s.regenerate_analysis(&next, &crate::test_support::never_cancelled)
         .unwrap();
@@ -616,7 +616,7 @@ fn initial_import_speaker_count_survives_reopen_and_reaches_diarization() {
 }
 
 #[test]
-fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
+fn initial_recording_meeting_speaker_count_binds_the_mixed_source_after_reopen() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
     let audio_dir = PathBuf::from("meetings").join(&m).join("audio");
@@ -633,10 +633,7 @@ fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
         let db = s.connection.lock().unwrap();
         db.execute(
             "UPDATE recording_sessions SET capture_config_json=?1 WHERE meeting_id=?2",
-            params![
-                serde_json::json!({"speakerCounts":{"mic":1,"system":5}}).to_string(),
-                m
-            ],
+            params![serde_json::json!({"numSpeakers":5}).to_string(), m],
         )
         .unwrap();
         db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) SELECT 'system-track',meeting_id,session_id,'system',format,sample_rate,channels,state,created_at,updated_at FROM audio_tracks WHERE meeting_id=?1", params![m]).unwrap();
@@ -649,7 +646,7 @@ fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
     let flow = s.analysis_flow(&m).unwrap().unwrap();
     let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
     let input = s.recorded_analysis_input(&m).unwrap().0;
-    assert_eq!(plan.speaker_counts.len(), 2);
+    assert_eq!(plan.speaker_counts.len(), 1);
     for track in &input.tracks {
         assert_eq!(
             plan.speaker_counts
@@ -657,7 +654,7 @@ fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
                 .find(|c| c.track_id == track.id)
                 .unwrap()
                 .num_speakers,
-            Some(if track.kind == "mic" { 1 } else { 5 })
+            Some(5)
         );
     }
     assert_eq!(plan.speaker_counts_manifest, Some(input.manifest_hash));
@@ -677,9 +674,6 @@ fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
             .iter()
             .find(|v| v["trackId"] == track.id)
             .unwrap();
-        assert_eq!(
-            count["numSpeakers"],
-            if track.kind == "mic" { 1 } else { 5 }
-        );
+        assert_eq!(count["numSpeakers"], 5);
     }
 }

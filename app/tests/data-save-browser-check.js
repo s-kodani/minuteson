@@ -36,7 +36,7 @@ async (page) => {
   await boot(); await set({ mode: "delay" }); await choose("backup");
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled during native work");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "editing enabled during native work");
   check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
   check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
   await page.evaluate(() => window.dataFixture.complete()); await done();
@@ -136,7 +136,7 @@ async (page) => {
 
   await boot(); await set({ previewMode: "delay" }); await choose("restore");
   await stop();
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "preview cancellation unlocked before actual completion");
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "preview cancellation unlocked before actual completion");
   await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
   await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor();
   check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "late preview resurrected confirmation");
@@ -157,7 +157,7 @@ async (page) => {
   results.push("lost reply + missing events: polling recovers without new admission");
 
   await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
-  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  await page.getByRole("dialog").locator("p.action-error").filter({ hasText: "受付結果を確定できません" }).waitFor();
   check(await region().getByRole("button", { name: "バックアップから追加復元", exact: true }).isDisabled(), "unknown request allowed a new operation");
   await set({ mode: "success" });
   await page.getByRole("dialog").getByRole("button", { name: "同じ操作の結果を確認", exact: true }).click(); await done();
@@ -173,7 +173,7 @@ async (page) => {
   results.push("unknown unaccepted request: explicit native cancellation releases review without publication");
 
   await boot(); await choose("restore"); await ready(); await set({ mode: "forged" }); await confirm();
-  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
+  await page.getByRole("dialog").locator("p.action-error").filter({ hasText: "状態が不正" }).waitFor();
   check(await region().getByRole("button", { name: "復元した会議一覧を開く", exact: true }).count() === 0, "forged completion displayed success");
   results.push("forged completion: no receipt, no success");
 
@@ -198,23 +198,23 @@ async (page) => {
   check(await region().getByRole("button", { name: "バックアップを作成", exact: true }).isDisabled(), "active AI allowed data selection");
   check((await region().innerText()).includes("停止・完了後"), "stop/wait guidance missing");
   await set({ blocker: null, failRead: true });
-  await page.waitForFunction(() => document.querySelector('button[aria-label="用語を追加"]')?.disabled);
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "failed state read did not lock writes");
+  await page.waitForFunction(() => document.querySelector('section[aria-label="登録した声の自動適用"] input')?.matches(":disabled"));
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "failed state read did not lock writes");
   await set({ failRead: false });
-  await page.waitForFunction(() => document.querySelector('button[aria-label="用語を追加"]')?.disabled === false);
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isEnabled(), "successful reread did not recover writes");
+  await page.waitForFunction(() => document.querySelector('section[aria-label="登録した声の自動適用"] input')?.matches(":disabled") === false);
+  check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isEnabled(), "successful reread did not recover writes");
   results.push("active processing guidance + fail-closed state read recovery");
 
-  await boot(); await set({ failSave: true }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
-  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await choose("backup");
+  await boot(); await page.locator(".sidebar").getByRole("button", { name: "プロンプト", exact: true }).click(); await set({ failSave: true }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await page.locator(".sidebar").getByRole("button", { name: "設定", exact: true }).click();
   await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
   check((await calls("select_data_operation")).length === 0 && await page.getByRole("textbox", { name: "用語（必須）", exact: true }).inputValue() === "点検日", "save failure lost edits or selected backup");
   await set({ failSave: false }); await page.getByRole("region", { name: "共通用語", exact: true }).getByRole("button", { name: "用語保存を再試行", exact: true }).click();
-  await choose("backup"); await done();
+  await page.locator(".sidebar").getByRole("button", { name: "設定", exact: true }).click(); await choose("backup"); await done();
   results.push("draft save failure blocks data operation and preserves input");
 
-  await boot(); await set({ saveDelay: 500 }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
-  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await choose("backup"); await done();
+  await boot(); await page.locator(".sidebar").getByRole("button", { name: "プロンプト", exact: true }).click(); await set({ saveDelay: 500 }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await page.locator(".sidebar").getByRole("button", { name: "設定", exact: true }).click(); await choose("backup"); await done();
   const order = await page.evaluate(() => window.dataFixture.calls.map(c => c.command));
   check(order.indexOf("save_vocabulary_book") < order.indexOf("select_data_operation") && await page.evaluate(() => window.dataFixture.book.payload[0].term) === "点検日", "data snapshot did not wait for draft save");
   results.push("draft flush before file selection and publication");

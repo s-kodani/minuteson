@@ -98,7 +98,7 @@ export async function assertDownloadReview(value: unknown, expectedRecipeHash?: 
   return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, totalBytes, recipeSchemaVersion: recipe.schemaVersion, ...totals, publisherAuthenticity: "not_verified", installed: false, ready: false };
 }
 export async function assertOfficialModelOptions(value: unknown): Promise<OfficialModelOption[]> {
-  if (!Array.isArray(value) || value.length > 12) fail();
+  if (!Array.isArray(value) || value.length > 16) fail();
   const seen = new Set<string>();
   const result: OfficialModelOption[] = [];
   for (const entry of value) {

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isTheme, isColorTheme, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
-import { IssueStatus, ToastNotice } from "./toast";
+import { ToastNotice } from "./toast";
 
 const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -53,14 +53,13 @@ export function ThemeSelection({ locked = false, compact = false, describedBy }:
     </select>
   </label>;
 }
-export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolean; compact?: boolean }) {
+export function ThemeSettingsPanel({ locked }: { locked: boolean }) {
   const { controller, state } = useTheme();
   const colorId = useId();
   return <section className="status-card theme-settings" aria-label="表示設定">
     <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">カラーと明るさは別々に選べます。システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
     <label className="theme-choice" htmlFor={colorId}>カラー<select id={colorId} value={state.pendingPreferences?.colorTheme ?? state.snapshot?.payload.colorTheme ?? "monochrome"} disabled={locked || state.busy || state.uncertain || !state.snapshot || !isTauri()} onChange={event => { if (isColorTheme(event.target.value)) void controller.changeColor(event.target.value); }}><option value="monochrome">モノトーン</option><option value="purple">パープル</option></select></label>
     <ThemeSelection locked={locked} />
-    <IssueStatus label="表示設定の読込・保存" message={state.error} />
     {state.pendingPreferences && !state.busy && <div className="analysis-actions">
       <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>テーマの保存を再試行</button>
     </div>}
@@ -76,9 +75,7 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
     <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
   </>;
 }
-export function ThemeReadNotice({ compact = false }: { compact?: boolean }) {
+export function ThemeReadNotice() {
   const { state } = useTheme();
-  // Compact use belongs to scrollable help. Recorder operation diagnostics
-  // are shared with main-window toasts, not long clipped panel paragraphs.
-  return compact ? state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null : <IssueStatus label="表示設定の読込・保存" message={state.error} />;
+  return state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null;
 }

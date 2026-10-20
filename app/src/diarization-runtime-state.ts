@@ -26,12 +26,14 @@ export function diarizationRuntimeProgress(job: AnalysisJob, progress: Operation
   if (!runtime || job.kind !== "diarization" || job.state !== "running" || runtime.jobId !== job.id
     || runtime.specHash !== job.specHash || runtime.attempt !== job.attempt || runtime.unitIndex !== job.completedUnits
     || job.totalUnits === null || runtime.unitIndex >= job.totalUnits) return progress;
-  const finishing = runtime.finishing || runtime.engineBasisPoints === 10000;
-  const unit = `${runtime.unitIndex + 1} / ${job.totalUnits} 処理単位`;
+  const finishing = runtime.finishing;
+  const clustering = !finishing && runtime.engineBasisPoints===10000;
+  const preparing = !finishing && runtime.engineBasisPoints===0;
   return {
     ...progress,
-    label: `話者分離 · ${finishing ? "結果を照合・保存中" : "エンジンで処理中"}`,
-    completed: finishing ? null : runtime.engineBasisPoints, total: finishing ? null : 10000,
-    detail: `${unit} · ${finishing ? "この処理単位のエンジン処理 100%" : "この処理単位のエンジン進捗"}`,
+    label: `話者分離 · ${finishing ? "結果を保存中" : clustering ? "話者をクラスタリング中" : preparing ? "前処理中" : "特徴抽出中"}`,
+    completed: finishing || clustering || preparing ? null : runtime.engineBasisPoints,
+    total: finishing || clustering || preparing ? null : 10000,
+    detail: "会議全体の音声を処理しています。",
   };
 }
