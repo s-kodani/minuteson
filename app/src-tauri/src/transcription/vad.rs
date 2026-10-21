@@ -64,6 +64,7 @@ mod tests {
     use super::*;
     use crate::local_engine::Fingerprint;
     use crate::transcription::whisper::{run_unit, WhisperConfig};
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
     #[test]
@@ -91,6 +92,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(unix)]
     fn vad_cli_arguments_freeze_all_values_and_off_or_legacy_omit_new_flags() {
         let root = tempfile::tempdir().unwrap();
         let model = root.path().canonicalize().unwrap().join("model");

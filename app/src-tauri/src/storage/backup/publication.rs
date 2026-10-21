@@ -414,7 +414,7 @@ fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
 #[cfg(test)]
 pub(super) mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod model_tests;
 
 #[cfg(all(test, unix))]

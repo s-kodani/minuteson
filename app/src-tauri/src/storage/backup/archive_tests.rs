@@ -172,6 +172,7 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
 }
 
 #[test]
+#[cfg(unix)]
 fn archive_preserves_audio_options_text_markdown_and_model_metadata_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

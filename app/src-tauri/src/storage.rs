@@ -59,6 +59,8 @@ pub(crate) mod speaker_completion;
 pub(crate) mod transcript_consolidation;
 mod transcription;
 pub(crate) mod voice_preferences;
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;

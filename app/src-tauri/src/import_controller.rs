@@ -569,7 +569,11 @@ async fn select_file(window: &WebviewWindow) -> Result<Option<PathBuf>, String> 
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform_dialog::open_audio(window).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
         Err("このOSの音声選択は保留中です".into())

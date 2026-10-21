@@ -9,7 +9,9 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "tauri": "tauri",
     "tauri:qa:build": "tauri build --config src-tauri/tauri.qa.conf.json",
-    "tauri:release:build": "python3 ../tools/mon_macos_release.py"
+    "tauri:release:build": "python3 ../tools/mon_macos_release.py",
+    "tauri:windows:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1",
+    "tauri:windows:qa:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Qa"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

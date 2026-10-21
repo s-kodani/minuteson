@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "externalBin": [
+      "binaries/mon-windows-capture"
+    ],
+    "resources": {
+      "../../.cache/windows-third-party-notices/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt",
+      "../../.cache/windows-third-party-notices/third-party-inventory.json": "third-party-inventory.json"
+    }
+  }
+}

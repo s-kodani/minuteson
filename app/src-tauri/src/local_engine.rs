@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 pub(crate) mod resident;
 pub(crate) mod verification;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;
 
 #[cfg(target_os = "macos")]
 mod guard_core;
@@ -72,6 +74,8 @@ impl Fingerprint {
 
 pub(crate) struct ManagedChild {
     pub(crate) child: Child,
+    #[cfg(target_os = "windows")]
+    job: Option<windows::Job>,
     #[cfg(target_os = "macos")]
     owner: Option<std::os::unix::net::UnixStream>,
 }
@@ -81,16 +85,20 @@ impl ManagedChild {
     pub(crate) fn direct(child: Child) -> Self {
         Self {
             child,
+            #[cfg(target_os = "windows")]
+            job: None,
             #[cfg(target_os = "macos")]
             owner: None,
         }
     }
 }
 
-/// Four inference engines share one headless guardian and one anonymous owner
-/// channel per launch. No PID from a receipt, file or later scan is adopted.
+/// Native inference uses an OS-owned lifetime: a macOS guardian or Windows jobs.
+/// No PID from a receipt, file or later scan is adopted.
 pub(crate) struct OwnedCommand {
     pub(crate) command: Command,
+    #[cfg(target_os = "windows")]
+    job: Option<windows::Job>,
     #[cfg(target_os = "macos")]
     receiver: Option<std::os::unix::net::UnixStream>,
     #[cfg(target_os = "macos")]
@@ -98,7 +106,20 @@ pub(crate) struct OwnedCommand {
 }
 impl OwnedCommand {
     pub(crate) fn new(program: &Path) -> Result<Self, String> {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+            windows::initialize().map_err(|e| e.to_string())?;
+            let job = windows::Job::new().map_err(|e| e.to_string())?;
+            let mut command = Command::new(program);
+            command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+            Ok(Self {
+                command,
+                job: Some(job),
+            })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Ok(Self {
                 command: Command::new(program),
@@ -150,6 +171,30 @@ impl OwnedCommand {
                 "engine ownership channel was already consumed",
             ));
         }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+            // Callers configure the command after construction; enforce this
+            // invariant at the actual spawn boundary as well.
+            self.command
+                .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+            let job = self
+                .job
+                .take()
+                .ok_or_else(|| std::io::Error::other("worker job was already consumed"))?;
+            let mut child = self.command.spawn()?;
+            if let Err(error) = job.assign_and_resume(&child) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+            return Ok(ManagedChild {
+                child,
+                job: Some(job),
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
         let child = self.command.spawn()?;
         #[cfg(target_os = "macos")]
         {
@@ -159,7 +204,7 @@ impl OwnedCommand {
                 owner: self.owner.take(),
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         Ok(ManagedChild::direct(child))
     }
 }
@@ -221,6 +266,8 @@ impl StableFile {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         // Dropping std::process::Child alone leaves a native worker alive.
+        #[cfg(target_os = "windows")]
+        drop(self.job.take());
         #[cfg(target_os = "macos")]
         if self.owner.take().is_some() {
             // Do not SIGKILL the guard before it can stop/reap its engine group.

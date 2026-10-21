@@ -15,7 +15,7 @@ test("recorder explanation starts hidden and unfocused in production and QA", ()
 test("explanation has its own role and does not mount recording or editing providers", () => {
   const cap = JSON.parse(source("../src-tauri/capabilities/recorder-info.json"));
   assert.deepEqual(cap.windows, ["recorder-info"]);
-  assert.deepEqual(cap.permissions, ["core:default", "core:event:allow-listen"]);
+  assert.deepEqual(cap.permissions, ["core:default", "core:event:allow-listen", "recorder-info-commands"]);
   const ui = source("../src/main.tsx");
   assert.ok(ui.includes("isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider"));
   const popup = source("../src/recorder-info.tsx").split("export function RecorderInfoWindow()")[1];

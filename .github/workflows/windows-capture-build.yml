@@ -1,8 +1,8 @@
 name: Windows capture build
 
 'on':
-  # Windows-specific validation is deferred. Do not run on pushes or PRs
-  # until Windows work resumes; keep an explicit manual entry point.
+  # The desktop-platform workflow builds this probe with the QA installer.
+  # Keep this manual entry point for capture-only diagnostics.
   workflow_dispatch:
 
 permissions:

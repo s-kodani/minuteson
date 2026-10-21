@@ -68,7 +68,11 @@ pub(super) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Option<
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform_dialog::open_data(window, kind == Kind::Relocation).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
         Err("このOSのバックアップ選択は保留中です".into())

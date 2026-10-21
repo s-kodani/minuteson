@@ -1,7 +1,7 @@
 """Collect installed dependency notices offline; this is NOT a license clearance.
 
-The macOS graph conservatively includes build dependencies, not development or
-unreachable/platform-only packages. Package-provided texts are copied verbatim;
+The selected target graph conservatively includes build dependencies, not
+development or unreachable/platform-only packages. Package-provided texts are copied verbatim;
 missing texts and source/license obligations remain explicit review work.
 """
 import argparse
@@ -119,7 +119,9 @@ def supplemental_files(repository, package, index, locked):
     return result
 
 
-def collect(repository, metadata, lock):
+def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
+    if target not in ("aarch64-apple-darwin", "x86_64-pc-windows-msvc"):
+        raise ValueError("unsupported notice target")
     if lock.get("lockfileVersion") != 3:
         raise ValueError("npm lockfile version 3 is required")
     index_path = repository / "third-party/notices/index.json"
@@ -157,10 +159,10 @@ def collect(repository, metadata, lock):
         dependencies.append(("npm", installed["name"], package["version"],
                              package.get("license"), None, notice_files(base), [], None))
     dependencies.sort(key=lambda item: item[:3])
-    inventory = {"schemaVersion": 1, "target": "aarch64-apple-darwin",
+    inventory = {"schemaVersion": 1, "target": target,
                  "scope": "resolved Cargo normal/build dependencies and npm production dependencies",
                  "licenseReview": "not_verified", "distributionReady": False,
-                 "excluded": ["MON-owned code", "Rust standard library/toolchain", "Apple SDK/system frameworks",
+                 "excluded": ["MON-owned code", "Rust standard library/toolchain", ("Apple SDK/system frameworks" if target == "aarch64-apple-darwin" else "Microsoft Windows SDK/system libraries"),
                               "separately obtained AI engines/models/runtime libraries"],
                  "lockHashes": {name: sha((repository / relative).read_bytes()) for name, relative in
                                 (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
@@ -214,29 +216,38 @@ def write_outputs(output, notices, inventory):
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise ValueError("generated notice output is linked or not a file")
     for name, data in zip(OUTPUTS, (notices, (json.dumps(inventory, ensure_ascii=False, indent=2) + "\n").encode())):
-        with tempfile.NamedTemporaryFile(dir=output, prefix=".notice-", delete=False) as stream:
-            temporary = Path(stream.name)
-            try:
-                os.fchmod(stream.fileno(), 0o644)  # Public notices must be readable by app recipients.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=output, prefix=".notice-", delete=False) as stream:
+                temporary = Path(stream.name)
+                if os.name != "nt":
+                    os.fchmod(stream.fileno(), 0o644)
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-                os.replace(temporary, output / name)
-            finally:
+            # Windows cannot replace or delete a still-open temporary file.
+            os.replace(temporary, output / name)
+        finally:
+            if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=REPOSITORY / ".cache/third-party-notices")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--target", choices=("aarch64-apple-darwin", "x86_64-pc-windows-msvc"),
+                        default="aarch64-apple-darwin")
     args = parser.parse_args()
+    output = args.output_dir or (REPOSITORY / ".cache" /
+                                 ("windows-third-party-notices" if args.target == "x86_64-pc-windows-msvc"
+                                  else "third-party-notices"))
     try:
         metadata = json.loads(subprocess.check_output(
             ["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
-             "--filter-platform", "aarch64-apple-darwin"], cwd=REPOSITORY / "app/src-tauri", timeout=120))
+             "--filter-platform", args.target], cwd=REPOSITORY / "app/src-tauri", timeout=120))
         lock = json.loads((REPOSITORY / "app/package-lock.json").read_text(encoding="utf8"))
-        notices, inventory = collect(REPOSITORY, metadata, lock)
-        write_outputs(args.output_dir, notices, inventory)
+        notices, inventory = collect(REPOSITORY, metadata, lock, args.target)
+        write_outputs(output, notices, inventory)
         print(json.dumps({"packages": len(inventory["packages"]), "bytes": len(notices),
                           "missingNoticeTexts": inventory["missingNoticeTexts"], "licenseReview": "not_verified"}))
         return 0

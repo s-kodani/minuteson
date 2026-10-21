@@ -2,6 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "recording-confirmation",
   "description": "Read recording state and decide only the pending recording confirmation.",
-  "windows": ["recording-confirmation"],
-  "permissions": ["core:default", "core:event:allow-listen"]
+  "windows": [
+    "recording-confirmation"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "recording-confirmation-commands"
+  ]
 }

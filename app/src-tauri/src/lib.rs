@@ -20,6 +20,8 @@ mod import_controller;
 mod input_levels;
 mod input_status;
 mod internal_logs;
+#[cfg(test)]
+mod ipc_acl;
 mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -34,6 +36,8 @@ mod model_download_recipe;
 mod model_inspection;
 mod model_official_catalog;
 mod model_placement;
+#[cfg(target_os = "windows")]
+mod platform_dialog;
 mod playback;
 mod processing_optimization;
 mod recorder;
@@ -2111,7 +2115,10 @@ pub fn run() {
     if let Some(code) = local_engine::guard_entry() {
         std::process::exit(code);
     }
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    builder
         .manage(startup_attention::Startup::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
@@ -2138,6 +2145,19 @@ pub fn run() {
             );
             app.manage(logs);
             internal_logs::phase("application", None, None, "starting", None);
+            #[cfg(target_os = "windows")]
+            if let Err(error) = local_engine::windows::initialize() {
+                app.state::<startup_attention::Startup>().block(
+                    startup_attention::Failure::new(
+                        startup_attention::Stage::Directories,
+                        format!("Windowsの処理終了管理を準備できません: {error}"),
+                        None,
+                        None,
+                    ),
+                )?;
+                startup_attention::show(app.handle());
+                return Ok(());
+            }
             #[cfg(target_os = "macos")]
             macos_menu::install(app)?;
             #[cfg(target_os = "macos")]
@@ -2186,7 +2206,23 @@ pub fn run() {
                 }
             }
             #[cfg(not(target_os = "macos"))]
-            app.manage(Storage::open(root)?);
+            match Storage::open(root.clone()) {
+                Ok(storage) => {
+                    app.manage(storage);
+                }
+                Err(error) => {
+                    app.state::<startup_attention::Startup>().block(
+                        startup_attention::Failure::new(
+                            startup_attention::Stage::StorageAdmission,
+                            error.to_string(),
+                            Some(&root),
+                            None,
+                        ),
+                    )?;
+                    startup_attention::show(app.handle());
+                    return Ok(());
+                }
+            }
             app.state::<startup_attention::Startup>().ready()?;
             internal_logs::phase("application", None, None, "ready", None);
             ImportController::recover(app.handle())?;
@@ -2255,8 +2291,11 @@ pub fn run() {
                 get_deletion_paths,
                 #[cfg(unix)]
                 get_model_deletion_items,
+                #[cfg(unix)]
                 review_model_body_deletion,
+                #[cfg(unix)]
                 review_pending_model_deletion,
+                #[cfg(unix)]
                 get_model_deletion_paths,
                 #[cfg(unix)]
                 get_audio_deletion_items,
@@ -2268,6 +2307,7 @@ pub fn run() {
                 get_audio_deletion_paths,
                 #[cfg(target_os = "macos")]
                 get_storage_bootstrap,
+                #[cfg(target_os = "macos")]
                 review_storage_move,
                 get_data_operation_availability,
                 list_restored_meeting_ids,

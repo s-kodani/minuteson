@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "mon — 会議記録",
+        "title": "mon \u2014 \u4f1a\u8b70\u8a18\u9332",
         "url": "index.html",
         "width": 1280,
         "height": 820,
@@ -23,7 +23,7 @@
       },
       {
         "label": "recorder",
-        "title": "mon 録音パネル",
+        "title": "mon \u9332\u97f3\u30d1\u30cd\u30eb",
         "url": "index.html?window=recorder",
         "width": 360,
         "height": 116,
@@ -35,7 +35,7 @@
       },
       {
         "label": "recorder-info",
-        "title": "mon 録音パネルの説明",
+        "title": "mon \u9332\u97f3\u30d1\u30cd\u30eb\u306e\u8aac\u660e",
         "url": "index.html?window=recorder-info",
         "width": 360,
         "height": 340,
@@ -48,7 +48,7 @@
       },
       {
         "label": "recording-confirmation",
-        "title": "mon 録音終了の確認",
+        "title": "mon \u9332\u97f3\u7d42\u4e86\u306e\u78ba\u8a8d",
         "url": "index.html?window=recording-confirmation",
         "width": 420,
         "height": 280,
@@ -60,7 +60,13 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+      "capabilities": [
+        "main",
+        "recorder",
+        "recorder-info",
+        "recording-confirmation"
+      ]
     }
   },
   "bundle": {

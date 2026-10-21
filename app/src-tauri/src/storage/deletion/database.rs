@@ -480,6 +480,7 @@ impl Scope {
     // Read-only current observations under a typed, completed unavailable-audio
     // source. The caller owns the live maintenance lease; crash-stale work is
     // retained, not silently recovered while startup has deferred writes.
+    #[cfg(unix)]
     pub(super) fn capture_audio_reconfirmation(
         db: &Connection,
         meeting: &str,

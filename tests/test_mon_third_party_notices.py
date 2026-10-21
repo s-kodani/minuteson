@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "notices", Path(__file__).resolve().parents[1] / "tools/mon_third_party_notices.py")
@@ -55,6 +56,36 @@ class NoticeTests(unittest.TestCase):
         self.assertNotIn("build-tool", text.decode())
         self.assertFalse(inventory["distributionReady"])
         self.assertEqual(inventory["licenseReview"], "not_verified")
+
+    def test_notice_temporary_files_are_closed_before_publication(self):
+        output = self.root / "generated"
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        streams = []
+        temporary_file = notices.tempfile.NamedTemporaryFile
+        replace = notices.os.replace
+
+        def track_temporary(*args, **kwargs):
+            stream = temporary_file(*args, **kwargs)
+            streams.append(stream)
+            return stream
+
+        def publish(source, destination):
+            self.assertTrue(streams[-1].closed)
+            replace(source, destination)
+
+        with patch.object(notices.tempfile, "NamedTemporaryFile", side_effect=track_temporary), \
+                patch.object(notices.os, "replace", side_effect=publish):
+            notices.write_outputs(output, text, inventory)
+        self.assertEqual(len(streams), 2)
+        self.assertEqual(list(output.glob(".notice-*")), [])
+
+    def test_windows_inventory_identifies_the_target_and_system_exclusions(self):
+        _, inventory = notices.collect(self.root, self.metadata, self.lock, "x86_64-pc-windows-msvc")
+        self.assertEqual(inventory["target"], "x86_64-pc-windows-msvc")
+        self.assertIn("Microsoft Windows SDK/system libraries", inventory["excluded"])
+        self.assertNotIn("Apple SDK/system frameworks", inventory["excluded"])
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock, "unreviewed-target")
 
     def test_missing_text_is_explicit_not_license_success_or_generic_replacement(self):
         (self.root / "crate/LICENSE").unlink()

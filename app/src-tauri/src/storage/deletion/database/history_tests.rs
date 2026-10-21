@@ -167,6 +167,7 @@ fn history_schema_refuses_fk_corruption_and_any_unknown_temp_object() {
 }
 
 #[test]
+#[cfg(unix)]
 fn audio_use_refuses_a_missing_journal_in_old_and_current_databases() {
     let meeting = uuid::Uuid::new_v4().to_string();
     for version in [20, 21, MIGRATIONS.len()] {

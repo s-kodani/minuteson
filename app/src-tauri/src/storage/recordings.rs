@@ -1290,7 +1290,9 @@ pub(in crate::storage) mod tests {
                 serde_json::to_vec(&tip).unwrap(),
             )
             .unwrap();
+            #[cfg(unix)]
             use std::os::unix::fs::PermissionsExt;
+            #[cfg(unix)]
             for name in [
                 format!("raw-{lane}-00000001.caf"),
                 format!("raw-{lane}-00000001.json"),

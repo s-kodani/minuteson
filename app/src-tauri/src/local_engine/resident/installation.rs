@@ -242,6 +242,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
     let file = directory.join(&snapshot.name);
     if !file.exists() {
         std::fs::write(&file, SYNTHETIC).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }

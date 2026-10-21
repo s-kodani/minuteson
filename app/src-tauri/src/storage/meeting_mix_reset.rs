@@ -203,7 +203,7 @@ fn collect_derived_files(root: &Path, path: &Path, files: &mut Vec<String>) -> R
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]

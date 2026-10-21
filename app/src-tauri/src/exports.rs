@@ -316,7 +316,11 @@ pub(crate) async fn save_dialog_with(
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform_dialog::save(window, &filename, title, extension).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (window, filename, title, extension);
         Err("このOSの保存ダイアログはまだ接続していません".into())

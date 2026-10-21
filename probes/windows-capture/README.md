@@ -4,6 +4,8 @@ M1-02向けのWASAPI検証用CLI。マイクは録音エンドポイント、PC�
 
 このソースはWindows実機でのビルドと動作確認がまだできていない。GitHub ActionsのWindowsビルドジョブも、変更をpushするまで実行されない。対象OSはWindows 11 24H2以降、x64。Application LoopbackにはWindows 10 build 20348以降のAPIを使う。
 
+2026年10月21日からWindows対応を再開し、デスクトップCIと `app/prepare-windows.ps1` からもこのCLIを構築・同梱する。現時点では診断用CLIで、製品の録音プロトコルと現行FLAC保存への接続は未実装。CIとWindows実機での実行結果はまだ取得していない。
+
 ## ビルド
 
 Visual Studio 2022、Desktop development with C++、Windows 11 SDKを入れたx64 Native Tools Command Promptで実行する。
