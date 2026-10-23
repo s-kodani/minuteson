@@ -347,9 +347,14 @@ fn get_deletion_paths(
 #[tauri::command]
 async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<bootstrap::Bootstrap>().view())
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let selection = app.state::<bootstrap::Bootstrap>();
+        let mut view = selection.view()?;
+        view.recovery = selection.recovery_view_for_storage(&app.state::<Storage>())?;
+        Ok(view)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(unix)]
@@ -2193,6 +2198,8 @@ pub fn run() {
                     .and_then(|config| startup_attention::admit_storage(&config, &root));
                 match admission {
                     Ok((storage, selection)) => {
+                        app.state::<startup_attention::Startup>()
+                            .set_recovery(selection.recovery_view_for_storage(&storage)?)?;
                         app.manage(storage);
                         app.manage(selection);
                     }
@@ -2226,9 +2233,14 @@ pub fn run() {
             app.state::<startup_attention::Startup>().ready()?;
             internal_logs::phase("application", None, None, "ready", None);
             ImportController::recover(app.handle())?;
-            capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
+            if !app.state::<Storage>().data_write_blocked() {
+                capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                if handle.state::<Storage>().data_write_blocked() {
+                    return;
+                }
                 #[cfg(unix)]
                 if let Err(error) = data_controller::finish_interrupted_deletions(&handle) {
                     internal_logs::report_error("recovery", &error);

@@ -166,7 +166,7 @@ fn activation_missing_owner_lock_history_or_invalid_target_refuses_cold_start_wi
 }
 
 #[test]
-fn activation_admitted_binding_substitution_or_missing_current_schema_is_not_repaired() {
+fn activation_database_copy_rebinds_but_changed_ownership_ledgers_are_rejected() {
     for failure in ["db", "registry", "table", "admission"] {
         let f = Fixture::new();
         select(&f);
@@ -205,7 +205,17 @@ fn activation_admitted_binding_substitution_or_missing_current_schema_is_not_rep
             }
         }
         let before = std::fs::read(owner).unwrap();
-        assert!(Bootstrap::open(&config, &legacy).is_err(), "{failure}");
+        if failure == "db" {
+            let bootstrap = Bootstrap::open(&config, &legacy).unwrap();
+            assert_eq!(bootstrap.root(), f.target);
+            assert_eq!(
+                bootstrap.recovery_view().unwrap().unwrap().kind,
+                "copy_restored"
+            );
+            assert!(!bootstrap.open_storage().unwrap().data_write_blocked());
+        } else {
+            assert!(Bootstrap::open(&config, &legacy).is_err(), "{failure}");
+        }
         assert_eq!(
             std::fs::read(config.join(format!(".relocation-{}.sqlite3", f.operation))).unwrap(),
             before

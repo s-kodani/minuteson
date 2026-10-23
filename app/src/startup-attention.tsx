@@ -29,7 +29,16 @@ export function StartupGate({ children }: { children: ReactNode }) {
   const state = useStartupReport();
   // Browser-only preview is not a native admission proof and cannot invoke
   // desktop operations. A desktop reader failure never mounts normal UI.
-  return !isTauri() || state.report?.phase === "ready" ? children : <StartupAttention state={state} />;
+  return !isTauri() || state.report?.phase === "ready" ? <>
+    {state.report?.recovery && <aside className="status-card" role="status" aria-label="保存先の自動復旧">
+      <strong>保存先の情報を修復しました</strong>
+      {state.report.recovery.reviewRequired ? <>
+        <p>中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
+        <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+      </> : <p>保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
+    </aside>}
+    {children}
+  </> : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
   const { report, error, busy, quitting, read, quit } = state, f = report?.failure;

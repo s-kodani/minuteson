@@ -11,6 +11,50 @@ use std::time::UNIX_EPOCH;
 mod sqlite_lock_tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_binding_reads_old_device_history_without_changing_current_proofs() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("synthetic.db"), b"synthetic").unwrap();
+        let anchor = RootAnchor::owned_image(temp.path(), "synthetic.db").unwrap();
+        let (root, database) = anchor.identity().unwrap();
+        let mut old_root = root.clone();
+        old_root.device += 100;
+        let mut old_database = database.clone();
+        old_database.device += 100;
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(!anchor
+            .matches_history_root(&db, "test", &old_root, &old_database)
+            .unwrap());
+        let anchor = anchor.with_startup_binding((
+            old_root.registered().unwrap(),
+            old_database.registered().unwrap(),
+        ));
+        assert!(anchor
+            .matches_history_root(&db, "test", &old_root, &old_database)
+            .unwrap());
+        assert_eq!(anchor.identity().unwrap(), (root, database));
+        assert!(anchor.root.verify_identity(&old_root).is_err());
+        old_database.inode += 1;
+        assert!(!anchor
+            .matches_history_root(&db, "test", &old_root, &old_database)
+            .unwrap());
+        std::fs::create_dir(temp.path().join("child")).unwrap();
+        let child = Directory::root(&temp.path().join("child").canonicalize().unwrap()).unwrap();
+        let mut copied_child = child.identity.clone();
+        copied_child.inode += 1;
+        let mut old_root = old_root.registered().unwrap();
+        old_root.1 += 1;
+        let anchor = anchor.with_startup_binding((old_root, old_database.registered().unwrap()));
+        assert!(anchor
+            .verify_history_directory(&db, "test", "child", &child, &copied_child)
+            .is_ok());
+        assert!(anchor
+            .verify_history_directory(&db, "test", "other", &child, &copied_child)
+            .is_err());
+        assert!(child.verify_identity(&copied_child).is_err());
+    }
+
     #[test]
     fn control_identity_verification_does_not_release_posix_locks() {
         let temp = tempfile::tempdir().unwrap();
@@ -125,6 +169,13 @@ pub(super) struct Identity {
     birth_seconds: u64,
     birth_nanos: u32,
     mode: u32,
+}
+#[cfg(target_os = "macos")]
+fn same_persistent(a: &Identity, b: &Identity) -> bool {
+    a.inode == b.inode
+        && a.birth_seconds == b.birth_seconds
+        && a.birth_nanos == b.birth_nanos
+        && a.mode == b.mode
 }
 impl Identity {
     #[cfg(target_os = "macos")]
@@ -516,8 +567,67 @@ pub(in crate::storage) struct RootAnchor {
     controls: Vec<(String, Option<(File, Identity)>)>,
     #[cfg(target_os = "macos")]
     inspection_history: Option<std::sync::Arc<super::relocation::receiver::Aliases>>,
+    #[cfg(target_os = "macos")]
+    startup_binding: Option<((u64, u64, u64), (u64, u64, u64))>,
 }
 impl RootAnchor {
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage) fn with_startup_binding(
+        mut self,
+        binding: ((u64, u64, u64), (u64, u64, u64)),
+    ) -> Self {
+        self.startup_binding = Some(binding);
+        self
+    }
+    // Historical read/reconfirmation only. Current identity(), file proofs,
+    // removal writers and unlink checks continue to compare every field.
+    #[cfg(target_os = "macos")]
+    fn matches_startup_binding(
+        &self,
+        root: &Identity,
+        database: &Identity,
+        current: &(Identity, Identity),
+    ) -> Result<bool, String> {
+        let Some((old_root, old_database)) = self.startup_binding else {
+            return Ok(false);
+        };
+        let r = root.registered()?;
+        let d = database.registered()?;
+        Ok((r.1, r.2) == (old_root.1, old_root.2)
+            && (d.1, d.2) == (old_database.1, old_database.2)
+            && root.mode == current.0.mode
+            && database.mode == current.1.mode)
+    }
+    #[cfg(target_os = "macos")]
+    fn startup_copy(&self) -> bool {
+        self.startup_binding.is_some_and(|(root, database)| {
+            self.root
+                .identity
+                .registered()
+                .is_ok_and(|now| (now.1, now.2) != (root.1, root.2))
+                || self
+                    .database_identity
+                    .registered()
+                    .is_ok_and(|now| (now.1, now.2) != (database.1, database.2))
+        })
+    }
+    pub(super) fn verify_startup_history_directory(
+        &self,
+        directory: &Directory,
+        expected: &Identity,
+    ) -> Result<(), String> {
+        self.verify()?;
+        if directory.verify_identity(expected).is_ok() {
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        if self.startup_binding.is_some()
+            && (same_persistent(&directory.identity, expected) || self.startup_copy())
+        {
+            return directory.verify();
+        }
+        Err("履歴の保存先フォルダーの実体が一致しません".into())
+    }
     /// Read-only backup traversal starts from the SAME root inode as SQLite,
     /// never a newly opened path that could have been substituted meanwhile.
     pub(in crate::storage) fn backup_input_root(&self) -> Result<File, String> {
@@ -568,6 +678,8 @@ impl RootAnchor {
             controls: vec![],
             #[cfg(target_os = "macos")]
             inspection_history: None,
+            #[cfg(target_os = "macos")]
+            startup_binding: None,
         })
     }
     pub(in crate::storage) fn seal_controls(&mut self) -> Result<(), String> {
@@ -643,6 +755,10 @@ impl RootAnchor {
             return Ok(true);
         }
         #[cfg(target_os = "macos")]
+        if self.matches_startup_binding(root, database, &current)? {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
         if let Some(history) = &self.inspection_history {
             return history.matches_root(db, operation, root, database, &current);
         }
@@ -670,6 +786,13 @@ impl RootAnchor {
             return Ok(());
         }
         #[cfg(target_os = "macos")]
+        if self.startup_binding.is_some()
+            && (same_persistent(&directory.identity, expected)
+                || (self.startup_copy() && directory.path == self.root.path.join(relative_path)))
+        {
+            return directory.verify();
+        }
+        #[cfg(target_os = "macos")]
         if let Some(history) = &self.inspection_history {
             if let Some(copied) = history.directory(db, operation, relative_path, expected)? {
                 return directory.verify_identity(copied);
@@ -692,6 +815,10 @@ impl RootAnchor {
             return Ok(true);
         }
         #[cfg(target_os = "macos")]
+        if self.matches_startup_binding(root, database, &current)? {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
         if let Some(history) = &self.inspection_history {
             return history.matches_reconfirmation_root(db, operation, root, database, &current);
         }
@@ -709,6 +836,10 @@ impl RootAnchor {
     ) -> Result<bool, String> {
         let current = self.identity()?;
         if current == (root.clone(), database.clone()) {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
+        if self.matches_startup_binding(root, database, &current)? {
             return Ok(true);
         }
         #[cfg(target_os = "macos")]

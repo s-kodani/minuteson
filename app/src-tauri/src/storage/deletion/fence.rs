@@ -36,7 +36,7 @@ pub(in crate::storage) fn has_pending(db: &Connection) -> Result<bool, String> {
     let pending = predicate(db)?;
     db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind IN ('delete_meeting','delete_assets') AND {pending})"), [], |r|r.get(0)).map_err(|e|e.to_string())
 }
-fn readonly(context: AuthContext<'_>) -> Authorization {
+pub(in crate::storage) fn readonly(context: AuthContext<'_>) -> Authorization {
     match context.action {
         AuthAction::Read { .. }
         | AuthAction::Select
@@ -153,6 +153,7 @@ impl Writer<'_> {
         require_pending: bool,
     ) -> Result<Writer<'a>, String> {
         if storage.retired.load(Ordering::Acquire)
+            || storage.recovery_hold
             || storage.maintenance.load(Ordering::Acquire)
             || (require_pending && !storage.deletion_fence.pending())
             || (!require_pending && has_pending(db)?)

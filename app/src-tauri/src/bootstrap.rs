@@ -22,6 +22,7 @@ pub(crate) mod move_recovery;
 pub(crate) mod movement;
 #[allow(dead_code)] // Native coordinator/UI and cutover integration follow.
 pub(crate) mod placement;
+pub(crate) mod recovery;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -142,7 +143,7 @@ impl Root {
         let root = Self::metadata(path)?;
         let mut file = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
             .open(path.join("meetings.sqlite3"))
             .map_err(|e| e.to_string())?;
         if !root
@@ -189,6 +190,7 @@ impl Root {
 enum Origin {
     Default,
     Relocated,
+    Recovered,
 }
 
 /// Durable intent only. Startup always opens `current`, never this target.
@@ -220,10 +222,20 @@ struct Record {
     // An inactive selection has no relocation admission capability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activation: Option<Activation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<recovery::Recovery>,
 }
 impl Record {
     fn validate(&self) -> Result<(), String> {
         absolute(&self.current.path)?;
+        if let Some(recovery) = &self.recovery {
+            recovery.validate()?;
+        }
+        if (self.origin == Origin::Recovered && self.recovery.is_none())
+            || (self.origin == Origin::Default && self.recovery.is_some())
+        {
+            return Err("起動設定の復旧記録が一致しません".into());
+        }
         if self.revision > i64::MAX as u64 {
             return Err("起動設定の版が範囲外です".into());
         }
@@ -274,6 +286,7 @@ struct Loaded {
     record: Record,
     identity: Identity,
     bytes_hash: String,
+    bytes: Vec<u8>,
 }
 struct State {
     loaded: Option<Loaded>,
@@ -313,6 +326,7 @@ pub(crate) struct View {
     pub bootstrap_path: PathBuf,
     pub revision: u64,
     pub origin: String,
+    pub recovery: Option<recovery::RecoveryView>,
     pub pending_operation_id: Option<String>,
     pub pending_target: Option<PathBuf>,
     pub kept_moves: Vec<move_recovery::KeptMove>,
@@ -328,6 +342,7 @@ pub(crate) struct Bootstrap {
     models_root: PathBuf,
     state: Mutex<State>,
     restart_required: std::sync::atomic::AtomicBool,
+    recovered_this_launch: std::sync::atomic::AtomicBool,
     // Release only after the owner's other fields have been dropped.
     lock: BootstrapLock,
 }
@@ -409,12 +424,25 @@ impl Bootstrap {
                 uncertain: false,
             }),
             restart_required: std::sync::atomic::AtomicBool::new(false),
+            recovered_this_launch: std::sync::atomic::AtomicBool::new(false),
         };
         result.guard_directory()?;
-        let loaded = result.read()?;
+        let mut loaded = result.read()?;
         if loaded.is_some() != (stamp == STAMP) {
             return Err("起動設定と初期化記録が一致しません。既定の空DBへ切り替えません".into());
         }
+        result
+            .state
+            .get_mut()
+            .map_err(|_| "起動設定ロックを取得できません")?
+            .loaded = loaded.take();
+        result.recover_selection()?;
+        loaded = result
+            .state
+            .get_mut()
+            .map_err(|_| "起動設定ロックを取得できません")?
+            .loaded
+            .take();
         let (selected, origin) = match &loaded {
             Some(l) => {
                 l.record.current.verify()?;
@@ -512,7 +540,8 @@ impl Bootstrap {
         }
         let doc: Document = serde_json::from_slice(&bytes)
             .map_err(|e| format!("起動設定が不正です。空DBへ切り替えません: {e}"))?;
-        if doc.schema_version != 2
+        if !matches!(doc.schema_version, 2 | 3)
+            || (doc.schema_version == 2 && doc.record.recovery.is_some())
             || (doc.record.origin == Origin::Relocated && doc.record.activation.is_none())
             || !sha(&doc.sha256)
             || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
@@ -530,6 +559,7 @@ impl Bootstrap {
             record: doc.record,
             identity,
             bytes_hash: hash(&bytes),
+            bytes,
         }))
     }
     fn guard(&self, state: &State) -> Result<(), String> {
@@ -559,7 +589,7 @@ impl Bootstrap {
         }
         let digest = hash(&serde_json::to_vec(&record).map_err(|e| e.to_string())?);
         let bytes = serde_json::to_vec(&Document {
-            schema_version: 2,
+            schema_version: 3,
             record,
             sha256: digest,
         })
@@ -655,6 +685,7 @@ impl Bootstrap {
                 current: root,
                 pending_move: None,
                 activation: None,
+                recovery: None,
             },
         )
     }
@@ -679,8 +710,10 @@ impl Bootstrap {
             origin: match r.origin {
                 Origin::Default => "default",
                 Origin::Relocated => "relocated",
+                Origin::Recovered => "recovered",
             }
             .into(),
+            recovery: r.recovery.as_ref().map(|r| r.view(&self.config)),
             pending_operation_id: r.pending_move.as_ref().map(|p| p.operation_id.clone()),
             pending_target: r.pending_move.as_ref().map(|p| p.target.clone()),
             kept_moves: self.kept_moves(r)?,

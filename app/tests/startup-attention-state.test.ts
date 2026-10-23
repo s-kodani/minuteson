@@ -29,10 +29,18 @@ test("bounded UTF8 detail may explicitly be truncated but does not claim repair"
   assert.equal(checkedStartupReport(value).failure!.messageTruncated, true);
   assert.equal(checkedStartupReport(value).phase, "blocked");
 });
+test("startup recovery reports validate retained reasons and preserve old reports", () => {
+  const recovery = { kind: "device_changed" as const, reviewRequired: false, reasons: [], recordPath: "/config/recovery/previous-bootstrap.json" };
+  assert.deepEqual(checkedStartupReport({ ...ready, recovery }), { ...ready, recovery });
+  const pending = { ...recovery, kind: "copy_restored" as const, reviewRequired: true, reasons: ["保存先移動が未完了です"] };
+  assert.deepEqual(checkedStartupReport({ ...ready, recovery: pending }).recovery, pending);
+  for (const bad of [null, { ...recovery, kind: "unknown" }, { ...recovery, reviewRequired: true }, { ...recovery, reasons: ["pending"] }, { ...recovery, recordPath: "../outside" }, { ...pending, reasons: ["x".repeat(257)] }, { ...recovery, repaired: true }]) assert.throws(() => checkedStartupReport({ ...ready, recovery: bad }));
+  assert.throws(() => acceptStartupReport({ ...ready, recovery }, { ...ready, recovery: pending }));
+});
 test("main entry gates all workspace providers; attention route has only report and failure exit IPC", () => {
   const root = source("../src/main.tsx"), ui = source("../src/startup-attention.tsx");
   assert.ok(root.includes("<StartupGate>{desktopWindow}</StartupGate>"));
-  assert.ok(ui.includes('state.report?.phase === "ready" ? children'));
+  assert.ok(ui.includes('state.report?.phase === "ready" ? <>'));
   assert.deepEqual([...ui.matchAll(/invoke\("([^"]+)"/gu)].map(m => m[1]), ["get_startup_report", "quit_blocked_startup"]);
   assert.doesNotMatch(ui, /ThemeProvider|setInterval|localStorage|\.reload\(/u);
 });

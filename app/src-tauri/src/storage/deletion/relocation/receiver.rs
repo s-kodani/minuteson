@@ -21,6 +21,7 @@ use std::{
 };
 mod startup_admission;
 pub(in crate::storage) use startup_admission::admitted_history;
+pub(in crate::storage) use startup_admission::inspect_rebinding;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

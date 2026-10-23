@@ -171,6 +171,7 @@ pub struct Storage {
     retired: std::sync::atomic::AtomicBool,
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
     deletion_fence: deletion::fence::Fence,
+    recovery_hold: bool,
     #[cfg(unix)]
     managed_anchor: deletion::fs::RootAnchor,
     #[cfg(unix)]
@@ -205,11 +206,15 @@ impl Storage {
     }
 
     pub(crate) fn data_write_blocked(&self) -> bool {
-        self.retired.load(std::sync::atomic::Ordering::Acquire) || self.deletion_fence.blocked()
+        self.recovery_hold
+            || self.retired.load(std::sync::atomic::Ordering::Acquire)
+            || self.deletion_fence.blocked()
     }
 
     pub(crate) fn require_data_writable(&self) -> Result<(), String> {
-        if self.deletion_fence.pending() {
+        if self.recovery_hold {
+            Err("保存先を復旧しました。中断操作の再確認が必要なため閲覧のみ利用できます。元の記録とファイルを保持しています".into())
+        } else if self.deletion_fence.pending() {
             Err("未完了の会議削除／音声削除／モデル削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
         } else if self.deletion_fence.restart_required() {
             Err(
@@ -252,6 +257,8 @@ impl Storage {
                 None,
                 #[cfg(target_os = "macos")]
                 None,
+                #[cfg(target_os = "macos")]
+                None,
             )
         }
         #[cfg(not(unix))]
@@ -272,6 +279,8 @@ impl Storage {
             None,
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         )
     }
 
@@ -287,10 +296,73 @@ impl Storage {
             Some(admission.models_root().to_owned()),
             history,
             flac_history,
+            None,
         )
         .map_err(|e| e.to_string())?;
         admission.verify()?;
         Ok(storage)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn open_recovered(
+        root: PathBuf,
+        models: PathBuf,
+        admission: &crate::bootstrap::recovery::Admission,
+    ) -> Result<Self, String> {
+        Self::open_inner(root, Some(models), None, None, Some(admission)).map_err(|e| e.to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn initialize_rebinding_scratch(root: &Path, journal: &Path) -> Result<(), String> {
+        drop(backup::scratch::Registry::open_at(root, journal)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn ancillary_binding_changed(
+        root: &Path,
+        journal: &Path,
+        cache: &Path,
+    ) -> Result<bool, String> {
+        if backup::scratch::Registry::binding_changed(root, journal)? {
+            return Ok(true);
+        }
+        let cache = cache.join(".mon-read-cache");
+        match std::fs::symlink_metadata(&cache) {
+            Ok(_) => backup::scratch::Registry::binding_changed(&cache, &cache),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn inspect_rebinding(root: &Path, cache: &Path) -> Result<Vec<String>, String> {
+        deletion::relocation::receiver::inspect_rebinding(root, cache, Self::validate_rebinding)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn validate_rebinding(db: &Connection) -> Result<Vec<String>, String> {
+        deletion::database::trusted_schema(db)?;
+        let integrity: String = db
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if integrity != "ok" {
+            return Err("復旧対象DBの整合性検査に失敗しました".into());
+        }
+        let mut pending = Vec::new();
+        for (sql, reason) in [
+            ("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention') OR (state='completed' AND json_extract(progress_json,'$.version')=4 AND (kind='delete_meeting' OR json_extract(progress_json,'$.phase')='removing')))", "削除・復元などの保守操作が未完了です"),
+            ("SELECT EXISTS(SELECT 1 FROM restore_batches WHERE state='prepared')", "バックアップからの復元が未完了です"),
+            ("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state!='saved')", "録音・音声変換の再確認が必要です"),
+            ("SELECT EXISTS(SELECT 1 FROM audio_imports WHERE state!='ready')", "音声取り込みの再確認が必要です"),
+            ("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('queued','running','pausing','paused','interrupted'))", "解析処理が未完了です"),
+            ("SELECT EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')", "モデル配置が未完了です"),
+            ("SELECT EXISTS(SELECT 1 FROM export_records WHERE state='writing')", "書き出しが未完了です"),
+            ("SELECT EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building')", "音声・解析結果の作成が未完了です"),
+        ] {
+            if db.query_row(sql, [], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? { pending.push(reason.into()); }
+        }
+        Ok(pending)
     }
 
     fn open_inner(
@@ -302,6 +374,7 @@ impl Storage {
         #[cfg(target_os = "macos")] flac_history: Option<
             std::sync::Arc<recordings::flac::relocation::Aliases>,
         >,
+        #[cfg(target_os = "macos")] recovery: Option<&crate::bootstrap::recovery::Admission>,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
@@ -309,7 +382,16 @@ impl Storage {
         let root = root.canonicalize()?;
         #[cfg(unix)]
         let root_directory = deletion::fs::RootAnchor::directory(&root)?;
-        let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
+        #[cfg(target_os = "macos")]
+        let recovery_content = recovery
+            .map(|admission| admission.capture_content())
+            .transpose()?;
+        let mut flags = rusqlite::OpenFlags::default();
+        #[cfg(target_os = "macos")]
+        if recovery.is_some() {
+            flags.remove(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
+        }
+        let mut connection = Connection::open_with_flags(root.join("meetings.sqlite3"), flags)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         // Set EXCLUSIVE before *any* access to an existing WAL database so
         // SQLite keeps the wal-index on the heap rather than mmap'ing -shm.
@@ -319,11 +401,28 @@ impl Storage {
         // Refuse old/unknown databases before journal-mode changes, recovery
         // writes, temporary registries or filesystem cleanup can begin.
         empty_or_current_database(&connection)?;
+        let mut recovery_hold = false;
+        #[cfg(target_os = "macos")]
+        if let Some(admission) = recovery {
+            // Verify again through SQLite before any mutable startup work.
+            // Admission checks only metadata and never closes another live DB FD.
+            Self::validate_rebinding(&connection)?;
+            recovery_hold = admission.pending();
+            admission.verify()?;
+            recovery_content
+                .as_ref()
+                .ok_or("復旧対象の接続前検査がありません")?
+                .verify()?;
+        }
         connection.execute_batch(
             "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
         )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
+        #[cfg(target_os = "macos")]
+        if let Some(admission) = recovery {
+            managed_anchor = managed_anchor.with_startup_binding(admission.previous_identities());
+        }
         #[cfg(target_os = "macos")]
         if let Some(history) = history {
             managed_anchor = managed_anchor.with_inspection_history(history)?;
@@ -336,7 +435,7 @@ impl Storage {
         let pending_deletion = deletion::fence::has_pending(&connection)?;
         let deletion_fence = deletion::fence::Fence::open(&connection)?;
         let scratch;
-        if !pending_deletion {
+        if !pending_deletion && !recovery_hold {
             connection.execute(
             "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
             params![now_ms()?],
@@ -350,7 +449,16 @@ impl Storage {
             connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
             #[cfg(unix)]
             {
-                scratch = Some(backup::scratch::Registry::open(&root)?);
+                #[cfg(target_os = "macos")]
+                let registry = match recovery {
+                    Some(admission) => {
+                        backup::scratch::Registry::open_at(&root, &admission.scratch_root())?
+                    }
+                    None => backup::scratch::Registry::open(&root)?,
+                };
+                #[cfg(not(target_os = "macos"))]
+                let registry = backup::scratch::Registry::open(&root)?;
+                scratch = Some(registry);
             }
             #[cfg(not(unix))]
             {
@@ -367,6 +475,9 @@ impl Storage {
         }
         #[cfg(unix)]
         managed_anchor.seal_controls()?;
+        if recovery_hold {
+            connection.authorizer(Some(deletion::fence::readonly))?;
+        }
         Ok(Self {
             root,
             connection: Mutex::new(connection),
@@ -377,6 +488,7 @@ impl Storage {
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
             deletion_fence,
+            recovery_hold,
             #[cfg(unix)]
             managed_anchor,
             #[cfg(unix)]

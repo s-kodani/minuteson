@@ -8,7 +8,7 @@ mod audio_supersession;
 pub(crate) mod automatic;
 #[cfg(unix)]
 mod completion;
-mod database;
+pub(in crate::storage) mod database;
 
 // Read-only native-image inspection; not a deletion or cutover capability.
 #[cfg(target_os = "macos")]

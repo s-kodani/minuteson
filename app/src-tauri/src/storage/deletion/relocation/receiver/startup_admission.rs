@@ -412,6 +412,38 @@ fn inspection_database(
     path: &Path,
     create: &dyn Fn() -> Result<crate::storage::read_cache::Snapshot, String>,
 ) -> Result<InspectionDatabase, String> {
+    inspection_database_inner(anchor, path, create, false)
+}
+
+// Startup rebinding always reads an owned copy, including when SHM exists.
+// No rejected source DB or WAL is opened by SQLite or changed by inspection.
+pub(in crate::storage) fn inspect_rebinding<T>(
+    path: &Path,
+    cache: &Path,
+    inspect: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(path)?)?;
+    anchor.seal_controls()?;
+    let db = inspection_database_inner(
+        &anchor,
+        path,
+        &|| crate::storage::read_cache::Snapshot::create(cache),
+        true,
+    )?;
+    db.execute_batch("PRAGMA foreign_keys=ON;")
+        .map_err(|e| e.to_string())?;
+    let value = inspect(&db)?;
+    db.finish()?;
+    anchor.verify()?;
+    Ok(value)
+}
+
+fn inspection_database_inner(
+    anchor: &fs::RootAnchor,
+    path: &Path,
+    create: &dyn Fn() -> Result<crate::storage::read_cache::Snapshot, String>,
+    force_copy: bool,
+) -> Result<InspectionDatabase, String> {
     use std::os::unix::ffi::OsStrExt;
     anchor.verify()?;
     let root = anchor.directory_ref()?;
@@ -437,7 +469,7 @@ fn inspection_database(
             files.push((name.into(), file, proof));
         }
     }
-    let snapshot = if wal && !shm {
+    let snapshot = if force_copy || (wal && !shm) {
         Some(private_wal_snapshot(&owned_root, &files, create)?)
     } else {
         None
@@ -453,9 +485,10 @@ fn inspection_database(
         .iter()
         .map(|b| format!("%{b:02X}"))
         .collect::<String>();
-    let option = match (wal, shm) {
-        (true, true) => "readonly_shm=1",
-        (true, false) => "",
+    let option = match (wal, shm, snapshot.is_some()) {
+        (true, _, true) => "",
+        (true, true, false) => "readonly_shm=1",
+        (true, false, false) => "",
         _ => "immutable=1",
     };
     let db = Connection::open_with_flags(
@@ -500,6 +533,9 @@ fn private_wal_snapshot(
         );
     }
     for (name, source, proof) in files {
+        if name == "meetings.sqlite3-shm" {
+            continue;
+        }
         if !matches!(name.as_str(), "meetings.sqlite3" | "meetings.sqlite3-wal") {
             return Err("読取用コピーへ未知の制御ファイルを採用しません".into());
         }

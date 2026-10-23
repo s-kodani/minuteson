@@ -13,12 +13,17 @@ const REAPPEARED: &str = "model_completed_scope_reappeared";
 const INVALID: &str = "model_completed_receipt_invalid";
 const UNINSPECTABLE: &str = "model_completed_scope_uninspectable";
 
-fn absent(receipt: &removal::Receipt, root: &Path) -> Result<bool, String> {
+fn absent(
+    receipt: &removal::Receipt,
+    root: &Path,
+    anchor: &crate::storage::deletion::fs::RootAnchor,
+) -> Result<bool, String> {
     if root != Path::new(receipt.confirmed().models_root()) {
         return Err("ネイティブのモデル保存先と削除記録が一致しません".into());
     }
     let models = Directory::root(root)?;
-    models.verify_identity(&receipt.confirmed().snapshot().models_root)?;
+    anchor
+        .verify_startup_history_directory(&models, &receipt.confirmed().snapshot().models_root)?;
     // Presence only: do not hash a large model or enumerate neighboring models.
     for name in receipt.roots()? {
         if models.optional_kind(&name)?.is_some() {
@@ -122,7 +127,7 @@ pub(in crate::storage) fn inspect(
             if root != Path::new(receipt.confirmed().models_root()) {
                 return Err("ネイティブのモデル保存先と削除記録が一致しません".into());
             }
-            match absent(&receipt, root) {
+            match absent(&receipt, root, anchor) {
                 Ok(true) => Ok(None),
                 Ok(false) => Ok(Some(REAPPEARED)),
                 Err(_) => Ok(Some(UNINSPECTABLE)),
@@ -150,7 +155,11 @@ pub(in crate::storage::deletion::models) fn resolve(
     receipt.verify_anchor(storage)?;
     if !receipt.completed()
         || check()
-        || !absent(receipt, Path::new(receipt.confirmed().models_root()))?
+        || !absent(
+            receipt,
+            Path::new(receipt.confirmed().models_root()),
+            &storage.managed_anchor,
+        )?
         || check()
     {
         return Err("モデル削除の最終確認後に対象が再出現しました。確認待ちを維持します".into());

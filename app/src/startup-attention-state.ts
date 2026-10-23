@@ -1,18 +1,22 @@
 export const startupStages = ["directories", "storage_selection", "storage_admission"] as const;
 export interface StartupFailure { stage: typeof startupStages[number]; message: string; messageTruncated: boolean; meetingRoot: string | null; configRoot: string | null }
-export interface StartupReport { schemaVersion: 1; phase: "starting" | "ready" | "blocked"; failure: StartupFailure | null }
+export interface StartupRecovery { kind: "device_changed" | "copy_restored"; reviewRequired: boolean; reasons: string[]; recordPath: string }
+export interface StartupReport { schemaVersion: 1; phase: "starting" | "ready" | "blocked"; failure: StartupFailure | null; recovery?: StartupRecovery }
 const bytes = (v: unknown, limit: number): v is string => typeof v === "string" && !v.includes("\0") && new TextEncoder().encode(v).length <= limit;
 const path = (v: unknown) => v === null || bytes(v, 8192) && (/^\//u.test(v) || /^[A-Za-z]:[\\/]/u.test(v));
 export function checkedStartupReport(input: unknown): StartupReport {
   const r = input as StartupReport;
-  if (!r || Object.keys(r).sort().join() !== "failure,phase,schemaVersion" || r.schemaVersion !== 1 || !["starting", "ready", "blocked"].includes(r.phase)) throw Error("起動診断の形式を確認できません。通常操作は開始しません。");
+  if (!r || !["failure,phase,schemaVersion", "failure,phase,recovery,schemaVersion"].includes(Object.keys(r).sort().join()) || r.schemaVersion !== 1 || !["starting", "ready", "blocked"].includes(r.phase)) throw Error("起動診断の形式を確認できません。通常操作は開始しません。");
+  const recovery = r.recovery;
+  if (recovery !== undefined && (!recovery || Object.keys(recovery).sort().join() !== "kind,reasons,recordPath,reviewRequired" || !["device_changed", "copy_restored"].includes(recovery.kind) || typeof recovery.reviewRequired !== "boolean" || !Array.isArray(recovery.reasons) || recovery.reasons.length > 32 || recovery.reasons.some(s => !bytes(s, 256) || !s) || recovery.reviewRequired !== (recovery.reasons.length > 0) || !bytes(recovery.recordPath, 8192) || !/^\//u.test(recovery.recordPath))) throw Error("起動時の復旧結果を確認できません。");
+  const extra = recovery ? { recovery: { kind: recovery.kind, reviewRequired: recovery.reviewRequired, reasons: [...recovery.reasons], recordPath: recovery.recordPath } } : {};
   const f = r.failure;
   if (r.phase === "blocked") {
     if (!f || Object.keys(f).sort().join() !== "configRoot,meetingRoot,message,messageTruncated,stage" || !startupStages.includes(f.stage) || !bytes(f.message, 16384) || typeof f.messageTruncated !== "boolean" || !path(f.meetingRoot) || !path(f.configRoot)) throw Error("起動拒否の診断を確認できません。通常操作は開始しません。");
-    return { schemaVersion: 1, phase: r.phase, failure: { stage: f.stage, message: f.message, messageTruncated: f.messageTruncated, meetingRoot: f.meetingRoot, configRoot: f.configRoot } };
+    return { schemaVersion: 1, phase: r.phase, failure: { stage: f.stage, message: f.message, messageTruncated: f.messageTruncated, meetingRoot: f.meetingRoot, configRoot: f.configRoot }, ...extra };
   }
   if (f !== null) throw Error("起動診断の状態が矛盾しています。通常操作は開始しません。");
-  return { schemaVersion: 1, phase: r.phase, failure: null };
+  return { schemaVersion: 1, phase: r.phase, failure: null, ...extra };
 }
 export function acceptStartupReport(previous: StartupReport | null, value: unknown): StartupReport {
   const next = checkedStartupReport(value);

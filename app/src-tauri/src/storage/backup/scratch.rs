@@ -93,6 +93,8 @@ struct Proof {
 pub(in crate::storage) struct Registry {
     root: PathBuf,
     root_identity: Identity,
+    journal_root: PathBuf,
+    journal_identity: Identity,
     file_identity: Identity,
     expected_schema: Vec<(String, String, String)>,
     db: Mutex<Connection>,
@@ -170,7 +172,66 @@ fn active(path: &Path) -> Result<Option<(PathBuf, Active)>, String> {
 }
 
 impl Registry {
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage) fn binding_changed(root: &Path, journal: &Path) -> Result<bool, String> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = journal.join(".mon-scratch.sqlite3");
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.to_string()),
+        };
+        if !regular(&metadata) {
+            return Err("一時領域台帳の実体・権限が不正です".into());
+        }
+        if let Some(current) = REGISTRIES
+            .get_or_init(Mutex::default)
+            .lock()
+            .map_err(|_| "一時領域台帳ロックを取得できません")?
+            .get(root)
+            .and_then(Weak::upgrade)
+        {
+            current.check_root()?;
+            return Ok(false);
+        }
+        // Immutable read of metadata only: never recover, checkpoint or edit
+        // the old journal while deciding whether a fresh generation is needed.
+        let encoded = path
+            .as_os_str()
+            .as_bytes()
+            .iter()
+            .map(|b| format!("%{b:02X}"))
+            .collect::<String>();
+        let db = Connection::open_with_flags(
+            format!("file:{encoded}?mode=ro&immutable=1"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|e| e.to_string())?;
+        let (proof, digest): (String, String) = db
+            .query_row(
+                "SELECT proof,hash FROM metadata WHERE id=1 AND length(CAST(proof AS BLOB))<=1024",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        if hash(proof.as_bytes()) != digest {
+            return Err("一時領域の親証拠が変更されています".into());
+        }
+        let saved: Identity = serde_json::from_str(&proof).map_err(|e| e.to_string())?;
+        Ok(saved != Identity::read(&directory(root)?)?)
+    }
     pub(in crate::storage) fn open(root: &Path) -> Result<Arc<Self>, String> {
+        Self::open_inner(root, None)
+    }
+    // A recovered root gets a new journal, while stages and history remain
+    // relative to the actual meeting root. Old journal bytes stay untouched.
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage) fn open_at(root: &Path, journal: &Path) -> Result<Arc<Self>, String> {
+        Self::open_inner(root, Some(journal))
+    }
+    fn open_inner(root: &Path, journal: Option<&Path>) -> Result<Arc<Self>, String> {
         let mut all = REGISTRIES
             .get_or_init(Mutex::default)
             .lock()
@@ -178,6 +239,9 @@ impl Registry {
         // A PreparedRestore may still own its private copies after a Storage
         // handle is reopened in this process. Do not recover that live owner.
         if let Some(current) = all.get(root).and_then(Weak::upgrade) {
+            if journal.is_some_and(|path| path != current.journal_root) {
+                return Err("別の一時領域台帳が使用中です".into());
+            }
             current.check_root()?;
             {
                 let db = current
@@ -189,7 +253,9 @@ impl Registry {
             return Ok(current);
         }
         let root_identity = Identity::read(&directory(root)?)?;
-        let path = root.join(".mon-scratch.sqlite3");
+        let journal_root = journal.unwrap_or(root);
+        let journal_identity = Identity::read(&directory(journal_root)?)?;
+        let path = journal_root.join(".mon-scratch.sqlite3");
         let new = match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let mut o = OpenOptions::new();
@@ -202,7 +268,7 @@ impl Registry {
                 o.open(&path)
                     .and_then(|f| f.sync_all())
                     .map_err(|e| e.to_string())?;
-                sync(root)?;
+                sync(journal_root)?;
                 true
             }
             Ok(m) if regular(&m) => false,
@@ -273,6 +339,8 @@ impl Registry {
         let registry = Arc::new(Self {
             root: root.into(),
             root_identity,
+            journal_root: journal_root.into(),
+            journal_identity,
             file_identity,
             expected_schema,
             db: Mutex::new(db),
@@ -283,11 +351,14 @@ impl Registry {
         Ok(registry)
     }
     fn check_root(&self) -> Result<(), String> {
-        let path = self.root.join(".mon-scratch.sqlite3");
+        let path = self.journal_root.join(".mon-scratch.sqlite3");
         let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if !regular(&m)
             || !self.file_identity.matches(&m)
             || !self.root_identity.matches(&directory(&self.root)?)
+            || !self
+                .journal_identity
+                .matches(&directory(&self.journal_root)?)
         {
             return Err("一時領域台帳または保存先が差し替えられています".into());
         }

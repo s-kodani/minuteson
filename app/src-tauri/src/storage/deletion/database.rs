@@ -169,7 +169,7 @@ fn current_schema() -> Result<&'static KnownSchema, String> {
         .as_ref()
         .map_err(Clone::clone)
 }
-pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
+pub(in crate::storage) fn trusted_schema(db: &Connection) -> Result<String, String> {
     Ok(inspect_schema(db)?.hash.clone())
 }
 // Saved deletion history uses the same current schema as new operations.

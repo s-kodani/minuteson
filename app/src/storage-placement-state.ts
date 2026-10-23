@@ -1,14 +1,19 @@
+import { checkedStartupReport } from "./startup-attention-state.ts";
+
 export interface StorageView {
   meetingRoot: string; activeMeetingRoot: string; restartRequired: boolean;
-  modelsRoot: string; bootstrapPath: string; revision: number; origin: "default" | "relocated";
+  modelsRoot: string; bootstrapPath: string; revision: number; origin: "default" | "relocated" | "recovered";
+  recovery?: import("./startup-attention-state").StartupRecovery | null;
   pendingOperationId: string | null; pendingTarget: string | null;
   keptMoves: { operationId: string; source: string; destination: string; decisionPending: boolean }[];
 }
 export function assertStorageView(s: StorageView): void {
+  if (s?.recovery != null) checkedStartupReport({ schemaVersion: 1, phase: "ready", failure: null, recovery: s.recovery });
   const path = (p: unknown) => typeof p === "string" && p.startsWith("/") && p.length <= 4096 && !p.includes("\0");
   if (!s || ![s.meetingRoot, s.activeMeetingRoot, s.modelsRoot, s.bootstrapPath].every(path)
     || typeof s.restartRequired !== "boolean" || !Number.isSafeInteger(s.revision) || s.revision < 0
-    || !["default", "relocated"].includes(s.origin)
+    || !["default", "relocated", "recovered"].includes(s.origin)
+    || (s.origin === "recovered" && s.recovery == null)
     || (s.meetingRoot !== s.activeMeetingRoot && !s.restartRequired)
     || (s.pendingOperationId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(s.pendingOperationId))
     || ((s.pendingOperationId === null) !== (s.pendingTarget === null))

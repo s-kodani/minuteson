@@ -269,7 +269,6 @@ fn bootstrap_missing_replaced_or_linked_root_and_database_are_not_recreated_or_a
         "replaced_root",
         "root_link",
         "missing_db",
-        "replaced_db",
         "db_link",
         "db_hardlink",
         "truncated_db",

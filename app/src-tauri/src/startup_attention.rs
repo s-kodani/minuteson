@@ -55,10 +55,20 @@ pub(crate) enum Phase {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct Recovery {
+    pub kind: String,
+    pub review_required: bool,
+    pub reasons: Vec<String>,
+    pub record_path: std::path::PathBuf,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Report {
     schema_version: u8,
     phase: Phase,
     failure: Option<Failure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<Recovery>,
 }
 pub(crate) struct Startup(Mutex<Report>);
 impl Default for Startup {
@@ -67,10 +77,23 @@ impl Default for Startup {
             schema_version: 1,
             phase: Phase::Starting,
             failure: None,
+            recovery: None,
         }))
     }
 }
 impl Startup {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_recovery(&self, recovery: Option<Recovery>) -> Result<(), String> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| "起動診断のロックを取得できません")?;
+        if state.phase != Phase::Starting {
+            return Err("起動結果は確定済みです".into());
+        }
+        state.recovery = recovery;
+        Ok(())
+    }
     pub(crate) fn snapshot(&self) -> Result<Report, String> {
         self.0
             .lock()
@@ -120,6 +143,61 @@ impl Startup {
             };
         }
         if report.phase == Phase::Ready {
+            if report.recovery.as_ref().is_some_and(|r| r.review_required)
+                && !matches!(
+                    command,
+                    "get_internal_logs"
+                        | "get_storage_bootstrap"
+                        | "list_meetings"
+                        | "get_meeting"
+                        | "list_restored_meeting_ids"
+                        | "get_current_analysis"
+                        | "get_transcript_draft"
+                        | "get_minutes_markdown"
+                        | "get_analysis_versions"
+                        | "get_meeting_audio_summary"
+                        | "get_data_operation"
+                        | "get_data_operation_availability"
+                        | "get_deletion_items"
+                        | "get_deletion_paths"
+                        | "get_audio_deletion_items"
+                        | "get_audio_deletion_paths"
+                        | "get_model_deletion_items"
+                        | "get_model_deletion_paths"
+                        | "get_audio_import"
+                        | "get_recording_snapshot"
+                        | "get_capture_test_snapshot"
+                        | "get_analysis_flow"
+                        | "get_analysis_jobs"
+                        | "get_analysis_notification_jobs"
+                        | "get_analysis_notification_output"
+                        | "get_ready_analysis_flows"
+                        | "get_analysis_preparations"
+                        | "get_meeting_analysis_audio"
+                        | "get_ui_preferences"
+                        | "get_analysis_preferences"
+                        | "get_diarization_preferences"
+                        | "get_minutes_preferences"
+                        | "get_minutes_prompt_preferences"
+                        | "get_voice_matching_preferences"
+                        | "get_speaker_completion_preferences"
+                        | "get_voice_people"
+                        | "get_voice_context"
+                        | "get_vocabulary_book"
+                        | "get_meeting_vocabulary"
+                        | "get_model_profiles"
+                        | "get_model_placements"
+                        | "get_recording_microphone_selection"
+                        | "get_application_close_activity"
+                        | "finish_main_close"
+                        | "open_main_window"
+                )
+            {
+                return Err(
+                    "保存先の復旧後は中断操作の再確認が必要です。現在は会議の閲覧のみ利用できます"
+                        .into(),
+                );
+            }
             Ok(())
         } else {
             Err("保存先の起動確認が完了していません。通常操作は開始しません。起動診断を確認してください".into())
@@ -178,6 +256,39 @@ pub(crate) fn quit_blocked_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recovered_pending_startup_allows_reading_but_never_dispatches_mutations() {
+        let s = Startup::default();
+        s.set_recovery(Some(Recovery {
+            kind: "device_changed".into(),
+            review_required: true,
+            reasons: vec!["保存先移動が未完了です".into()],
+            record_path: "/config/previous-bootstrap.json".into(),
+        }))
+        .unwrap();
+        s.ready().unwrap();
+        for command in [
+            "list_meetings",
+            "get_meeting",
+            "get_minutes_markdown",
+            "get_startup_report",
+            "finish_main_close",
+        ] {
+            assert!(s.admit_command("main", command).is_ok(), "{command}");
+        }
+        for command in [
+            "start_recording",
+            "start_data_operation",
+            "start_analysis_flow",
+            "rename_meeting",
+            "save_minutes_markdown",
+            "start_capture_test",
+        ] {
+            assert!(s.admit_command("main", command).is_err(), "{command}");
+        }
+        assert!(s.snapshot().unwrap().recovery.unwrap().review_required);
+    }
     #[test]
     fn starting_and_blocked_reject_every_normal_operation_and_never_reset() {
         let s = Startup::default();

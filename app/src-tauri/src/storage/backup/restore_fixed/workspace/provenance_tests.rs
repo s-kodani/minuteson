@@ -143,6 +143,7 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         )
         .unwrap(),
         scratch: None,
+        recovery_hold: false,
         #[cfg(target_os = "macos")]
         flac_history: None,
         #[cfg(unix)]
