@@ -358,6 +358,21 @@ impl Bootstrap {
         Ok(view)
     }
 
+    pub(crate) fn startup_recovery_view(
+        &self,
+        storage: &Storage,
+    ) -> Result<Option<RecoveryView>, String> {
+        // Retained history still binds the scratch/cache generation. Its
+        // presence alone is not a recovery event in this process. Keep an
+        // unresolved review visible so the startup write guard stays active.
+        Ok(self.recovery_view_for_storage(storage)?.filter(|view| {
+            view.review_required
+                || self
+                    .recovered_this_launch
+                    .load(std::sync::atomic::Ordering::Acquire)
+        }))
+    }
+
     pub(super) fn read_cache_root(&self) -> Result<PathBuf, String> {
         let state = self
             .state

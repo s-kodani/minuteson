@@ -2199,7 +2199,7 @@ pub fn run() {
                 match admission {
                     Ok((storage, selection)) => {
                         app.state::<startup_attention::Startup>()
-                            .set_recovery(selection.recovery_view_for_storage(&storage)?)?;
+                            .set_recovery(selection.startup_recovery_view(&storage)?)?;
                         app.manage(storage);
                         app.manage(selection);
                     }

@@ -37,6 +37,7 @@ impl Fixture {
 fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
     let f = Fixture::new();
     let (b, s) = f.start();
+    assert!(b.startup_recovery_view(&s).unwrap().is_none());
     let meeting = s.create_meeting("再起動後も保持").unwrap();
     drop(s);
     drop(b);
@@ -55,6 +56,7 @@ fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
         let recovery = b.recovery_view().unwrap().unwrap();
         assert_eq!(recovery.kind, "device_changed");
         assert!(!recovery.review_required);
+        assert_eq!(b.startup_recovery_view(&s).unwrap(), Some(recovery.clone()));
         if round == 0 {
             assert_eq!(std::fs::read(&recovery.record_path).unwrap(), old);
         }
@@ -64,6 +66,8 @@ fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
         let (b, s) = f.start();
         assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), saved);
         assert_eq!(s.list_meetings().unwrap(), vec![meeting.clone()]);
+        assert!(b.startup_recovery_view(&s).unwrap().is_none());
+        assert_eq!(b.recovery_view_for_storage(&s).unwrap(), Some(recovery));
         drop(s);
         drop(b);
         if round == 0 {
@@ -286,6 +290,12 @@ fn pending_maintenance_is_retained_readonly_across_restarts() {
         assert!(s.create_meeting("禁止").is_err());
         assert!(s.require_data_writable().is_err());
         assert!(b.recovery_view().unwrap().unwrap().review_required);
+        assert!(
+            b.startup_recovery_view(&s)
+                .unwrap()
+                .unwrap()
+                .review_required
+        );
         crate::storage::with_test_database(&s, |db| {
             assert_eq!(
                 db.query_row("SELECT state FROM maintenance_operations", [], |r| r

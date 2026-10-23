@@ -34,7 +34,7 @@ export function StartupGate({ children }: { children: ReactNode }) {
   return !isTauri() || state.report?.phase === "ready" ? <>
     {children}
     {state.report?.recovery && <CommonModal portal open={!recoveryDismissed} onDismiss={() => setRecoveryDismissed(true)} dismissLabel="閉じる" dismissText="復旧結果を閉じる" restoreTarget={() => document.querySelector<HTMLElement>(".sidebar button:not(:disabled)")} aria-labelledby="startup-recovery-title" aria-describedby="startup-recovery-description">
-      <h2 id="startup-recovery-title">保存先の情報を修復しました</h2>
+      <h2 id="startup-recovery-title">{state.report.recovery.reviewRequired ? "中断操作の再確認が必要です" : "保存先の情報を修復しました"}</h2>
       {state.report.recovery.reviewRequired ? <>
         <p id="startup-recovery-description">中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
         <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
