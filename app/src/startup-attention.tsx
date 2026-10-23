@@ -2,6 +2,7 @@ import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { acceptStartupReport, startupStageLabels, type StartupReport } from "./startup-attention-state";
+import { CommonModal } from "./common-modal";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
@@ -27,17 +28,19 @@ function useStartupReport() {
 export function StartupAttentionWindow() { return <StartupAttention state={useStartupReport()} />; }
 export function StartupGate({ children }: { children: ReactNode }) {
   const state = useStartupReport();
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   // Browser-only preview is not a native admission proof and cannot invoke
   // desktop operations. A desktop reader failure never mounts normal UI.
   return !isTauri() || state.report?.phase === "ready" ? <>
-    {state.report?.recovery && <aside className="status-card" role="status" aria-label="保存先の自動復旧">
-      <strong>保存先の情報を修復しました</strong>
-      {state.report.recovery.reviewRequired ? <>
-        <p>中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
-        <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
-      </> : <p>保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
-    </aside>}
     {children}
+    {state.report?.recovery && <CommonModal portal open={!recoveryDismissed} onDismiss={() => setRecoveryDismissed(true)} dismissLabel="閉じる" dismissText="復旧結果を閉じる" restoreTarget={() => document.querySelector<HTMLElement>(".sidebar button:not(:disabled)")} aria-labelledby="startup-recovery-title" aria-describedby="startup-recovery-description">
+      <h2 id="startup-recovery-title">保存先の情報を修復しました</h2>
+      {state.report.recovery.reviewRequired ? <>
+        <p id="startup-recovery-description">中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
+        <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+      </> : <p id="startup-recovery-description">保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
+      <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
+    </CommonModal>}
   </> : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
