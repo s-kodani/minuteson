@@ -94,7 +94,7 @@ pub(crate) fn model(
     Ok(true)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::cell::Cell;

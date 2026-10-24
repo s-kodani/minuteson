@@ -27,7 +27,7 @@ async page=>{
     results.push("each disconnected input retains its own cause without an invented save claim");
     await set(binding("connected",2,1),binding("connected",2,1));await states("connected","connected");results.push("both tracks recover only with new source epochs");
     await page.evaluate(()=>window.closeFixture.refreshInputStatus=false);await states("stale","stale");results.push("frozen paired report expires both live statuses");
-    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:360,height:116});
+    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:227,height:101});
     await page.evaluate(()=>{window.closeFixture.refreshInputStatus=true;return window.closeFixture.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID()});});
     await set(binding("disconnected",1,1,"device_disconnected"),binding("disconnected",1,1,"stream_stopped"));await states("disconnected","disconnected");
     check(await page.locator(".mini-shell").evaluate(e=>e.scrollHeight<=e.clientHeight+1&&e.scrollWidth<=e.clientWidth+1),"mini input status overflow");

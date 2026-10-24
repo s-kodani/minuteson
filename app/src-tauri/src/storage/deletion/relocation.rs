@@ -5,11 +5,12 @@
 #[cfg(test)]
 use super::intent;
 use super::{database, fs, startup};
+use crate::native_fs::Metadata;
 use crate::storage::Storage;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs::Metadata, path::PathBuf};
+use std::path::PathBuf;
 
 pub(crate) mod receiver;
 
@@ -547,5 +548,5 @@ impl Source {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

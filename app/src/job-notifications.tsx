@@ -129,6 +129,10 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
                 if (disposed) return;
                 const event = tracker.confirmOutput(job, verifiedJobOutput(job, proof));
                 if(event && job.kind==="speaker_completion") event.message += `。${(proof as {warnings:string[]}).warnings.join("。")}`;
+                if(event && ["transcription","diarization"].includes(job.kind)) {
+                  const warnings=(proof as {warnings?:string[]}).warnings??[];
+                  if(warnings.length){event.message=`「${job.meetingTitle}」の${jobName(job.kind)}：完了・要確認あり。${warnings.join("。")} `;event.level="warning";event.important=true;}
+                }
                 if (event) publish([event]);
               } catch (cause) { proofError ||= `「${job.meetingTitle}」の${jobName(job.kind)}の保存結果を確認できません: ${String(cause)}`; }
             }

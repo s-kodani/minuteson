@@ -14,22 +14,40 @@ const LOG_LIMIT: usize = 64 * 1024;
 #[serde(rename_all = "camelCase")]
 pub(super) enum Policy {
     AutoMetalV2,
+    AutoVulkanV1,
 }
 impl Policy {
     pub(super) fn accepts(self, engine: &LlamaConfig) -> bool {
         match self {
-            Self::AutoMetalV2 => engine.gpu_layers == 0 && engine.validate().is_ok(),
+            Self::AutoMetalV2 | Self::AutoVulkanV1 => {
+                engine.gpu_layers == 0 && engine.validate().is_ok()
+            }
         }
     }
     fn proof_version(self) -> u32 {
         match self {
             Self::AutoMetalV2 => 2,
+            Self::AutoVulkanV1 => 3,
+        }
+    }
+    fn device(self) -> &'static str {
+        match self {
+            Self::AutoMetalV2 => DEVICE,
+            Self::AutoVulkanV1 => "Vulkan0",
+        }
+    }
+    fn evidence(self, log: &str) -> Option<(String, u32)> {
+        match self {
+            Self::AutoMetalV2 => super::llama_metrics::metal_evidence(log),
+            Self::AutoVulkanV1 => super::llama_metrics::vulkan_evidence(log),
         }
     }
 }
 pub(super) fn policy(engine: &LlamaConfig) -> Option<Policy> {
     if cfg!(target_os = "macos") && Policy::AutoMetalV2.accepts(engine) {
         Some(Policy::AutoMetalV2)
+    } else if cfg!(windows) && Policy::AutoVulkanV1.accepts(engine) {
+        Some(Policy::AutoVulkanV1)
     } else {
         None
     }
@@ -56,8 +74,16 @@ pub(super) struct Proof {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "backend", rename_all = "camelCase")]
 pub(super) enum Resolved {
-    Cpu { reason: CpuReason },
-    Metal { proof: Proof },
+    Cpu {
+        reason: CpuReason,
+    },
+    Metal {
+        proof: Proof,
+    },
+    Vulkan {
+        proof: Proof,
+        adapter: crate::gpu::Adapter,
+    },
 }
 impl Resolved {
     pub(super) fn validate(
@@ -69,17 +95,31 @@ impl Resolved {
         if !policy.accepts(base) {
             return Err("GPU試行の固定モデルが一致しません".into());
         }
-        if let Self::Metal { proof } = self {
+        if matches!(
+            (self, policy),
+            (Self::Metal { .. }, Policy::AutoVulkanV1) | (Self::Vulkan { .. }, Policy::AutoMetalV2)
+        ) {
+            return Err("保存GPU方式が実行方針と一致しません".into());
+        }
+        if let Self::Vulkan { proof, adapter } = self {
+            if !adapter.validate()
+                || !proof.log.lines().any(|line| {
+                    line.contains("using device Vulkan0 (") && line.contains(&adapter.name)
+                })
+            {
+                return Err("Vulkanの実アダプター証拠が不正です".into());
+            }
+        }
+        if let Self::Metal { proof } | Self::Vulkan { proof, .. } = self {
             if proof.schema_version != policy.proof_version()
                 || proof.engine_sha256 != base.executable.sha256
                 || proof.model_sha256 != base.model.sha256
                 || proof.context_tokens != context
                 || !(1..=256).contains(&proof.gpu_layers)
-                || proof.device != DEVICE
+                || proof.device != policy.device()
                 || proof.log.len() > LOG_LIMIT
                 || proof.result.len() > 4096
-                || super::llama_metrics::metal_evidence(&proof.log)
-                    != Some((DEVICE.into(), proof.gpu_layers))
+                || policy.evidence(&proof.log) != Some((policy.device().into(), proof.gpu_layers))
                 || llama::parse_output(proof.result.as_bytes())? != json!({"ok":true})
             {
                 return Err("GPUの試行結果・実デバイス・オフロード証拠が不正です".into());
@@ -88,6 +128,11 @@ impl Resolved {
         Ok(())
     }
     pub(super) fn ensure_available(&self, policy: Policy) -> Result<(), String> {
+        if let Self::Vulkan { adapter, .. } = self {
+            if !cfg!(windows) || policy != Policy::AutoVulkanV1 || !adapter.available() {
+                return Err("保存したVulkan GPUを利用できません。完了済みの結果は保持しています。別の実行設定を選ぶには新しい生成を開始してください。（minutes_gpu_unavailable）".into());
+            }
+        }
         if matches!(self, Self::Metal { .. }) && (!cfg!(target_os = "macos")) {
             return Err("保存したGPU設定に必要なメモリ環境を確認できません。完了済み工程は保持しています。このMacで新しく生成するとCPU構成を選び直します。（minutes_gpu_unavailable）".into());
         }
@@ -95,7 +140,7 @@ impl Resolved {
     }
     pub(super) fn configure(&self, config: &mut LlamaConfig) -> Option<&str> {
         match self {
-            Self::Metal { proof } => {
+            Self::Metal { proof } | Self::Vulkan { proof, .. } => {
                 config.gpu_layers = proof.gpu_layers;
                 Some(&proof.device)
             }
@@ -156,8 +201,14 @@ fn resolve_with_memory(
         return Err("未検証モデルのGPU自動設定は使用できません".into());
     }
     let candidates = match policy {
-        Policy::AutoMetalV2 => AUTO_LAYERS,
+        Policy::AutoMetalV2 | Policy::AutoVulkanV1 => AUTO_LAYERS,
     };
+    // Preflight token counting may have opened the CPU worker. GPU admission
+    // starts a separate trial before any durable generated unit exists.
+    #[cfg(windows)]
+    if policy == Policy::AutoVulkanV1 {
+        crate::local_engine::resident::discard_trial();
+    }
     for (index, layers) in candidates.iter().enumerate() {
         if cancelled() {
             return Ok(None);
@@ -184,7 +235,7 @@ fn resolve_with_memory(
                 Duration::from_secs(60),
                 cancelled,
                 &|_| {},
-                Some(DEVICE),
+                Some(policy.device()),
             )?
             else {
                 return Ok(None);
@@ -196,19 +247,33 @@ fn resolve_with_memory(
                 std::fs::read_to_string(directory.join("stderr.log")).map_err(|e| e.to_string())?;
             let result = std::fs::read_to_string(directory.join("result.json"))
                 .map_err(|e| e.to_string())?;
-            let (_, actual_layers) =
-                super::llama_metrics::metal_evidence(&log).ok_or("GPU実行の証拠がありません")?;
-            let choice = Resolved::Metal {
-                proof: Proof {
-                    schema_version: policy.proof_version(),
-                    engine_sha256: base.executable.sha256.clone(),
-                    model_sha256: base.model.sha256.clone(),
-                    context_tokens: context,
-                    gpu_layers: actual_layers,
-                    device: DEVICE.into(),
-                    result,
-                    log,
-                },
+            let (_, actual_layers) = policy.evidence(&log).ok_or("GPU実行の証拠がありません")?;
+            let proof = Proof {
+                schema_version: policy.proof_version(),
+                engine_sha256: base.executable.sha256.clone(),
+                model_sha256: base.model.sha256.clone(),
+                context_tokens: context,
+                gpu_layers: actual_layers,
+                device: policy.device().into(),
+                result,
+                log,
+            };
+            let choice = match policy {
+                Policy::AutoMetalV2 => Resolved::Metal { proof },
+                Policy::AutoVulkanV1 => {
+                    let mut adapters = crate::gpu::adapters().into_iter().filter(|adapter| {
+                        proof.log.lines().any(|line| {
+                            line.contains("using device Vulkan0 (") && line.contains(&adapter.name)
+                        })
+                    });
+                    let adapter = adapters
+                        .next()
+                        .ok_or("Vulkanの実デバイスを確認できません")?;
+                    if adapters.next().is_some() {
+                        return Err("Vulkanのデバイス識別が曖昧です".into());
+                    }
+                    Resolved::Vulkan { proof, adapter }
+                }
             };
             choice.validate(policy, base, context)?;
             Ok(Some(choice))
@@ -224,7 +289,9 @@ fn resolve_with_memory(
                 // A CPU-only build or missing device cannot benefit from fewer
                 // layers. Retry only when this runtime actually selected Metal.
                 let log = std::fs::read_to_string(directory.join("stderr.log")).unwrap_or_default();
-                if super::llama_metrics::metal_device(&log).as_deref() != Some(DEVICE) {
+                if policy.evidence(&log).is_none()
+                    && !log.contains(&format!("using device {} (", policy.device()))
+                {
                     break;
                 }
             }

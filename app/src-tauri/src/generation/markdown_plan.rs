@@ -200,7 +200,10 @@ pub(super) fn build_with_system(
     version: PromptVersion,
     system: &str,
 ) -> Result<Plan, String> {
-    if !(2048..=60000).contains(&limit) {
+    // Reviewed adaptive models can expose more than the legacy 60k input
+    // ceiling. Keep the same absolute bound as the frozen engine conditions;
+    // existing plans and their saved limits remain unchanged.
+    if !(2048..=262144).contains(&limit) {
         return Err("議事録の入力上限が不正です".into());
     }
     let mut groups = Vec::new();

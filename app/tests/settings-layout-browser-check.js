@@ -19,7 +19,10 @@ async page => {
   const vocabulary = page.getByRole('region', { name: '共通用語', exact: true }); await vocabulary.waitFor();
   const prompt = page.getByRole('region', { name: '議事録生成プロンプト', exact: true });
   check(await prompt.evaluate((node) => !!(node.compareDocumentPosition(document.querySelector('section[aria-label="共通用語"]')) & Node.DOCUMENT_POSITION_FOLLOWING)), 'vocabulary precedes prompts');
-  await page.getByText('議事録の作成・統合に使うプロンプトと共通用語を管理します。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'プロンプトの説明を開く', exact: true }).click();
+  const help=page.getByRole('dialog', { name: 'プロンプト', exact: true });
+  await help.getByText('議事録の作成・統合に使うプロンプトと共通用語を管理します。', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');await help.waitFor({state:'hidden'});
   await vocabulary.getByRole('button', { name: '用語を追加', exact: true }).click();
   const term = vocabulary.getByRole('textbox', { name: '用語（必須）', exact: true }); await term.fill('移動後の用語');
   await vocabulary.getByRole('status').filter({ hasText: '用語は保存済み' }).waitFor();

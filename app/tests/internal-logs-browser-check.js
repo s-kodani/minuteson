@@ -54,7 +54,7 @@ async page => {
   check(await logs.getByText("一時停止中の追記", { exact: true }).count() === 0, "paused viewer updated");
   await logs.getByRole("button", { name: "自動更新を再開", exact: true }).click();
   await logs.getByText("一時停止中の追記", { exact: true }).waitFor();
-  await page.evaluate(() => { window.internalLogsFixture.hold = true; });
+  await page.evaluate(() => { window.internalLogsFixture.holdOlder = true; });
   await top();
   await page.waitForFunction(() => window.internalLogsFixture.pending.length === 1);
   await logs.getByText("古いログを読み込んでいます…", {exact:true}).waitFor();

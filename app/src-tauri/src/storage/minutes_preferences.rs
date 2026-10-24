@@ -141,8 +141,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
         let mut payload = storage.minutes_preferences().unwrap().payload;
-        payload.standard.executable_path = "/engines/llama-completion".into();
-        payload.standard.model_path = "/models/japanese.gguf".into();
+        payload.standard.executable_path =
+            crate::test_support::absolute("/engines/llama-completion");
+        payload.standard.model_path = crate::test_support::absolute("/models/japanese.gguf");
         let saved = storage
             .save_minutes_preferences(0, payload.clone())
             .unwrap();

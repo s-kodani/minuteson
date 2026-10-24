@@ -33,7 +33,7 @@ class TauriPlatformTests(unittest.TestCase):
         self.base = configuration("tauri.conf.json")
         self.permissions = {
             item["identifier"]: set(item["commands"]["allow"])
-            for item in tomllib.loads((TAURI / "permissions/application.toml").read_text())["permission"]
+            for item in tomllib.loads((TAURI / "permissions/application.toml").read_text(encoding="utf8"))["permission"]
         }
 
     def grants(self, window):
@@ -47,15 +47,15 @@ class TauriPlatformTests(unittest.TestCase):
         return grants
 
     def test_every_registered_command_is_in_the_acl_manifest_and_has_an_explicit_role(self):
-        source = (TAURI / "src/lib.rs").read_text()
+        source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
         handler = source.split("tauri::generate_handler![", 1)[1].split("];", 1)[0]
         commands = re.findall(r"^\s*(?:\w+::)*(\w+),\s*$", handler, re.M)
-        manifest = re.findall(r'"(\w+)"', (TAURI / "app_commands.rs").read_text())
+        manifest = re.findall(r'"(\w+)"', (TAURI / "app_commands.rs").read_text(encoding="utf8"))
         self.assertGreater(len(commands), 100)
         self.assertEqual(len(commands), len(set(commands)))
         self.assertEqual(commands, manifest)
         self.assertEqual(set(commands), set.union(*self.permissions.values()))
-        build = (TAURI / "build.rs").read_text()
+        build = (TAURI / "build.rs").read_text(encoding="utf8")
         self.assertIn("AppManifest::new().commands(app_commands::COMMANDS)", build)
 
     def test_auxiliary_windows_cannot_modify_meetings_models_or_saved_settings(self):

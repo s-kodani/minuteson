@@ -1,3 +1,4 @@
+import {unpackNoticeReply} from "./archived-input-state";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
 import {useEffect,useRef,useState} from "react";
@@ -26,10 +27,10 @@ function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInpu
 }
 
 /** Closed recordings only: neither a current connection badge nor replay. */
-export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;locked:boolean;onOpen:(id:string)=>Promise<void>}){
+export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingIds?:string[];paused:boolean;locked:boolean;onOpen:(id:string)=>Promise<void>}){
   const [views,setViews]=useState<ArchivedInputView[]>([]),[readError,setReadError]=useState(""),[listenerError,setListenerError]=useState(""),[reading,setReading]=useState(false),[readPending,setReadPending]=useState(false);
-  const guard=useRef({paused,locked,onOpen}),refresh=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
-  guard.current={paused,locked,onOpen};
+  const guard=useRef({paused,locked,onOpen,meetingIds}),refresh=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
+  guard.current={paused,locked,onOpen,meetingIds};
   useEffect(()=>{
     if(!isTauri())return;
     let disposed=false,inFlight=false,epoch=0,wasPaused=guard.current.paused,next=0,pendingAt:number|null=null;
@@ -38,14 +39,14 @@ export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;lock
     const now=()=>clock.read(performance.now(),Date.now());
     const pause=()=>{if(wasPaused!==guard.current.paused){wasPaused=guard.current.paused;epoch++;controller.pause(wasPaused);}return wasPaused;};
     const paint=()=>{
-      if(disposed)return;pause();const at=now(),state=controller.paint(at);setViews(state.views);
+      if(disposed)return;pause();if(guard.current.meetingIds)controller.retainMeetings(new Set(guard.current.meetingIds));const at=now(),state=controller.paint(at);setViews(state.views);
       setReadPending(!wasPaused&&pendingAt!==null&&at-pendingAt>=1000);
       for(const request of state.attempts)void deliver(request);
     };
     const deliver=async(request:ArchivedAttempt)=>{
       const a=request.attempt;
       try{const value=await invoke("acknowledge_archived_recording_input_notice",{request:{meetingId:request.meetingId,sessionId:a.sessionId,noticeId:a.noticeId,recipientId:a.recipientId,generation:a.generation,action:a.action,receiveId:a.action==="receive"?a.receiveId:null}});
-        if(disposed)return;pause();controller.complete(request,value,now());paint();
+        if(disposed)return;pause();const reply=unpackNoticeReply(value);if(reply.paused){controller.defer(request);paint();return;}controller.complete(request,reply.value,now());paint();
       }catch{if(!disposed){controller.fail(request);paint();}}
     };
     const poll=async()=>{
@@ -54,7 +55,8 @@ export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;lock
       inFlight=true;pendingAt=requestedAt;setReading(true);const after=controller.after(),requestedEpoch=epoch;
       try{const page=await invoke("get_archived_recording_input_notices",{afterSessionId:after});
         if(disposed||pause()||epoch!==requestedEpoch)return;
-        controller.acceptPage(page,after,requestedAt);setReadError("");
+        const reply=unpackNoticeReply(page);if(reply.paused){controller.defer();return;}
+        controller.acceptPage(reply.value,after,requestedAt);setReadError("");
       }catch{if(!disposed&&!pause()&&epoch===requestedEpoch){controller.failedRead();setReadError("終了済み録音の通知履歴を確認できません。保存された音声の成否を示す診断ではありません。");}}
       finally{inFlight=false;pendingAt=null;if(!disposed){setReading(false);paint();
         // One page at a time; traverse promptly instead of refreshing only the

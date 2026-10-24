@@ -21,6 +21,8 @@ impl Policy {
 }
 
 pub(crate) fn helper_path() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    return crate::windows_runtime::embedding();
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     // Tests inject an owned signed binary, without changing production lookup.

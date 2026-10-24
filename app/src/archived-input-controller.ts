@@ -16,6 +16,8 @@ export class ArchivedInputController {
   private recipientId:string;
   constructor(recipientId:string){this.recipientId=recipientId;}
   after(){return this.cursor;}
+  retainMeetings(ids:Set<string>){for(const [id,entry]of this.entries)if(!ids.has(entry.row.meetingId))this.entries.delete(id);}
+  defer(request?:ArchivedAttempt){if(request){const entry=this.entries.get(request.attempt.sessionId);if(entry===request.entry){entry.queue.defer(request.attempt);entry.fresh=false;}}else for(const entry of this.entries.values())entry.fresh=false;}
   pause(paused:boolean){
     if(paused&&!this.paused)for(const entry of this.entries.values())entry.fresh=false;
     this.paused=paused;
@@ -28,6 +30,7 @@ export class ArchivedInputController {
     if(after===null)for(const entry of this.entries.values())entry.seen=false;
     for(const row of page.recordings){
       let entry=this.entries.get(row.sessionId);
+      if(row.issue==="paused"){if(entry){entry.seen=true;entry.fresh=false;entry.error=false;}continue;}
       if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue; // Legacy: no new local/disk ledger.
       if(!entry){
         if(this.entries.size===128)this.entries.delete(this.entries.keys().next().value!);

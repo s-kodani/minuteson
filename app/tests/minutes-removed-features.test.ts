@@ -51,7 +51,7 @@ test("legacy draft edits, adoption and version restoration are deleted from nati
   // ASR revision publication is a separate, still required operation.
   assert.match(revisions,/fn commit_analysis_inner\(/);
   const modules=readFileSync(new URL("storage.rs",root),"utf8");
-  assert.match(modules,/#\[cfg\(test\)\]\npub\(crate\) mod current_minutes_fixture;/);
+  assert.match(modules,/#\[cfg\(test\)\]\r?\npub\(crate\) mod current_minutes_fixture;/);
   assert.doesNotMatch(modules,/mod minutes_ui;|MinutesAdoptRequest|MinutesVersionState|CommittedMinutes/);
   assert.equal(existsSync(new URL("storage/stored_minutes_fixture.rs",root)),false);
 });
@@ -79,7 +79,7 @@ test("structured worker execution and candidate publication are removed from the
   for(const path of ["storage/minutes.rs","storage/minutes_drafts.rs","minutes_document.rs","storage/stored_minutes_fixture.rs"]) assert.equal(existsSync(new URL(path,root)),false,path);
   const admission=readFileSync(new URL("storage/minutes_input.rs",root),"utf8");
   for(const name of ["enqueue_minutes_job","enqueue_minutes_job_configured"])
-    assert.match(admission,new RegExp("#\\[cfg\\(test\\)\\]\\n    pub\\(crate\\) fn "+name+"\\("));
+    assert.match(admission,new RegExp("#\\[cfg\\(test\\)\\]\\r?\\n    pub\\(crate\\) fn "+name+"\\("));
 });
 test("opening plain minutes never migrates or publishes a removed structured document",()=>{
   const root=new URL("../src-tauri/src/",import.meta.url);

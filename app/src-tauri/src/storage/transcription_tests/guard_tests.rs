@@ -76,17 +76,24 @@ fn guarded_transcription_fallback_is_durable_and_resume_keeps_the_original_vocab
     assert_eq!(checkpoint2["outputs"][0], checkpoint.unwrap()["outputs"][0]);
 }
 #[test]
-fn guarded_transcription_never_checkpoints_or_publishes_a_failed_fallback() {
+fn guarded_transcription_finishes_with_review_ranges_instead_of_publishing_repetition() {
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting, config, calls) = engine(root.path(), 4, true);
     let job = enqueue(&storage, &meeting, "guard", config, "standard").unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    let error = process(&storage, &job.id, &|| false, &|_| {}).unwrap_err();
-    assert!(error.contains("再認識しても反復"));
-    assert_eq!(call_args(&calls).len(), 2);
-    assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 0);
-    assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
+    let candidate = process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(call_args(&calls).len(), 3);
+    let view = storage
+        .load_visible_analysis(&meeting, &candidate)
+        .unwrap()
+        .unwrap();
+    assert!(view.utterances.is_empty());
+    assert_eq!(view.review_ranges.len(), 1);
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
 }
+
 #[test]
 fn guarded_transcription_checks_rejected_artifacts_before_resume_or_retry() {
     let root = tempfile::tempdir().unwrap();

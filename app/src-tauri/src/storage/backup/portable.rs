@@ -348,6 +348,7 @@ pub(super) fn portable_json_with_metadata(
             "schemaVersion",
             "inputDiagnosticsState",
             "systemAudioUnreceived",
+            "microphoneAudioUnreceived",
             "scenario",
             "captureMode",
             "backend",

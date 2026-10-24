@@ -73,6 +73,11 @@ fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 
+#[cfg(windows)]
+fn capacity(parent: &Path) -> Result<u64, String> {
+    crate::windows_files::available(parent)
+}
+#[cfg(unix)]
 fn capacity(parent: &Path) -> Result<u64, String> {
     let path = std::ffi::CString::new(parent.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -105,7 +110,9 @@ impl Bootstrap {
             .open(&parent)
             .map_err(|e| e.to_string())?;
         let parent_identity = Identity::read(&metadata)?;
-        if !parent_identity.matches(&parent_file.metadata().map_err(|e| e.to_string())?) {
+        if !parent_identity
+            .matches(&crate::native_fs::metadata(&parent_file).map_err(|e| e.to_string())?)
+        {
             return Err("選択した親フォルダーが変更されています".into());
         }
         let operation_id = Uuid::new_v4().to_string();
@@ -177,12 +184,12 @@ impl NewMove {
         if !self.parent_identity.matches(&directory(&self.parent)?)
             || !self
                 .parent_identity
-                .matches(&self.parent_file.metadata().map_err(|e| e.to_string())?)
+                .matches(&crate::native_fs::metadata(&self.parent_file).map_err(|e| e.to_string())?)
         {
             return Err("確認した親フォルダーの実体が変更されています".into());
         }
         local(&self.parent)?;
-        match std::fs::symlink_metadata(target) {
+        match crate::native_fs::symlink_metadata(target) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
             Ok(_) => return Err("確認した新規フォルダー名は既に存在します。上書きしません".into()),
@@ -278,26 +285,35 @@ impl NewMove {
                 "新規フォルダーの作成中に親が変更されました。途中コピーを保持します".into(),
             );
         }
-        File::open(&self.preview.destination)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        self.parent_file.sync_all().map_err(|e| e.to_string())?;
-        let intent = bootstrap.begin_move(
-            &self.preview.operation_id,
-            confirmation,
-            &self.preview.destination,
-            snapshot.manifest_hash(),
-            self.revision,
-        )?;
+        crate::native_fs::sync_path(&&self.preview.destination)?;
+        crate::native_fs::sync_handle(&self.parent_file).map_err(|e| e.to_string())?;
+        let intent = bootstrap
+            .begin_move(
+                &self.preview.operation_id,
+                confirmation,
+                &self.preview.destination,
+                snapshot.manifest_hash(),
+                self.revision,
+            )
+            .map_err(|e| format!("保存先移動の開始記録: {e}"))?;
         progress("copying");
-        let mut placement = bootstrap.pending_placement(&self.preview.operation_id, &snapshot)?;
-        placement.copy(&snapshot, cancelled)?;
+        let mut placement = bootstrap
+            .pending_placement(&self.preview.operation_id, &snapshot)
+            .map_err(|e| format!("保存先移動の所有台帳: {e}"))?;
+        placement
+            .copy(&snapshot, cancelled)
+            .map_err(|e| format!("保存先移動のコピー: {e}"))?;
         progress("handoff");
-        let handoff = snapshot.prepare_control_handoff(cancelled)?;
-        placement.install_history(&handoff, cancelled)?;
+        let handoff = snapshot
+            .prepare_control_handoff(cancelled)
+            .map_err(|e| format!("保存先移動の履歴取得: {e}"))?;
+        placement
+            .install_history(&handoff, cancelled)
+            .map_err(|e| format!("保存先移動の履歴配置: {e}"))?;
         progress("switching");
-        let selected =
-            placement.activate_for_restart(&handoff, confirmation, intent.revision, cancelled)?;
+        let selected = placement
+            .activate_for_restart(&handoff, confirmation, intent.revision, cancelled)
+            .map_err(|e| format!("保存先移動の切替: {e}"))?;
         Ok(MoveReceipt {
             operation_id: self.preview.operation_id.clone(),
             source: self.preview.source.clone(),
@@ -308,5 +324,5 @@ impl NewMove {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

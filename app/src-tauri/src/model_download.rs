@@ -4,8 +4,15 @@
 //! Download recipes are explicit untrusted input, not an authenticated catalog.
 #[cfg(target_os = "macos")]
 mod archive;
+#[cfg(windows)]
+#[path = "model_download/archive_windows.rs"]
+mod archive;
 pub(crate) mod catalog;
 mod reuse;
+#[cfg(target_os = "macos")]
+mod transport;
+#[cfg(windows)]
+#[path = "model_download/transport_windows.rs"]
 mod transport;
 #[cfg(test)]
 use crate::model_download_recipe::MAX_TOTAL;
@@ -319,6 +326,94 @@ type Fetch<'a> = dyn FnMut(
     ) -> Result<(), String>
     + 'a;
 
+pub(crate) fn download_platform(
+    staging_root: &Path,
+    bundle_root: &Path,
+    reusable: Option<(&Path, &[crate::model_placement::CatalogEntry])>,
+    operation_id: &str,
+    recipe: &Recipe,
+    expected_recipe_hash: &str,
+    cancelled: &impl Fn() -> bool,
+    progress: &mut impl FnMut(u64, u64),
+) -> Result<DownloadReceipt, String> {
+    #[cfg(target_os = "macos")]
+    {
+        download_with_bundle_reuse(
+            staging_root,
+            bundle_root,
+            reusable,
+            operation_id,
+            recipe,
+            expected_recipe_hash,
+            cancelled,
+            progress,
+        )
+    }
+    #[cfg(windows)]
+    {
+        let _ = reusable;
+        crate::windows_runtime::validate_recipe(bundle_root, recipe)?;
+        stage(
+            staging_root,
+            operation_id,
+            recipe,
+            expected_recipe_hash,
+            cancelled,
+            progress,
+            &mut |url, size, hash, output, cancelled, report| {
+                if url == crate::model_download_recipe::BUNDLED_WINDOWS {
+                    crate::windows_runtime::fetch(bundle_root, size, hash, output, cancelled)
+                } else {
+                    transport::fetch(url, size, hash, output, cancelled, report)
+                }
+            },
+        )
+    }
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn windows_offline_parity_stage(
+    staging: &Path,
+    bundle: &Path,
+    operation: &str,
+    recipe: &Recipe,
+    hash: &str,
+    index: &serde_json::Value,
+) -> Result<DownloadReceipt, String> {
+    crate::windows_runtime::validate_recipe(bundle, recipe)?;
+    stage(
+        staging,
+        operation,
+        recipe,
+        hash,
+        &|| false,
+        &mut |_, _| {},
+        &mut |url, size, sha, output, cancelled, report| {
+            if url == crate::model_download_recipe::BUNDLED_WINDOWS {
+                return crate::windows_runtime::fetch(bundle, size, sha, output, cancelled);
+            }
+            let path = Path::new(
+                index[sha]["path"]
+                    .as_str()
+                    .ok_or_else(|| format!("verified offline asset missing: {sha}"))?,
+            );
+            let proof = crate::local_engine::Fingerprint::capture(path, &|| false)?;
+            if proof.size != size || proof.sha256 != sha {
+                return Err("オフライン素材の容量・SHAが一致しません".into());
+            }
+            let parents =
+                crate::windows_files::parents(path.parent().ok_or("素材の親がありません")?)?;
+            let mut source = crate::windows_files::read(path, false)?;
+            let count = std::io::copy(&mut source, output).map_err(|e| e.to_string())?;
+            if count != size {
+                return Err("オフライン素材のコピー長が一致しません".into());
+            }
+            report(count);
+            drop(parents);
+            Ok(())
+        },
+    )
+}
 fn stage(
     staging_root: &Path,
     operation_id: &str,
@@ -383,9 +478,7 @@ fn stage(
             if !archives_seen.insert(&source.url) {
                 continue;
             }
-            #[cfg(not(target_os = "macos"))]
-            return Err("Windowsのアーカイブ取得は保留中です".into());
-            #[cfg(target_os = "macos")]
+
             {
                 let archives = operation.child("archives", false)?;
                 let name = format!("source-{index}.tar");
@@ -397,7 +490,7 @@ fn stage(
                     &mut output,
                     cancelled,
                     &mut |n| {
-                        if source.url != crate::model_download_recipe::BUNDLED_WHISPER {
+                        if !crate::model_download_recipe::is_bundled(&source.url) {
                             progress(completed + n, transfer_total);
                         }
                     },
@@ -414,7 +507,7 @@ fn stage(
                     .filter_map(|(i, s)| (s.url == source.url).then_some(i))
                     .collect::<Vec<_>>();
                 archive::extract(&archives, &name, &payload, recipe, &indices, cancelled)?;
-                if source.url != crate::model_download_recipe::BUNDLED_WHISPER {
+                if !crate::model_download_recipe::is_bundled(&source.url) {
                     completed += archive_source.expected_size;
                 }
                 progress(completed, transfer_total);
@@ -480,5 +573,5 @@ fn durable_file(directory: &Directory, relative: &str, bytes: &[u8]) -> Result<(
     directory.sync()
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests;

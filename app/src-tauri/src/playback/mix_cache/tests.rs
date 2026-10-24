@@ -1,4 +1,20 @@
 use super::*;
+
+#[test]
+fn meeting_suspension_counts_owners_and_does_not_cancel_other_meetings() {
+    let cache = MixCache::default();
+    let other = cache.reserve("other").unwrap();
+    cache.suspend_meeting("target");
+    cache.suspend_meeting("target");
+    assert!(!other.cancel.load(Ordering::Acquire));
+    cache.resume_meeting("target");
+    drop(other);
+    assert!(cache.reserve("target").is_none());
+    let unaffected = cache.reserve("other").unwrap();
+    drop(unaffected);
+    cache.resume_meeting("target");
+    assert!(cache.reserve("target").is_some());
+}
 use crate::audio::{tests::caf_fixture, VerifiedAudio};
 use crate::playback::{AudioSpan, MeetingIntervalAudio, PlaybackMissingRange, PreparedAudio};
 use sha2::{Digest, Sha256};

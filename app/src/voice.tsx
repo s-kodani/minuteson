@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
 import {IconButton} from "./action-icon";
@@ -80,10 +81,9 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
   return <details className="voice-panel" onToggle={event=>setOpen(event.currentTarget.open)}>
     <summary>声の登録・照合</summary>
     {open&&<>
-      <p>会議の声を人物として登録すると、以降の解析で照合します。名前の変更だけでは声を登録しません。</p>
+      <div className="heading-with-info"><h3>声の登録・照合</h3><InfoPopover label="声の登録・照合"><p>会議の声を人物として登録すると、以降の解析で照合します。名前の変更だけでは声を登録しません。</p><p>実音声で評価済みの判定条件がないモデルでは、名前を候補として表示します。</p></InfoPopover></div>
       {context&&!context.supported?<p>声の登録・照合は現在macOSのみ対応しています。</p>:<>
         <button className="small-secondary" disabled={disabled||running||!context?.people.some(p=>p.samples.length)} onClick={()=>void run(()=>start(null))}>登録した声と照合</button>
-        <p className="voice-note">実音声で評価済みの判定条件がないモデルでは、名前を候補として表示します。</p>
         {speakers.map(s=>{
           const match=context?.matches.find(m=>m.speakerId===s.id);
           return <div className="voice-speaker" key={s.id}>
@@ -107,11 +107,10 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
       {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
       {pending.current&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(()=>start(pending.current!.speakerId))}>同じ操作を再送して確認</button>}
       <CommonModal className="voice-dialog" nested open={!!enrolling} blocked={disabled} onDismiss={()=>setEnrolling(null)} restoreTarget={()=>opener.current} aria-label="声を人物として登録">
-        <h2>声を人物として登録</h2>
+        <div className="heading-with-info"><h2>声を人物として登録</h2><InfoPopover label="声を人物として登録"><p>現在の話者に割り当てた発言から、登録する音声を1〜2区間選んでください。</p><p>1秒以上の単独音声を候補にしています。30秒を超える区間は中央の30秒を使います。</p></InfoPopover></div>
         <label>登録先<select value={person} disabled={disabled||!!pending.current} onChange={e=>setPerson(e.target.value)}><option value="">新しい人物</option>{context?.people.map(p=><option value={p.id} key={p.id}>{p.name}（{p.id.slice(0,6)}）</option>)}</select></label>
         {!person&&<label>人物名<input maxLength={200} value={name} disabled={disabled||!!pending.current} onChange={e=>setName(e.target.value)} /></label>}
-        <p>現在の話者に割り当てた発言から、登録する音声を1〜2区間選んでください。選んだ区間を使い、この会議の話者にも人物名を適用します。元の会議・音声を削除しても、登録した声は残ります。</p>
-        <p>1秒以上の単独音声を候補にしています。30秒を超える区間は中央の30秒を使います。</p>
+        <p>選んだ区間を使い、この会議の話者にも人物名を適用します。元の会議・音声を削除しても、登録した声は残ります。</p>
         <p role="status">{selected.length} / 2区間を選択 · 候補{candidates.length}件</p>
         {needsReview&&<div role="alert"><p>登録候補が変更されました。区間を選び直すか、残った選択を確認してください。</p><button className="small-secondary" disabled={disabled||!!pending.current||!selected.length} onClick={()=>setNeedsReview(false)}>選択区間を確認しました</button></div>}
         {!context?<p>登録候補を取得できません。画面を開き直して確認してください。</p>:!candidates.length&&<p>登録できる1秒以上の単独音声がありません。</p>}
@@ -151,8 +150,8 @@ export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boo
     if(name===null){audio.clear();await stopAllPlayback();}
     await invoke<void>("manage_voice_person",{personId:p.id,expectedVersion:p.version,name,sampleId});
   };
+  const help=<InfoPopover label={standalone?"ボイス一覧":"登録した話者"}><p>声を登録した人物と、登録に使った音声を確認できます。</p><p>声の特徴量はこの端末内に保存し、バックアップにも含めます。削除しても過去の会議に付けた名前は残ります。異なるモデルで登録した声は照合に使いません。モデル変更後は、会議から声を追加登録してください。</p></InfoPopover>;
   const content=<>
-    <p>声の特徴量はこの端末内に保存し、バックアップにも含めます。削除しても過去の会議に付けた名前は残ります。異なるモデルで登録した声は照合に使いません。モデル変更後は、会議から声を追加登録してください。</p>
     <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
     {loaded&&!people.length&&!error&&<p>登録した話者はいません。</p>}
     {people.map(p=><section className="voice-person" key={p.id} aria-label={p.name}><strong>{p.name}</strong><small>識別子 {p.id.slice(0,8)} · {p.samples.length}区間</small>
@@ -168,7 +167,7 @@ export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boo
     {error&&<p role="alert">{error}</p>}
   </>;
   return <section className={standalone?"voice-library":"voice-settings"} aria-label={standalone?"ボイス一覧":undefined}>
-    {standalone?<><div className="page-heading"><h1>ボイス一覧</h1><p className="lead">声を登録した人物と、登録に使った音声を確認できます。</p></div>{content}</>:<details onToggle={e=>{setOpen(e.currentTarget.open);if(!e.currentTarget.open)audio.clear();}}><summary>登録した話者</summary>{open&&content}</details>}
+    {standalone?<><div className="page-heading heading-with-info"><h1>ボイス一覧</h1>{help}</div>{content}</>:<details onToggle={e=>{setOpen(e.currentTarget.open);if(!e.currentTarget.open)audio.clear();}}><summary>登録した話者</summary>{open&&<><div className="heading-with-info"><h3>登録した話者</h3>{help}</div>{content}</>}</details>}
     <CommonModal className="voice-dialog" open={!!editing} blocked={locked||busy} onDismiss={()=>setEditing(null)} restoreTarget={()=>opener.current} aria-label="登録した人物名を変更"><h2>人物名を変更</h2><label>人物名<input maxLength={200} value={name} onChange={e=>setName(e.target.value)} /></label><p>過去の会議に保存した名前は変わりません。</p><button disabled={locked||busy||!name.trim()} onClick={()=>void run(async()=>{await manage(editing!,name,null);setEditing(null);})}>保存</button>{error&&<p role="alert">{error}</p>}</CommonModal>
     <CommonModal className="voice-dialog" open={!!deleting} blocked={locked||busy} onDismiss={()=>setDeleting(null)} restoreTarget={()=>opener.current} aria-label="人物と声を削除"><h2>「{deleting?.name}」の登録を削除</h2><p>登録した声をすべて削除します。今後の照合には使われません。</p><button disabled={locked||busy} onClick={()=>void run(async()=>{await manage(deleting!,null,null);setDeleting(null);})}>人物と声を削除</button>{error&&<p role="alert">{error}</p>}</CommonModal>
   </section>;

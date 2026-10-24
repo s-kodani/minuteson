@@ -349,7 +349,7 @@ impl Storage {
         request: Option<&transcript_consolidation::Request>,
     ) -> Result<Option<JobSnapshot>, String> {
         self.require_data_writable()?;
-        if !cfg!(target_os = "macos") {
+        if !cfg!(any(target_os = "macos", windows)) {
             return Ok(None);
         }
         let (source, _) = self.recorded_analysis_input(meeting)?;
@@ -627,5 +627,5 @@ impl Storage {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(in crate::storage) mod tests;

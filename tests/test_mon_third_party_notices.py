@@ -39,8 +39,16 @@ class NoticeTests(unittest.TestCase):
     def file(self, relative, text):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf8")
+        path.write_text(text, encoding="utf8", newline="")
         return path
+
+    def symlink(self, path, target):
+        try:
+            path.symlink_to(target)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("Windows symbolic links require Developer Mode or the symlink privilege")
+            raise
 
     def test_graph_excludes_root_dev_and_unreachable_platform_but_keeps_build(self):
         self.assertEqual([p["id"] for p in notices.cargo_packages(self.metadata)], ["build", "crate"])
@@ -117,7 +125,7 @@ class NoticeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notices.notice_files(base, "../outside/LICENSE")
         (base / "LICENSE").unlink()
-        (base / "LICENSE").symlink_to(outside)
+        self.symlink(base / "LICENSE", outside)
         with self.assertRaises(ValueError):
             notices.notice_files(base)
 
@@ -137,7 +145,7 @@ class NoticeTests(unittest.TestCase):
         self.file("crate/LICENSE.BSD-3-Clause", "Named BSD text")
         self.file("crate/src/copying.rs", "pub fn copying() {}")
         self.file("crate/vendor/LICENSE.py", "print('not a notice')")
-        names = [name for name, _ in notices.notice_files(self.root / "crate")]
+        names = [Path(name).as_posix() for name, _ in notices.notice_files(self.root / "crate")]
         self.assertIn("LICENSES/MIT.txt", names)
         self.assertIn("LICENSES/Apache-2.0.txt", names)
         self.assertIn("LICENSE.MIT", names)
@@ -150,11 +158,12 @@ class NoticeTests(unittest.TestCase):
         output = self.root / "generated"
         notices.write_outputs(output, text, inventory)
         self.assertEqual((output / notices.OUTPUTS[0]).read_bytes(), text)
-        self.assertEqual((output / notices.OUTPUTS[0]).stat().st_mode & 0o777, 0o644)
-        self.assertEqual(json.loads((output / notices.OUTPUTS[1]).read_text()), inventory)
+        if notices.os.name != "nt":
+            self.assertEqual((output / notices.OUTPUTS[0]).stat().st_mode & 0o777, 0o644)
+        self.assertEqual(json.loads((output / notices.OUTPUTS[1]).read_text(encoding="utf8")), inventory)
         target = self.file("outside.txt", "preserve")
         (output / notices.OUTPUTS[0]).unlink()
-        (output / notices.OUTPUTS[0]).symlink_to(target)
+        self.symlink(output / notices.OUTPUTS[0], target)
         with self.assertRaises(ValueError):
             notices.write_outputs(output, text, inventory)
         self.assertEqual(target.read_text(), "preserve")
@@ -257,16 +266,16 @@ class NoticeTests(unittest.TestCase):
             notices.collect(self.root, self.metadata, self.lock)
         package["source"] = notices.REGISTRY
         vcs_path = self.root / "crate/.cargo_vcs_info.json"
-        original_vcs = vcs_path.read_text()
+        original_vcs = vcs_path.read_text(encoding="utf8")
         vcs_path.unlink()
-        vcs_path.symlink_to(self.file("outside-vcs.json", original_vcs))
+        self.symlink(vcs_path, self.file("outside-vcs.json", original_vcs))
         with self.assertRaises(ValueError):
             notices.collect(self.root, self.metadata, self.lock)
         vcs_path.unlink()
         self.file("crate/.cargo_vcs_info.json", original_vcs)
         path = self.root / "third-party/notices/upstream.txt"
         path.unlink()
-        path.symlink_to(self.file("outside.txt", "preserve"))
+        self.symlink(path, self.file("outside.txt", "preserve"))
         with self.assertRaises(ValueError):
             notices.collect(self.root, self.metadata, self.lock)
         (self.root / "third-party/notices/index.json").unlink()

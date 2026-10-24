@@ -13,7 +13,11 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare fixed capture protocol dependency
+        run: python tools/mon_windows_capture_dependencies.py
       - name: Configure x64 probe
         run: cmake -S probes/windows-capture -B probes/windows-capture/build -G "Visual Studio 17 2022" -A x64
       - name: Build Release probe
         run: cmake --build probes/windows-capture/build --config Release
+      - name: Validate packet clock without audio hardware
+        run: ctest --test-dir probes/windows-capture/build -C Release --output-on-failure

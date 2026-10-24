@@ -1,3 +1,4 @@
+import { nativeAbsolutePath } from "./native-path.ts";
 import { checkedStartupReport } from "./startup-attention-state.ts";
 
 export interface StorageView {
@@ -9,7 +10,7 @@ export interface StorageView {
 }
 export function assertStorageView(s: StorageView): void {
   if (s?.recovery != null) checkedStartupReport({ schemaVersion: 1, phase: "ready", failure: null, recovery: s.recovery });
-  const path = (p: unknown) => typeof p === "string" && p.startsWith("/") && p.length <= 4096 && !p.includes("\0");
+  const path = (p: unknown) => nativeAbsolutePath(p);
   if (!s || ![s.meetingRoot, s.activeMeetingRoot, s.modelsRoot, s.bootstrapPath].every(path)
     || typeof s.restartRequired !== "boolean" || !Number.isSafeInteger(s.revision) || s.revision < 0
     || !["default", "relocated", "recovered"].includes(s.origin)

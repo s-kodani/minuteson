@@ -125,7 +125,7 @@ pub(crate) struct Plan {
 }
 
 pub(crate) fn engine(storage: &Storage) -> Result<SherpaConfig, String> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", windows)) {
         return Err("声の登録・照合は現在macOSのみ対応しています".into());
     }
     let preferences = storage.diarization_preferences()?;
@@ -323,7 +323,9 @@ mod tests {
 // Called only after a newly analyzed meeting becomes current, never after
 // enrollment or registry changes (old meetings are explicitly re-matched).
 pub(crate) fn enqueue_automatic(storage: &Storage, meeting: &str) -> Result<(), String> {
-    if !cfg!(target_os = "macos") || storage.voice_people()?.iter().all(|p| p.samples.is_empty()) {
+    if !cfg!(any(target_os = "macos", windows))
+        || storage.voice_people()?.iter().all(|p| p.samples.is_empty())
+    {
         return Ok(());
     }
     let context = storage.voice_context(meeting)?;

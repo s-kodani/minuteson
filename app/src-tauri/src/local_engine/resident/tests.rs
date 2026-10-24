@@ -9,6 +9,7 @@ pub(crate) fn fixture(script: &str) -> (tempfile::TempDir, PathBuf, Snapshot) {
     std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
     let proof = Fingerprint::capture(&worker, &|| false).unwrap();
     let snapshot = Snapshot {
+        gpu: None,
         protocol: 1,
         engine: "whisper".into(),
         name: "mon-whisper-worker".into(),

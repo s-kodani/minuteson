@@ -536,6 +536,6 @@ pub(super) fn retain(
     Ok(Some(operation))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_supersession_tests.rs"]
 mod tests;

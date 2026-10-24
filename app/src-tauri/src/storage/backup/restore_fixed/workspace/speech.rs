@@ -15,7 +15,7 @@ impl FixedWorkspace {
     ) -> Result<(), String> {
         check_cancelled(cancelled)?;
         let source = &fixed.ids.source().database;
-        if !std::fs::symlink_metadata(self.stage.path())
+        if !crate::native_fs::symlink_metadata(self.stage.path())
             .map_err(|e| e.to_string())?
             .is_dir()
         {

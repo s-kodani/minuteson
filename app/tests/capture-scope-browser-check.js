@@ -12,7 +12,11 @@ async page=>{
   await scope().selectOption("application");await ready();
   check(await selected()===null&&await app().inputValue()===""&&await page.evaluate(()=>window.scopeFixture.calls.every(c=>c==="get_capture_applications")),"application mode silently picked a target or requested capture");
   results.push("application selection requires an explicit target and only invokes metadata");
-  await app().selectOption(await key(123));check((await selected()).application.pid===123&&await page.getByText(/特定タブだけの取得は保証しません/).isVisible(),"identity or browser scope warning missing");
+  await app().selectOption(await key(123));
+  await page.getByRole("button",{name:"PC音声の取得範囲の説明を開く",exact:true}).click();
+  const help=page.getByRole("dialog",{name:"PC音声の取得範囲",exact:true});await help.waitFor();
+  check((await selected()).application.pid===123&&(await help.innerText()).includes("特定タブだけの取得は保証しません"),"identity or browser scope warning missing");
+  await page.keyboard.press("Escape");await help.waitFor({state:"hidden"});
   results.push("explicit application retains process instance and explains browser-wide rather than tab-only capture");
   await page.evaluate(()=>{window.scopeFixture.catalog.applications[0].launchTimeUs++;});await refresh().click();await ready();
   check(await selected()===null&&(await app().locator("option:checked").innerText()).includes("終了・再起動"),"restarted process was silently adopted");

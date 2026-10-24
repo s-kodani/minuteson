@@ -24,11 +24,13 @@ fn package_path(models_root: &Path, package: &str) -> Result<PathBuf, String> {
     let root = models_root.canonicalize().map_err(|e| e.to_string())?;
     let path = root.join(package);
     let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    if !meta.is_dir()
-        || meta.permissions().mode() & 0o077 != 0
-        || path.canonicalize().map_err(|e| e.to_string())? != path
-    {
+    #[cfg(unix)]
+    let private = meta.permissions().mode() & 0o077 == 0;
+    #[cfg(windows)]
+    let private = crate::windows_files::ordinary(&meta);
+    if !meta.is_dir() || !private || path.canonicalize().map_err(|e| e.to_string())? != path {
         return Err("モデル配置先の実体・権限が不正です".into());
     }
     Ok(path)
@@ -98,15 +100,24 @@ fn artifact(
         }
         hash.update(&buffer[..n]);
     }
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let same = |current: &std::fs::Metadata| {
+        #[cfg(unix)]
+        if current.dev() != before.dev()
+            || current.ino() != before.ino()
+            || current.ctime() != before.ctime()
+            || current.ctime_nsec() != before.ctime_nsec()
+        {
+            return false;
+        }
+        #[cfg(windows)]
+        if !crate::windows_files::ordinary(current) {
+            return false;
+        }
         current.is_file()
-            && current.dev() == before.dev()
-            && current.ino() == before.ino()
             && current.len() == before.len()
             && current.modified().ok() == before.modified().ok()
-            && current.ctime() == before.ctime()
-            && current.ctime_nsec() == before.ctime_nsec()
     };
     if count != before.len()
         || !same(&meta)

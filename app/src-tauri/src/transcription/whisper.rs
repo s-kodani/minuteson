@@ -162,6 +162,11 @@ pub(crate) fn logical_output(
 ) -> Result<Vec<u8>, String> {
     let segments = parse_output(bytes, runtime, duration)?;
     let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    super::recovery::rebind_json(
+        &mut value,
+        &[runtime.to_string_lossy().into_owned()],
+        logical,
+    )?;
     value["params"]["model"] = serde_json::to_value(logical).map_err(|e| e.to_string())?;
     let normalized = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
     if parse_output(&normalized, logical, duration)? != segments {
@@ -268,6 +273,7 @@ pub(crate) fn run_unit_with_suppression(
             return Err("VADモデルが導入されていません。設定から追加してください".into());
         }
     }
+    crate::local_engine::native_environment(command);
     let mut child = crate::local_engine::resident::Run::spawn(
         &mut launch,
         "whisper",

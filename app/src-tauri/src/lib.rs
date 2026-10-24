@@ -5,7 +5,7 @@ mod application_close;
 mod audio;
 mod audio_clock;
 mod audio_import;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod bootstrap;
 mod capture_inputs;
 mod capture_manifest;
@@ -16,6 +16,7 @@ mod data_controller;
 mod diarization;
 mod exports;
 mod generation;
+mod gpu;
 mod import_controller;
 mod input_levels;
 mod input_status;
@@ -29,13 +30,13 @@ mod model_application;
 #[cfg(target_os = "macos")]
 mod model_bundled_runtime;
 mod model_compatibility;
-#[cfg(target_os = "macos")]
 mod model_download;
 mod model_download_ipc;
 mod model_download_recipe;
 mod model_inspection;
 mod model_official_catalog;
 mod model_placement;
+mod native_fs;
 #[cfg(target_os = "windows")]
 mod platform_dialog;
 mod playback;
@@ -46,7 +47,7 @@ mod recorder_operation_notices;
 mod recorder_panel;
 mod recording_confirmation;
 mod recording_confirmation_window;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod recording_segments;
 mod recording_writes;
 mod resampling;
@@ -61,6 +62,16 @@ mod startup_attention;
 mod storage;
 mod transcription;
 mod voice;
+#[cfg(target_os = "windows")]
+mod window_chrome;
+#[cfg(windows)]
+mod windows_appearance;
+#[cfg(target_os = "windows")]
+mod windows_files;
+#[cfg(all(test, target_os = "windows"))]
+mod windows_integration_tests;
+#[cfg(target_os = "windows")]
+mod windows_runtime;
 
 #[cfg(test)]
 mod test_support;
@@ -303,7 +314,7 @@ fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot
     data_app(&window)?.state::<DataController>().snapshot()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 async fn get_deletion_items(
     window: WebviewWindow,
@@ -315,23 +326,27 @@ async fn get_deletion_items(
     .await
     .map_err(|e| e.to_string())?
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
-fn review_meeting_deletion(
+async fn review_meeting_deletion(
     window: WebviewWindow,
     meeting_id: String,
 ) -> Result<data_controller::Snapshot, String> {
-    DataController::review_deletion(&data_app(&window)?, meeting_id, false)
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::review_deletion(&app, meeting_id, false)).await.map_err(|e| e.to_string())?
+
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
-fn review_pending_deletion(
+async fn review_pending_deletion(
     window: WebviewWindow,
     operation_id: String,
 ) -> Result<data_controller::Snapshot, String> {
-    DataController::review_deletion(&data_app(&window)?, operation_id, true)
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::review_deletion(&app, operation_id, true)).await.map_err(|e| e.to_string())?
+
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 fn get_deletion_paths(
     window: WebviewWindow,
@@ -343,7 +358,7 @@ fn get_deletion_paths(
         .deletion_page(&confirmation_id, offset)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View, String> {
     let app = data_app(&window)?;
@@ -357,7 +372,7 @@ async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View,
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 fn review_model_body_deletion(
     window: WebviewWindow,
@@ -372,7 +387,7 @@ fn review_model_body_deletion(
         },
     )
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 fn review_pending_model_deletion(
     window: WebviewWindow,
@@ -383,7 +398,7 @@ fn review_pending_model_deletion(
         data_controller::ModelTarget::Pending(operation_id),
     )
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 fn get_model_deletion_paths(
     window: WebviewWindow,
@@ -395,7 +410,7 @@ fn get_model_deletion_paths(
         .model_deletion_page(&confirmation_id, offset)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 async fn get_model_deletion_items(
     window: WebviewWindow,
@@ -413,7 +428,7 @@ async fn get_model_deletion_items(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 async fn get_audio_deletion_items(
     window: WebviewWindow,
@@ -425,29 +440,27 @@ async fn get_audio_deletion_items(
     .await
     .map_err(|e| e.to_string())?
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
-fn review_meeting_audio_deletion(
+async fn review_meeting_audio_deletion(
     window: WebviewWindow,
     meeting_id: String,
 ) -> Result<data_controller::Snapshot, String> {
-    DataController::review_audio_deletion(
-        &data_app(&window)?,
-        data_controller::AudioTarget::Fresh(meeting_id),
-    )
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::review_audio_deletion(&app, data_controller::AudioTarget::Fresh(meeting_id))).await.map_err(|e| e.to_string())?
+
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
-fn review_pending_audio_deletion(
+async fn review_pending_audio_deletion(
     window: WebviewWindow,
     operation_id: String,
 ) -> Result<data_controller::Snapshot, String> {
-    DataController::review_audio_deletion(
-        &data_app(&window)?,
-        data_controller::AudioTarget::Pending(operation_id),
-    )
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::review_audio_deletion(&app, data_controller::AudioTarget::Pending(operation_id))).await.map_err(|e| e.to_string())?
+
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tauri::command]
 fn get_audio_deletion_paths(
     window: WebviewWindow,
@@ -459,7 +472,7 @@ fn get_audio_deletion_paths(
         .audio_deletion_page(&confirmation_id, offset)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
     DataController::review_move(&data_app(&window)?)
@@ -470,6 +483,35 @@ fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapsho
 struct DataAvailability {
     available: bool,
     reason: Option<String>,
+    deletion_available: bool,
+    deletion_reason: Option<String>,
+}
+
+#[tauri::command]
+async fn get_meeting_deletion_availability(window: WebviewWindow, meeting_ids: Vec<String>) -> Result<Vec<storage::meeting_access::Availability>, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let reason = app.state::<AnalysisController>().meeting_deletion_blocker()?;
+        let mut result = app.state::<Storage>().meeting_deletion_availability(&meeting_ids)?;
+        let recording=app.state::<SessionStore>().snapshot();
+        if recording.is_active() {
+            for item in &mut result {
+                if recording.meeting_id.is_none() || recording.meeting_id.as_deref()==Some(item.meeting_id.as_str()) {
+                    item.available=false;
+                    if !item.blockers.iter().any(|b|b.kind=="recording") {
+                        item.blockers.push(storage::meeting_access::Blocker {kind:"recording".into(),reason:"この会議の録音・音声保存が完了していません".into(),job_id:None});
+                    }
+                }
+            }
+        }
+        if let Some(reason) = reason {
+            for item in &mut result {
+                item.available = false;
+                item.blockers.push(storage::meeting_access::Blocker {kind:"storage".into(),reason:reason.clone(),job_id:None});
+            }
+        }
+        Ok(result)
+    }).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -483,9 +525,13 @@ fn get_data_operation_availability(window: WebviewWindow) -> Result<DataAvailabi
     } else {
         app.state::<AnalysisController>().data_operation_blocker()?
     };
+    let reason = if reason.is_none() && app.state::<Storage>().has_scoped_meeting_deletion()? {
+        Some("未完了の会議削除があります。削除の確認画面から解決してください".into())
+    } else { reason };
+    let deletion_reason = if reason.as_deref() == Some("録音通知履歴の確認・更新中") { app.state::<AnalysisController>().deletion_operation_blocker()? } else { reason.clone() };
     Ok(DataAvailability {
-        available: reason.is_none(),
-        reason,
+        available: reason.is_none(), reason,
+        deletion_available: deletion_reason.is_none(), deletion_reason,
     })
 }
 
@@ -507,11 +553,13 @@ async fn select_data_operation(
 }
 
 #[tauri::command]
-fn start_data_operation(
+async fn start_data_operation(
     window: WebviewWindow,
     request: data_controller::Request,
 ) -> Result<data_controller::Snapshot, String> {
-    DataController::start(&data_app(&window)?, request)
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::start(&app, request)).await.map_err(|e| e.to_string())?
+
 }
 
 #[tauri::command]
@@ -662,12 +710,14 @@ async fn export_plain_minutes_markdown(
 ) -> Result<Option<storage::ExportRecord>, String> {
     let app = minutes_app(&window)?;
     app.state::<Storage>().require_data_writable()?;
+    let meeting_owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "export", None)?;
     let admission = app.state::<AnalysisController>().begin_export()?;
     let lease = app.state::<exports::ExportController>().begin()?;
     // A lost receiver does not release admission while the native dialog or
     // durable publication is still alive. Status reads never reopen a dialog.
     tauri::async_runtime::spawn(async move {
         let _admission = admission;
+        let _meeting_owner = meeting_owner;
         let _lease = lease;
         let worker = app.clone();
         let query = request.clone();
@@ -1275,11 +1325,12 @@ async fn prepare_meeting_playback(
             },
             || {
                 guard.check()?;
+                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
                 audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
-                guard.publish(|| app.state::<PlaybackStore>().insert_meeting(audio))
+                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert_meeting(audio)?,owner) })
             },
         )
     })
@@ -1326,11 +1377,12 @@ async fn prepare_markdown_interval_playback(
             },
             || {
                 guard.check()?;
+                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
                 audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
-                guard.publish(|| app.state::<PlaybackStore>().insert_interval(audio))
+                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert_interval(audio)?,owner) })
             },
         )
     })
@@ -1361,13 +1413,14 @@ async fn prepare_utterance_playback(
             },
             || {
                 guard.check()?;
+                let owner = app.state::<Storage>().begin_meeting_work(&meeting_id, "playback", None)?;
                 let audio = app.state::<Storage>().prepare_utterance_audio_cancellable(
                     &meeting_id,
                     &analysis_id,
                     &utterance_id,
                     &|| guard.cancelled(),
                 )?;
-                guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert(audio)?,owner) })
             },
         )
     })
@@ -1396,10 +1449,11 @@ async fn prepare_draft_utterance_playback(
             },
             || {
                 guard.check()?;
+                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
                 let audio = app
                     .state::<Storage>()
                     .prepare_draft_utterance_audio_cancellable(&request, &|| guard.cancelled())?;
-                guard.publish(|| app.state::<PlaybackStore>().insert(audio))
+                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert(audio)?,owner) })
             },
         )
     })
@@ -1666,11 +1720,19 @@ async fn get_recording_input_history_status(
     .await
     .map_err(|e| e.to_string())?
 }
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoticeReply<T> { paused: bool, value: Option<T> }
+impl<T> NoticeReply<T> {
+    fn ready(value: T) -> Self { Self { paused: false, value: Some(value) } }
+    fn paused() -> Self { Self { paused: true, value: None } }
+}
+
 #[tauri::command]
 async fn get_archived_recording_input_notices(
     window: WebviewWindow,
     after_session_id: Option<String>,
-) -> Result<input_status::archived::Page, String> {
+) -> Result<NoticeReply<input_status::archived::Page>, String> {
     if window.label() != "main" {
         return Err("保存後通知はメイン画面から確認してください".into());
     }
@@ -1678,19 +1740,22 @@ async fn get_archived_recording_input_notices(
     // The blocking worker owns admission until its actual I/O ends, even if the
     // WebView/awaiting caller disappears. Do not hold any recorder/child lock.
     tauri::async_runtime::spawn_blocking(move || {
-        let lease = app.state::<AnalysisController>().begin_notice_storage()?;
+        let analysis = app.state::<AnalysisController>();
+        if analysis.notice_storage_paused(None) { return Ok(NoticeReply::paused()); }
         let visible = || {
             input_status::notice_window_visible(
                 window.is_visible().ok(),
                 window.is_minimized().ok(),
             )
         };
-        app.state::<input_status::archived::ArchivedInputs>().page(
+        app.state::<input_status::archived::ArchivedInputs>().page_scoped(
             &app.state::<Storage>(),
-            &lease,
+            &analysis,
             after_session_id.as_deref(),
             &visible,
-        )
+        ).map(NoticeReply::ready).or_else(|error| {
+            if error == input_status::archived::PAUSED { Ok(NoticeReply::paused()) } else { Err(error) }
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1700,13 +1765,17 @@ async fn get_archived_recording_input_notices(
 async fn acknowledge_archived_recording_input_notice(
     window: WebviewWindow,
     request: input_status::archived::Acknowledge,
-) -> Result<input_status::Receipt, String> {
+) -> Result<NoticeReply<input_status::Receipt>, String> {
     if window.label() != "main" {
         return Err("保存後通知の受付・表示・終了はメイン画面から確認してください".into());
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let lease = app.state::<AnalysisController>().begin_notice_storage()?;
+        let analysis = app.state::<AnalysisController>();
+        let lease = match analysis.try_begin_scoped_notice_storage(Some(&request.meeting_id))? {
+            Some(lease) => lease,
+            None => return Ok(NoticeReply::paused()),
+        };
         let visible = || {
             input_status::notice_window_visible(
                 window.is_visible().ok(),
@@ -1714,7 +1783,7 @@ async fn acknowledge_archived_recording_input_notice(
             )
         };
         app.state::<input_status::archived::ArchivedInputs>()
-            .acknowledge(&app.state::<Storage>(), &lease, request, &visible)
+            .acknowledge(&app.state::<Storage>(), &lease, request, &visible).map(NoticeReply::ready)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2120,6 +2189,13 @@ pub fn run() {
     if let Some(code) = local_engine::guard_entry() {
         std::process::exit(code);
     }
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "windows")]
+    let context = {
+        let mut context = context;
+        window_chrome::configure(context.config_mut());
+        context
+    };
     let builder = tauri::Builder::default();
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_dialog::init());
@@ -2167,6 +2243,8 @@ pub fn run() {
             macos_menu::install(app)?;
             #[cfg(target_os = "macos")]
             rounded_windows::configure(app.handle())?;
+            #[cfg(windows)]
+            windows_appearance::configure(app.handle())?;
             let root = match app.path().app_data_dir() {
                 Ok(root) => root,
                 Err(error) => {
@@ -2182,7 +2260,7 @@ pub fn run() {
                     return Ok(());
                 }
             };
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             {
                 let admission = app
                     .path()
@@ -2212,7 +2290,7 @@ pub fn run() {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", windows)))]
             match Storage::open(root.clone()) {
                 Ok(storage) => {
                     app.manage(storage);
@@ -2241,7 +2319,7 @@ pub fn run() {
                 if handle.state::<Storage>().data_write_blocked() {
                     return;
                 }
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if let Err(error) = data_controller::finish_interrupted_deletions(&handle) {
                     internal_logs::report_error("recovery", &error);
                     eprintln!("中断処理の自動整理に失敗しました: {error}");
@@ -2293,35 +2371,36 @@ pub fn run() {
                 start_audio_import,
                 cancel_audio_import,
                 get_data_operation,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_deletion_items,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_meeting_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_pending_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_deletion_paths,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_model_deletion_items,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_model_body_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_pending_model_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_model_deletion_paths,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_audio_deletion_items,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_meeting_audio_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 review_pending_audio_deletion,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 get_audio_deletion_paths,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 get_storage_bootstrap,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 review_storage_move,
                 get_data_operation_availability,
+                get_meeting_deletion_availability,
                 list_restored_meeting_ids,
                 select_data_operation,
                 start_data_operation,
@@ -2425,6 +2504,8 @@ pub fn run() {
             handler(invoke)
         })
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            windows_appearance::event(window, event);
             if window.state::<startup_attention::Startup>().blocked() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -2433,13 +2514,12 @@ pub fn run() {
                 return;
             }
             if window.label() == recorder_info::LABEL {
+                // Native window/WebView focus transfers can emit a transient blur
+                // during opening. Only explicit close or recorder lifecycle hides help.
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = recorder_info::hide(window.app_handle(), true);
-                    }
-                    WindowEvent::Focused(false) => {
-                        let _ = recorder_info::hide(window.app_handle(), false);
                     }
                     _ => {}
                 }
@@ -2471,7 +2551,7 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to start mon desktop")
         .run(|app, event| {
             if let RunEvent::Exit = event {

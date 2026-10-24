@@ -82,6 +82,7 @@ pub(in crate::storage) struct Fence {
     connection_identity: usize,
     pending: AtomicBool,
     writing: AtomicBool,
+    scoped: AtomicBool,
     // Startup skipped mutable recovery. Resolving the receipt is not proof that
     // those recoveries ran; ordinary use still requires a clean reopen.
     startup_deferred: bool,
@@ -93,6 +94,7 @@ impl Fence {
             connection_identity: connection_identity(db),
             pending: AtomicBool::new(pending),
             writing: AtomicBool::new(false),
+            scoped: AtomicBool::new(false),
             startup_deferred: pending,
         };
         if pending {
@@ -101,7 +103,8 @@ impl Fence {
         Ok(result)
     }
     pub(in crate::storage) fn blocked(&self) -> bool {
-        self.pending.load(Ordering::Acquire) || self.startup_deferred
+        (self.pending.load(Ordering::Acquire) && !self.scoped.load(Ordering::Acquire))
+            || self.startup_deferred
     }
     pub(in crate::storage) fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
@@ -116,10 +119,13 @@ impl Fence {
         db.flush_prepared_statement_cache();
         let result = if self.blocked() {
             db.authorizer(Some(readonly))
+        } else if self.scoped.load(Ordering::Acquire) {
+            db.authorizer(Some(scoped_authorizer))
         } else {
             db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
         };
         if let Err(error) = result {
+            self.scoped.store(false, Ordering::Release);
             self.pending.store(true, Ordering::Release);
             let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
             return Err(format!("削除の書込停止を維持できません: {error}"));
@@ -128,7 +134,64 @@ impl Fence {
     }
     pub(super) fn arm(&self, db: &Connection) -> Result<(), String> {
         self.pending.store(true, Ordering::Release);
+        if self.writing.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.install(db)
+    }
+
+    pub(in crate::storage) fn scoped_update(
+        &self,
+        db: &Connection,
+        action: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.startup_deferred {
+            return Err("再起動後の削除は専用の回復操作で確認してください".into());
+        }
+        db.flush_prepared_statement_cache();
+        db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .map_err(|e| e.to_string())?;
+        let result = action();
+        if result.is_err() {
+            self.fail_closed(db);
+            return result;
+        }
+        let reserved = super::super::meeting_access::any_reserved(db);
+        match reserved {
+            Ok(scoped) => self.scoped.store(scoped, Ordering::Release),
+            Err(error) => {
+                self.fail_closed(db);
+                return Err(error);
+            }
+        }
+        self.install(db)?;
+        result
+    }
+
+    pub(in crate::storage) fn fail_closed(&self, db: &Connection) {
+        self.scoped.store(false, Ordering::Release);
+        self.pending.store(true, Ordering::Release);
+        db.flush_prepared_statement_cache();
+        let _ = db.authorizer(Some(readonly));
+    }
+}
+
+// The trigger definitions enforce row ownership. Ordinary callers cannot
+// change their control rows, schema, or protection PRAGMAs.
+fn scoped_authorizer(context: AuthContext<'_>) -> Authorization {
+    match context.action {
+        AuthAction::Insert { table_name }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::Delete { table_name }
+            if context.database_name == Some("main")
+                && !matches!(
+                    table_name,
+                    "maintenance_operations" | "maintenance_paths" | "schema_migrations"
+                ) =>
+        {
+            Authorization::Allow
+        }
+        _ => readonly(context),
     }
 }
 
@@ -162,7 +225,7 @@ impl Writer<'_> {
         {
             return Err("削除確認記録の保守状態が一致しません".into());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         storage.managed_anchor.verify()?;
         if storage.deletion_fence.writing.swap(true, Ordering::AcqRel) {
             return Err("削除の保守書込みが既に進行中です".into());
@@ -173,8 +236,16 @@ impl Writer<'_> {
                 .deletion_fence
                 .writing
                 .store(false, Ordering::Release);
-            let _ = storage.deletion_fence.arm(db);
+            storage.deletion_fence.fail_closed(db);
             return Err(error.to_string());
+        }
+        if let Err(error) = super::super::meeting_access::bypass(db, true) {
+            storage
+                .deletion_fence
+                .writing
+                .store(false, Ordering::Release);
+            storage.deletion_fence.fail_closed(db);
+            return Err(error);
         }
         Ok(Writer { storage, db })
     }
@@ -192,12 +263,14 @@ impl Drop for Writer<'_> {
                 .db
                 .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
                 .is_ok_and(|enabled| enabled);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let anchored = self.storage.managed_anchor.verify().is_ok();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let anchored = true;
         let pending = has_pending(self.db);
-        if !rolled_back || !guards || !anchored || pending.is_err() {
+        let guarded = super::super::meeting_access::bypass(self.db, false).is_ok();
+        if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
+            fence.scoped.store(false, Ordering::Release);
             fence.pending.store(true, Ordering::Release);
             let _ = self
                 .db
@@ -210,7 +283,14 @@ impl Drop for Writer<'_> {
     }
 }
 
-#[cfg(unix)]
+pub(super) fn write_fresh<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+) -> Result<Writer<'a>, String> {
+    Writer::begin(storage, db, has_pending(db)?)
+}
+
+#[cfg(any(unix, windows))]
 pub(super) fn write_prepared<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -221,7 +301,7 @@ pub(super) fn write_prepared<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_audio_prepared<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -234,7 +314,7 @@ pub(super) fn write_audio_prepared<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_audio_reconfirmation<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -247,7 +327,7 @@ pub(super) fn write_audio_reconfirmation<'a>(
     Writer::begin(storage, db, has_pending(db)?)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_audio_renewal<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -260,7 +340,7 @@ pub(super) fn write_audio_renewal<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_audio_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -274,7 +354,7 @@ pub(super) fn write_audio_removal<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_model_prepared<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -287,7 +367,7 @@ pub(super) fn write_model_prepared<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_model_reconfirmation<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -309,7 +389,7 @@ pub(super) fn write_model_reconfirmation<'a>(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_model_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -329,7 +409,7 @@ pub(super) fn write_model_removal<'a>(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,
@@ -358,7 +438,7 @@ pub(super) fn write_scope_fixture<'a>(
     Writer::begin(storage, db, true)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn write_completion<'a>(
     storage: &'a Storage,
     db: &'a Connection,

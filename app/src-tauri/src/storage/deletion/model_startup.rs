@@ -172,6 +172,6 @@ pub(in crate::storage::deletion::models) fn resolve(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "model_startup_tests.rs"]
 mod tests;

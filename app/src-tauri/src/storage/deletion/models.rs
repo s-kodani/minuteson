@@ -182,7 +182,7 @@ fn hash_file(
     check: &impl Fn() -> bool,
 ) -> Result<(Proof, String), String> {
     let mut file = dir.regular(leaf)?;
-    let before = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+    let before = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
     before.validate(false)?;
     let mut hash = Sha256::new();
     let mut size = 0_u64;
@@ -200,7 +200,9 @@ fn hash_file(
         hash.update(&buffer[..n]);
     }
     dir.verify_file(leaf, &file)?;
-    if size != before.size || Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != before {
+    if size != before.size
+        || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != before
+    {
         return Err("モデル検査中にファイルが変更されました".into());
     }
     Ok((before, format!("{:x}", hash.finalize())))
@@ -487,7 +489,7 @@ pub(crate) fn preview(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "model_tests.rs"]
 pub(crate) mod tests;
 

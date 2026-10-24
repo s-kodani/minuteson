@@ -52,7 +52,7 @@ fn placement(
 // Visibility polls and confirmation-driven hiding must never acquire focus.
 fn focus_content(window: &WebviewWindow) -> Result<(), String> {
     window.set_focus().map_err(|e| e.to_string())?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         let webview: &tauri::Webview = window.as_ref();
         webview.set_focus().map_err(|e| e.to_string())?;

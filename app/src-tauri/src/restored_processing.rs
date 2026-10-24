@@ -53,7 +53,7 @@ pub(crate) fn read_local(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let metadata = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !metadata.file_type().is_file()
         || metadata.len() > limit
         || std::fs::canonicalize(path).map_err(|e| e.to_string())? != path
@@ -67,25 +67,30 @@ pub(crate) fn read_local(
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(not(windows))]
     let file = options.open(path).map_err(|e| e.to_string())?;
-    let before = file.metadata().map_err(|e| e.to_string())?;
-    let same = |a: &std::fs::Metadata, b: &std::fs::Metadata| -> Result<bool, String> {
-        if !b.file_type().is_file()
-            || a.len() != b.len()
-            || a.modified().map_err(|e| e.to_string())?
-                != b.modified().map_err(|e| e.to_string())?
-        {
-            return Ok(false);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if a.dev() != b.dev() || a.ino() != b.ino() {
+    #[cfg(windows)]
+    let file = crate::windows_files::read(path, false)?;
+    let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+    let same =
+        |a: &crate::native_fs::Metadata, b: &crate::native_fs::Metadata| -> Result<bool, String> {
+            if !b.file_type().is_file()
+                || a.len() != b.len()
+                || a.modified().map_err(|e| e.to_string())?
+                    != b.modified().map_err(|e| e.to_string())?
+            {
                 return Ok(false);
             }
-        }
-        Ok(true)
-    };
+            #[cfg(any(unix, windows))]
+            {
+                #[cfg(unix)]
+                use std::os::unix::fs::MetadataExt;
+                if a.dev() != b.dev() || a.ino() != b.ino() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        };
     if !same(&metadata, &before)? {
         return Err("処理出力が差し替えられました".into());
     }
@@ -104,10 +109,13 @@ pub(crate) fn read_local(
     }
     if bytes.len() as u64 != before.len()
         || bytes.len() as u64 > limit
-        || !same(&before, &file.metadata().map_err(|e| e.to_string())?)?
         || !same(
             &before,
-            &std::fs::symlink_metadata(path).map_err(|e| e.to_string())?,
+            &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+        )?
+        || !same(
+            &before,
+            &crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?,
         )?
     {
         return Err("処理出力が読込中に変更されています".into());

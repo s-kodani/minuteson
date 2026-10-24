@@ -159,10 +159,11 @@ mod tests {
         let whisper = s.analysis_preferences().unwrap();
         let minutes = s.minutes_preferences().unwrap();
         let mut prefs = s.diarization_preferences().unwrap().payload;
-        prefs.standard.executable_path = "/engine/sherpa".into();
-        prefs.standard.segmentation_model_path = "/models/seg.onnx".into();
-        prefs.standard.embedding_model_path = "/models/emb.onnx".into();
-        prefs.standard.runtime_library_paths = vec!["/engine/lib/runtime.dylib".into()];
+        prefs.standard.executable_path = crate::test_support::absolute("/engine/sherpa");
+        prefs.standard.segmentation_model_path = crate::test_support::absolute("/models/seg.onnx");
+        prefs.standard.embedding_model_path = crate::test_support::absolute("/models/emb.onnx");
+        prefs.standard.runtime_library_paths =
+            vec![crate::test_support::absolute("/engine/lib/runtime.dylib")];
         let saved = s.save_diarization_preferences(0, prefs.clone()).unwrap();
         assert_eq!(saved.lock_version, 1);
         assert!(s.save_diarization_preferences(0, prefs.clone()).is_err());

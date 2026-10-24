@@ -2,7 +2,7 @@
 //! filename. Live writers and unverified ownership always retain their files.
 use serde::Serialize;
 use std::path::Path;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone, Debug, Serialize)]
@@ -16,9 +16,9 @@ pub(crate) struct Snapshot {
 }
 pub(super) struct Ownership {
     snapshot: Snapshot,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     root: Option<PathBuf>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     registry: Option<Arc<super::journal::Registry>>,
 }
 impl Default for Ownership {
@@ -27,7 +27,7 @@ impl Default for Ownership {
             snapshot: Snapshot {
                 schema_version: 1,
                 revision: 1,
-                phase: if cfg!(target_os = "macos") {
+                phase: if cfg!(any(target_os = "macos", windows)) {
                     "checking"
                 } else {
                     "clear"
@@ -36,9 +36,9 @@ impl Default for Ownership {
                 run_id: None,
                 error_message: None,
             },
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             root: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             registry: None,
         }
     }
@@ -65,14 +65,14 @@ impl Ownership {
         Ok(())
     }
     pub(super) fn configure(&mut self, root: &Path) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             if self.root.is_some() {
                 return Err("テスト音声の回復先は設定済みです".into());
             }
             self.root = Some(root.to_path_buf());
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = root;
         Ok(())
     }
@@ -92,7 +92,7 @@ impl Ownership {
         self.snapshot.phase = "checking".into();
         self.snapshot.error_message = None;
         self.snapshot.run_id = None;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let result = (|| {
             if self.registry.is_none() {
                 let root = self.root.as_ref().ok_or("テスト音声の回復先がありません")?;
@@ -106,7 +106,7 @@ impl Ownership {
             }
             Ok::<_, String>(())
         })();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let result = Ok::<_, String>(());
         match result {
             Ok(()) => {
@@ -120,7 +120,7 @@ impl Ownership {
         }
         self.snapshot()
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn allocate(
         &mut self,
         request: super::Request,

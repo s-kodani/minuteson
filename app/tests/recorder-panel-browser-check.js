@@ -22,11 +22,11 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     const body = (await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/recording-confirmation-browser-fixture.js");</script>');
     await route.fulfill({ response, body });
   });
-  await page.setViewportSize({ width: 360, height: 116 });
+  await page.setViewportSize({ width: 227, height: 101 });
   const boot = async () => {
     await page.goto("http://127.0.0.1:1420/?window=recorder");
     await page.getByRole("button", { name: "ミニパネルを閉じる", exact: true }).waitFor();
-    await page.waitForFunction(() => document.querySelector(".mini-top strong")?.textContent !== "接続中");
+    await page.waitForFunction(() => document.querySelector(".mini-top .status-dot")?.getAttribute("aria-label") !== "接続中");
   };
   const close = () => page.getByRole("button", { name: "ミニパネルを閉じる", exact: true });
   const checkClose = async () => {
@@ -45,15 +45,16 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     const bounds = await page.locator(".mini-shell").evaluate(e => ({ overflow: e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight }));
     check(!bounds.overflow, `${phase} mini overflowed native geometry`);
     const buttons = await page.locator(".mini-bottom button").evaluateAll(list => list.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
-    check(buttons.every(r => r.x >= 0 && r.x + r.width <= 360 && r.y >= 0 && r.y + r.height <= 116 && Math.abs(r.y - buttons[0].y) < 1 && r.height === 36), `${phase} controls clipped or misaligned`);
+    check(buttons.every(r => r.x >= 0 && r.x + r.width <= 227 && r.y >= 0 && r.y + r.height <= 101 && Math.abs(r.y - buttons[0].y) < 1 && Math.abs(r.height - 21.6) < .1), `${phase} controls clipped or misaligned`);
     const layout = await page.locator(".mini-shell").evaluate(shell => {
       const rect = selector => { const r=shell.querySelector(selector).getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,center:(r.top+r.bottom)/2}; };
       const grip=shell.querySelector(".mini-drag");
-      return { row:rect(".mini-row"), summary:rect(".mini-summary"), grip:rect(".mini-drag"), main:rect('[aria-label="メインを開く"]'), info:rect(".info-trigger"), close:rect(".mini-close"), dragFont:getComputedStyle(grip).fontSize, dragRegion:grip.hasAttribute("data-tauri-drag-region") };
+      return { row:rect(".mini-row"), summary:rect(".mini-summary"), grip:rect(".mini-drag"), main:rect('[aria-label="メインを開く"]'), close:rect(".mini-close"), dragBorder:getComputedStyle(grip).borderRightWidth, dragRegion:grip.hasAttribute("data-tauri-drag-region") };
     });
-    check(Math.abs(layout.row.center - 58)<1 && [layout.summary,layout.grip,layout.main,layout.info].every(r=>Math.abs(r.center-layout.row.center)<1), `${phase} content is not vertically centered`);
-    check(layout.close.top===11 && layout.close.right===345 && layout.close.top<layout.info.top, `${phase} close is not independently top-right`);
-    check(layout.info.right+8<=layout.close.left && layout.dragFont==="24px" && layout.grip.right-layout.grip.left===18 && layout.dragRegion, `${phase} larger grip or close clearance invalid`);
+    check(Math.abs(layout.row.center - 50.5)<1 && [layout.summary,layout.grip].every(r=>Math.abs(r.center-layout.row.center)<1), `${phase} grip is not vertically centered`);
+    check(Math.abs(layout.close.top-layout.main.top)<1 && layout.main.right+2.3<=layout.close.left && layout.close.right<=227, `${phase} header close overlaps controls`);
+    check(layout.dragBorder==="0px" && Math.abs(layout.grip.right-layout.grip.left-14.4)<.1 && layout.dragRegion, `${phase} grip has a separator or cannot drag`);
+    check(await page.locator('.mini-source-row').count()===2, `${phase} separate audio rows missing`);
     if (["idle", "recording", "error"].includes(phase)) await page.screenshot({ path: capturePath(`mini-${phase}.png`) });
     await checkClose();
   }

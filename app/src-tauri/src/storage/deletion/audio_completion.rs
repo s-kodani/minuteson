@@ -369,6 +369,6 @@ fn finish_inner(
     Ok(done)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_completion_tests.rs"]
 mod tests;

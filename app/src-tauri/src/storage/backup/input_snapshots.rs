@@ -132,9 +132,9 @@ pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
 pub(super) struct Native {
     payloads: BTreeMap<(String, String), String>,
     transfers: BTreeMap<(String, String), String>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     root: File,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     witnesses: Vec<source::Witness>,
 }
 impl Native {
@@ -147,9 +147,9 @@ impl Native {
         let mut result = Self {
             payloads: BTreeMap::new(),
             transfers: BTreeMap::new(),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             root: storage.managed_anchor.backup_input_root()?,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             witnesses: Vec::new(),
         };
         let mut query = db.prepare("SELECT meeting_id,id,input_history_snapshot_json FROM recording_sessions WHERE state IN ('saved','interrupted','failed') ORDER BY id LIMIT 10001").map_err(|e|e.to_string())?;
@@ -187,7 +187,7 @@ impl Native {
                 }
                 Some(bound.encode()?)
             } else {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     // Old logical fixtures/legacy IDs have no native owner
                     // capability. Never turn them into path components.
@@ -212,7 +212,7 @@ impl Native {
                         None
                     }
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 {
                     let _ = storage;
                     None
@@ -245,7 +245,7 @@ impl Native {
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
         check_cancelled(cancelled)?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             storage.managed_anchor.verify()?;
             for witness in &self.witnesses {
@@ -253,13 +253,13 @@ impl Native {
             }
             storage.managed_anchor.verify()?;
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let _ = storage;
         Ok(())
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod source;
 #[cfg(all(test, unix))]
 mod tests;

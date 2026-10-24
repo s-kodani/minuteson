@@ -44,12 +44,12 @@ impl Fingerprint {
             return Err("パスを文字列として保存できません".into());
         }
         let mut file = File::open(&path).map_err(|e| e.to_string())?;
-        let before = file.metadata().map_err(|e| e.to_string())?;
+        let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() == 0 {
             return Err("モデル・実行ファイルが空または通常ファイルではありません".into());
         }
         let digest = verification::hash(&path, &mut file, cancelled, retain)?;
-        let after = file.metadata().map_err(|e| e.to_string())?;
+        let after = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if crate::audio::reuse::stamp(&before) != crate::audio::reuse::stamp(&after)
             || before.len() != after.len()
             || before.modified().map_err(|e| e.to_string())?
@@ -78,6 +78,19 @@ pub(crate) struct ManagedChild {
     job: Option<windows::Job>,
     #[cfg(target_os = "macos")]
     owner: Option<std::os::unix::net::UnixStream>,
+}
+
+pub(crate) fn native_environment(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command
+                .env("SystemRoot", &root)
+                .env("PATH", PathBuf::from(root).join("System32"));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = command;
 }
 impl ManagedChild {
     // Import helpers already have their own parent-PID protocol. This preserves
@@ -223,12 +236,13 @@ pub(crate) fn guard_entry() -> Option<i32> {
 }
 pub(crate) struct StableFile {
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    metadata: crate::native_fs::Metadata,
 }
 
 impl StableFile {
     pub(crate) fn watch(proof: &Fingerprint) -> Result<Self, String> {
-        let metadata = std::fs::metadata(&proof.path).map_err(|e| e.to_string())?;
+        let metadata =
+            crate::native_fs::symlink_metadata(&proof.path).map_err(|e| e.to_string())?;
         if !metadata.is_file()
             || metadata.len() != proof.size
             || proof.path.canonicalize().map_err(|e| e.to_string())? != proof.path
@@ -242,15 +256,16 @@ impl StableFile {
     }
 
     pub(crate) fn verify(&self) -> Result<(), String> {
-        let current = std::fs::metadata(&self.path).map_err(|e| e.to_string())?;
+        let current = crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
         if current.len() != self.metadata.len()
             || current.modified().map_err(|e| e.to_string())?
                 != self.metadata.modified().map_err(|e| e.to_string())?
         {
             return Err("実行中にモデル・実行ファイルが変更されました".into());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             if current.dev() != self.metadata.dev()
                 || current.ino() != self.metadata.ino()

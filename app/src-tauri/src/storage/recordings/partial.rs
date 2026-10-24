@@ -3,6 +3,7 @@
 //! not inferred from a prefix, a failed process or the time of recovery.
 use super::*;
 use crate::recording_segments::{Lane, Prefix};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,7 +230,7 @@ impl Storage {
 
     /// Read-only recapture across source retirement, only behind the held
     /// native snapshot. Public review/recovery still requires writable data.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn inspect_partial_for_relocation(
         &self,
         snapshot: &super::super::backup::relocation::NativeSnapshot<'_>,
@@ -270,7 +271,7 @@ impl Storage {
             .join("audio")
             .join(session_id);
         let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
-        let identity = directory.metadata().map_err(|e| e.to_string())?;
+        let identity = crate::native_fs::metadata(&directory).map_err(|e| e.to_string())?;
         let mut prefixes = Vec::new();
         let mut lanes = Vec::new();
         for lane in [Lane::Microphone, Lane::System] {
@@ -396,6 +397,7 @@ impl Storage {
         confirmed: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordingSession, String> {
+        let _meeting_owner = self.begin_meeting_work(&reviewed.session.meeting_id, "recording", None)?;
         check_cancel(cancelled)?;
         if !confirmed {
             return Err("確定済み部分だけを救出する明示的な同意が必要です".into());

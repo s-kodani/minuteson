@@ -27,13 +27,28 @@ pub(super) fn verify_temp_schema(db: &Connection) -> Result<(), String> {
     }
     // Do not whitelist a name: verify every TEMP table, index and trigger
     // against this binary's exact isolated schema. Shadow tables stay denied.
-    static EXPECTED: std::sync::OnceLock<Result<TempSchema, String>> = std::sync::OnceLock::new();
-    let expected = EXPECTED
-        .get_or_init(|| {
+    let has_attention = actual
+        .iter()
+        .any(|(_, name, _, _)| name == "mon_deletion_startup_attention");
+    let has_guard = actual
+        .iter()
+        .any(|(_, name, _, _)| name == "mon_meeting_deletion_guard");
+    static EXPECTED: [std::sync::OnceLock<Result<TempSchema, String>>; 4] =
+        [const { std::sync::OnceLock::new() }; 4];
+    let expected = EXPECTED[usize::from(has_attention) + 2 * usize::from(has_guard)]
+        .get_or_init(|| -> Result<TempSchema, String> {
             let reference = Connection::open_in_memory().map_err(|e| e.to_string())?;
-            reference
-                .execute_batch(CREATE_ATTENTION)
-                .map_err(|e| e.to_string())?;
+            if has_attention {
+                reference
+                    .execute_batch(CREATE_ATTENTION)
+                    .map_err(|e| e.to_string())?;
+            }
+            if has_guard {
+                for (_, sql) in crate::storage::MIGRATIONS {
+                    reference.execute_batch(sql).map_err(|e| e.to_string())?;
+                }
+                super::super::meeting_access::install(&reference)?;
+            }
             temp_schema(&reference)
         })
         .as_ref()
@@ -330,6 +345,6 @@ pub(super) fn resolve(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "startup_tests.rs"]
 mod tests;

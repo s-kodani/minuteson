@@ -356,7 +356,10 @@ void write_stats(std::ostream& output, const CaptureStream& stream) {
 
 }  // namespace
 
-int wmain(int argc, wchar_t** argv) {
+#include "product_capture.h"
+#include "audio_import.h"
+
+int diagnostic_main(int argc, wchar_t** argv) {
   Options options;
   bool parsed = false;
   bool output_ready = false;
@@ -444,4 +447,23 @@ int wmain(int argc, wchar_t** argv) {
                  "[--render-device-id ID] [--microphone-device-id ID]\n";
     return 2;
   }
+}
+
+int wmain(int argc, wchar_t** argv) {
+  try {
+    if(argc==3&&std::wstring(argv[1])==L"--raw-four-hour-fixture") {
+      fs::path directory=argv[2];if(!directory.is_absolute()||!fs::is_directory(directory)||!fs::is_empty(directory))throw std::runtime_error("fixture requires a new empty absolute directory");
+      product::RawSegments raw(directory,"6ed98cb6-1658-4e35-ab1c-6c98d82abc58","microphone",1);
+      std::vector<float> packet(48000,0.125f);std::size_t maximum=0;
+      for(std::uint64_t second=0;second<14400;++second){raw.append(packet.data(),48000,90000000000ULL+second*10000000ULL,second%901==0);maximum=std::max(maximum,raw.pcm.capacity());}
+      raw.finish();if(raw.total!=691200000||raw.sequence!=3600||maximum>192000*4)throw std::runtime_error("raw fixture exceeded duration or memory contract");
+      std::cout<<product::Json{{"frames",raw.total},{"segments",raw.sequence},{"maximumPendingPcmBytes",maximum},{"durationSeconds",14400}}.dump()<<std::endl;return 0;
+    }
+    if(argc>1&&std::wstring(argv[1])==L"--import-audio")return audio_import::run(argc,argv);
+    for (int i=1;i<argc;++i) {
+      std::wstring flag=argv[i];
+      if(flag==L"--backend"||flag==L"--list-input-devices"||flag==L"--list-capture-applications")return product::run(argc,argv);
+    }
+    return diagnostic_main(argc,argv);
+  } catch(const std::exception& error) { std::cerr<<error.what()<<std::endl;return 1; }
 }

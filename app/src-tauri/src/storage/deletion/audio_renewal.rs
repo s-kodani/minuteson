@@ -562,6 +562,6 @@ pub(in crate::storage::deletion) fn audit_source(json: &str) -> Result<String, S
     }
     Ok(record.source_operation)
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_renewal_tests.rs"]
 mod tests;

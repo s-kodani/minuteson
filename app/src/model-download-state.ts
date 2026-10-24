@@ -6,6 +6,8 @@ type File = { relativePath: string; role: string; expectedSize: number; expected
 export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[] };
 export type DownloadArchive = { format: "tar"; expectedSize: number; expectedHash: string; memberPath: string };
 export const bundledWhisperSource = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
+export const bundledWindowsSource = "mon-bundled://windows-runtime-v1/runtime.tar";
+const isBundledSource = (url: string) => url === bundledWhisperSource || url === bundledWindowsSource;
 export type DownloadRecipe = { schemaVersion: 4; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
 export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
@@ -48,6 +50,9 @@ export function canonicalRecipe(value: unknown): DownloadRecipe {
       const file = manifest.files[index], member = result.archive?.memberPath;
       if (manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
         || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
+    } else if (result.url === bundledWindowsSource) {
+      if (manifest.target !== "windows_x86_64" || !result.archive
+        || !["executable", "runtime_library", "notice"].includes(manifest.files[index].role)) fail();
     } else if (result.url.startsWith("mon-bundled:")) fail();
     return result;
   });
@@ -68,14 +73,14 @@ export function downloadByteTotals(recipe: DownloadRecipe): { downloadBytes: num
       if (members.has(key) || previous && (previous.expectedHash !== source.archive.expectedHash || previous.expectedSize !== source.archive.expectedSize)) fail();
       members.add(key);
       if (!previous) {
-        if (source.url === bundledWhisperSource) bundledBytes += source.archive.expectedSize;
+        if (isBundledSource(source.url)) bundledBytes += source.archive.expectedSize;
         else downloadBytes += source.archive.expectedSize;
         archiveBytes += source.archive.expectedSize; archives.set(source.url, source.archive);
       }
     } else downloadBytes += recipe.manifest.files[index].expectedSize;
   });
   if (recipe.sources.some(source => !source.archive && archives.has(source.url))) fail();
-  return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.sources.some(source => source.url === bundledWhisperSource) ? { bundledBytes: size(bundledBytes) } : {}) };
+  return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.sources.some(source => isBundledSource(source.url)) ? { bundledBytes: size(bundledBytes) } : {}) };
 }
 export function downloadTransferBytes(review: DownloadReview): number { return review.downloadBytes; }
 export function parseDownloadDefinition(definition: string): DownloadRecipe {

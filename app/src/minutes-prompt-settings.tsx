@@ -1,6 +1,7 @@
+import { InfoPopover } from "./info-popover";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useActionConfirmation } from "./confirmation-service";
 import { IssueNotice } from "./toast";
@@ -8,6 +9,7 @@ import { promptValidation, resetPrompt, type MinutesPromptPreferences, type Minu
 
 const read = () => invoke<MinutesPromptSnapshot>("get_minutes_prompt_preferences");
 export function MinutesPromptSettings({ visible, locked }: { visible: boolean; locked: boolean }) {
+  const id = useId();
   const composition = useRef<{ done: Promise<void>; finish: () => void } | null>(null);
   const [queue] = useState(() => new DraftSaveQueue<MinutesPromptPreferences, MinutesPromptSnapshot>(
     async (_id, expectedLockVersion, payload) => { await composition.current?.done; return invoke("save_minutes_prompt_preferences", { expectedLockVersion, payload }); },
@@ -61,17 +63,16 @@ export function MinutesPromptSettings({ visible, locked }: { visible: boolean; l
   const disabled = locked || loading || confirm.pending || !state.payload;
   const invalid = state.payload ? promptValidation(state.payload) : "";
   return <section hidden={!visible} className="status-card minutes-prompt-settings" aria-label="議事録生成プロンプト">
-    <h2>議事録生成プロンプト</h2>
-    <p>すべての会議・モデルで共通の設定です。編集内容は自動保存され、次の新規生成から使われます。</p>
+    <div className="heading-with-info"><h2>議事録生成プロンプト</h2><InfoPopover label="議事録生成プロンプト">すべての会議・モデルで共通の設定です。編集内容は自動保存され、次の新規生成から使われます。</InfoPopover></div>
     {([ ["extractPrompt", "作成用プロンプト", "文字起こしから議事録を作成するときに使います。"], ["mergePrompt", "統合用プロンプト", "長い会議を分割して作成した下書きを、一つの議事録にまとめるときに使います。"] ] as const).map(([field, label, help]) => <div key={field}>
-      <label className="prompt-label">{label}<textarea aria-label={label} value={state.payload?.[field] ?? ""} disabled={disabled} rows={10}
+      <div className="heading-with-info"><label htmlFor={`${id}-${field}`} className="prompt-label">{label}</label><InfoPopover label={label}>{help}</InfoPopover></div>
+      <div className="prompt-label"><textarea id={`${id}-${field}`} aria-label={label} value={state.payload?.[field] ?? ""} disabled={disabled} rows={10}
         onCompositionStart={() => {
           if (!composition.current) { let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; }); composition.current = { done, finish }; }
           setComposing(true);
         }} onCompositionEnd={() => { composition.current?.finish(); composition.current = null; setComposing(false); }}
         onChange={event => { const text = event.target.value; queue.edit(value => ({ ...value, [field]: text })); }} />
-      </label>
-      <p>{help}</p>
+      </div>
       <button type="button" className="small-secondary" aria-label={`${label}をデフォルトに戻す`} disabled={disabled || state.saving || composing || state.payload?.[field] === state.draft?.defaults[field]} onClick={() => void reset(field)}>デフォルトに戻す</button>
     </div>)}
     <div className="analysis-actions">

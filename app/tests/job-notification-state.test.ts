@@ -112,3 +112,10 @@ test("retained transcription quality failure explains why no result was adopted"
   assert.match(jobFailureDetail("transcription_quality_failed"), /採用していません/);
   assert.equal(jobFailureDetail("engine_failed"), "engine_failed");
 });
+
+test("recognition review warnings are validated independently of successful publication",()=>{
+ const done=job({state:"succeeded",completedUnits:2,updatedAt:102,outputAnalysisId:"candidate"});
+ const receipt={job:done,contentHash:"c".repeat(64),publicationState:"candidate",warnings:["認識できない区間があります"]};
+ assert.equal(verifiedJobOutput(done,receipt),"candidate");
+ assert.throws(()=>verifiedJobOutput(done,{...receipt,warnings:[{text:"untrusted"}]}),/要確認/);
+});

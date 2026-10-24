@@ -1,3 +1,4 @@
+import { nativeAbsolutePath } from "./native-path.ts";
 export type ModelDeletionStartupReason = "model_completed_scope_reappeared" | "model_completed_receipt_invalid" | "model_completed_scope_uninspectable";
 export interface ModelBodyDeletionItem { operationId: string; state: string; packageId: string | null; modelName: string | null; reviewAllowed: boolean; errorMessage: string | null; startupReason?: ModelDeletionStartupReason | null }
 export interface ModelBodyDeletionListing { items: ModelBodyDeletionItem[]; writeBlocked: boolean; restartRequired: boolean; reason: string | null }
@@ -53,7 +54,7 @@ const reservation = (root: string, operation: string) => {
 };
 export function assertModelDeletionPreview(p: ModelDeletionPreview): void {
   if (!p || ![p.confirmationId, p.operationId, p.packageId].every(id) || !/^[0-9a-f]{64}$/u.test(p.reviewHash)
-    || !text(p.modelName) || !text(p.modelVersion) || !text(p.modelsRoot) || !p.modelsRoot.startsWith("/")
+    || !text(p.modelName) || !text(p.modelVersion) || !nativeAbsolutePath(p.modelsRoot)
     || !["review", "not_started", "files", "reconfirmation", "awaiting_ack", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.reconfirmationAllowed, p.priorDeletionCompleted].every(v => typeof v === "boolean")
     || (p.resumeReason !== null && !text(p.resumeReason)) || (p.executeAllowed && p.resumeReason !== null)

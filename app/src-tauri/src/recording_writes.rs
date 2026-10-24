@@ -150,19 +150,20 @@ impl TrackReader {
         }
         let result = (|| {
             let mut file = crate::input_levels::open_capture_file_at(directory, name)?;
-            let before = file.metadata().map_err(|e| e.to_string())?;
+            let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
             if !before.is_file() {
                 return Err("通常のCAFファイルではありません".into());
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             let (device, inode) = {
+                #[cfg(unix)]
                 use std::os::unix::fs::MetadataExt;
                 if before.nlink() != 1 {
                     return Err("CAFが共有されています".into());
                 }
                 (before.dev(), before.ino())
             };
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             let (device, inode) = (0, 0);
             let modified = before.modified().map_err(|e| e.to_string())?;
             let created = before.created().map_err(|e| e.to_string())?;
@@ -175,14 +176,15 @@ impl TrackReader {
                 return Ok(Track::unknown("waiting"));
             }
             let (format, frames) = live_frames(&mut file, before.len())?;
-            let after = file.metadata().map_err(|e| e.to_string())?;
+            let after = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
             if before.len() != after.len()
                 || modified != after.modified().map_err(|e| e.to_string())?
             {
                 return Err("CAFが確認中に変更されました".into());
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
+                #[cfg(unix)]
                 use std::os::unix::fs::MetadataExt;
                 if after.nlink() != 1
                     || after.dev() != device
@@ -280,12 +282,13 @@ impl WriteReader {
         Ok(result)
     }
     fn check_directory(&self, path: &Path) -> Result<(), String> {
-        let held = self.directory.metadata().map_err(|e| e.to_string())?;
-        let current = crate::input_levels::open_capture_directory(path)?
-            .metadata()
-            .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
+        let held = crate::native_fs::metadata(&self.directory).map_err(|e| e.to_string())?;
+        let current =
+            crate::native_fs::metadata(&crate::input_levels::open_capture_directory(path)?)
+                .map_err(|e| e.to_string())?;
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             if held.dev() != current.dev()
                 || held.ino() != current.ino()

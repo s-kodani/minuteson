@@ -132,7 +132,7 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
     assert_eq!(references.len(), 2);
     assert_eq!(targets.len(), 1);
     let fp = Fingerprint {
-        path: PathBuf::from("/test-only"),
+        path: PathBuf::from(crate::test_support::absolute("/test-only")),
         size: 1,
         sha256: "a".repeat(64),
     };
@@ -670,6 +670,7 @@ else:
     plan.extractor.helper = proof.clone();
     plan.extractor.library = proof.clone();
     let runtime = crate::local_engine::resident::Snapshot {
+        gpu: None,
         protocol: 1,
         engine: "sherpa".into(),
         name: "mon-sherpa-worker".into(),

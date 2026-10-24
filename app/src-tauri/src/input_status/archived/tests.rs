@@ -378,13 +378,13 @@ fn cache_eviction_is_bounded_and_fences_an_unrendered_old_recipient() {
         for n in 1..CACHE_LIMIT {
             entries.insert(
                 format!("zz-{n}"),
-                Entry {
+                CachedEntry { meeting: meeting.clone(), touched: Instant::now(), value: Arc::new(Mutex::new(Entry {
                     meeting: meeting.clone(),
                     directory: pinned.try_clone().unwrap(),
                     reader: journal::Reader::pin_at(&pinned).unwrap(),
                     queue: None,
                     touched: Instant::now(),
-                },
+                })) },
             );
         }
     }

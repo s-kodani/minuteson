@@ -1,6 +1,8 @@
 #include "worker.hpp"
 #include "c-api.h"
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include <map>
 #include <memory>
 #include <cmath>
@@ -8,7 +10,12 @@
 #include <filesystem>
 static void *library = nullptr;
 template <typename T> static T symbol(const char *name) {
-    auto pointer = dlsym(library,name); if (!pointer) throw std::runtime_error(std::string("missing ABI symbol: ")+name);
+    #ifdef _WIN32
+    auto pointer=GetProcAddress(reinterpret_cast<HMODULE>(library),name);
+    #else
+    auto pointer = dlsym(library,name);
+    #endif
+    if (!pointer) throw std::runtime_error(std::string("missing ABI symbol: ")+name);
     return reinterpret_cast<T>(pointer);
 }
 #define API(name) symbol<decltype(&name)>(#name)
@@ -27,7 +34,14 @@ static std::map<std::string,std::string> options(int argc,char **argv) {
 }
 static void load(const std::string &path) {
     if (library) { if (path!=library_path) throw std::runtime_error("runtime changed"); return; }
-    library = dlopen(path.c_str(),RTLD_NOW|RTLD_LOCAL); if (!library) throw std::runtime_error("cannot load sherpa C API");
+    #ifdef _WIN32
+    auto native=mon_wide(path);
+    if(!std::filesystem::path(native).is_absolute()||std::filesystem::path(native).filename()!=L"sherpa-onnx-c-api.dll")throw std::runtime_error("invalid pinned sherpa library");
+    library=LoadLibraryExW(native.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    #else
+    library = dlopen(path.c_str(),RTLD_NOW|RTLD_LOCAL);
+    #endif
+    if (!library) throw std::runtime_error("cannot load sherpa C API");
     library_path=path;
     if (std::string(API(SherpaOnnxGetVersionStr)()) != "1.13.8") throw std::runtime_error("unsupported sherpa ABI");
 }
@@ -109,6 +123,12 @@ int main(int argc,char **argv) {
     int result=mon_loop(argc,argv,[](const std::string &kind,int n,char **a) { auto o=options(n,a); if (kind=="sherpa") return diarize(o); if (kind=="embedding") return embedding(o); return 2; });
     if (extractor) API(SherpaOnnxDestroySpeakerEmbeddingExtractor)(extractor);
     if (diarizer) API(SherpaOnnxDestroyOfflineSpeakerDiarization)(diarizer);
-    if (library) dlclose(library);
+    if (library) {
+        #ifdef _WIN32
+        FreeLibrary(reinterpret_cast<HMODULE>(library));
+        #else
+        dlclose(library);
+        #endif
+    }
     return result;
 }

@@ -1,6 +1,8 @@
+import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
-import {useEffect,useState} from "react";
+import {useEffect,useId,useState} from "react";
 import {OptionsModal} from "./options-modal";
+import {usePlatform} from "./platform";
 import {captureApplicationKey,captureApplicationScope,checkedCaptureApplicationIdentity,checkedCaptureApplications,type CaptureApplicationIdentity,type CaptureApplications,type CaptureScope} from "./capture-scope-state";
 
 // Scope is deliberately unset until an application is explicitly chosen.
@@ -26,13 +28,16 @@ export function useCaptureScope(enabled:boolean,meetingId:string|null){
 }
 
 export function CaptureApplicationSelection({control,locked}:{control:ReturnType<typeof useCaptureScope>;locked:boolean}){
+  const scopeId=useId();
+  const windows=usePlatform()==="windows";
   const {mode,application,applications,loading,error,selected}=control;
   const value=application?captureApplicationKey(application):"";
   return <OptionsModal className="capture-scope-details" label="録音の詳細設定">
-    <label>PC音声の取得範囲<select aria-label="PC音声の取得範囲" value={mode} disabled={locked} onChange={e=>{const mode=e.target.value;if(mode==="system"||mode==="application")control.changeMode(mode);}}>
+    <div className="heading-with-info"><label htmlFor={scopeId}>PC音声の取得範囲</label><InfoPopover label="PC音声の取得範囲">{mode==="system"?"PCで再生される音声を全体取得します。通知音や他の動画・タブの音も含まれる場合があります。":"選択したアプリ単位でPC音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの一覧にあることは音声取得の成功を示しません。"}</InfoPopover></div>
+    <select id={scopeId} aria-label="PC音声の取得範囲" value={mode} disabled={locked} onChange={e=>{const mode=e.target.value;if(mode==="system"||mode==="application")control.changeMode(mode);}}>
       <option value="system">全体録音</option><option value="application">アプリ選択録音</option>
-    </select></label>
-    {mode==="system"?<p>PCで再生される音声を全体取得します。通知音や他の動画・タブの音も含まれる場合があります。</p>:<>
+    </select>
+    {mode==="application"&&<>
       <label>録音するアプリ<select aria-label="録音するアプリ" value={value} disabled={locked||loading||!applications} onChange={e=>control.choose(e.target.value)}>
         {!selected&&<option value={value}>{application?"選択したアプリ（終了・再起動）":"アプリを選択してください"}</option>}
         {applications?.applications.map(a=><option key={captureApplicationKey(a)} value={captureApplicationKey(a)}>{a.name}</option>)}
@@ -40,9 +45,8 @@ export function CaptureApplicationSelection({control,locked}:{control:ReturnType
       <button type="button" className="small-secondary" disabled={locked||loading} onClick={control.reload}>アプリ一覧を再確認</button>
       {loading&&<p role="status">OSのアプリ一覧を確認中です。録音や権限要求は開始しません。</p>}
       {applications&&!selected&&<p role="alert">対象アプリを明示選択してください。終了・再起動したアプリへ引き継いだり、全体録音へ自動切替したりはしません。</p>}
-      {applications?.systemPermission==="permissionRequired"&&<p>PC音声の取得権限を確認してください。macOSのシステム設定で「システムオーディオ録音のみ」の許可を確認してください。画面の収録許可は要求しません。</p>}
+      {applications?.systemPermission==="permissionRequired"&&<p>{windows?"PC音声を取得できません。Windowsのサウンド設定で出力機器と対象アプリの再生状態、他のアプリによる排他使用を確認してください。":"PC音声の取得権限を確認してください。macOSのシステム設定で「システムオーディオ録音のみ」の許可を確認してください。画面の収録許可は要求しません。"}</p>}
       {applications?.systemPermission==="unknown"&&<p>PC音声の権限は状態不明です。実際の取得処理で確認します。</p>}
-      <p>選択したアプリ単位でPC音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの一覧にあることは音声取得の成功を示しません。</p>
       {error&&<p role="alert" className="action-error">{error}</p>}
     </>}
   </OptionsModal>;

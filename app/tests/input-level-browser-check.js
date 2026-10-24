@@ -90,7 +90,14 @@ async page=>{
       await page.screenshot({path:`input-levels-${theme}-${width}.png`});
     }
     results.push("two independent meters and silence/writing disclaimer fit both themes at 1280/960/360px");
-    check((await panel().innerText()).includes("保存の成功を示すものではありません")&&(await panel().innerText()).includes("入力レベルや接続状態だけでは保存中と表示しません"),"telemetry claimed saved audio");
+    // These explanations live in the production help popovers.
+    await page.setViewportSize({width:1280,height:900});
+    for(const [label,text] of [["録音の入力状態","保存の成功を示すものではありません"],["録音の書込み","入力レベルや接続状態だけでは保存中と表示しません"]]){
+      await panel().getByRole("button",{name:`${label}の説明を開く`,exact:true}).click();
+      const help=page.getByRole("dialog",{name:label,exact:true});await help.waitFor();
+      check((await help.innerText()).includes(text),"telemetry claimed saved audio");
+      await page.keyboard.press("Escape");await help.waitFor({state:"hidden"});
+    }
     results.push("input evidence is explicitly separate from durable CAF writing and saving success");
     return {passed:results.length,results};
   }catch(cause){throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator('body').innerText()}`);}

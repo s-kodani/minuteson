@@ -363,13 +363,13 @@ fn saved_fixture() -> (files::TestDirectory, Request, serde_json::Value) {
     let directory = files::TestDirectory::new().unwrap();
     let request = request();
     let manifest = serde_json::json!({
-        "schemaVersion":4,"captureMode":"system","backend":"coreaudio",
+        "schemaVersion":4,"captureMode":"system","backend":if cfg!(windows){"wasapi"}else{"coreaudio"},
         "targetPIDs":[],"microphoneDeviceUID":request.microphone_uid,
         "targetApplicationIdentity":null,"state":"saved","errors":[],
         "captureTest":{"ownerId":request.run_id,"durationSeconds":5,
             "windowStartNs":1_000_000_000_i64,"windowEndNs":6_000_000_000_i64,
             "firstSavedCaptureNs":1_000_000_000_i64,"completed":true},
-        "captureClock":{"domain":"mach_continuous_time","originUtcMs":1_700_000_000_000_i64,"uncertaintyNs":20},
+        "captureClock":{"domain":if cfg!(windows){"query_performance_counter"}else{"mach_continuous_time"},"originUtcMs":1_700_000_000_000_i64,"uncertaintyNs":20},
         "microphone":{"frames":40000,"sampleRate":8000,"channels":2,"appendFailures":0,
             "clockSegments":[segment(0,40000,0,5_000_000)]},
         "system":{"frames":8000,"sampleRate":8000,"channels":2,"appendFailures":0,
@@ -390,6 +390,64 @@ fn saved_fixture() -> (files::TestDirectory, Request, serde_json::Value) {
     }
     write_manifest(&directory, &manifest);
     (directory, request, manifest)
+}
+
+#[test]
+fn pc_only_test_verifies_real_pcm_and_rejects_unreceived_contradictions() {
+    let (directory, request, mut manifest) = saved_fixture();
+    let samples=[0.25_f32.to_le_bytes(),(-0.25_f32).to_le_bytes()].concat().repeat(8000);
+    std::fs::write(directory.path.join("system.caf"),crate::audio::tests::caf_fixture(8000,2,3,32,4,&samples)).unwrap();
+    std::fs::remove_file(directory.path.join("microphone.caf")).unwrap();
+    manifest["microphoneAudioUnreceived"] = serde_json::json!(true);
+    manifest["microphone"] = serde_json::json!({"frames":0,"callbackCount":0,"appendFailures":0,
+        "sampleRate":null,"channels":null,"clockFailure":null,"clockSegments":[]});
+    manifest["captureTest"]["firstSavedCaptureNs"] = serde_json::json!(1_100_000_000_i64);
+    manifest["system"]["clockSegments"] = serde_json::json!([segment(0,4000,0,500_000),segment(4000,8000,1_500_000,2_000_000)]);
+    write_manifest(&directory, &manifest);
+    let ready = files::verify(&directory, &request, &||false).unwrap();
+    assert!(ready.microphone.is_none());
+    read_all(ready.system.as_ref().unwrap().playback(&directory,"system",&||false).unwrap(),8000,0.25);
+    assert!(files::verify(&directory, &request, &||true).is_err());
+    for (pointer, value) in [
+        ("/microphoneAudioUnreceived",serde_json::json!(false)),
+        ("/microphone/callbackCount",serde_json::json!(1)),
+        ("/microphone/frames",serde_json::json!(1)),
+        ("/microphone/sampleRate",serde_json::json!(8000)),
+        ("/microphone/channels",serde_json::json!(2)),
+        ("/microphone/appendFailures",serde_json::json!(1)),
+        ("/microphone/clockFailure",serde_json::json!("failure")),
+        ("/microphone/clockSegments",serde_json::Value::Null),
+        ("/system/clockSegments/0/timelineStartUs",serde_json::json!(1)),
+        ("/system/clockSegments/0/timelineStartUs",serde_json::json!(-1)),
+        ("/captureTest/completed",serde_json::json!(false)),
+    ] {
+        let mut changed=manifest.clone(); *changed.pointer_mut(pointer).unwrap()=value;
+        write_manifest(&directory,&changed);
+        assert!(files::verify(&directory,&request,&||false).is_err(),"{pointer}");
+    }
+    write_manifest(&directory,&manifest);
+    std::fs::write(directory.path.join("microphone.caf"),b"unexpected payload").unwrap();
+    assert!(files::verify(&directory,&request,&||false).is_err());
+    std::fs::remove_file(directory.path.join("microphone.caf")).unwrap();
+    manifest["systemAudioUnreceived"]=serde_json::json!(true);
+    write_manifest(&directory,&manifest);
+    assert!(files::verify(&directory,&request,&||false).is_err());
+    directory.cleanup().unwrap();
+}
+
+#[test]
+fn silent_microphone_remains_received_and_rounding_does_not_shift_origin() {
+    let (directory, request, mut manifest)=saved_fixture();
+    let samples=vec![0_u8;40000*2*4];
+    std::fs::write(directory.path.join("microphone.caf"),crate::audio::tests::caf_fixture(8000,2,3,32,4,&samples)).unwrap();
+    for offset in [0,1,99,999] {
+        manifest["captureTest"]["firstSavedCaptureNs"]=serde_json::json!(1_000_000_000_i64+offset);
+        manifest["microphone"]["clockSegments"]=serde_json::json!([segment(0,40000,0,4_999_999)]);
+        write_manifest(&directory,&manifest);
+        let ready=files::verify(&directory,&request,&||false).unwrap();
+        read_all(ready.microphone.as_ref().unwrap().playback(&directory,"mic",&||false).unwrap(),40000,0.0);
+    }
+    directory.cleanup().unwrap();
 }
 
 #[test]
@@ -497,13 +555,13 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
     let (directory, request, _) = saved_fixture();
     let before = std::fs::read(directory.path.join("manifest.json")).unwrap();
     let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
-    assert_eq!(ready.microphone.info.duration_ms, 5000);
-    assert!(!ready.microphone.info.has_gaps);
+    assert_eq!(ready.microphone.as_ref().unwrap().info.duration_ms, 5000);
+    assert!(!ready.microphone.as_ref().unwrap().info.has_gaps);
     assert_eq!(ready.system.as_ref().unwrap().info.duration_ms, 1000);
     assert!(ready.system.as_ref().unwrap().info.has_gaps);
     read_all(
         ready
-            .microphone
+            .microphone.as_ref().unwrap()
             .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,
@@ -537,10 +595,10 @@ fn completed_microphone_test_accepts_explicitly_unreceived_pc_without_inventing_
     assert!(files::verify(&directory, &request, &|| true).is_err());
     let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert!(ready.system.is_none());
-    assert_eq!(ready.microphone.info.duration_ms, 5000);
+    assert_eq!(ready.microphone.as_ref().unwrap().info.duration_ms, 5000);
     read_all(
         ready
-            .microphone
+            .microphone.as_ref().unwrap()
             .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,
@@ -706,7 +764,7 @@ fn test_private_verification_and_preview_cancel_and_refuse_modified_same_format_
     assert!(files::verify(&directory, &request, &|| true).is_err());
     let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
     assert!(ready
-        .microphone
+        .microphone.as_ref().unwrap()
         .playback(&directory, "mic", &|| true)
         .is_err());
     let samples = [0.25_f32.to_le_bytes(), (-0.25_f32).to_le_bytes()]
@@ -718,7 +776,7 @@ fn test_private_verification_and_preview_cancel_and_refuse_modified_same_format_
     )
     .unwrap();
     assert!(ready
-        .microphone
+        .microphone.as_ref().unwrap()
         .playback(&directory, "mic", &crate::test_support::never_cancelled)
         .is_err());
     assert!(ready
@@ -812,13 +870,13 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
     request.run_id = manifest["captureTest"]["ownerId"].as_str().unwrap().into();
     request.microphone_uid = "fixture-microphone".into();
     let ready = files::verify(&directory, &request, &crate::test_support::never_cancelled).unwrap();
-    assert!(!ready.microphone.info.has_gaps);
+    assert!(!ready.microphone.as_ref().unwrap().info.has_gaps);
     assert!(ready.system.as_ref().unwrap().info.has_gaps);
-    assert_eq!(ready.microphone.info.duration_ms, 5000);
+    assert_eq!(ready.microphone.as_ref().unwrap().info.duration_ms, 5000);
     assert_eq!(ready.system.as_ref().unwrap().info.duration_ms, 3900);
     read_all(
         ready
-            .microphone
+            .microphone.as_ref().unwrap()
             .playback(&directory, "mic", &crate::test_support::never_cancelled)
             .unwrap(),
         40000,

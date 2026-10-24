@@ -14,19 +14,20 @@ pub(super) struct Installed<'a> {
     journal: Option<journal::Journal<'a>>,
 }
 fn same_inode(a: &Metadata, b: &Metadata) -> bool {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         a.dev() == b.dev() && a.ino() == b.ino() && a.file_type() == b.file_type()
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (a, b);
         false
     } // Windows cleanup is deliberately not claimed.
 }
 fn directory(path: &Path) -> Result<(), String> {
-    if !std::fs::symlink_metadata(path)
+    if !crate::native_fs::symlink_metadata(path)
         .map_err(|e| e.to_string())?
         .is_dir()
         || path.canonicalize().map_err(|e| e.to_string())? != path
@@ -36,13 +37,7 @@ fn directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn sync_directory(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        File::open(path)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    crate::native_fs::sync_directory(path)
 }
 impl<'a> Installed<'a> {
     fn create_directory(&mut self, path: PathBuf) -> Result<(), String> {
@@ -54,8 +49,10 @@ impl<'a> Installed<'a> {
             builder.mode(0o700);
         }
         builder.create(&path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&path)?;
         self.owned.push(Owned {
-            metadata: std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
+            metadata: crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
             path,
             directory: true,
             proof: None,
@@ -97,7 +94,7 @@ impl<'a> Installed<'a> {
             journal,
         };
         let parent = root.join("meetings");
-        match std::fs::symlink_metadata(&parent) {
+        match crate::native_fs::symlink_metadata(&parent) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 install.create_directory(parent.clone())?
             }
@@ -132,13 +129,13 @@ impl<'a> Installed<'a> {
             {
                 return Err("追加復元の管理パスが不正です".into());
             }
-            let target = root.join(&asset.relative_path);
+            let target = crate::native_fs::join(root, &asset.relative_path);
             directory(target.parent().ok_or("追加復元の親パスがありません")?)?;
-            let source = source_root.join(&asset.relative_path);
+            let source = crate::native_fs::join(&source_root, &asset.relative_path);
             let (mut input, before) = open_source(&source)?;
             let mut output = private_file(&target)?;
             install.owned.push(Owned {
-                metadata: output.metadata().map_err(|e| e.to_string())?,
+                metadata: crate::native_fs::metadata(&output).map_err(|e| e.to_string())?,
                 path: target,
                 directory: false,
                 proof: Some((asset.size_bytes as u64, asset.content_hash.clone())),
@@ -156,10 +153,13 @@ impl<'a> Installed<'a> {
                 check,
             )?;
             if proof != (asset.size_bytes as u64, asset.content_hash)
-                || !same_file(&before, &input.metadata().map_err(|e| e.to_string())?)
                 || !same_file(
                     &before,
-                    &std::fs::symlink_metadata(&source).map_err(|e| e.to_string())?,
+                    &crate::native_fs::metadata(&input).map_err(|e| e.to_string())?,
+                )
+                || !same_file(
+                    &before,
+                    &crate::native_fs::symlink_metadata(&source).map_err(|e| e.to_string())?,
                 )
             {
                 return Err("追加復元中に管理ファイルが変更されています".into());
@@ -179,7 +179,7 @@ impl<'a> Installed<'a> {
         for entry in &self.owned {
             check_cancelled(check)?;
             directory(entry.path.parent().ok_or("追加復元の親パスがありません")?)?;
-            let now = std::fs::symlink_metadata(&entry.path).map_err(|e| e.to_string())?;
+            let now = crate::native_fs::symlink_metadata(&entry.path).map_err(|e| e.to_string())?;
             if !same_inode(&entry.metadata, &now) {
                 return Err("追加復元の専用保存先が変更されています".into());
             }
@@ -224,7 +224,7 @@ impl Drop for Installed<'_> {
             // files are never removed, even if this leaves a recoverable orphan.
             let safe = directory(&self.root).is_ok()
                 && entry.path.parent().is_some_and(|p| directory(p).is_ok())
-                && std::fs::symlink_metadata(&entry.path)
+                && crate::native_fs::symlink_metadata(&entry.path)
                     .is_ok_and(|m| same_inode(&entry.metadata, &m));
             if safe {
                 if entry.directory {

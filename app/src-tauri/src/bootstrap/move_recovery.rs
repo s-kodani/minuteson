@@ -43,7 +43,8 @@ fn marker(operation: &str) -> String {
     format!(".relocation-kept-{operation}.json")
 }
 fn missing(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    crate::native_fs::symlink_metadata(path)
+        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
 }
 
 // Metadata observation does not confer ownership. Symlinks are never followed;
@@ -68,7 +69,7 @@ fn observe(
         if objects.len() > 200_004 {
             return Err("保持対象の確認が安全件数を超えました。ファイルは変更しません".into());
         }
-        match std::fs::symlink_metadata(&path) {
+        match crate::native_fs::symlink_metadata(&path) {
             Ok(m) => {
                 objects.push(serde_json::json!([
                     path,
@@ -150,6 +151,7 @@ impl Bootstrap {
                 self.directory.as_raw_fd(),
                 name.as_ptr(),
                 libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                0,
             )
         };
         if fd < 0 {
@@ -161,7 +163,7 @@ impl Bootstrap {
             };
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
-        let before = file.metadata().map_err(|e| e.to_string())?;
+        let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !regular(&before, true) || before.len() > LIMIT {
             return Err("保持記録の形式・権限・容量が不正です".into());
         }
@@ -190,9 +192,9 @@ impl Bootstrap {
         {
             return Err("保持記録の確認対象が不正です".into());
         }
-        let after = file.metadata().map_err(|e| e.to_string())?;
+        let after = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !Identity::read(&before)?.matches(
-            &std::fs::symlink_metadata(self.config.join(marker(operation)))
+            &crate::native_fs::symlink_metadata(self.config.join(marker(operation)))
                 .map_err(|e| e.to_string())?,
         ) || !Identity::read(&before)?.matches(&after)
             || before.len() != after.len()
@@ -396,7 +398,7 @@ impl Bootstrap {
             }
             let mut file = unsafe { File::from_raw_fd(fd) };
             file.write_all(&bytes)
-                .and_then(|_| file.sync_all())
+                .and_then(|_| crate::native_fs::sync_handle(&file))
                 .map_err(|e| e.to_string())?;
             self.guard_directory()?;
             let target = std::ffi::CString::new(marker(id)).unwrap();
@@ -413,7 +415,7 @@ impl Bootstrap {
                 return Err(std::io::Error::last_os_error().to_string());
             }
         }
-        self.directory.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         if self.read_kept(id)?.as_ref() != Some(decision) {
             return Err("保持記録の確定結果が一致しません".into());
         }
@@ -563,5 +565,5 @@ fn keep_checkpoint() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

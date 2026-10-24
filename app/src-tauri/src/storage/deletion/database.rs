@@ -11,7 +11,7 @@ const MAX_MANIFEST: usize = 65_536;
 
 // Every selector is repository-owned SQL. No request may choose tables or SQL.
 // Order is dependency order, except the three self-referential trees below.
-const TARGETS: &[(&str, &str)] = &[
+pub(in crate::storage) const TARGETS: &[(&str, &str)] = &[
     ("voice_matches", "meeting_id=?1"),
     ("analysis_flows", "meeting_id=?1"),
     (
@@ -191,9 +191,9 @@ fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static Kno
     }
 }
 fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     super::startup::verify_temp_schema(db)?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     if db
         .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema)", [], |r| {
             r.get::<_, bool>(0)
@@ -243,10 +243,16 @@ pub(super) fn stopped(db: &Connection) -> Result<(), String> {
     }
 }
 
+fn stopped_for_meeting(db: &Connection, meeting: &str) -> Result<(), String> {
+    // Only a native live reservation can authorize ignoring persisted work
+    // states. Ordinary / historical callers retain the original global check.
+    if super::super::meeting_access::reserved(db, meeting)? { Ok(()) } else { stopped(db) }
+}
+
 // A crash-stale partial model package is a legitimate deletion target. The
 // caller MUST own the real DataMaintenanceLease (which excludes live model
 // workers); all other active SQL work and unfinished CPU checks still block.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn stopped_for_model_consent(db: &Connection) -> Result<(), String> {
     let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_compatibility_checks WHERE state='preparing')", [], |r|r.get(0)).map_err(|e|e.to_string())?;
     if active {
@@ -350,7 +356,7 @@ fn hash_cell(hash: &mut Sha256, value: ValueRef<'_>, bytes: &mut usize) -> Resul
 // Reconstruct the confirmation's complete maintenance fingerprint after the
 // meeting FK was detached by ON DELETE SET NULL. This is a hash-only view: no
 // row is rewritten, and every other cell remains byte-for-byte bound to Scope.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn detached_maintenance_hash(
     db: &Connection,
     meeting: &str,
@@ -480,7 +486,7 @@ impl Scope {
     // Read-only current observations under a typed, completed unavailable-audio
     // source. The caller owns the live maintenance lease; crash-stale work is
     // retained, not silently recovered while startup has deferred writes.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn capture_audio_reconfirmation(
         db: &Connection,
         meeting: &str,
@@ -517,7 +523,7 @@ impl Scope {
             return Err("削除する会議が見つかりません".into());
         }
         if require_stopped {
-            stopped(db)?;
+            stopped_for_meeting(db, meeting)?;
         }
         closed_scope(db, meeting, check)?;
         let tables = TARGETS
@@ -731,7 +737,7 @@ pub(super) fn verify_rows_deleted(
     expected: &Scope,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    stopped(db)?;
+    stopped_for_meeting(db, &expected.meeting_id)?;
     verify_rows_absent(db, expected, check)
 }
 // Startup observation is not deletion admission. Unrelated stale running rows
@@ -811,7 +817,7 @@ pub(super) fn finish_database_purge(
         return Err("削除後処理の操作・トランザクションが不正です".into());
     }
     expected.validate_format(db)?;
-    stopped(db)?;
+    stopped_for_meeting(db, &expected.meeting_id)?;
     let (meeting, manifest, hash, consent, state, progress): (Option<String>, String, String, Option<i64>, String, String) = db.query_row("SELECT meeting_id,target_manifest_json,target_hash,consent_at,state,progress_json FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting' AND state IN ('cleanup','completed')", params![operation], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|e| e.to_string())?;
     let progress: Progress = serde_json::from_str(&progress).map_err(|e| e.to_string())?;
     let exists: bool = db
@@ -859,5 +865,5 @@ pub(super) fn finish_database_purge(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod history_tests;

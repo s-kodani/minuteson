@@ -145,8 +145,8 @@ mod tests {
         let initial = storage.analysis_preferences().unwrap();
         assert_eq!(initial.lock_version, 0);
         let mut payload = initial.payload;
-        payload.standard.model_path = "/models/multilingual.bin".into();
-        payload.standard.executable_path = "/engines/whisper-cli".into();
+        payload.standard.model_path = crate::test_support::absolute("/models/multilingual.bin");
+        payload.standard.executable_path = crate::test_support::absolute("/engines/whisper-cli");
         let saved = storage
             .save_analysis_preferences(0, payload.clone())
             .unwrap();

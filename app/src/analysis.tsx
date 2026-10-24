@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -123,7 +124,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     if (outcome === "completed" && regeneration.current) await submitRegeneration(regeneration.current);
   });
   const tools = <section className="analysis-card" aria-label="文字起こし操作">
-    <h2>文字起こし</h2><p>全体設定のモデルを使います。完了した結果は発言一覧に保存します。</p>
+    <div className="heading-with-info"><h2>文字起こし</h2><InfoPopover label="文字起こし">全体設定のモデルを使います。完了した結果は発言一覧に保存します。</InfoPopover></div>
     {pending ? <p role="status">{flow?.stage === "diarization" ? "話者分離" : "文字起こし"}{!active ? "の開始を準備しています。" : active.state === "paused" ? "を一時停止しています。" : active.state === "interrupted" ? "が中断しています。" : active.state === "queued" ? "の開始を待っています。" : active.state === "pausing" ? "を停止しています。" : "中です。"}進捗は画面上部で確認できます。</p> : (
     <div className="speaker-count-fields"><label>会議全体の話者数<select value={numSpeakers??""} disabled={locked||busy||recordingActive||pending||!!regeneration.current} onChange={e=>setNumSpeakers(e.target.value?Number(e.target.value):null)}><option value="">自動</option>{Array.from({length:100},(_,i)=><option key={i+1} value={i+1}>最大{i+1}人</option>)}</select></label></div>
     )}

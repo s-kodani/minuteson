@@ -160,6 +160,10 @@ pub(crate) fn advance(
     changed: &impl Fn(AnalysisFlow),
 ) -> Result<(), String> {
     for mut flow in storage.pending_analysis_flows()? {
+        let _meeting_owner = match storage.begin_meeting_work(&flow.meeting_id, "job", None) {
+            Ok(owner) => owner,
+            Err(_) => continue,
+        };
         let _verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
         let _audio_verification = crate::audio::reuse::Scope::join_or_enter()?;
         let _preparing = (flow.stage == "pending"
@@ -352,6 +356,24 @@ fn step(
         _ => {}
     }
     Ok(None)
+}
+
+// Private-data verification must never advance another meeting's pending work.
+#[cfg(test)]
+pub(crate) fn advance_selected_for_test(
+    storage: &Storage,
+    meeting: &str,
+) -> Result<AnalysisFlow, String> {
+    let mut flow = storage
+        .analysis_flow(meeting)?
+        .ok_or("対象の解析工程がありません")?;
+    for _ in 0..4 {
+        match step(storage, &flow, &|| false)? {
+            Some(next) => flow = next,
+            None => break,
+        }
+    }
+    Ok(flow)
 }
 
 pub(crate) fn continue_flow(

@@ -21,6 +21,8 @@ mockIPC(async(command,args)=>{
   switch(command){
     case "get_recording_snapshot":return {revision:0,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};
     case "capture_available":return false;
+    case "get_voice_matching_preferences":return {id:"voice_matching",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
+    case "get_speaker_completion_preferences":return {id:"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
     case "get_audio_import":return structuredClone(f.import);
     case "select_audio_import":{
       if(f.failSelect)throw Error("模擬音声選択失敗");

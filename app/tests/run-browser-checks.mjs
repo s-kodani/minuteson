@@ -17,6 +17,7 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
   ["internal-logs", null, "internal-logs-browser-check.js"],
   ["speaker-count", "browser-fixture.js", "speaker-count-browser-check.js"],
   ["meeting-mix-progress", "browser-fixture.js", "meeting-mix-progress-browser-check.js"],
@@ -27,6 +28,7 @@ const suites = [
   ["simple-workspace", "browser-fixture.js", "simple-workspace-browser-check.js"],
   ["notification-archive", null, "notification-archive-browser-check.js"],
   ["simple-transcript", "browser-fixture.js", "simple-transcript-browser-check.js"],
+  ["recognition-review", "browser-fixture.js", "recognition-review-browser-check.js"],
   ["transcript-consolidation", "browser-fixture.js", "transcript-groups-browser-check.js"],
   ["speaker-assignment", "browser-fixture.js", "speaker-assignment-browser-check.js"],
   ["speaker-structure", "browser-fixture.js", "speaker-structure-browser-check.js"],
@@ -51,14 +53,19 @@ const suites = [
   ["data-admission", "data-save-browser-fixture.js", "data-admission-browser-check.js"],
   ["no-maintenance", "data-save-browser-fixture.js", "no-maintenance-browser-check.js"],
   ["data-layout", "data-save-browser-fixture.js", "data-save-layout-browser-check.js"],
+  ["native-path-display", "data-save-browser-fixture.js", "native-path-browser-check.js"],
+  ["notice-deletion", "audio-deletion-browser-fixture.js", "notice-deletion-browser-check.js"],
+  ["capture-test-pc-only", null, "capture-test-pc-only-browser-check.js"],
   ["data-action", "data-save-browser-fixture.js", "data-action-confirmation-browser-check.js"],
   ["move", "data-save-browser-fixture.js", "storage-move-browser-check.js"],
   // Model deletion/rebinding dialogs were retired with maintenance UI.
   // Current download/selection and hidden cleanup have their own suites.
   ["info-production", "browser-fixture.js", "info-production-browser-check.js"],
+  ["info-headings", "browser-fixture.js", "info-headings-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["recorder-panel", null, "recorder-panel-browser-check.js"],
+  ["recorder-waveform", null, "recorder-waveform-browser-check.js"],
   ["recorder-info", null, "recorder-info-browser-check.js"],
   ["recorder-operations", null, "recorder-operation-browser-check.js"],
   ["startup-attention", null, "startup-attention-browser-check.js"],
@@ -103,6 +110,7 @@ const suites = [
   ["minutes-prompt", "browser-fixture.js", "minutes-prompt-browser-check.js"],
   ["navigation-menu", null, "navigation-menu-browser-check.js"],
   ["row-menu-confirmation", "audio-deletion-browser-fixture.js", "row-menu-confirmation-browser-check.js"],
+  ["row-menu-disabled", "audio-deletion-browser-fixture.js", "row-menu-disabled-browser-check.js"],
   ["row-menu-activation", "deletion-browser-fixture.js", "row-menu-activation-browser-check.js"],
 ].filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");

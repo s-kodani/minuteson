@@ -97,11 +97,9 @@ impl<'storage> NativeSnapshot<'storage> {
         let path = self.stage.path().join("relocation-control.json");
         let mut file = private_file(&path)?;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        let proof = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
-        File::open(self.stage.path())
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+        let proof = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_path(&self.stage.path())?;
         let result = ControlHandoff {
             snapshot: self,
             registry,
@@ -256,11 +254,9 @@ impl ControlHandoff<'_, '_> {
             &bindings,
         )?;
         drop(db);
-        file.sync_all().map_err(|e| e.to_string())?;
-        File::open(self.snapshot.stage.path())
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        let proof = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+        crate::native_fs::sync_path(&self.snapshot.stage.path())?;
+        let proof = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         let (size, hash) = digest_file(&path, cancelled)?;
         self.verify(cancelled)?;
         Ok(RegistryImage {
@@ -273,7 +269,7 @@ impl ControlHandoff<'_, '_> {
     pub(crate) fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         self.snapshot.verify(cancelled)?;
         self.snapshot.verify_source(cancelled)?;
-        if Proof::read(&std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
+        if Proof::read(&crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
             != self.proof
             || digest_file(&self.path, cancelled)? != (self.bytes.len() as u64, self.hash.clone())
         {
@@ -312,7 +308,7 @@ impl ControlHandoff<'_, '_> {
             return Err("元の所有台帳・保持記録が変更されています。移行確認は失効しました".into());
         }
         self.snapshot.verify_source(cancelled)?;
-        if Proof::read(&std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
+        if Proof::read(&crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
             != self.proof
         {
             return Err("元の台帳を再照合する間に移行用制御記録が変更されています".into());
@@ -351,7 +347,9 @@ impl RegistryImage {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(&self.path)
             .map_err(|e| e.to_string())?;
-        if Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != self.proof {
+        if Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)?
+            != self.proof
+        {
             return Err("移行用台帳の一時コピーが変更されています".into());
         }
         check(cancelled)?;
@@ -359,15 +357,17 @@ impl RegistryImage {
         std::io::Seek::seek(output, std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let (_, hash) = stream(&mut input, Some(output), self.size, cancelled)?;
         if hash != self.hash
-            || Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != self.proof
-            || Proof::read(&std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
+            || Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)?
                 != self.proof
+            || Proof::read(
+                &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
+            )? != self.proof
         {
             return Err("移行用台帳のコピー中に内容・実体が変更されています".into());
         }
-        output.sync_all().map_err(|e| e.to_string())
+        crate::native_fs::sync_handle(&output).map_err(|e| e.to_string())
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

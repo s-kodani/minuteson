@@ -381,7 +381,7 @@ fn observed(dir: &Directory, name: &str, directory: bool) -> Result<Proof, Strin
     if directory {
         dir.child(name)?.ok_or("モデル対象がありません")?.proof()
     } else {
-        Proof::read(&dir.regular(name)?.metadata().map_err(|e| e.to_string())?)
+        Proof::read(&crate::native_fs::metadata(&dir.regular(name)?).map_err(|e| e.to_string())?)
     }
 }
 fn inspect(

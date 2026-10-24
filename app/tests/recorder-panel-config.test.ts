@@ -45,21 +45,21 @@ test("native main focus and recording phase own mini visibility without a manual
   assert.match(panel,/&& !confirming/);
   assert.match(panel,/\.dismissed\s*\.store\(true, Ordering::SeqCst\)/);
 });
-test("mini issue badge uses a separate grid row and adjacent buttons stay top aligned",()=>{
-  const base=source("../src/style.css"), mini=source("../src/recorder-panel.css");
-  assert.match(base,/\.recorder-info-trigger \{ display:inline-grid; position:relative; justify-items:center; gap:4px; \}/);
-  const badge=base.match(/\.recorder-operation-badge \{([^}]*)\}/)?.[1]??"";
-  assert.ok(badge.includes("line-height:10px"));
-  assert.doesNotMatch(badge,/position:absolute|bottom:|left:|width:/);
-  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; height:36px; margin:0; align-items:flex-start; \}/);
-  assert.match(mini,/button\.mini-action-icon \{[^}]*background:transparent; border:0;/);
+test("mini keeps icon controls without info, phase labels or inline diagnostics",()=>{
+  const panel=source("../src/main.tsx").split("function RecorderPanel()")[1].split("function MainWindow()")[0];
+  assert.doesNotMatch(panel,/RecorderInfoTrigger|mini-save-diagnostics|<strong>/);
+  assert.match(panel,/aria-label=\{phaseLabel\(state\)\}/);
 });
-test("mini centers its content and larger drag grip independently of its top-right close",()=>{
+test("mini centers its six-dot grip without a separator and keeps controls in the header",()=>{
   const mini=source("../src/recorder-panel.css");
   assert.match(mini,/\.mini-shell \{[^}]*display:flex;[^}]*justify-content:center;/);
-  assert.match(mini,/\.mini-shell \.mini-row \{[^}]*align-items:center;[^}]*padding-right:36px;/);
-  assert.match(mini,/\.mini-shell \.mini-drag \{[^}]*width:18px;[^}]*font-size:24px;/);
-  assert.match(mini,/\.mini-shell \.mini-close\.icon-button \{[^}]*position:absolute; top:10px; right:14px;/);
+  assert.match(mini,/\.mini-shell \.mini-row \{[^}]*align-items:center;/);
+  assert.match(mini,/\.mini-shell \.mini-drag \{[^}]*align-self:stretch;[^}]*width:14.4px;[^}]*border:0;/);
+  assert.match(mini,/\.mini-shell \.mini-close\.icon-button \{ position:static; \}/);
   const panel=source("../src/main.tsx").split("function RecorderPanel()")[1].split("function MainWindow()")[0];
-  assert.match(panel,/<\/div>\s*<\/div>\s*<IconButton label="ミニパネルを閉じる"[^>]*mini-close/);
+  assert.match(panel,/<header className="mini-header">[\s\S]*label="ミニパネルを閉じる"[\s\S]*<\/header>/);
+  for(const file of ["tauri.conf.json","tauri.qa.conf.json"]){
+    const mini=JSON.parse(source(`../src-tauri/${file}`)).app.windows.find((w:{label:string})=>w.label==="recorder");
+    assert.equal(mini.width,227);assert.equal(mini.height,101);
+  }
 });

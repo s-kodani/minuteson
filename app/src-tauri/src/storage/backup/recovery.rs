@@ -93,7 +93,7 @@ fn observe(
         let mut blocked = false;
         for part in parts.iter().take(parts.len().saturating_sub(1)) {
             path.push(part.as_os_str());
-            match std::fs::symlink_metadata(&path) {
+            match crate::native_fs::symlink_metadata(&path) {
                 Ok(m) if m.is_dir() && path.canonicalize().is_ok_and(|p| p == path) => {}
                 result => {
                     digest.update(format!("blocked:{path:?}:{result:?}"));
@@ -117,7 +117,7 @@ fn observe(
             "path:{:?}",
             path.strip_prefix(root).map_err(|e| e.to_string())?
         ));
-        let m = match std::fs::symlink_metadata(&path) {
+        let m = match crate::native_fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(error) => {
                 digest.update(format!("missing:{:?}", error.kind()));
@@ -127,8 +127,9 @@ fn observe(
                 continue;
             }
         };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             digest.update(format!(
                 "{}:{}:{}:{}:{}:{}:{}:{}:{}",

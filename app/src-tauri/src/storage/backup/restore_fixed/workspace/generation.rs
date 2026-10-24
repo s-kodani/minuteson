@@ -85,7 +85,7 @@ impl FixedWorkspace {
             .iter()
             .filter_map(|e| e.asset_id.as_deref().map(|id| (id, e)))
             .collect();
-        if !std::fs::symlink_metadata(self.stage.path())
+        if !crate::native_fs::symlink_metadata(self.stage.path())
             .map_err(|e| e.to_string())?
             .is_dir()
         {

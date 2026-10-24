@@ -397,6 +397,6 @@ pub(super) fn run_observed(
     run_inner(storage, receipt, check, event)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "completion_tests.rs"]
 mod tests;

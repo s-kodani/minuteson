@@ -11,12 +11,63 @@ enum DeletionLane {
     Audio,
 }
 
+struct NoticeWait { app: AppHandle, id: String }
+impl NoticeWait {
+    fn new(app: &AppHandle, meeting: Option<&str>) -> Option<Self> {
+        if !app.state::<AnalysisController>().notice_storage_busy(meeting) { return None; }
+        let id=Uuid::new_v4().to_string();
+        let _ = app.emit("deletion-notice-wait", serde_json::json!({"id":id,"waiting":true}));
+        Some(Self {app:app.clone(),id})
+    }
+}
+impl Drop for NoticeWait {
+    fn drop(&mut self) { let _ = self.app.emit("deletion-notice-wait", serde_json::json!({"id":self.id,"waiting":false})); }
+}
+
 impl Admission {
+    pub(super) fn acquire_meeting_deletion(
+        app: &AppHandle,
+        meeting: &str,
+        operation: Option<&str>,
+    ) -> Result<Self, String> {
+        // Cold recovery deliberately keeps the legacy global fence.
+        if app.state::<Storage>().deletion_resume_restart_required() {
+            return Self::acquire_deletion(app, operation);
+        }
+        let recording = app.state::<crate::session::SessionStore>().snapshot();
+        if recording.is_active()
+            && (recording.meeting_id.is_none() || recording.meeting_id.as_deref() == Some(meeting))
+        {
+            return Err("この会議の録音・音声保存が完了していません。録音画面で停止完了後に削除してください".into());
+        }
+        deletion::authorize_review(&app.state::<Storage>(), operation)?;
+        let _waiting = NoticeWait::new(app, Some(meeting));
+        app.state::<crate::playback::mix_cache::MixCache>()
+            .suspend_meeting(meeting);
+        let lease = match app
+            .state::<AnalysisController>()
+            .begin_meeting_deletion(&app.state::<Storage>(), meeting)
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                app.state::<crate::playback::mix_cache::MixCache>()
+                    .resume_meeting(meeting);
+                return Err(error);
+            }
+        };
+        let admission = Self {
+            app: app.clone(),
+            lease: Some(lease),
+        };
+        app.state::<crate::input_status::archived::ArchivedInputs>().evict(Some(meeting))?;
+        app.state::<Storage>().evict_restored_input_cache(Some(meeting))?;
+        Ok(admission)
+    }
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
-        app.state::<Storage>().require_data_writable()?;
+        app.state::<Storage>().require_global_data_writable()?;
         Self::acquire_worker(app, None, DeletionLane::Meeting)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn acquire_deletion(
         app: &AppHandle,
         operation: Option<&str>,
@@ -24,7 +75,7 @@ impl Admission {
         deletion::authorize_review(&app.state::<Storage>(), operation)?;
         Self::acquire_worker(app, operation, DeletionLane::Meeting)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn acquire_model_deletion(
         app: &AppHandle,
         operation: Option<&str>,
@@ -32,7 +83,7 @@ impl Admission {
         model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
         Self::acquire_worker(app, operation, DeletionLane::Model)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn acquire_audio_deletion(
         app: &AppHandle,
         operation: Option<&str>,
@@ -54,7 +105,8 @@ impl Admission {
             .is_active();
         let import_blocked = importing.busy || importing.recording_blocked;
         let analysis = app.state::<AnalysisController>();
-        #[cfg(unix)]
+        let _waiting = if matches!(lane, DeletionLane::Audio) { NoticeWait::new(app, None) } else { None };
+        #[cfg(any(unix, windows))]
         let lease = if let Some(operation) = deletion_operation {
             if matches!(lane, DeletionLane::Audio) {
                 analysis.begin_audio_deletion_maintenance(
@@ -82,19 +134,27 @@ impl Admission {
                 )?
             }
         } else {
-            analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
+            if matches!(lane, DeletionLane::Audio) {
+                analysis.begin_deletion_wait(recording, import_blocked, &|| false)?
+            } else { analysis.begin_data_maintenance(recording, import_blocked, &|| false)? }
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let lease = {
             let _ = (deletion_operation, lane);
             analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
         };
+        if deletion_operation.is_none() {
+            app.state::<Storage>().require_global_data_writable()?;
+        }
         app.state::<crate::playback::mix_cache::MixCache>()
             .suspend();
-        Ok(Self {
+        let admission = Self {
             app: app.clone(),
             lease: Some(lease),
-        })
+        };
+        app.state::<crate::input_status::archived::ArchivedInputs>().evict(None)?;
+        app.state::<Storage>().evict_restored_input_cache(None)?;
+        Ok(admission)
     }
     pub(super) fn cancelled(&self) -> bool {
         self.lease.as_ref().is_none_or(|lease| lease.cancelled())
@@ -108,23 +168,42 @@ impl Admission {
 
 impl Drop for Admission {
     fn drop(&mut self) {
+        let meeting = self
+            .lease
+            .as_ref()
+            .and_then(|lease| lease.meeting())
+            .map(str::to_owned);
+        if let Some(meeting) = &meeting {
+            if let Err(error) = self
+                .app
+                .state::<Storage>()
+                .release_meeting_deletion(meeting)
+            {
+                crate::internal_logs::report_error("meeting_deletion", &error);
+            }
+            self.app
+                .state::<crate::playback::mix_cache::MixCache>()
+                .resume_meeting(meeting);
+        }
         drop(self.lease.take());
-        self.app
-            .state::<crate::playback::mix_cache::MixCache>()
-            .resume();
+        if meeting.is_none() {
+            self.app
+                .state::<crate::playback::mix_cache::MixCache>()
+                .resume();
+        }
         if !self.app.state::<Storage>().restart_required() {
             let _ = AnalysisController::kick(&self.app);
         }
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) enum AudioTarget {
     Fresh(String),
     Pending(String),
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) enum ModelTarget {
     Fresh { package: String, review: String },
     Pending(String),
@@ -133,13 +212,13 @@ pub(crate) enum ModelTarget {
 pub(super) enum Work {
     Select(Kind, Result<Option<PathBuf>, String>, Option<Selection>),
     Request(Selection, Request),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     PendingMove(Option<Selection>),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     Deletion(String, bool, Option<Selection>),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     AudioDeletion(AudioTarget, Option<Selection>),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     ModelDeletion(ModelTarget, PathBuf, Option<Selection>),
 }
 
@@ -149,11 +228,11 @@ pub(super) struct Completion {
     pub backup: Option<BackupReceipt>,
     pub restore: Option<RestoreReceipt>,
     pub relocation: Option<MoveReceipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub deletion: Option<deletion::Receipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub audio_deletion: Option<audio_deletion::Receipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub model_deletion: Option<model_deletion::Receipt>,
     pub restart_required: bool,
     pub error: Option<String>,
@@ -172,7 +251,7 @@ impl Completion {
 
 impl Work {
     #[cfg(test)]
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn run_with_bootstrap(
         self,
         storage: &Storage,
@@ -182,7 +261,7 @@ impl Work {
     ) -> Completion {
         self.run_with_bootstrap_admitted(storage, bootstrap, cancelled, progress, None)
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn run_with_bootstrap_admitted(
         self,
         storage: &Storage,
@@ -318,7 +397,7 @@ impl Work {
         admission: Option<&crate::analysis_worker::data_maintenance::DataMaintenanceLease>,
     ) -> Completion {
         match self {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::ModelDeletion(target, root, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -353,7 +432,7 @@ impl Work {
                     },
                 }
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::AudioDeletion(target, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -387,7 +466,7 @@ impl Work {
                     },
                 }
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::Deletion(id, pending, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -415,7 +494,7 @@ impl Work {
                     },
                 }
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             Self::PendingMove(_) => {
                 Completion::failed("起動設定から未完了移動を確認してください".into())
             }
@@ -470,7 +549,7 @@ impl Work {
                 }
             }
             Self::Request(mut selection, request) => {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if let Selection::ModelDeletion(prepared) = &mut selection {
                     let mut completion = Completion::default();
                     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
@@ -523,7 +602,7 @@ impl Work {
                     completion.selection = Some(selection);
                     return completion;
                 }
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if let Selection::AudioDeletion(prepared) = &mut selection {
                     let mut completion = Completion::default();
                     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
@@ -576,7 +655,7 @@ impl Work {
                     completion.selection = Some(selection);
                     return completion;
                 }
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if let Selection::Deletion(prepared) = &mut selection {
                     let mut completion = Completion::default();
                     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {

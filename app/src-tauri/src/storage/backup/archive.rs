@@ -103,7 +103,7 @@ impl VerifiedArchive {
         let path = self.stage.path().join("validation.sqlite3");
         if !same_file(
             &self.database_identity,
-            &std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
+            &crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
         ) {
             return Err("検証済みバックアップの確認用DBの実体が変更されています".into());
         }
@@ -113,7 +113,7 @@ impl VerifiedArchive {
         Ok(())
     }
     pub(super) fn owned_asset_path(&self, id: &str) -> Result<PathBuf, String> {
-        if !std::fs::symlink_metadata(self.stage.path())
+        if !crate::native_fs::symlink_metadata(self.stage.path())
             .map_err(|e| e.to_string())?
             .is_dir()
         {
@@ -339,7 +339,10 @@ impl Snapshot<'_> {
             let (mut source, before) = open_source(&path)?;
             let (_, hash) = stream(&mut source, Some(output), entry.size, cancelled)?;
             if hash != entry.sha256
-                || !same_file(&before, &source.metadata().map_err(|e| e.to_string())?)
+                || !same_file(
+                    &before,
+                    &crate::native_fs::metadata(&source).map_err(|e| e.to_string())?,
+                )
             {
                 return Err("バックアップ作成中に入力が変更されています".into());
             }
@@ -347,7 +350,9 @@ impl Snapshot<'_> {
         output.sync_all().map_err(|e| e.to_string())?;
         output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let verified = read(output, stage.path(), cancelled)?;
-        let size = output.metadata().map_err(|e| e.to_string())?.len();
+        let size = crate::native_fs::metadata(&output)
+            .map_err(|e| e.to_string())?
+            .len();
         output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let (_, sha256) = stream(output, None, size, cancelled)?;
         self.verify(cancelled)?;
@@ -562,7 +567,7 @@ pub(crate) fn read(
 ) -> Result<VerifiedArchive, String> {
     check_cancelled(cancelled)?;
     input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    let before = input.metadata().map_err(|e| e.to_string())?;
+    let before = crate::native_fs::metadata(&input).map_err(|e| e.to_string())?;
     if !before.is_file() || before.len() < HEADER_BYTES {
         return Err("バックアップが短すぎます".into());
     }
@@ -633,7 +638,10 @@ pub(crate) fn read(
             assets.insert(id.clone(), path);
         }
     }
-    if !same_file(&before, &input.metadata().map_err(|e| e.to_string())?) {
+    if !same_file(
+        &before,
+        &crate::native_fs::metadata(&input).map_err(|e| e.to_string())?,
+    ) {
         return Err("検証中にバックアップが変更されています".into());
     }
     let database = portable::load(
@@ -655,8 +663,9 @@ pub(crate) fn read(
         .execute_batch("PRAGMA query_only=ON")
         .map_err(|e| e.to_string())?;
     let database_proof = digest_file(&stage.path().join("validation.sqlite3"), cancelled)?;
-    let database_identity = std::fs::symlink_metadata(stage.path().join("validation.sqlite3"))
-        .map_err(|e| e.to_string())?;
+    let database_identity =
+        crate::native_fs::symlink_metadata(stage.path().join("validation.sqlite3"))
+            .map_err(|e| e.to_string())?;
     Ok(VerifiedArchive {
         database,
         manifest,

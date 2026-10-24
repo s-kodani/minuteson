@@ -287,7 +287,7 @@ pub(crate) fn run_unit_observed_on_device(
     device: Option<&str>,
 ) -> Result<Option<Value>, String> {
     use super::llama_metrics::{Metrics, Phase};
-    if device.is_some_and(|v| v != "MTL0" || config.gpu_layers == 0) {
+    if device.is_some_and(|v| !matches!(v, "MTL0" | "Vulkan0") || config.gpu_layers == 0) {
         return Err("GPUデバイスの固定条件が不正です".into());
     }
     let started = Instant::now();
@@ -421,6 +421,7 @@ pub(crate) fn run_unit_observed_on_device(
     let verification = started.elapsed();
     observe(Phase::Starting);
     let spawning = Instant::now();
+    crate::local_engine::native_environment(command);
     let mut child = crate::local_engine::resident::Run::spawn(
         &mut launch,
         super::optimization::kind(),
@@ -498,15 +499,24 @@ pub(crate) fn run_unit_observed_on_device(
         .map_err(|e| e.to_string())?;
     if let Some(device) = device {
         let log = std::fs::read_to_string(&log_path).map_err(|e| e.to_string())?;
-        if !super::llama_metrics::metal_matches(&log, device, config.gpu_layers) {
-            return Err("固定したMetal GPUの利用を確認できません。処理済みの結果を保持しています。新しく生成してGPU設定を確認してください。（minutes_gpu_unavailable）".into());
+        if !(if device.starts_with("Vulkan") {
+            super::llama_metrics::vulkan_matches(&log, device, config.gpu_layers)
+        } else {
+            super::llama_metrics::metal_matches(&log, device, config.gpu_layers)
+        }) {
+            return Err("固定したGPUの利用を確認できません。処理済みの結果を保持しています。別の設定を選ぶには新しい生成を開始してください。（minutes_gpu_unavailable）".into());
         }
     }
     let value = parse_output(&bytes)?;
     validate_markdown_bound(&value, schema)?;
     // Freeze exactly the validated adapter result, including the fixed CLI's
     // optional end marker. The scheduler later registers and hashes this file.
-    File::open(&result_path)
+    let mut flush_options = OpenOptions::new();
+    flush_options.read(true);
+    #[cfg(windows)]
+    flush_options.write(true);
+    flush_options
+        .open(&result_path)
         .map_err(|e| e.to_string())?
         .sync_all()
         .map_err(|e| e.to_string())?;

@@ -1,4 +1,84 @@
 use super::*;
+#[cfg(windows)]
+#[test]
+#[ignore = "requires SHA-verified real models in MON_WINDOWS_PARITY_ASSETS"]
+fn windows_real_llama_vulkan_trial_and_cpu_fallback() {
+    use crate::local_engine::Fingerprint;
+    let index: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::env::var_os("MON_WINDOWS_PARITY_ASSETS").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let value = index
+        .as_object()
+        .unwrap()
+        .values()
+        .filter(|v| v["role"] == "llm")
+        .min_by_key(|v| v["bytes"].as_u64().unwrap())
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap();
+    let snapshot = crate::local_engine::resident::prepare(&path, "llama")
+        .unwrap()
+        .unwrap();
+    let config = LlamaConfig {
+        executable: Fingerprint::capture(
+            &crate::windows_runtime::resources()
+                .unwrap()
+                .join("llama/llama-completion.exe"),
+            &|| false,
+        )
+        .unwrap(),
+        model: Fingerprint::capture(Path::new(value["path"].as_str().unwrap()), &|| false).unwrap(),
+        threads: 2,
+        context_tokens: 2048,
+        prediction_tokens: 64,
+        gpu_layers: 0,
+        seed: 42,
+    };
+    {
+        let scope = crate::local_engine::resident::Scope::enter(&path, Some(&snapshot)).unwrap();
+        let directory = path.join("gpu");
+        std::fs::create_dir(&directory).unwrap();
+        let resolved = resolve(Policy::AutoVulkanV1, &config, 2048, &directory, &|| false)
+            .unwrap()
+            .unwrap();
+        resolved
+            .validate(Policy::AutoVulkanV1, &config, 2048)
+            .unwrap();
+        eprintln!(
+            "Actual Vulkan trial: {}",
+            serde_json::to_string(&resolved).unwrap()
+        );
+        if matches!(resolved, Resolved::Vulkan { .. }) {
+            let directory = path.join("gpu-followup");
+            std::fs::create_dir(&directory).unwrap();
+            let mut selected = config.clone();
+            let device = resolved.configure(&mut selected);
+            assert_eq!(llama::run_unit_observed_on_device(&selected,&directory,SYSTEM,PROMPT,&json!({"type":"object","properties":{"ok":{"type":"boolean","const":true}},"required":["ok"],"additionalProperties":false}),Duration::from_secs(60),&||false,&|_|{},device).unwrap().unwrap(),json!({"ok":true}));
+            let log = std::fs::read_to_string(directory.join("stderr.log")).unwrap();
+            assert!(log.contains("reusing model"));
+            assert!(!log.contains("mon_model_load: llama=1"));
+        }
+        drop(scope);
+    }
+    let mut cpu = snapshot;
+    cpu.gpu = None;
+    let _scope = crate::local_engine::resident::Scope::enter(&path, Some(&cpu)).unwrap();
+    let directory = path.join("forced-failure");
+    std::fs::create_dir(&directory).unwrap();
+    let resolved = resolve(Policy::AutoVulkanV1, &config, 2048, &directory, &|| false)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        resolved,
+        Resolved::Cpu {
+            reason: CpuReason::TrialFailed
+        }
+    ));
+    let directory = path.join("cpu");
+    std::fs::create_dir(&directory).unwrap();
+    assert_eq!(llama::run_unit_observed_on_device(&config,&directory,SYSTEM,PROMPT,&json!({"type":"object","properties":{"ok":{"type":"boolean","const":true}},"required":["ok"],"additionalProperties":false}),Duration::from_secs(60),&||false,&|_|{},None).unwrap().unwrap(),json!({"ok":true}));
+}
 fn config() -> LlamaConfig {
     use crate::local_engine::Fingerprint;
     LlamaConfig {

@@ -55,7 +55,7 @@ pub(in crate::storage) fn inspect_workspaces(
         }
         let relative = format!("meetings/{meeting}/audio/{session}");
         let path = storage.root.join(&relative);
-        match std::fs::symlink_metadata(&path) {
+        match crate::native_fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e.to_string()),
             Ok(_) => {}
@@ -86,7 +86,7 @@ pub(in crate::storage) fn inspect_workspaces(
                 // names nor this failure grant ownership of intermediate PCM.
                 continue;
             };
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             relocation::effective_plan(storage, &root.path, name, &bytes, &mut plan)?;
             // Backup or an unadmitted copy preserves bytes, not ownership.
             // Registered audio is still classified separately by the DB.
@@ -114,7 +114,7 @@ pub(in crate::storage) fn inspect_workspaces(
                     return Err("FLAC出力トラックのID・区間数が不正です".into());
                 }
                 let track_relative = format!("meetings/{meeting}/audio/{}", track.id);
-                match std::fs::symlink_metadata(storage.root.join(&track_relative)) {
+                match crate::native_fs::symlink_metadata(storage.root.join(&track_relative)) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(e) => return Err(e.to_string()),
                     Ok(_) => {}
@@ -137,7 +137,7 @@ pub(in crate::storage) fn inspect_workspaces(
                     };
                     let mut checkpoint: Checkpoint =
                         serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", windows))]
                     relocation::effective_checkpoint(
                         storage,
                         &directory.path,

@@ -1072,7 +1072,7 @@ fn history_install_crash_child() {
             .open(&marker)
             .unwrap();
         file.write_all(b"ready").unwrap();
-        file.sync_all().unwrap();
+        crate::native_fs::sync_handle(&file).unwrap();
         loop {
             std::thread::park();
         }

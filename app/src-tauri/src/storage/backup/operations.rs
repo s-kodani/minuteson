@@ -106,14 +106,15 @@ fn source_file(path: &Path) -> Result<File, String> {
     {
         return Err("絶対パスのMONバックアップを選択してください".into());
     }
-    let before = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let before = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !before.is_file() || before.file_type().is_symlink() {
         return Err("バックアップはリンクではない通常ファイルを選択してください".into());
     }
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let opened = file.metadata().map_err(|e| e.to_string())?;
-    #[cfg(unix)]
+    let opened = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         if before.nlink() != 1
             || opened.nlink() != 1

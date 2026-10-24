@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {useEffect,useState} from "react";
 import {InputLevelClock} from "./input-level-state";
@@ -26,8 +27,7 @@ function label(value:VisibleWrite){
 export function RecordingWriteStatus({owner}:{owner:string|null}){
   const view=useWrites(owner),confirmed=view.microphone.state==="written"&&view.system.state==="written";
   return <section aria-label="録音の書込み" className="recording-write-status">
-    <p role="status">{confirmed?"この端末に保存中":"音声の書込みを確認しています"}</p>
+    <div className="heading-with-info"><p role="status">{confirmed?"この端末に保存中":"音声の書込みを確認しています"}</p><InfoPopover label="録音の書込み">録音ファイルにある音声と更新時刻を確認しています。入力レベルや接続状態だけでは保存中と表示しません。録音の保存完了は停止後に確認します。電源断による末尾の損失を保証する表示ではありません。</InfoPopover></div>
     <dl className="recording-write-tracks"><div><dt>マイク</dt><dd data-write-state={view.microphone.state}>{label(view.microphone)}</dd></div><div><dt>PCの音声</dt><dd data-write-state={view.system.state}>{label(view.system)}</dd></div></dl>
-    <p>録音ファイルにある音声と更新時刻を確認しています。入力レベルや接続状態だけでは保存中と表示しません。録音の保存完了は停止後に確認します。電源断による末尾の損失を保証する表示ではありません。</p>
   </section>;
 }

@@ -1,7 +1,7 @@
 //! Headless, bounded speaker-feature extraction. No capture, network or DB.
 //! The parent must verify helper/model/runtime/WAV fingerprints before and
 //! after execution, own/reap this process, and enforce its inference timeout.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod native;
 mod wave;
 use std::path::PathBuf;
@@ -117,9 +117,9 @@ impl Output {
 fn execute(args: &[String]) -> Result<String, String> {
     let request = request(args)?;
     let samples = wave::selected(&request.wave, request.first, request.end)?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     let output = native::extract(&request, &samples)?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let output: Output = {
         let _ = samples;
         return Err("this helper currently supports macOS only".into());

@@ -1,3 +1,4 @@
+import {useDeletionNoticeWait} from "./deletion-notice-wait";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { rowMenuReturnTarget } from "./row-menu";
@@ -8,14 +9,19 @@ import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
 import { assertDeletionPathPage, deletionPhaseLabel, isDeletionReconfirmation, type DeletionPathPage, type DeletionReceipt } from "./deletion-state";
 import { bytesLabel } from "./import-state";
-import { stopAllPlayback } from "./playback-barrier";
+import { stopMeetingPlayback } from "./playback-barrier";
+import { useMeetingDeletionAvailability } from "./meeting-deletion-availability";
+import { deletionReviewReason } from "./deletion-review-reason";
 
-export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted }: {
+export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted, meetingIds }: {
+  meetingIds: string[];
   operation: DataOperation; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onDeleted: (receipt: DeletionReceipt) => Promise<void>;
 }) {
+  const noticeWaiting=useDeletionNoticeWait();
   const latest = useRef({ operation, locked, withSavedEdits, onDeleted }); latest.current = { operation, locked, withSavedEdits, onDeleted };
+  const availability = useMeetingDeletionAvailability(meetingIds);
   const [rpcBusy, setRpcBusy] = useState(false), running = useRef(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
@@ -41,8 +47,11 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   // Restart normally forbids all work. A canonical pending deletion alone can
   // use its restricted native resume lane; it never enables ordinary writes.
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
-  const canReviewPending = canInspect && sharedAvailable;
-  const canReviewMeeting = canReviewPending && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
+  const canReviewPending = canInspect && (sharedAvailable || (!listing?.restartRequired && !s?.restartRequired));
+  const canReviewMeeting = canInspect && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
+  const canReviewMeetingId = (id: string) => canReviewMeeting && availability.rows.get(id)?.available === true;
+  const reviewUnavailableReason = canReviewMeeting ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.deletionSupported, locked, protectedNow, sharedAvailable });
+  const meetingReviewReason = (id: string) => !canReviewMeeting ? reviewUnavailableReason : availability.error || availability.rows.get(id)?.blockers.map(b => b.reason).join(" ") || (availability.rows.has(id) ? null : "削除できる状態か確認しています。");
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const run = async (action: () => Promise<void>) => {
     if (running.current) return;
@@ -69,21 +78,27 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     finally { if (epoch === pageEpoch.current) setPageBusy(false); }
   };
   const review = async (id: string, pendingReview: boolean) => {
-    if (!(pendingReview ? canReviewPending : canReviewMeeting)) return;
+    if (!(pendingReview ? canReviewPending || (canInspect && !listing?.restartRequired) : canReviewMeetingId(id))) return;
     const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
     await protect(async () => {
-      await stopAllPlayback(); opener.current = active; setOpen(false); setToast("");
+      await stopMeetingPlayback(pendingReview ? preview?.meetingId ?? listing?.items.find(item => item.operationId === id)?.meetingId ?? "" : id); opener.current = active; setOpen(false); setToast("");
       choice.current = { id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 };
       try {
         latest.current.operation.accept(await invoke<DataSnapshot>(pendingReview ? "review_pending_deletion" : "review_meeting_deletion", pendingReview ? { operationId: id } : { meetingId: id }));
         choice.current = null; setUnknown(false);
-      } catch (cause) { setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`); }
+      } catch (cause) {
+        if (typeof cause === "string" && cause.startsWith("meeting_deletion_not_started:")) { choice.current = null; setUnknown(false); void availability.refresh(); throw Error(cause.slice("meeting_deletion_not_started:".length)); }
+        setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`);
+      }
     });
   };
   const send = async (request: DataRequest, revision: number) => {
     pending.current = { request, revision };
     try { latest.current.operation.accept(await invoke<DataSnapshot>("start_data_operation", { request })); pending.current = null; setUnknown(false); setOpen(false); }
-    catch (cause) { setUnknown(true); throw Error(`受付結果を確定できません。別の削除を始めず、同じ操作の結果を確認してください: ${String(cause)}`); }
+    catch (cause) {
+      if (typeof cause === "string" && cause.startsWith("meeting_deletion_not_started:")) { pending.current = null; setUnknown(false); void availability.refresh(); throw Error(cause.slice("meeting_deletion_not_started:".length)); }
+      setUnknown(true); throw Error(`受付結果を確定できません。別の削除を始めず、同じ操作の結果を確認してください: ${String(cause)}`);
+    }
   };
   const submit = async (action: DataRequest["action"]) => {
     if (!canResolve) return;
@@ -91,7 +106,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     if (!confirmation) return;
     if (["publish", "delete_including_unregistered"].includes(action) && (!open || !currentUnderstood || !page || pageBusy || pageError || page.confirmationId !== preview?.confirmationId || (action === "delete_including_unregistered" && !currentIncludeUnknown))) return;
     await protect(async () => {
-      await stopAllPlayback();
+      await stopMeetingPlayback(preview?.meetingId ?? "");
       const now = latest.current.operation.getSnapshot(); if (!now) throw Error("削除状態を再確認してください。");
       if (now.deletionPreview?.confirmationId !== confirmation) throw Error("待機中に削除の確認が変更されました。新しい一覧を確認してください。");
       await send(dataRequest(now, action), now.revision);
@@ -100,7 +115,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const retryUnknown = async () => {
     if (running.current || locked || s?.busy) return;
     await protect(async () => {
-      if (pending.current) { const p = pending.current; await stopAllPlayback(); await send(p.request, p.revision); }
+      if (pending.current) { const p = pending.current; await stopMeetingPlayback(preview?.meetingId ?? ""); await send(p.request, p.revision); }
       else { await latest.current.operation.refresh(); const now = latest.current.operation.getSnapshot(), c = choice.current;
         if (c && now?.kind === "deletion" && now.revision > c.revision && (now.busy || ["failed", "cancelled", "attention"].includes(now.phase) || (c.pending ? now.deletionPreview?.operationId === c.id : now.deletionPreview?.meetingId === c.id))) { choice.current = null; setUnknown(false); }
         else throw Error("同じ確認の受付をまだ確定できません。読み直すか、安全な停止を要求してください。");
@@ -138,9 +153,11 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
-  const canDelete = canResolve && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
+  const targetUnavailableReason = preview && !preview.pending ? availability.error || availability.rows.get(preview.meetingId)?.blockers.map(b => b.reason).join(" ") || (!availability.rows.has(preview.meetingId) ? "削除できる状態か確認しています。" : null) : null;
+  const canDelete = canResolve && !targetUnavailableReason && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
-    rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
+    canReviewMeetingId, meetingReviewReason, targetUnavailableReason, meetingBlockers: (id: string) => availability.rows.get(id)?.blockers ?? [], retryAvailability: availability.refresh,
+    noticeWaiting, reviewUnavailableReason, rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
     understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
 
@@ -150,8 +167,10 @@ export function MeetingDeletionPanel({ operation, control }: { operation: DataOp
   return <>
     <ToastNotice scope="deletion" type="meeting-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s?.errorMessage : "")} />
+    {c.rpcBusy&&c.noticeWaiting&&<p role="status">通知履歴の処理完了を待っています</p>}
     <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
       <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>{isDeletionReconfirmation(p?.phase) ? "変更後の残り範囲への再同意" : "会議の完全削除を確認"}</h2>
+      {c.targetUnavailableReason && <p role="status">削除待ち：{c.targetUnavailableReason} <button type="button" className="small-secondary" onClick={() => void c.retryAvailability()}>削除可否を再確認</button></p>}
       {p && <><h3>{p.title}</h3><p className="data-path">会議ID: {p.meetingId}</p><p>管理音声、文字起こし、議事録、現在・直前・内部参照版、候補、下書き・手動編集、会議別用語と処理履歴を削除します。アプリ内では復元できません。</p><p>外部の元音声・書き出し・バックアップ、AIモデル・共通用語、旧保存先・保持コピー・会議ツリー外の一時領域は対象外です。媒体上の安全消去は保証しません。</p><dl className="import-info"><dt>確認時のファイル</dt><dd>{p.fileCount} 件 · 実在容量 {bytesLabel(p.bytes)}</dd><dt>欠落・登録時と変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd><dt>{p.rowPhaseCommitted ? "元の確認時のDB行（削除済み）" : "確認時のDB行"}</dt><dd>{p.rowCount} 件</dd><dt>{isDeletionReconfirmation(p.phase) ? "現在の確認段階" : "保存済み段階"}</dt><dd>{deletionPhaseLabel(p.phase)}</dd><dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}（フォルダー・欠落を含み、消したファイル数ではありません）</dd></dl>
       {p.pending && <p role="alert">途中まで削除している可能性があります。既に消したデータは復元しません。{isDeletionReconfirmation(p.phase) ? "この一覧は再同意前の確認です。再検査で確認IDが変わると、新しい範囲への同意をやり直します。" : "再検査は元の確認範囲を照合し、新しい未知物を自動採用しません。"}</p>}
       {isDeletionReconfirmation(p.phase) && <p role="alert">以前の計画では {p.previousProcessedPaths} / {p.previousPathCount} パスを処理済みです。ここには現在残る新しい範囲を表示しています。元の同意と進捗を履歴として保持し、再同意後に新しい計画で続行します。処理済みデータの復元や未開始への巻き戻しではありません。</p>}

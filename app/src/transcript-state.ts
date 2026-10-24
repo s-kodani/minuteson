@@ -13,7 +13,9 @@ export interface Utterance {
   recognitionIsSource?: boolean;
   sourceUtteranceId?: string;
 }
+export interface RecognitionReviewRange { trackId: string; startUs: number; endUs: number; reason: "repetition_after_recovery" }
 export interface Analysis {
+  reviewRanges?: RecognitionReviewRange[];
   id: string; meetingId: string; contentHash: string;
   speakers: Speaker[]; utterances: Utterance[];
 }

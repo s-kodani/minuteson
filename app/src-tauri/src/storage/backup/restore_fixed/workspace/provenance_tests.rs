@@ -135,8 +135,9 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
     // Test-only access to the owned image: this is not a publication path.
     let owned_connection = Connection::open(work.stage.path().join("fixed.sqlite3")).unwrap();
     let owned = Storage {
+        meeting_owners: Default::default(),
         deletion_fence: crate::storage::deletion::fence::Fence::open(&owned_connection).unwrap(),
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
             work.stage.path(),
             "fixed.sqlite3",
@@ -144,9 +145,9 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         .unwrap(),
         scratch: None,
         recovery_hold: false,
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         flac_history: None,
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         native_models_root: work.stage.path().join("models"),
         root: work.stage.path().canonicalize().unwrap(),
         connection: Mutex::new(owned_connection),

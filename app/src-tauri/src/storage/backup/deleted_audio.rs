@@ -28,9 +28,9 @@ impl Native {
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let meetings = crate::storage::deletion::audio::backup_deleted(storage, db, check)?;
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let meetings = {
             let _ = (storage, db);
             check_cancelled(check)?;

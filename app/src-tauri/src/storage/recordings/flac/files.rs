@@ -1,11 +1,20 @@
 //! Descriptor-relative conversion workspace. Never overwrite a final object,
 //! follow a link, or truncate a partial without its durable identity receipt.
+#[cfg(windows)]
+use crate::bootstrap::windows_io as libc;
+#[cfg(windows)]
+use crate::bootstrap::windows_io::{AsRawFd, FromRawFd};
+use crate::native_fs::Metadata;
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +41,7 @@ impl Identity {
             birth: (birth.as_secs(), birth.subsec_nanos()),
         })
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn registered(&self) -> Result<(u64, u64, u64), String> {
         self.validate(self.mode & libc::S_IFMT as u32 == libc::S_IFDIR as u32)?;
         Ok((
@@ -45,7 +54,7 @@ impl Identity {
                 .ok_or("FLAC実体の時刻が範囲外です")?,
         ))
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
         let kind = if directory {
             libc::S_IFDIR
@@ -54,17 +63,17 @@ impl Identity {
         };
         if self.birth.1 >= 1_000_000_000
             || self.mode & libc::S_IFMT as u32 != kind as u32
-            || self.uid != unsafe { libc::geteuid() }
+            || self.uid != crate::native_fs::current_owner()?
         {
             return Err("FLAC実体の所有記録が不正です".into());
         }
         Ok(())
     }
     pub(super) fn file(file: &File) -> Result<Self, String> {
-        let m = file.metadata().map_err(|e| e.to_string())?;
+        let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !m.is_file()
             || m.nlink() != 1
-            || m.uid() != unsafe { libc::geteuid() }
+            || m.uid() != crate::native_fs::current_owner()?
             || m.mode() & 0o077 != 0
         {
             return Err("FLAC作業ファイルの実体・所有・権限が不正です".into());
@@ -88,7 +97,7 @@ pub(super) struct Stamp {
 }
 impl Stamp {
     pub(super) fn read(file: &File) -> Result<Self, String> {
-        let m = file.metadata().map_err(|e| e.to_string())?;
+        let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         Ok(Self {
             identity: Identity::file(file)?,
             size: m.len(),
@@ -119,7 +128,11 @@ fn name(value: &str) -> Result<CString, String> {
     }
     CString::new(value).map_err(|e| e.to_string())
 }
-fn descriptor(fd: i32) -> Result<File, String> {
+#[cfg(unix)]
+type NativeDescriptor = std::os::fd::RawFd;
+#[cfg(windows)]
+type NativeDescriptor = crate::bootstrap::windows_io::RawFd;
+fn descriptor(fd: NativeDescriptor) -> Result<File, String> {
     if fd < 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
@@ -128,8 +141,9 @@ fn descriptor(fd: i32) -> Result<File, String> {
 impl Directory {
     pub(super) fn open(path: &Path) -> Result<Self, String> {
         let file = crate::input_levels::open_capture_directory(path)?;
-        let identity = Identity::read(&file.metadata().map_err(|e| e.to_string())?)?;
-        if identity.uid != unsafe { libc::geteuid() } {
+        let identity =
+            Identity::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
+        if identity.uid != crate::native_fs::current_owner()? {
             return Err("FLAC管理先の所有者が不正です".into());
         }
         Ok(Self {
@@ -150,7 +164,7 @@ impl Directory {
         if unsafe { libc::mkdirat(self.file.as_raw_fd(), name(leaf)?.as_ptr(), 0o700) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        self.file.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         let child = Self::open(&self.path.join(leaf))?;
         self.verify()?;
         Ok(child)
@@ -168,6 +182,7 @@ impl Directory {
                 }) | libc::O_NOFOLLOW
                     | libc::O_NONBLOCK
                     | libc::O_CLOEXEC,
+                0,
             )
         };
         if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
@@ -218,7 +233,7 @@ impl Directory {
         self.verify()?;
         let from = name(from)?;
         let to = name(to)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let result = unsafe {
             libc::renameatx_np(
                 self.file.as_raw_fd(),
@@ -239,12 +254,12 @@ impl Directory {
                 if exclusive { libc::RENAME_NOREPLACE } else { 0 },
             ) as i32
         };
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let result = -1;
         if result != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        self.file.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         self.verify()
     }
     pub(super) fn json(
@@ -260,7 +275,7 @@ impl Directory {
         let temporary = format!(".{}.json.part", uuid::Uuid::new_v4());
         let mut file = self.create(&temporary)?;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
         if let Some(stamp) = previous {
             stamp.require(&self.required(leaf, false)?)?;
         }

@@ -201,6 +201,7 @@ struct Records {
     sessions: BTreeSet<String>,
     imports: BTreeSet<String>,
     jobs: BTreeMap<String, String>,
+    #[cfg(unix)]
     flac_files: crate::storage::recordings::flac::WorkspaceFiles,
 }
 impl Records {
@@ -259,6 +260,7 @@ impl Records {
             sessions: ids("recording_sessions")?,
             imports: ids("audio_imports")?,
             jobs,
+            #[cfg(unix)]
             flac_files: Default::default(),
         })
     }
@@ -413,7 +415,8 @@ fn walk(
             )?;
         } else {
             let mut file = dir.regular(name)?;
-            let before = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+            let before =
+                Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
             let mut digest = Sha256::new();
             let mut length = 0u64;
             // Keep the buffer off recursive directory-walk stack frames.
@@ -434,7 +437,8 @@ fn walk(
             }
             dir.verify_file(name, &file)?;
             if length != before.size
-                || Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != before
+                || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?
+                    != before
             {
                 return Err("検査中にファイルが変更されました".into());
             }
@@ -446,10 +450,15 @@ fn walk(
                     proof: Some(before),
                     sha256: Some(format!("{:x}", digest.finalize())),
                     registered: records.assets.get(&child_path).cloned(),
-                    stage_hint: records
-                        .flac_files
-                        .hint(&child_path, &file)?
-                        .or_else(|| records.hint(&child_path)),
+                    stage_hint: {
+                        #[cfg(unix)]
+                        let hint = records.flac_files.hint(&child_path, &file)?;
+                        #[cfg(unix)]
+                        let hint = hint.or_else(|| records.hint(&child_path));
+                        #[cfg(windows)]
+                        let hint = records.hint(&child_path);
+                        hint
+                    },
                 },
             );
         }
@@ -764,6 +773,7 @@ impl Census {
         let (root, database) = storage.managed_anchor.identity()?;
         let scope = capture_scope()?;
         let mut records = Records::read(db, meeting)?;
+        #[cfg(unix)]
         if inspect_flac {
             records.flac_files = crate::storage::recordings::flac::inspect_workspaces(
                 storage,
@@ -784,6 +794,16 @@ impl Census {
             reservation_roots,
             long_audio,
         )?;
+        #[cfg(unix)]
+        let changed_workspaces = inspect_flac
+            && crate::storage::recordings::flac::inspect_workspaces(
+                storage,
+                meeting,
+                &records.sessions,
+                check,
+            )? != records.flac_files;
+        #[cfg(windows)]
+        let changed_workspaces = false;
         if inventory(
             root_directory,
             meeting,
@@ -793,13 +813,7 @@ impl Census {
             reservation_roots,
             long_audio,
         )? != entries
-            || (inspect_flac
-                && crate::storage::recordings::flac::inspect_workspaces(
-                    storage,
-                    meeting,
-                    &records.sessions,
-                    check,
-                )? != records.flac_files)
+            || changed_workspaces
             || capture_scope()? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {

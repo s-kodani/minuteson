@@ -105,7 +105,9 @@ impl Drop for Scope {
     }
 }
 fn verify_audit(e: &Entry) -> Result<(), String> {
-    if crate::audio::reuse::stamp(&e.audit.metadata().map_err(|e| e.to_string())?) != e.stamp {
+    if crate::audio::reuse::stamp(&crate::native_fs::metadata(&e.audit).map_err(|e| e.to_string())?)
+        != e.stamp
+    {
         return Err("処理中に検証済みファイルが変更されました".into());
     }
     Ok(())
@@ -119,7 +121,7 @@ pub(crate) fn hash(
     if cancelled() {
         return Err("ファイル照合を中断しました".into());
     }
-    let before = file.metadata().map_err(|e| e.to_string())?;
+    let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
     let identity = crate::audio::reuse::stamp(&before);
     let hit = CACHE.with(|c| -> Result<Option<String>, String> {
         let mut c = c.borrow_mut();
@@ -155,7 +157,9 @@ pub(crate) fn hash(
         hash.update(&buffer[..n]);
     }
     let hash = format!("{:x}", hash.finalize());
-    if crate::audio::reuse::stamp(&file.metadata().map_err(|e| e.to_string())?) != identity {
+    if crate::audio::reuse::stamp(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)
+        != identity
+    {
         return Err("照合中にファイルが変更されました".into());
     }
     CACHE.with(|c| -> Result<(), String> {
@@ -189,7 +193,7 @@ fn inventory_of(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
     let mut pending = vec![root.to_path_buf()];
     let mut result = Vec::new();
     while let Some(path) = pending.pop() {
-        let m = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let m = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         if m.file_type().is_symlink() {
             return Err("モデルパッケージ内にリンクがあります".into());
         }
@@ -239,7 +243,7 @@ mod tests {
         proof.verify(&|| false).unwrap();
         assert_eq!(CACHE.with(|c| c.borrow().as_ref().unwrap().hits), 1);
         scope.finish(&|| false).unwrap();
-        let old = p.metadata().unwrap().modified().unwrap();
+        let old = crate::native_fs::metadata(&p).unwrap().modified().unwrap();
         std::fs::write(&p, b"tampered").unwrap();
         File::options()
             .write(true)

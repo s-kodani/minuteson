@@ -67,10 +67,44 @@ pub(crate) fn get_official_model_options(
             .join("asr-runtime");
         serde_json::to_value(options_with_bundle(&root)?).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        Ok(serde_json::json!([]))
+        let root = window
+            .app_handle()
+            .path()
+            .resource_dir()
+            .map_err(|e| e.to_string())?
+            .join("windows-runtime");
+        serde_json::to_value(options_windows(&root)?).map_err(|e| e.to_string())
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn options_windows(root: &std::path::Path) -> Result<Vec<OptionView>, String> {
+    let choices: Vec<Choice> = serde_json::from_slice(&crate::windows_runtime::catalog(root)?)
+        .map_err(|e| e.to_string())?;
+    choices
+        .into_iter()
+        .map(|choice| {
+            if choice.recipe.manifest.engine == crate::model_inspection::Engine::Llama {
+                choice
+                    .token_limits
+                    .as_ref()
+                    .ok_or("議事録モデルの入力・出力トークン上限がありません")?
+                    .validate()?;
+            } else if choice.token_limits.is_some() {
+                return Err("トークン上限は議事録モデルにだけ指定してください".into());
+            }
+            Ok(OptionView {
+                id: choice.id,
+                label: choice.label,
+                description: choice.description,
+                definition: String::from_utf8(choice.recipe.bytes()?).map_err(|e| e.to_string())?,
+                review: choice.recipe.review()?,
+                token_limits: choice.token_limits,
+            })
+        })
+        .collect()
 }
 
 #[cfg(target_os = "macos")]

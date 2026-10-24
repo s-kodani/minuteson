@@ -65,6 +65,7 @@ pub(crate) struct Recovery {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Report {
     schema_version: u8,
+    platform: &'static str,
     phase: Phase,
     failure: Option<Failure>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +76,13 @@ impl Default for Startup {
     fn default() -> Self {
         Self(Mutex::new(Report {
             schema_version: 1,
+            platform: if cfg!(windows) {
+                "windows"
+            } else if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "other"
+            },
             phase: Phase::Starting,
             failure: None,
             recovery: None,
@@ -82,7 +90,7 @@ impl Default for Startup {
     }
 }
 impl Startup {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn set_recovery(&self, recovery: Option<Recovery>) -> Result<(), String> {
         let mut state = self
             .0
@@ -159,6 +167,7 @@ impl Startup {
                         | "get_data_operation"
                         | "get_data_operation_availability"
                         | "get_deletion_items"
+                        | "get_meeting_deletion_availability"
                         | "get_deletion_paths"
                         | "get_audio_deletion_items"
                         | "get_audio_deletion_paths"
@@ -205,7 +214,7 @@ impl Startup {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) fn admit_storage(
     config: &Path,
     root: &Path,
@@ -352,13 +361,13 @@ mod tests {
             Stage::StorageSelection,
             format!("{}\0", "故障".repeat(6000)),
             Some(Path::new("relative")),
-            Some(Path::new("/config")),
+            Some(Path::new(&crate::test_support::absolute("/config"))),
         );
         assert!(f.message.len() <= 16_384 && f.message_truncated);
         assert!(f.meeting_root.is_none());
         let v = serde_json::to_value(f).unwrap();
         assert_eq!(v["stage"], "storage_selection");
-        assert_eq!(v["configRoot"], "/config");
+        assert_eq!(v["configRoot"], crate::test_support::absolute("/config"));
         assert!(v.get("messageTruncated").is_some());
         assert!(v.get("message_truncated").is_none());
     }
@@ -368,7 +377,7 @@ mod tests {
         s.ready().unwrap();
         assert_eq!(
             serde_json::to_value(s.snapshot().unwrap()).unwrap(),
-            serde_json::json!({"schemaVersion":1,"phase":"ready","failure":null})
+            serde_json::json!({"schemaVersion":1,"platform":if cfg!(windows){"windows"}else if cfg!(target_os="macos"){"macos"}else{"other"},"phase":"ready","failure":null})
         );
         assert!(s.admit_command("recorder", "get_startup_report").is_err());
     }

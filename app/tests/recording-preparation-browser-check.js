@@ -19,9 +19,18 @@ async (page,capturePath,detailUI)=>{
     await page.waitForFunction(()=>{const e=document.querySelector('.recording-workspace button');return e&&!e.disabled;});
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するマイク"]');return e&&!e.disabled;});
   };
-  const dismissFailure=async()=>{await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{await modal().getByRole("alert").filter({hasText:"処理を完了できませんでした。"}).waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
   try {
   await boot();
+  for(const [label,text] of [["新しい録音","モデル未準備でも録音できます"],["録音の会議名","日時から仮の会議名"],["録音するマイク","自動では会議アプリ"],["会議全体の話者数","会議全体の最大人数"],["録音前の入力確認","毎回のテストは必須ではありません"]]){
+    await workspace().getByRole("button",{name:`${label}の説明を開く`,exact:true}).click();
+    const help=page.getByRole("dialog",{name:label,exact:true});await help.waitFor();
+    check((await help.innerText()).includes(text),`${label}: explanation missing`);
+    await page.keyboard.press("Escape");await help.waitFor({state:"hidden"});
+  }
+  check(await workspace().locator("label .info-trigger").count()===0,"recording info nested in input label");
+  check(await page.getByRole("textbox",{name:"会議名",exact:true}).count()===1,"recording title label lost its input");
+  results.push("recording and input help is adjacent and accessible without changing field labels or starting capture");
   check(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}の会議$/u.test(await name().inputValue())&&await start().isEnabled(),"local default title missing or required typing");
   check(await count("create_meeting")===0&&await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"opening preparation persisted a draft or began capture");
   results.push("new recording opens a dedicated preparation with local-time title and no DB/capture write");

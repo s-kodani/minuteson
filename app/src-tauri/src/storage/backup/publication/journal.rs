@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const MAX_PATHS: usize = 200_000;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) mod relocation;
 fn load_effective(root: &Path, db: &Connection, id: &str) -> Result<Saved, String> {
     let saved = load(db, id)?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     return relocation::effective(root, db, id, saved);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = root;
         Ok(saved)
@@ -27,8 +27,9 @@ struct Identity {
 }
 impl Identity {
     fn read(metadata: &Metadata) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             let birth = metadata
                 .created()
@@ -42,7 +43,7 @@ impl Identity {
                 birth_nanos: birth.subsec_nanos(),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = metadata;
             Err("Windowsの復元回収は未検証です".into())
@@ -90,7 +91,7 @@ fn uuid(text: &str) -> bool {
     Uuid::parse_str(text).is_ok_and(|id| id.to_string() == text)
 }
 fn directory(path: &Path) -> Result<(), String> {
-    if !std::fs::symlink_metadata(path)
+    if !crate::native_fs::symlink_metadata(path)
         .map_err(|e| e.to_string())?
         .is_dir()
         || path.canonicalize().map_err(|e| e.to_string())? != path
@@ -100,13 +101,7 @@ fn directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn sync(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        File::open(path)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    crate::native_fs::sync_directory(path)
 }
 fn target_hash(targets: &[Target]) -> Result<String, String> {
     let mut hash = Sha256::new();
@@ -288,7 +283,9 @@ impl<'a> Journal<'a> {
             archive_fingerprint: fingerprint,
             mapping_hash,
             mapping_count,
-            root: Identity::read(&std::fs::symlink_metadata(root).map_err(|e| e.to_string())?)?,
+            root: Identity::read(
+                &crate::native_fs::symlink_metadata(root).map_err(|e| e.to_string())?,
+            )?,
             path_count: paths.len(),
             paths_hash: target_hash(&paths)?,
         };
@@ -306,7 +303,7 @@ impl<'a> Journal<'a> {
             if saved.state != "recovered" || saved.manifest != manifest {
                 return Err("前回の復元追加物の確認・回収が必要です".into());
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             relocation::start_local_scope(root, db, &id)?;
             id
         } else {
@@ -338,7 +335,8 @@ impl<'a> Journal<'a> {
             .strip_prefix(&self.root)
             .map_err(|_| "復元実体は保存先外です")?
             .to_str()
-            .ok_or("復元実体パスが不正です")?;
+            .ok_or("復元実体パスが不正です")?
+            .replace('\\', "/");
         if relative == "meetings" {
             return Ok(());
         } // Shared parent is never removed.
@@ -367,7 +365,7 @@ fn parents(root: &Path, target: &str, saved: &Saved) -> Result<(), String> {
     let parts: Vec<_> = target.split('/').collect();
     for part in &parts[..parts.len() - 1] {
         current.push(part);
-        match std::fs::symlink_metadata(&current) {
+        match crate::native_fs::symlink_metadata(&current) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.to_string()),
             Ok(metadata) => {
@@ -376,11 +374,12 @@ fn parents(root: &Path, target: &str, saved: &Saved) -> Result<(), String> {
                     .strip_prefix(root)
                     .map_err(|e| e.to_string())?
                     .to_str()
-                    .ok_or("復元回収パスが不正です")?;
+                    .ok_or("復元回収パスが不正です")?
+                    .replace('\\', "/");
                 if relative != "meetings"
                     && !saved
                         .targets
-                        .get(relative)
+                        .get(&relative)
                         .and_then(|(_, i)| i.as_ref())
                         .is_some_and(|i| i.matches(&metadata))
                 {
@@ -423,7 +422,7 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
     if !saved
         .manifest
         .root
-        .matches(&std::fs::symlink_metadata(root).map_err(|e| e.to_string())?)
+        .matches(&crate::native_fs::symlink_metadata(root).map_err(|e| e.to_string())?)
     {
         return attention(db, id, "restore_root_changed");
     }
@@ -471,7 +470,7 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
             continue;
         }
         let path = root.join(&target.path);
-        let metadata = match std::fs::symlink_metadata(&path) {
+        let metadata = match crate::native_fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => {
                 changed = true;
@@ -488,11 +487,7 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
             changed = true;
             continue;
         }
-        let removal = if target.kind == "file" {
-            std::fs::remove_file(&path)
-        } else {
-            std::fs::remove_dir(&path)
-        };
+        let removal = crate::native_fs::remove_owned(&path, &metadata);
         if removal.is_err() {
             changed = true;
             continue;
@@ -631,14 +626,15 @@ pub(in crate::storage::backup) fn recovery_evidence(
 }
 // A transfer preserves even an invalid/explicitly kept operation, but must not
 // turn its historical proof into ownership of a newly copied inode.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) fn source_record_valid(
     root: &Path,
     db: &Connection,
     id: &str,
 ) -> bool {
-    load_effective(root, db, id)
-        .is_ok_and(|s| std::fs::symlink_metadata(root).is_ok_and(|m| s.manifest.root.matches(&m)))
+    load_effective(root, db, id).is_ok_and(|s| {
+        crate::native_fs::symlink_metadata(root).is_ok_and(|m| s.manifest.root.matches(&m))
+    })
 }
 pub(in crate::storage::backup) fn recover_selected(
     root: &Path,

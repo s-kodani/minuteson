@@ -596,7 +596,7 @@ pub(super) fn accept_database_observed(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod history_bounds_tests {
     use super::*;
     #[test]

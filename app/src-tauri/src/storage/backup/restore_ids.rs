@@ -215,9 +215,9 @@ impl<'a> RestoreIds<'a> {
         // A checked historical capability is mandatory; missing flags or raw
         // descriptors never select a relaxed ready-source reconstruction.
         if !archive.deleted_audio.is_empty() {
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             return Err("Windowsの削除済み音声の追加復元は保留中です".into());
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
                 archive.verify_validation_database(cancelled)?;
                 archive
@@ -431,9 +431,7 @@ impl<'a> RestoreIds<'a> {
         plan.database
             .execute_batch("COMMIT; PRAGMA query_only=ON;")
             .map_err(|e| e.to_string())?;
-        File::open(plan.stage.path().join("identities.sqlite3"))
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_file(&plan.stage.path().join("identities.sqlite3"))?;
         Ok(plan)
     }
 

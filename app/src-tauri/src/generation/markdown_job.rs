@@ -805,6 +805,7 @@ fn infer(
     )
     .with_backend(match acceleration {
         Some(super::acceleration::Resolved::Metal { .. }) => Some("metal"),
+        Some(super::acceleration::Resolved::Vulkan { .. }) => Some("vulkan"),
         Some(super::acceleration::Resolved::Cpu { .. }) => Some("cpu"),
         None if p.engine.gpu_layers == 0 => Some("cpu"),
         _ => None,

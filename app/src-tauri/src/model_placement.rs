@@ -2,6 +2,9 @@
 //! is explicit, create-new-only, bound to a reviewed byte set and durable intent.
 #[cfg(unix)]
 pub(crate) mod fs;
+#[cfg(target_os = "windows")]
+#[path = "model_placement/fs_windows.rs"]
+pub(crate) mod fs;
 use crate::model_inspection::{self, FileReport, PackageManifest, Report, Role, Source, Target};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -191,20 +194,6 @@ pub(crate) fn place_with_manifest(
     manifest: Option<&PackageManifest>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<PlacementReceipt, String> {
-    #[cfg(not(unix))]
-    {
-        let _ = (
-            storage,
-            models_root,
-            source,
-            package_id,
-            expected_review_hash,
-            manifest,
-            cancelled,
-        );
-        return Err("Windowsのモデル配置は保留中です".into());
-    }
-    #[cfg(unix)]
     {
         if !uuid(package_id) {
             return Err("モデル配置の操作IDが不正です".into());
@@ -237,7 +226,6 @@ pub(crate) fn place_with_manifest(
     }
 }
 
-#[cfg(unix)]
 pub(crate) fn place_reviewed(
     storage: &Storage,
     models_root: &Path,
@@ -259,7 +247,6 @@ pub(crate) fn place_reviewed(
     )
 }
 
-#[cfg(unix)]
 fn place_reviewed_with_manifest(
     storage: &Storage,
     models_root: &Path,
@@ -349,7 +336,6 @@ fn place_reviewed_with_manifest(
     result
 }
 
-#[cfg(unix)]
 fn copy_package(
     source: &Path,
     expected: &Report,
@@ -357,6 +343,7 @@ fn copy_package(
     manifest_bytes: Option<&[u8]>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let source = source.canonicalize().map_err(|e| e.to_string())?;
     let mut sources = Vec::new();
@@ -414,6 +401,7 @@ fn copy_package(
             return Err("コピー中に確認済みモデルの容量・SHAが変わりました".into());
         }
         input.verify()?;
+        #[cfg(unix)]
         output
             .set_permissions(std::fs::Permissions::from_mode(if executable {
                 0o700

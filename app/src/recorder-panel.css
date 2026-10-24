@@ -1,24 +1,35 @@
-/* The mock's single horizontal row, with truthful save state underneath. */
-.mini-shell { position:relative; display:flex; flex-direction:column; justify-content:center; padding:10px 14px; border-radius:12px; }
-.mini-shell .mini-row { display:flex; flex:none; align-items:center; gap:8px; width:100%; min-height:64px; padding-right:36px; }
-.mini-shell .mini-drag { display:flex; align-items:center; justify-content:center; flex:none; width:18px; min-height:32px; font-size:24px; line-height:1; color:var(--muted); cursor:grab; user-select:none; }
+/* Icon-only recorder: 227 x 101 logical px; retain the compact layout height. */
+:root[data-floating-window="windows"], :root[data-floating-window="windows"] body, :root[data-floating-window="windows"] #root { background:transparent; }
+main.mini-shell { font-size:9px; position:relative; display:flex; flex-direction:column; justify-content:center; padding:4.8px 7.2px 4.8px 3.6px; border-radius:9.6px; }
+.mini-shell .mini-row { display:flex; flex:none; align-items:center; gap:4.8px; width:100%; min-width:0; }
+.mini-shell .mini-drag { display:flex; align-items:center; justify-content:center; flex:none; align-self:stretch; width:14.4px; min-height:24px; color:var(--secondary-text); cursor:grab; user-select:none; border:0; }
+.mini-shell .mini-drag:active { cursor:grabbing; }
+.mini-shell .mini-drag-dots { width:7.8px; height:12.6px; pointer-events:none; background:radial-gradient(circle,currentColor 1.38px,transparent 1.56px) 0 0 / 4.2px 4.2px; }
 .mini-shell .mini-summary { flex:1; min-width:0; }
-.mini-shell .mini-top { gap:5px; white-space:nowrap; }
-.mini-shell .mini-top strong { font-size:12px; font-weight:650; }
-.mini-shell .timer { margin-left:0; font-size:14px; font-weight:650; }
-.mini-shell .status-dot { width:8px; height:8px; }
-.mini-shell .mini-save-diagnostics { margin-top:4px; gap:2px; }
-.mini-shell .mini-inputs { display:grid; grid-template-columns:minmax(75px,1.15fr) minmax(65px,1fr); margin-top:3px; gap:3px; }
-.mini-shell .mini-input-status { font-size:9px; line-height:12px; }
-.mini-shell .mini-bottom { flex:none; gap:4px; height:36px; margin:0; align-items:flex-start; }
-.mini-shell .mini-bottom button { display:inline-flex; align-items:center; justify-content:center; height:36px; min-height:36px; padding:0 8px; font-size:12px; line-height:18px; border-radius:8px; }
-.mini-shell .mini-bottom .icon-button,.mini-shell .mini-bottom .info-trigger { width:28px; min-width:28px; padding:0; }
-.mini-shell .mini-bottom button.mini-action-icon { width:36px; min-width:36px; height:36px; min-height:36px; padding:0; background:transparent; border:0; box-shadow:none; }
-.mini-shell .mini-bottom button.mini-stop { color:var(--danger-text); }
-.mini-shell .mini-bottom button.mini-open { color:var(--secondary-text); }
-.mini-shell .mini-bottom button.mini-action-icon .action-icon { width:22px; height:22px; }
-.mini-shell .mini-bottom button.mini-action-icon:hover:not(:disabled) { background:var(--raised); }
-.mini-shell .mini-bottom button.mini-action-icon:disabled { color:var(--muted); background:transparent; }
-.mini-shell .mini-bottom .text-button { background:transparent; border-color:transparent; }
-.mini-shell .mini-bottom .info-trigger span { font-size:16px; }
-.mini-shell .mini-close.icon-button { position:absolute; top:10px; right:14px; width:28px; min-width:28px; height:32px; min-height:32px; padding:0; border-radius:8px; background:transparent; border-color:transparent; color:var(--secondary-text); }
+.mini-shell .mini-header { display:flex; align-items:flex-start; justify-content:space-between; gap:4.8px; height:28.8px; padding:0 0 4.8px; border-bottom:0.6px solid var(--border); }
+.mini-shell .mini-top { min-width:0; height:21.6px; gap:4.8px; white-space:nowrap; }
+.mini-shell .timer { margin-left:1.2px; font-size:13px; line-height:1; font-weight:700; }
+.mini-shell .status-dot { width:7px; height:7px; margin:0 2.4px; }
+.mini-shell .mini-bottom { display:flex; flex:none; gap:2.4px; height:21.6px; margin:0; align-items:flex-start; }
+.mini-shell .mini-bottom button { display:inline-flex; align-items:center; justify-content:center; width:19.2px; min-width:19.2px; height:21.6px; min-height:21.6px; padding:0; font-size:7.2px; line-height:10.8px; border-radius:4.8px; background:transparent; border:0; box-shadow:none; color:var(--secondary-text); }
+.mini-shell .mini-bottom button.mini-action-icon { background:transparent; border:0; }
+.mini-shell .mini-bottom button.mini-stop { color:var(--recording); }
+.mini-shell .mini-bottom button .action-icon { width:13.2px; height:13.2px; }
+.mini-shell .mini-bottom button:hover:not(:disabled) { background:var(--raised); }
+.mini-shell .mini-bottom button:disabled { color:var(--muted); opacity:.5; }
+.mini-shell .mini-close.icon-button { position:static; }
+.mini-shell .mini-inputs { display:flex; flex-direction:column; gap:0; margin:0; min-width:0; }
+.mini-shell .mini-source-row { display:grid; grid-template-columns:14.4px 6px minmax(0,1fr); align-items:center; gap:6px; min-width:0; height:26.4px; }
+.mini-shell .mini-source-row + .mini-source-row { border-top:0.6px solid var(--border); }
+.mini-shell .mini-source-icon { width:13.2px; height:14.4px; color:var(--secondary-text); }
+.mini-shell .mini-input-indicator { width:4.8px; height:4.8px; border-radius:50%; background:var(--muted); }
+.mini-shell .mini-input-indicator[data-input-state="connected"] { background:#22c55e; }
+.mini-shell .mini-waveform { position:relative; display:flex; align-items:center; height:21.6px; min-width:0; color:#92959c; overflow:hidden; }
+:root[data-theme="dark"] .mini-shell .mini-waveform { color:#a1a1aa; }
+.mini-shell .mini-waveform svg { display:block; width:100%; height:21.6px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
+.mini-shell .mini-waveform .mini-waveform-baseline { stroke-width:.6; opacity:.35; }
+
+.mini-shell .status-dot.live { box-shadow:0 0 0 3px var(--danger-tint); }
+.mini-shell button:focus-visible { outline-width:1.8px; outline-offset:1.2px; }
+
+.mini-shell .mini-source-name { display:flex; align-items:center; }

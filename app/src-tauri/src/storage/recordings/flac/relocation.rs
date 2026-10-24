@@ -101,7 +101,7 @@ pub(in crate::storage) struct Aliases {
     checkpoints: BTreeMap<String, (String, Identity, Identity)>,
 }
 fn metadata(root: &Path, path: &str) -> Result<Identity, String> {
-    Identity::read(&std::fs::symlink_metadata(root.join(path)).map_err(|e| e.to_string())?)
+    Identity::read(&crate::native_fs::symlink_metadata(root.join(path)).map_err(|e| e.to_string())?)
 }
 fn track_base(base: &str, id: &str) -> Result<String, String> {
     let parts: Vec<_> = base.split('/').collect();

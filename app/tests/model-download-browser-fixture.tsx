@@ -60,6 +60,7 @@ f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review
 export const modelDownloadIPC = async (command: string, args: any) => {
   f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_official_model_options") {
+    if ((window as any).windowsNativeModelOptions) return structuredClone((window as any).windowsNativeModelOptions);
     if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
       return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition), tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null };

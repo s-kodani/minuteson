@@ -46,6 +46,7 @@ commands.allow = [
   "get_data_operation",
   "get_data_operation_availability",
   "get_deletion_items",
+  "get_meeting_deletion_availability",
   "get_deletion_paths",
   "get_diarization_preferences",
   "get_downloaded_model_placement_result",

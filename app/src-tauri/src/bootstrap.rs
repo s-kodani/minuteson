@@ -1,17 +1,34 @@
 //! macOS meeting-root selection precedes opening SQLite. No silent fallback,
 //! copy, deletion, or activation of an unverified relocation destination.
+use crate::native_fs::Metadata;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
+#[cfg(windows)]
+pub(crate) mod windows_io;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use windows_io as libc;
+#[cfg(windows)]
+use windows_io::{AsRawFd, FromRawFd, OsStrExt};
+#[cfg(unix)]
+type Descriptor = std::os::fd::RawFd;
+#[cfg(windows)]
+type Descriptor = windows_io::RawFd;
 
 const NAME: &str = "bootstrap.json";
 const LOCK: &str = ".bootstrap.lock";
@@ -55,9 +72,12 @@ fn absolute(path: &Path) -> Result<(), String> {
         || path
             .to_str()
             .is_none_or(|p| p.len() > 4096 || p.contains('\0'))
-        || path
-            .components()
-            .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
+        || path.components().any(|c| {
+            !matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        })
     {
         return Err("起動設定の保存先には正規化した絶対パスが必要です".into());
     }
@@ -65,7 +85,7 @@ fn absolute(path: &Path) -> Result<(), String> {
 }
 fn directory(path: &Path) -> Result<Metadata, String> {
     absolute(path)?;
-    let m = std::fs::symlink_metadata(path)
+    let m = crate::native_fs::symlink_metadata(path)
         .map_err(|e| format!("保存先を確認できません。空の保存先へ切り替えません: {e}"))?;
     if !m.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
         return Err("保存先の実体または親が変更されています。データを保持します".into());
@@ -73,7 +93,7 @@ fn directory(path: &Path) -> Result<Metadata, String> {
     Ok(m)
 }
 fn regular(m: &Metadata, private: bool) -> bool {
-    m.is_file() && m.nlink() == 1 && (!private || m.permissions().mode() & 0o077 == 0)
+    m.is_file() && m.nlink() == 1 && (!private || m.mode() & 0o077 == 0)
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -89,6 +109,11 @@ fn sha(s: &str) -> bool {
 
 /// Only local writable filesystems are candidates. This is not a throughput
 /// qualification or proof of power-loss behavior. Network roots are rejected.
+#[cfg(windows)]
+fn local(path: &Path) -> Result<(), String> {
+    crate::windows_files::local_ntfs(path)
+}
+#[cfg(unix)]
 fn local(path: &Path) -> Result<(), String> {
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
@@ -107,6 +132,7 @@ fn local(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+#[cfg(unix)]
 fn mount_supported(flags: u32, kind: &[u8]) -> bool {
     flags & libc::MNT_LOCAL as u32 != 0 && flags & libc::MNT_RDONLY as u32 == 0 && kind == b"apfs"
 }
@@ -122,7 +148,7 @@ impl Root {
     fn metadata(path: &Path) -> Result<Self, String> {
         let d = directory(path)?;
         local(path)?;
-        let m = std::fs::symlink_metadata(path.join("meetings.sqlite3"))
+        let m = crate::native_fs::symlink_metadata(path.join("meetings.sqlite3"))
             .map_err(|e| format!("登録済みDBがありません。新しいDBは作成しません: {e}"))?;
         if !regular(&m, false) {
             return Err("会議DBは単独の通常ファイルである必要があります".into());
@@ -148,7 +174,7 @@ impl Root {
             .map_err(|e| e.to_string())?;
         if !root
             .database
-            .matches(&file.metadata().map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)
         {
             return Err("会議DBが確認中に差し替えられています".into());
         }
@@ -299,6 +325,11 @@ struct State {
 // Construct the guard only AFTER acquisition; a denied opener must never
 // unlock the existing owner's lock.
 struct BootstrapLock(File);
+impl crate::native_fs::MetadataSource for BootstrapLock {
+    fn native_metadata(&self) -> std::io::Result<Metadata> {
+        crate::native_fs::metadata(&self.0)
+    }
+}
 impl std::ops::Deref for BootstrapLock {
     type Target = File;
     fn deref(&self) -> &File {
@@ -351,17 +382,12 @@ impl Bootstrap {
     pub(crate) fn open(config: &Path, app_data: &Path) -> Result<Self, String> {
         absolute(config)?;
         absolute(app_data)?;
-        if let Ok(m) = std::fs::symlink_metadata(config) {
+        if let Ok(m) = crate::native_fs::symlink_metadata(config) {
             if !m.is_dir() {
                 return Err("起動設定の親が通常のフォルダーではありません".into());
             }
         }
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(config)
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::private_directories(config, true)?;
         let config = config.canonicalize().map_err(|e| e.to_string())?;
         let identity = Identity::read(&directory(&config)?)?;
         local(&config)?;
@@ -389,14 +415,18 @@ impl Bootstrap {
             return Err("起動設定のロックを開けません。設定を保持します".into());
         }
         let lock = unsafe { File::from_raw_fd(fd) };
-        if !regular(&lock.metadata().map_err(|e| e.to_string())?, true) {
+        if !regular(
+            &crate::native_fs::metadata(&lock).map_err(|e| e.to_string())?,
+            true,
+        ) {
             return Err("起動設定のロックの実体・権限が不正です".into());
         }
         lock.try_lock().map_err(|e| {
             format!("同じ起動設定のアプリが実行中、または排他を確認できません: {e}")
         })?;
         let mut lock = BootstrapLock(lock);
-        let lock_identity = Identity::read(&lock.metadata().map_err(|e| e.to_string())?)?;
+        let lock_identity =
+            Identity::read(&crate::native_fs::metadata(&lock).map_err(|e| e.to_string())?)?;
         let mut stamp = vec![];
         (&mut *lock)
             .take(128)
@@ -449,29 +479,32 @@ impl Bootstrap {
                 (l.record.current.path.clone(), l.record.origin.clone())
             }
             None => {
-                // No adoption or conversion of pre-bootstrap data. An
-                // unregistered object must not be mistaken for a fresh install.
-                match std::fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
+                #[cfg(windows)]
+                {
+                    (app_data.to_path_buf(), Origin::Default)
+                }
+                #[cfg(not(windows))]
+                {
+                    // No adoption or conversion of pre-bootstrap data. An
+                    // unregistered object must not be mistaken for a fresh install.
+                    match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
                     Ok(_) => return Err("旧形式の会議保存先は非対応です。初期開発の旧データを整理してから起動してください。自動移行は行いません".into()),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
                     Err(e) => return Err(e.to_string()),
                 }
-                (app_data.join("data"), Origin::Default)
+                    (app_data.join("data"), Origin::Default)
+                }
             }
         };
-        if std::fs::symlink_metadata(&selected).is_ok_and(|m| !m.is_dir()) {
+        if crate::native_fs::symlink_metadata(&selected).is_ok_and(|m| !m.is_dir()) {
             return Err("会議保存先が通常のフォルダーではありません".into());
         }
         // Only the native default path may be created before initialization.
         // Configured roots were already verified, so a missing one never reaches here.
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&selected)
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::private_directories(&selected, true)?;
         let selected = selected.canonicalize().map_err(|e| e.to_string())?;
         local(&selected)?;
-        if let Ok(m) = std::fs::symlink_metadata(selected.join("meetings.sqlite3")) {
+        if let Ok(m) = crate::native_fs::symlink_metadata(selected.join("meetings.sqlite3")) {
             if !regular(&m, false) {
                 return Err("会議DBのリンク・別実体を採用しません".into());
             }
@@ -496,11 +529,15 @@ impl Bootstrap {
         if !self.identity.matches(&directory(&self.config)?)
             || !self
                 .identity
-                .matches(&self.directory.metadata().map_err(|e| e.to_string())?)
+                .matches(&crate::native_fs::metadata(&self.directory).map_err(|e| e.to_string())?)
             || !self.lock_identity.matches(
-                &std::fs::symlink_metadata(self.config.join(LOCK)).map_err(|e| e.to_string())?,
+                &crate::native_fs::symlink_metadata(self.config.join(LOCK))
+                    .map_err(|e| e.to_string())?,
             )
-            || !regular(&self.lock.metadata().map_err(|e| e.to_string())?, true)
+            || !regular(
+                &crate::native_fs::metadata(&self.lock).map_err(|e| e.to_string())?,
+                true,
+            )
         {
             return Err("起動設定の親またはロックが差し替えられています。書き込みません".into());
         }
@@ -514,6 +551,7 @@ impl Bootstrap {
                 self.directory.as_raw_fd(),
                 c.as_ptr(),
                 libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0,
             )
         };
         if fd < 0 {
@@ -525,7 +563,7 @@ impl Bootstrap {
             };
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        let metadata = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !regular(&metadata, true) || metadata.len() > LIMIT {
             return Err("起動設定の形式・権限・容量が不正です".into());
         }
@@ -549,9 +587,10 @@ impl Bootstrap {
             return Err("起動設定の形式版またはSHAが一致しません".into());
         }
         doc.record.validate()?;
-        if !identity
-            .matches(&std::fs::symlink_metadata(self.config.join(NAME)).map_err(|e| e.to_string())?)
-        {
+        if !identity.matches(
+            &crate::native_fs::symlink_metadata(self.config.join(NAME))
+                .map_err(|e| e.to_string())?,
+        ) {
             return Err("起動設定が読込中に差し替えられています".into());
         }
         self.guard_directory()?;
@@ -611,7 +650,7 @@ impl Bootstrap {
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
         file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
+            .and_then(|_| crate::native_fs::sync_handle(&file))
             .map_err(|e| e.to_string())?;
         self.guard(state)?;
         let target = std::ffi::CString::new(NAME).unwrap();
@@ -637,7 +676,7 @@ impl Bootstrap {
         // after a sync/read failure; next launch reads the durable selection.
         state.uncertain = true;
         placement::activation::publication_checkpoint()?;
-        self.directory.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         state.loaded = self.read()?;
         if state
             .loaded
@@ -675,7 +714,7 @@ impl Bootstrap {
         let mut lock = self.lock.try_clone().map_err(|e| e.to_string())?;
         lock.seek(SeekFrom::Start(0))
             .and_then(|_| lock.write_all(STAMP))
-            .and_then(|_| lock.sync_all())
+            .and_then(|_| crate::native_fs::sync_handle(&lock))
             .map_err(|e| e.to_string())?;
         self.write(
             &mut state,
@@ -772,7 +811,7 @@ impl Bootstrap {
         }
         local(target)?;
         let metadata = directory(target)?;
-        if metadata.permissions().mode() & 0o077 != 0
+        if metadata.mode() & 0o077 != 0
             || std::fs::read_dir(target)
                 .map_err(|e| e.to_string())?
                 .next()
@@ -816,7 +855,7 @@ impl Bootstrap {
         {
             return Err("取消対象の保存先移動が一致しません".into());
         }
-        match std::fs::symlink_metadata(
+        match crate::native_fs::symlink_metadata(
             self.config.join(format!(".relocation-{operation}.sqlite3")),
         ) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -850,5 +889,119 @@ pub(crate) fn set_test_root(config: &Path, data: &Path, root: &Path) {
     b.write(&mut state, record).unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    #[test]
+    fn windows_parity_cancelled_move_recovers_pending_copy_and_keeps_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let app_data = root.join("data");
+        let config = root.join("config");
+        let parent = root.join("target");
+        std::fs::create_dir(&parent).unwrap();
+        let bootstrap = Bootstrap::open(&config, &app_data).unwrap();
+        let storage = bootstrap.open_storage().unwrap();
+        let meeting = storage.create_meeting("取消と再起動後の保持").unwrap();
+        let mut prepared = bootstrap
+            .prepare_move(&storage, &parent, &|| false, &|_| {})
+            .unwrap();
+        let preview = prepared.preview();
+        let cancelled = std::cell::Cell::new(false);
+        assert!(prepared
+            .publish(
+                &bootstrap,
+                &storage,
+                &preview.confirmation_id,
+                &|| cancelled.get(),
+                &|phase| {
+                    if phase == "copying" {
+                        cancelled.set(true);
+                    }
+                }
+            )
+            .is_err());
+        assert_eq!(
+            bootstrap.view().unwrap().active_meeting_root,
+            storage.root()
+        );
+        drop(prepared);
+        drop(storage);
+        drop(bootstrap);
+        let bootstrap = Bootstrap::open(&config, &app_data).unwrap();
+        let storage = bootstrap.open_storage().unwrap();
+        assert!(storage.get_meeting(&meeting.id).unwrap().is_some());
+        assert!(preview.destination.is_dir());
+        let mut pending = bootstrap
+            .prepare_pending_move(&storage, &|| false, &|_| {})
+            .unwrap();
+        let review = pending.preview();
+        assert!(review.pending);
+        let kept = pending
+            .keep(&bootstrap, &storage, &review.confirmation_id, &|| false)
+            .unwrap();
+        assert!(kept.retained);
+        assert!(app_data.join("meetings.sqlite3").is_file());
+        assert!(preview.destination.is_dir());
+    }
+    #[test]
+    fn windows_parity_bootstrap_keeps_the_existing_windows_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let app_data = root.join("app-data");
+        let storage = Storage::open(app_data.clone()).unwrap();
+        let meeting = storage.create_meeting("移行前からある会議").unwrap();
+        let before =
+            crate::windows_files::Identity::at(&app_data.join("meetings.sqlite3")).unwrap();
+        drop(storage);
+        let selection = Bootstrap::open(&app_data, &app_data).unwrap();
+        assert_eq!(selection.root(), app_data.canonicalize().unwrap());
+        let storage = selection.open_storage().unwrap();
+        assert!(storage.get_meeting(&meeting.id).unwrap().is_some());
+        assert_eq!(
+            before,
+            crate::windows_files::Identity::at(&app_data.join("meetings.sqlite3")).unwrap()
+        );
+        drop(storage);
+        drop(selection);
+        let selection = Bootstrap::open(&app_data, &app_data).unwrap();
+        let storage = selection.open_storage().unwrap();
+        assert!(storage.get_meeting(&meeting.id).unwrap().is_some());
+    }
+    #[test]
+    fn windows_parity_move_copies_verifies_switches_and_reopens_without_deleting_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let app_data = root.join("app-data");
+        let config = root.join("config");
+        let parent = root.join("移動先");
+        std::fs::create_dir(&parent).unwrap();
+        let selection = Bootstrap::open(&config, &app_data).unwrap();
+        let storage = selection.open_storage().unwrap();
+        let meeting = storage.create_meeting("保存先を変更する会議").unwrap();
+        let mut move_ = selection
+            .prepare_move(&storage, &parent, &|| false, &|_| {})
+            .unwrap();
+        let preview = move_.preview();
+        let receipt = move_
+            .publish(
+                &selection,
+                &storage,
+                &preview.confirmation_id,
+                &|| false,
+                &|_| {},
+            )
+            .unwrap();
+        assert!(receipt.restart_required);
+        assert!(app_data.join("meetings.sqlite3").is_file());
+        drop(storage);
+        drop(selection);
+        let selection = Bootstrap::open(&config, &app_data).unwrap();
+        assert_eq!(selection.root(), preview.destination);
+        let storage = selection.open_storage().unwrap();
+        assert!(storage.get_meeting(&meeting.id).unwrap().is_some());
+        assert!(app_data.join("meetings.sqlite3").is_file());
+    }
+}

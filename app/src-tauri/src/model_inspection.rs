@@ -1,9 +1,10 @@
 //! Read-only manual package preflight. Never executes package binaries, installs
 //! files, modifies jobs/settings, accesses the network, or grants AI readiness.
+use crate::native_fs::Metadata;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -218,8 +219,9 @@ fn unchanged(before: &Metadata, after: &Metadata) -> Result<(), String> {
         && before.len() == after.len()
         && before.modified().map_err(|e| e.to_string())?
             == after.modified().map_err(|e| e.to_string())?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         same &= before.dev() == after.dev()
             && before.ino() == after.ino()
@@ -237,21 +239,32 @@ pub(crate) struct Source {
     parents: Vec<(PathBuf, Metadata)>,
     path: PathBuf,
     before: Metadata,
+    #[cfg(windows)]
+    _pins: Vec<File>,
 }
 impl Source {
     pub(crate) fn open(root: &Path, relative: &str) -> Result<Self, String> {
+        if relative != MANIFEST && !crate::model_inspection::relative(relative) {
+            return Err("モデル素材の相対パスが不正です".into());
+        }
+        #[cfg(windows)]
+        let pins = crate::windows_files::parents(
+            &crate::native_fs::join(root, relative)
+                .parent()
+                .ok_or("親がありません")?,
+        )?;
         let mut path = root.to_path_buf();
         let mut parents = Vec::new();
         let parts = relative.split('/').collect::<Vec<_>>();
         for part in parts {
-            let info = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            let info = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
             if !info.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
                 return Err("モデルの親フォルダーにリンクまたは変更があります".into());
             }
             parents.push((path.clone(), info));
             path.push(part);
         }
-        let before = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let before = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         if !before.is_file() {
             return Err("モデルはリンクではない通常ファイルで指定してください".into());
         }
@@ -262,13 +275,21 @@ impl Source {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
+        #[cfg(not(windows))]
         let file = options.open(&path).map_err(|e| e.to_string())?;
-        unchanged(&before, &file.metadata().map_err(|e| e.to_string())?)?;
+        #[cfg(windows)]
+        let file = crate::windows_files::read(&path, false)?;
+        unchanged(
+            &before,
+            &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+        )?;
         let source = Self {
             file,
             parents,
             path,
             before,
+            #[cfg(windows)]
+            _pins: pins,
         };
         source.verify()?;
         Ok(source)
@@ -276,14 +297,14 @@ impl Source {
     pub(crate) fn verify(&self) -> Result<(), String> {
         unchanged(
             &self.before,
-            &self.file.metadata().map_err(|e| e.to_string())?,
+            &crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?,
         )?;
         unchanged(
             &self.before,
-            &std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
+            &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
         )?;
         for (path, metadata) in &self.parents {
-            let now = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+            let now = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
             if !now.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != *path {
                 return Err("検査中にモデルの親フォルダーが変更されました".into());
             }
@@ -303,7 +324,7 @@ fn inspect_for_target(
 ) -> Result<Report, String> {
     check(cancelled)?;
     if !directory.is_absolute()
-        || !std::fs::symlink_metadata(directory)
+        || !crate::native_fs::symlink_metadata(directory)
             .map_err(|e| e.to_string())?
             .is_dir()
     {
@@ -342,7 +363,7 @@ pub(crate) fn inspect_declared(
 ) -> Result<Report, String> {
     check(cancelled)?;
     if !directory.is_absolute()
-        || !std::fs::symlink_metadata(directory)
+        || !crate::native_fs::symlink_metadata(directory)
             .map_err(|e| e.to_string())?
             .is_dir()
     {

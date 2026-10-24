@@ -36,6 +36,7 @@ struct State {
     cached: Vec<(String, Arc<CachedMix>)>,
     jobs: HashMap<String, Arc<AtomicBool>>,
     suspended: usize,
+    suspended_meetings: HashMap<String, usize>,
 }
 #[derive(Default)]
 struct Shared {
@@ -70,7 +71,10 @@ impl MixCache {
     fn reserve(&self, meeting: &str) -> Option<Job> {
         let mut state = self.0.state.lock().ok()?;
         // Only one expensive background render at a time.
-        if state.suspended != 0 || !state.jobs.is_empty() {
+        if state.suspended != 0
+            || state.suspended_meetings.contains_key(meeting)
+            || !state.jobs.is_empty()
+        {
             return None;
         }
         let cancel = Arc::new(AtomicBool::new(false));
@@ -161,9 +165,36 @@ impl MixCache {
         let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
         state.suspended = state.suspended.saturating_sub(1);
     }
+
+    pub(crate) fn suspend_meeting(&self, meeting: &str) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        *state.suspended_meetings.entry(meeting.into()).or_default() += 1;
+        if let Some(cancel) = state.jobs.get(meeting) {
+            cancel.store(true, Ordering::Release);
+        }
+        while state.jobs.contains_key(meeting) {
+            state = self.0.idle.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+    pub(crate) fn resume_meeting(&self, meeting: &str) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = state.suspended_meetings.get_mut(meeting) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.suspended_meetings.remove(meeting);
+            }
+        }
+    }
 }
 
 pub(crate) fn warm(app: &AppHandle, meeting: &str) {
+    let owner = match app
+        .state::<crate::storage::Storage>()
+        .begin_meeting_work(meeting, "playback", None)
+    {
+        Ok(owner) => owner,
+        Err(_) => return,
+    };
     let cache = app.state::<MixCache>().inner().clone();
     let Some(job) = cache.reserve(meeting) else {
         return;
@@ -188,6 +219,7 @@ pub(crate) fn warm(app: &AppHandle, meeting: &str) {
                 eprintln!("再生用ミックスの準備を省略しました: {error}");
             }
         }
+        drop(owner);
         drop(job);
     });
 }

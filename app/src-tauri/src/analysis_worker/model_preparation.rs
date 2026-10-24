@@ -33,7 +33,7 @@ impl AnalysisController {
                 ..Default::default()
             },
             || {
-                app.state::<Storage>().require_data_writable()?;
+                app.state::<Storage>().require_global_data_writable()?;
                 let _wake = WakeWorker(app);
                 let controller = app.state::<Self>();
                 let importing = app
@@ -46,6 +46,7 @@ impl AnalysisController {
                     importing.busy || importing.recording_blocked,
                     cancelled,
                 )?;
+                app.state::<Storage>().require_global_data_writable()?;
                 lease.wait_for_worker(cancelled, |waiting| {
                     crate::internal_logs::phase(
                         "model",
@@ -83,6 +84,7 @@ impl AnalysisController {
             || import_blocked
             || self.shutdown.load(Ordering::SeqCst)
             || state.blocks_worker()
+            || !state.meeting_deletions.is_empty()
         {
             return Err("AI処理・録音・取り込み・モデル準備・バックアップ・復元・終了処理が停止してからモデルを準備してください".into());
         }

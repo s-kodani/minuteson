@@ -22,6 +22,7 @@ pub const COMMANDS: &[&str] = &[
     "cancel_audio_import",
     "get_data_operation",
     "get_deletion_items",
+    "get_meeting_deletion_availability",
     "review_meeting_deletion",
     "review_pending_deletion",
     "get_deletion_paths",

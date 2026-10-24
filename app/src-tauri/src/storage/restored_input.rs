@@ -167,6 +167,12 @@ pub(super) struct Registry {
 }
 
 impl Storage {
+    pub(crate) fn evict_restored_input_cache(&self, meeting: Option<&str>) -> Result<(), String> {
+        let mut registry = self.restored_inputs.lock().map_err(|_| "復元通知のキャッシュを解放できません")?;
+        registry.entries.retain(|_, entry| meeting.is_some_and(|id| entry.meeting != id));
+        Ok(())
+    }
+
     fn verify_restored_input_storage(&self) -> Result<(), String> {
         self.verify_closed_input_storage()?;
         if self.maintenance.load(std::sync::atomic::Ordering::Acquire) {

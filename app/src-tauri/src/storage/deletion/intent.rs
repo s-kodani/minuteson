@@ -721,8 +721,8 @@ fn prepare_inner(
     if !db.is_autocommit() {
         return Err("削除確認のトランザクションが既に進行中です".into());
     }
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
+    let _writer = super::fence::write_fresh(storage, &db)?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     intent.validate(&tx)?;
     let existing: Option<String> = tx

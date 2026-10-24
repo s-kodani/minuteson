@@ -13,7 +13,7 @@ test("five-second snapshot requires explicit ownership and exact complete track 
   assert.deepEqual(checkedCaptureTest(ready(),id),ready());
   for(const value of [null,{}, {...snapshot(),directory:"/private/path"},{...snapshot(),meetingId:"meeting"},
     {...snapshot(),runId:id.toUpperCase()},{...snapshot(),revision:0},{...snapshot(),microphoneUid:"\0"},
-    {...snapshot(),busy:false},{...ready(),busy:true},{...ready(),microphone:null},{...snapshot(),system:ready().system},
+    {...snapshot(),busy:false},{...ready(),busy:true},{...ready(),microphone:null,system:null},{...snapshot(),system:ready().system},
     {...ready(),cleanupPending:true},{...snapshot(),cleanupPending:true},{...snapshot(),phase:"finished"},{...snapshot(),phase:new String("preparing")},
     {...snapshot(),applicationName:"unexpected app"},{...ready(),microphone:{...ready().microphone,frames:40001}},
     {...ready(),system:{...ready().system,durationMs:5000}},{...ready(),system:{...ready().system,hasGaps:"no"}},
@@ -69,3 +69,5 @@ test("completed microphone preview remains available when PC audio is explicitly
   assert.throws(()=>checkedCaptureTest({...partial,system:{...ready().system!,frames:0,durationMs:0}}));
   assert.throws(()=>reconcileCaptureTest(partial,{...ready(),revision:6},snapshot()));
 });
+
+test("PC-only verified tests retain only the received track",()=>{ const value={...ready(),microphone:null}; assert.deepEqual(checkedCaptureTest(value,id),value); assert.throws(()=>checkedCaptureTest({...value,system:null},id)); });

@@ -81,6 +81,7 @@ pub struct AnalysisUtterance {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisView {
+    pub review_ranges: Vec<crate::transcription::ReviewRange>,
     pub id: String,
     pub meeting_id: String,
     pub content_hash: String,
@@ -214,7 +215,22 @@ pub(super) fn read_analysis_content(
             }
         }
     }
+    let review_ranges: Vec<crate::transcription::ReviewRange> = serde_json::from_value(
+        config
+            .get("reviewRanges")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(|e| e.to_string())?;
+    if review_ranges.len() > 100_000
+        || review_ranges.iter().any(|r| {
+            r.start_us < 0 || r.end_us <= r.start_us || r.reason != "repetition_after_recovery"
+        })
+    {
+        return Err("文字起こしの要確認範囲が不正です".into());
+    }
     Ok(AnalysisView {
+        review_ranges,
         id: id.to_owned(),
         meeting_id: meeting_id.to_owned(),
         content_hash: content_hash.to_owned(),
@@ -569,7 +585,12 @@ impl Storage {
                 )
                 .map_err(|e| e.to_string())?;
             let original: Value = serde_json::from_str(&original).map_err(|e| e.to_string())?;
-            for key in ["manualUtteranceSplits", "sourceRecognitionLineages"] {
+            for key in [
+                "manualUtteranceSplits",
+                "sourceRecognitionLineages",
+                "reviewRanges",
+                "completionStatus",
+            ] {
                 if let Some(value) = original.get(key) {
                     stored[key] = value.clone();
                 }

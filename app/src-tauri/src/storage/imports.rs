@@ -395,9 +395,7 @@ impl Storage {
         if expected.is_some_and(|e| e.size != result.size || e.sha256 != result.sha256) {
             return Err("取り込み音声のサイズ・ハッシュが一致しません".into());
         }
-        File::open(path)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_path(path)?;
         Ok(result)
     }
     pub(crate) fn cleanup_audio_import(&self, id: &str) -> Result<(), String> {
@@ -431,20 +429,18 @@ impl Storage {
                     "取り込み領域に未確認のファイルがあります。削除せず保持しました".into(),
                 );
             }
-            owned_files.push(entry.path());
+            let proof =
+                crate::native_fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+            #[cfg(windows)]
+            if proof.nlink() != 1 {
+                return Err("取り込み領域の共有ファイルは削除せず保持します".into());
+            }
+            owned_files.push((entry.path(), proof));
         }
         // Delete only the checked list; files arriving after inspection are
         // retained, and remove_dir refuses a newly non-empty directory.
-        for path in owned_files {
-            if path
-                .symlink_metadata()
-                .map_err(|e| e.to_string())?
-                .is_file()
-            {
-                std::fs::remove_file(path).map_err(|e| e.to_string())?;
-            } else {
-                return Err("整理中に取り込み物が変更されました".into());
-            }
+        for (path, proof) in owned_files {
+            crate::native_fs::remove_owned(&path, &proof).map_err(|e| e.to_string())?;
         }
         std::fs::remove_dir(base).map_err(|e| e.to_string())?;
         Ok(())

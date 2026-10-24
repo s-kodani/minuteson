@@ -2,21 +2,21 @@
 await import("./browser-fixture.js");
 const baseInvoke = window.__TAURI_INTERNALS__.invoke;
 const fixture = window.internalLogsFixture = {
-  calls: [], entries: [], fail: false, failOlder: false, stallOlder: false, hold: false, pending: [], pages: [],
+  calls: [], entries: [], fail: false, failOlder: false, stallOlder: false, hold: false, holdOlder: false, pending: [], pages: [],
   status: { storageError: null, droppedEntries: 0, historyTruncated: false },
   add(patch = {}) {
     const id = (this.entries.at(-1)?.id ?? 0) + 1;
     const entry = { id, timestamp: 1792150000000 + id * 1000, sessionId: "synthetic-session", kind: "process", level: "info", category: "transcription", meetingId: "meeting-0", jobId: "job-synthetic", operationId: null, state: "running", elapsedMs: id * 1000, message: `ログの工程 ${id}`, stream: null, ...patch };
     this.entries.push(entry); return entry;
   },
-  release() { this.hold = false; this.pending.splice(0).forEach(resolve => resolve()); },
+  release() { this.hold = false; this.holdOlder = false; this.pending.splice(0).forEach(resolve => resolve()); },
 };
 for (let i = 0; i < 1100; i++) fixture.add({ level: i % 10 === 0 ? "warn" : "info" });
 fixture.add({ kind: "engine", level: "raw", stream: "stderr.log", source: "/synthetic/unit-0", elapsedMs: null, message: "llama_model_load: using device MTL0\n<script>window.logMarkupExecuted = true</script>\n会議本文🦀\n" });
 window.__TAURI_INTERNALS__.invoke = async (command, args, options) => {
   if (command !== "get_internal_logs") return baseInvoke(command, args, options);
   fixture.calls.push(structuredClone(args));
-  if (fixture.hold) await new Promise(resolve => fixture.pending.push(resolve));
+  if (fixture.hold || fixture.holdOlder && args.query.before !== undefined) await new Promise(resolve => fixture.pending.push(resolve));
   if (fixture.fail) throw Error("合成ログ取得エラー");
   const { filter = {}, before, after, limit = 200 } = args.query;
   if (before !== undefined && fixture.failOlder) throw Error("合成の履歴取得エラー");

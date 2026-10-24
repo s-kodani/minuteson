@@ -675,7 +675,7 @@ fn inspect(
 ) -> Result<(), String> {
     super::super::cancel(check)?;
     let mut file = dir.regular(name)?;
-    if Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != *proof {
+    if Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != *proof {
         return Err("音声の実体が変更されています".into());
     }
     let mut digest = Sha256::new();
@@ -695,7 +695,7 @@ fn inspect(
     }
     dir.verify_file(name, &file)?;
     if bytes != proof.size
-        || Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != *proof
+        || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != *proof
         || target.sha256.as_deref() != Some(format!("{:x}", digest.finalize()).as_str())
     {
         return Err("音声内容・容量・実体が確認と一致しません".into());
@@ -834,8 +834,7 @@ fn run_inner(
                     return Err("未確定音声が消失しています".into());
                 }
                 let staged = Proof::read(
-                    &dir.regular(&reserved)?
-                        .metadata()
+                    &crate::native_fs::metadata(&dir.regular(&reserved)?)
                         .map_err(|e| e.to_string())?,
                 )?;
                 if !staged.matches_after_rename(&pending.before) {
@@ -887,6 +886,6 @@ fn run_inner(
     Ok(r)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_removal_tests.rs"]
 mod tests;

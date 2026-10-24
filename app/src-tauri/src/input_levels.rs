@@ -88,19 +88,38 @@ pub(crate) fn open_capture_file_at_optional(
     Ok(Some(unsafe { File::from_raw_fd(fd) }))
 }
 #[cfg(not(unix))]
-pub(crate) fn open_capture_directory(_directory: &Path) -> Result<File, String> {
-    Err("このOSの入力レベル確認は未対応です".into())
+pub(crate) fn open_capture_directory(directory: &Path) -> Result<File, String> {
+    crate::windows_files::directory(directory)
 }
 #[cfg(not(unix))]
-pub(crate) fn open_capture_file_at(_parent: &File, _name: &str) -> Result<File, String> {
-    Err("このOSの入力レベル確認は未対応です".into())
+pub(crate) fn open_capture_file_at(parent: &File, name: &str) -> Result<File, String> {
+    open_capture_file_at_optional(parent, name)?.ok_or("録音確認のファイルがありません".into())
 }
 #[cfg(not(unix))]
 pub(crate) fn open_capture_file_at_optional(
-    _parent: &File,
-    _name: &str,
+    parent: &File,
+    name: &str,
 ) -> Result<Option<File>, String> {
-    Err("このOSの録音確認は未対応です".into())
+    if !matches!(
+        name,
+        "input-levels.json"
+            | "input-status.json"
+            | "input-journal-status.json"
+            | "microphone-selection.status.json"
+            | "input-events.json"
+            | "input-notices.json"
+            | "manifest.json"
+            | "microphone.caf"
+            | "system.caf"
+    ) {
+        return Err("録音確認のファイル名が不正です".into());
+    }
+    let path = crate::windows_files::path(parent)?.join(name);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+        Ok(_) => crate::windows_files::read(&path, true).map(Some),
+    }
 }
 fn open_capture_file(directory: &Path, name: &str) -> Result<File, String> {
     open_capture_file_at(&open_capture_directory(directory)?, name)

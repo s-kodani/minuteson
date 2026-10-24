@@ -4,7 +4,7 @@ export interface RecordingDecision {
   sessionId: string | null; meetingId: string | null; meetingTitle: string | null;
   origin: "main" | "recorder" | null; preparing: boolean; quitAfterSave: boolean; errorMessage: string | null;
 }
-export const recordingDecisionVisible = (value: RecordingDecision | null) => !!value && ["confirming", "stopping", "failed"].includes(value.phase);
+export const recordingDecisionVisible = (value: RecordingDecision | null) => !!value && value.phase === "confirming";
 export function assertRecordingDecision(value: RecordingDecision): void {
   const optional = (v: unknown) => v === null || (typeof v === "string" && v.length > 0);
   if (typeof value?.quitAfterSave !== "boolean" || (value.quitAfterSave && value.origin !== "main")) throw Error("録音終了の目的を検証できません");

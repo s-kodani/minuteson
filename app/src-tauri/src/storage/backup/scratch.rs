@@ -6,29 +6,29 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, Weak};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) mod binding;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) mod history;
 pub(super) mod review;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) mod transfer;
 
 fn local_version() -> i64 {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", windows)) {
         4
     } else {
         2
     }
 }
 fn history_schema(db: &Connection) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     db.execute_batch(history::SCHEMA)
         .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     db.execute_batch(binding::SCHEMA)
         .map_err(|e| e.to_string())?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = db;
     Ok(())
 }
@@ -56,8 +56,10 @@ struct Identity {
 }
 impl Identity {
     fn read(m: &Metadata) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             let birth = m
                 .created()
@@ -71,7 +73,7 @@ impl Identity {
                 birth_nanos: birth.subsec_nanos(),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = m;
             Err("Windowsの一時領域回収は保留中です".into())
@@ -124,9 +126,7 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn sync(path: &Path) -> Result<(), String> {
-    File::open(path)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| e.to_string())
+    crate::native_fs::sync_directory(path)
 }
 fn regular(m: &Metadata) -> bool {
     #[cfg(unix)]
@@ -136,11 +136,11 @@ fn regular(m: &Metadata) -> bool {
     }
     #[cfg(not(unix))]
     {
-        m.is_file()
+        m.is_file() && m.nlink() == 1 && m.mode() & 0o077 == 0
     }
 }
 fn directory(path: &Path) -> Result<Metadata, String> {
-    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
         return Err("一時領域の親が変更されています".into());
     }
@@ -148,6 +148,10 @@ fn directory(path: &Path) -> Result<Metadata, String> {
 }
 fn private_directory(path: &Path) -> Result<Metadata, String> {
     let m = directory(path)?;
+    #[cfg(windows)]
+    if m.mode() & 0o077 != 0 {
+        return Err("一時領域の非公開権限が変更されています".into());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -172,11 +176,14 @@ fn active(path: &Path) -> Result<Option<(PathBuf, Active)>, String> {
 }
 
 impl Registry {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(in crate::storage) fn binding_changed(root: &Path, journal: &Path) -> Result<bool, String> {
+        #[cfg(windows)]
+        use crate::bootstrap::windows_io::OsStrExt;
+        #[cfg(unix)]
         use std::os::unix::ffi::OsStrExt;
         let path = journal.join(".mon-scratch.sqlite3");
-        let metadata = match std::fs::symlink_metadata(&path) {
+        let metadata = match crate::native_fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e.to_string()),
@@ -227,7 +234,7 @@ impl Registry {
     }
     // A recovered root gets a new journal, while stages and history remain
     // relative to the actual meeting root. Old journal bytes stay untouched.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(in crate::storage) fn open_at(root: &Path, journal: &Path) -> Result<Arc<Self>, String> {
         Self::open_inner(root, Some(journal))
     }
@@ -256,7 +263,7 @@ impl Registry {
         let journal_root = journal.unwrap_or(root);
         let journal_identity = Identity::read(&directory(journal_root)?)?;
         let path = journal_root.join(".mon-scratch.sqlite3");
-        let new = match std::fs::symlink_metadata(&path) {
+        let new = match crate::native_fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let mut o = OpenOptions::new();
                 o.read(true).write(true).create_new(true);
@@ -268,6 +275,8 @@ impl Registry {
                 o.open(&path)
                     .and_then(|f| f.sync_all())
                     .map_err(|e| e.to_string())?;
+                #[cfg(windows)]
+                crate::windows_files::set_private(&path)?;
                 sync(journal_root)?;
                 true
             }
@@ -275,27 +284,65 @@ impl Registry {
             _ => return Err("一時領域台帳が通常の非公開ファイルではありません".into()),
         };
         let file_identity =
-            Identity::read(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)?;
+            Identity::read(&crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?)?;
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
         expected
             .execute_batch(review::SCHEMA)
             .map_err(|e| e.to_string())?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         expected
             .execute_batch(history::SCHEMA)
             .map_err(|e| e.to_string())?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         expected
             .execute_batch(binding::SCHEMA)
             .map_err(|e| e.to_string())?;
         let expected_schema = schema(&expected)?;
-        let mut db = Connection::open(&path).map_err(|e| e.to_string())?;
+        let mut db =
+            Connection::open(&path).map_err(|e| format!("一時領域台帳を開けません: {e:?}"))?;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         // Inspect existing SQL before changing its journaling settings. Even an
         // empty file without a saved root proof is not adopted as ours.
+        #[cfg(windows)]
+        if !new && version == 2 {
+            let old = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            old.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+            old.execute_batch(review::SCHEMA)
+                .map_err(|e| e.to_string())?;
+            let actual = schema(&db)?;
+            if actual != schema(&old)? && actual != expected_schema {
+                return Err(
+                    "旧Windows一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into(),
+                );
+            }
+            let (proof, digest): (String, String) = db
+                .query_row("SELECT proof,hash FROM metadata WHERE id=1", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            if proof.len() > 1024
+                || hash(proof.as_bytes()) != digest
+                || serde_json::from_str::<Identity>(&proof).map_err(|e| e.to_string())?
+                    != root_identity
+            {
+                return Err(
+                    "旧Windows一時領域台帳の親証拠が一致しません。既存ファイルを保持します".into(),
+                );
+            }
+            let tx = db.transaction().map_err(|e| e.to_string())?;
+            if actual != expected_schema {
+                history_schema(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", local_version())
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
         if !new && (version != local_version() || schema(&db)? != expected_schema) {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
@@ -308,7 +355,8 @@ impl Registry {
         if new {
             let proof = serde_json::to_string(&root_identity).map_err(|e| e.to_string())?;
             let tx = db.transaction().map_err(|e| e.to_string())?;
-            tx.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+            tx.execute_batch(SCHEMA)
+                .map_err(|e| format!("一時領域台帳の作成に失敗しました: {e:?}"))?;
             tx.execute_batch(review::SCHEMA)
                 .map_err(|e| e.to_string())?;
             history_schema(&tx)?;
@@ -352,7 +400,7 @@ impl Registry {
     }
     fn check_root(&self) -> Result<(), String> {
         let path = self.journal_root.join(".mon-scratch.sqlite3");
-        let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if !regular(&m)
             || !self.file_identity.matches(&m)
             || !self.root_identity.matches(&directory(&self.root)?)
@@ -380,6 +428,8 @@ impl Registry {
             builder.mode(0o700);
         }
         builder.create(&path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&path)?;
         let proof = Proof {
             area: id.clone(),
             path: format!(".mon-stage-{id}"),
@@ -416,7 +466,7 @@ impl Registry {
             owner: Some((self.clone(), id)),
         })
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(in crate::storage) fn require_no_attention(&self) -> Result<(), String> {
         self.check_root()?;
         let db = self
@@ -617,7 +667,7 @@ impl Registry {
         if count >= LIMIT {
             return Err("一時領域の実体は新規作成した場合だけ登録できます".into());
         }
-        let current = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        let current = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         let identity = Identity::read(m)?;
         if !identity.matches(&current)
             || (kind == "file" && !regular(&current))
@@ -696,7 +746,7 @@ impl Registry {
             let mut changed = false;
             for (proof, _) in ordered {
                 let path = self.root.join(&proof.path);
-                let m = match std::fs::symlink_metadata(&path) {
+                let m = match crate::native_fs::symlink_metadata(&path) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                     Ok(m) => Some(m),
                     _ => {
@@ -713,11 +763,7 @@ impl Registry {
                         changed = true;
                         continue;
                     }
-                    let remove = if proof.kind == "file" {
-                        std::fs::remove_file(&path)
-                    } else {
-                        std::fs::remove_dir(&path)
-                    };
+                    let remove = crate::native_fs::remove_owned(&path, &m);
                     if remove.is_err() {
                         changed = true;
                         continue;
@@ -903,7 +949,7 @@ pub(in crate::storage) fn record_file(path: &Path, file: &File) -> Result<(), St
             registry.record(
                 &a.area,
                 path,
-                &file.metadata().map_err(|e| e.to_string())?,
+                &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
                 "file",
             )?;
         }

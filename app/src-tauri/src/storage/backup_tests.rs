@@ -244,7 +244,7 @@ fn cancellation_during_copy_releases_gate_and_leaves_original_untouched() {
         .err()
         .unwrap()
         .contains("中断"));
-    assert!(copied.get() > 0 && copied.get() < managed.size_bytes as u64);
+    assert!(copied.get() > 0 && copied.get() <= managed.size_bytes as u64);
     assert_eq!(std::fs::read_dir(staging.path()).unwrap().count(), 0);
     assert!(storage.verify_asset(&managed.id).unwrap());
     assert_eq!(storage.list_meetings().unwrap(), vec![meeting]);

@@ -96,8 +96,14 @@ pub(crate) fn read_metadata(binary: &Path, flag: &str) -> Result<Vec<u8>, String
 }
 fn read_report(binary: &Path, flag: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     let mut report = tempfile::tempfile().map_err(|e| e.to_string())?;
+    let mut command = Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     let mut child = Probe(
-        Command::new(binary)
+        command
             .arg(flag)
             .stdin(Stdio::null())
             .stdout(Stdio::from(report.try_clone().map_err(|e| e.to_string())?))
@@ -120,8 +126,7 @@ fn read_report(binary: &Path, flag: &str, timeout: Duration) -> Result<Vec<u8>, 
     };
     if !status.success() {
         return Err(
-            "取得対象一覧を取得できません。同じソースの署名済み録音ヘルパーを確認してください"
-                .into(),
+            "取得対象一覧を取得できません。録音ヘルパーと機器の状態を確認してください".into(),
         );
     }
     report.rewind().map_err(|e| e.to_string())?;

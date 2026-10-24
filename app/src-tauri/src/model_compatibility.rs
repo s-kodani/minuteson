@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-#[cfg(unix)]
 mod probe;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -144,14 +143,9 @@ pub(crate) fn verify_fixed_package(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     record.validate()?;
-    #[cfg(unix)]
+
     {
         probe::verify_package(models_root, record, cancelled).map(|_| ())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (models_root, cancelled);
-        Err("Windowsの管理モデル実行は保留中です".into())
     }
 }
 
@@ -163,19 +157,6 @@ pub(crate) fn check(
     expected_review: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<CheckSummary, String> {
-    #[cfg(not(unix))]
-    {
-        let _ = (
-            storage,
-            models_root,
-            operation,
-            package,
-            expected_review,
-            cancelled,
-        );
-        Err("Windowsのモデル互換性確認は保留中です".into())
-    }
-    #[cfg(unix)]
     {
         probe::check(
             storage,
@@ -199,7 +180,6 @@ pub(crate) fn verify_success(
     expected_review: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(PlacementRecord, std::path::PathBuf), String> {
-    #[cfg(unix)]
     {
         probe::verify_success(
             storage,
@@ -209,18 +189,6 @@ pub(crate) fn verify_success(
             expected_review,
             cancelled,
         )
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (
-            storage,
-            models_root,
-            operation,
-            package,
-            expected_review,
-            cancelled,
-        );
-        Err("Windowsのモデル適用は保留中です".into())
     }
 }
 

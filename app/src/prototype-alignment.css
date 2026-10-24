@@ -594,7 +594,7 @@ button:disabled { opacity:.5; }
 .model-setup-entrypoints {display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0 24px;}
 .model-inspection>h2 {font-size:17px; margin-top:0;}
 .model-setup-entrypoints>.model-download {margin:0; padding:0; border:0;}
-.model-inventory {display:grid; gap:12px; margin-top:8px;}
+.model-inventory {display:grid; gap:12px;}
 .model-inventory h3,.model-inventory p {margin:0;}
 .model-inventory ul {display:grid; gap:0; list-style:none; padding:0; margin:0;}
 .model-inventory li {display:flex; align-items:center; justify-content:space-between; gap:20px; padding:16px 0; border-bottom:1px solid var(--border);}
@@ -681,3 +681,19 @@ button:disabled { opacity:.5; }
 .model-details dd { overflow-wrap:anywhere; }
 .model-deletion-pending { border-top:1px solid var(--border); padding-top:16px; }
 @media(max-width:700px) { .model-inventory-actions { width:100%; } }
+
+/* Compact help headings replace inline explanatory paragraphs. */
+.page-heading { margin-bottom:20px; }
+.heading-with-info > :is(h1,h2,h3,h4) { margin:0; min-width:0; overflow-wrap:anywhere; }
+.heading-with-info > .info-trigger, .heading-with-info > .info-shell { flex:none; }
+.heading-with-info > label { margin:0; min-width:0; }
+.info-popover-content { margin:8px 0; color:var(--secondary-text); }
+.info-popover-content > :first-child { margin-top:0; }
+.info-popover-content > :last-child { margin-bottom:0; }
+.recording-workspace > .page-heading { margin:24px 0 16px; }
+.recording-workspace > .page-heading h1 { margin:0; }
+.capture-test-panel > .heading-with-info h3 { font-size:14px; }
+.capture-test-audio > .heading-with-info h4 { font-size:13px; }
+.speaker-count-fields > .info-field { display:grid; gap:8px; min-width:140px; max-width:100%; margin:0; font-size:13px; line-height:20px; color:var(--secondary-text); }
+.vad-fields > .info-field { display:grid; align-content:start; gap:8px; margin:0; min-width:0; font-size:13px; }
+.vad-fields > .info-field > .heading-with-info { min-height:32px; }

@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import { ModelIssue } from "./model-issue";
 import { useEffect, useId, useState } from "react";
 import { checkedVadOptions, defaultVadOptions, sameVadOptions, type VadOptions } from "./vad-state";
@@ -29,15 +30,14 @@ export function VadSettings({ value, available, disabled, onApply }: {
   } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
   const changed = options !== null && !sameVadOptions(options, value);
   return <section className="vad-settings" aria-label="発話区間検知（VAD）">
-    <label className="vad-enabled"><input type="checkbox" checked={enabled} disabled={disabled || !available} onChange={e => { setEnabled(e.target.checked); setTouched(true); }} />発話区間検知（VAD）</label>
-    <p>無音や雑音を除外して文字起こしします。短い発話や小声が除外される場合があります。変更は次に開始する処理から適用します。</p>
+    <div className="heading-with-info"><label className="vad-enabled"><input type="checkbox" checked={enabled} disabled={disabled || !available} onChange={e => { setEnabled(e.target.checked); setTouched(true); }} />発話区間検知（VAD）</label><InfoPopover label="発話区間検知（VAD）">無音や雑音を除外して文字起こしします。短い発話や小声が除外される場合があります。変更は次に開始する処理から適用します。</InfoPopover></div>
     {!available && <p>モデル選択欄の「VADを追加して使用」から導入できます。</p>}
     <div className="vad-detail-fields">
-        <fieldset className="vad-fields" disabled={disabled || !available || !enabled}>
-          {fields.map(f => <label key={f.key} htmlFor={`${id}-${f.key}`}><span>{f.label}{f.unit && `（${f.unit}）`}</span>
-            <input id={`${id}-${f.key}`} type="number" aria-label={`${f.label}${f.unit ? `（${f.unit}）` : ""}`} min={f.min} max={f.max} step={f.step} value={draft[f.key]} aria-describedby={`${id}-${f.key}-help`} aria-invalid={touched && !!error} onChange={e => { setDraft(d => ({ ...d, [f.key]: e.target.value })); setTouched(true); }} />
-            <span className="vad-field-help" id={`${id}-${f.key}-help`}>{f.help}</span>
-          </label>)}
+        <fieldset className="vad-fields">
+          {fields.map(f => <div className="info-field" key={f.key}><div className="heading-with-info"><label htmlFor={`${id}-${f.key}`}>{f.label}{f.unit && `（${f.unit}）`}</label><InfoPopover label={f.label}>{f.help}</InfoPopover></div>
+            <input id={`${id}-${f.key}`} type="number" disabled={disabled || !available || !enabled} aria-label={`${f.label}${f.unit ? `（${f.unit}）` : ""}`} min={f.min} max={f.max} step={f.step} value={draft[f.key]} aria-describedby={`${id}-${f.key}-help`} aria-invalid={touched && !!error} onChange={e => { setDraft(d => ({ ...d, [f.key]: e.target.value })); setTouched(true); }} />
+            <span className="sr-only" id={`${id}-${f.key}-help`}>{f.help}</span>
+          </div>)}
         </fieldset>
     </div>
     <ModelIssue label="VAD設定" message={touched ? error : null} />

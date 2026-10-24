@@ -38,7 +38,7 @@ export function checkedCaptureTest(value:unknown,expectedRunId?:string):CaptureT
   const phase=v.phase as CaptureTestPhase,captureScope=scope(v.captureScope),microphone=track(v.microphone),system=track(v.system);
   const busy=["preparing","recording","checking","cancelling"].includes(phase);
   if(v.busy!==busy||busy&&v.cleanupPending||phase==="ready"&&(v.cleanupPending||v.errorMessage!==null)||
-    (phase==="ready")!==(microphone!==null)||phase!=="ready"&&(microphone!==null||system!==null)||captureScope.mode==="system"&&v.applicationName!==null)throw Error("テストの保存・停止確認が状態と一致しません。");
+    (phase==="ready")!==(microphone!==null||system!==null)||phase!=="ready"&&(microphone!==null||system!==null)||captureScope.mode==="system"&&v.applicationName!==null)throw Error("テストの保存・停止確認が状態と一致しません。");
   return {schemaVersion:1,revision:v.revision,runId:v.runId,phase,busy:v.busy,microphoneUid:v.microphoneUid as string,
     microphoneName:v.microphoneName,captureScope,applicationName:v.applicationName,microphone,system,cleanupPending:v.cleanupPending,errorMessage:v.errorMessage};
 }

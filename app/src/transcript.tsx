@@ -305,6 +305,13 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
         }} />
       </>, speakerMount)}
       <div className="transcript-main">
+        {!!analysis.reviewRanges?.length && <section className="recognition-review" aria-label="文字起こしの要確認区間">
+          <p role="status">完了・要確認あり（{analysis.reviewRanges.length}区間）{!analysis.utterances.length && "。認識できた本文はありません。"}</p>
+          <ul>{analysis.reviewRanges.map((range,index)=><li key={`${range.trackId}:${range.startUs}:${index}`}>
+            <button type="button" className="utterance-stamp" disabled={disabled||!audio?.canPlay||audio.locked||audio.durationUs===null} onClick={()=>void audio?.playReference({kind:"interval",startUs:range.startUs,endUs:range.endUs,expectedDurationUs:audio.durationUs!})}>{timeLabel(range.startUs)}–{timeLabel(range.endUs)}</button> 認識できませんでした
+          </li>)}</ul>
+        </section>}
+
         <div className="transcript-toolbar">
           <div className="transcript-actions transcript-list-heading"><div className="transcript-heading-actions"><h2>発言一覧</h2><button type="button" className="small-secondary" disabled={!jumpRow||disabled||!visible} onClick={jumpToPlayback}>再生位置へ移動</button></div><span role="status">{snapshot.error ? "保存要確認" : snapshot.saving || busy ? "保存中" : Object.keys(texts).length || nameEditor || assignmentEditor || structureEditor || snapshot.dirty ? "編集中" : "保存済み"}</span></div>
           <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>

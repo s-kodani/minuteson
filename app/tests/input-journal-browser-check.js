@@ -66,18 +66,18 @@ async page=>{
     await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);
     await page.getByRole('button',{name:'通知一覧',exact:true}).click();await archived.waitFor();check((await archived.innerText()).includes("停止時の取得履歴保存が未確定"),"restart lost final manifest diagnosis");
     results.push("final writer uncertainty persists across replacement WebView even without a notification queue");
-    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:360,height:116});
+    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:227,height:101});
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID()}));
-    await set("failed",2,1);await state("failed");
+    await set("failed",2,1);await page.waitForTimeout(400);
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});await page.waitForTimeout(150);
       check(await page.locator(".mini-shell").evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1),"mini history diagnostic overflowed native geometry");
-      await page.screenshot({path:`journal-save-mini-${theme}-360x116.png`});
+      await page.screenshot({path:`journal-save-mini-${theme}-227x101.png`});
     }
-    check((await page.locator(".mini-journal-status").getAttribute("title")).includes("音声の取得・保存結果とは別"),"mini diagnosis implied audio result");
-    results.push("mini retains failure at native 360x116 geometry in both themes without conflating audio persistence");
-    await set("invalid",3,1);await state("invalid");await set("confirmed",3,3);await state("unknown");
-    check(await page.locator(".mini-journal-status").count()===1,"inconsistent recovery cleared invalid journal state");
-    results.push("invalid writer history cannot be optimistically recovered by a later contradictory confirmation");
+    check(await page.locator(".mini-journal-status").count()===0,"mini retained journal diagnostic text");
+    results.push("mini remains icon-only at 227x101 in both themes even when journal persistence fails");
+    await set("invalid",3,1);await page.waitForTimeout(400);await set("confirmed",3,3);await page.waitForTimeout(400);
+    check(await page.locator(".mini-journal-status").count()===0,"mini showed an invalid journal diagnostic");
+    results.push("invalid and contradictory writer reports add no text to the mini");
     return {passed:results.length,results};
   }catch(cause){throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator("body").innerText()}`);}
   finally{await page.context().unrouteAll();await page.evaluate(()=>sessionStorage.removeItem("MON_ARCHIVED_INPUT_FIXTURE")).catch(()=>{});}

@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { IssueNotice } from "./toast";
@@ -48,13 +49,11 @@ export function VoiceMatchingSettings({ locked = false, embedded = false }: { lo
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
   return <section className={embedded ? "voice-matching-settings ai-settings-group" : "analysis-card voice-matching-settings"} aria-label="登録した声の自動適用">
-    {embedded ? <h3>登録した声の自動適用</h3> : <h2>登録した声の自動適用</h2>}
-    <p>両方の条件を満たした場合、名前が未設定の話者に登録した名前を自動適用します。類似度は確率ではありません。登録が1人の場合は類似度の下限だけで判定します。</p>
+    <div className="heading-with-info">{embedded ? <h3>登録した声の自動適用</h3> : <h2>登録した声の自動適用</h2>}<InfoPopover label="登録した声の自動適用"><p>両方の条件を満たした場合、名前が未設定の話者に登録した名前を自動適用します。類似度は確率ではありません。登録が1人の場合は類似度の下限だけで判定します。</p><p>次に開始する照合から適用します。既存会議は「登録した声と照合」で照合できます。</p></InfoPopover></div>
     <fieldset className="vad-fields" disabled={locked || busy || !saved || uncertain}>
       <label><span>類似度の下限</span><input type="number" min="0" max="1" step="0.01" value={similarity} onChange={e => setSimilarity(e.target.value)} /></label>
       <label><span>次点との差の下限</span><input type="number" min="0" max="1" step="0.01" value={margin} onChange={e => setMargin(e.target.value)} /></label>
     </fieldset>
-    <p>次に開始する照合から適用します。既存会議は「登録した声と照合」で照合できます。</p>
     <IssueNotice scope="voice-matching-settings" type="settings" label="声の自動適用設定" message={error || validation} />
     <div className="analysis-actions">
       <button type="button" disabled={locked || busy || !changed || !!validation || uncertain} onClick={() => void apply()}>適用</button>

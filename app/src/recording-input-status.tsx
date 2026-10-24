@@ -58,11 +58,16 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
   },[owner,windowLabel]);
   return <Context.Provider value={view.owner===owner?view:{...empty(),owner}}>{children}</Context.Provider>;
 }
-export function RecordingInputStatus({owner,input,compact=false}:{owner:string|null;input:InputKind;compact?:boolean}){
+export function useRecordingInputValue(owner:string|null,input:InputKind):VisibleInput{
+  const view=useContext(Context);
+  return view.owner===owner&&owner?view[input]:unknown()[input];
+}
+export function RecordingInputStatus({owner,input,compact=false,indicator=false}:{owner:string|null;input:InputKind;compact?:boolean;indicator?:boolean}){
   const view=useContext(Context),value=view.owner===owner&&owner?view[input]:unknown()[input];
   const reception=view.owner===owner&&owner?view.reception[input]:"none",waiting=reception==="unconfirmed";
   const lost=view.owner===owner&&owner&&view.loss[input]>0;
   const short={unknown:"確認不可",stale:"更新なし",connected:lost?"接続":"接続済み",disconnected:"中断",reconnecting:"再取得中",unavailable:"取得不可",stopped:"停止"}[value.state];
+  if(indicator)return <span className="mini-input-indicator" data-input-kind={input} data-input-state={value.state} data-notice-history-lost={lost?"true":"false"} role="img" aria-label={`${input==="microphone"?"マイク":"PC音声"}の取得状態：${inputLabel(value,input)}${lost?"。通知履歴の一部を保持できません":""}`} title={`${inputLabel(value,input)}${lost?"。通知履歴の一部を保持できません":""}`} />;
   return <span className={compact?"mini-input-status":"recording-input-status"} data-input-kind={input} data-input-state={value.state} data-notice-reception={reception} data-notice-history-lost={lost?"true":"false"} aria-label={(input==="microphone"?"マイクの取得状態":"PC音声の取得状態")+(lost?"。通知履歴の一部を保持できません":"")} title={inputLabel(value,input)+(lost?"。通知履歴の一部を保持できません。保存後の欠損範囲を確認してください。":"")+(waiting?"。通知の処理結果を確認中です。取得や保存の成功を示す状態ではありません。":"")}>{compact&&lost?<span aria-hidden="true">⚠ </span>:null}{compact?(input==="microphone"?"マイク: ":"PC: "):"接続状態: "}{compact?short:inputLabel(value,input)}{lost&&!compact?" / 通知履歴の一部を保持できません":""}{waiting&&!compact?" / 通知確認待ち":""}</span>;
 }
 export function RecordingMicrophoneStatus({owner,compact=false}:{owner:string|null;compact?:boolean}){return <RecordingInputStatus owner={owner} input="microphone" compact={compact}/>;}

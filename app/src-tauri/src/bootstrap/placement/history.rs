@@ -28,7 +28,7 @@ impl Local {
     fn open(p: &Placement<'_>, create: bool) -> Result<Option<Self>, String> {
         p.guard()?;
         let path = p.pending.target.join(JOURNAL);
-        let new = match std::fs::symlink_metadata(&path) {
+        let new = match crate::native_fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
             Err(e) => return Err(e.to_string()),
             Ok(_) => false,
@@ -49,13 +49,14 @@ impl Local {
                 0o600,
             )
         })?;
-        let initial = ControlProof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let initial =
+            ControlProof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         if !new && initial.size == 0 {
             return Err("未確定の移行先台帳を再初期化しません".into());
         }
         if new {
-            file.sync_all().map_err(|e| e.to_string())?;
-            p.root.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&p.root).map_err(|e| e.to_string())?;
         }
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
@@ -67,7 +68,7 @@ impl Local {
         .map_err(|e| e.to_string())?;
         if !initial
             .identity
-            .matches(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
         {
             return Err("移行先台帳が開く途中で差し替えられています".into());
         }
@@ -117,10 +118,11 @@ impl Local {
             .map_err(|e| e.to_string())?;
             db.execute_batch("PRAGMA user_version=1; COMMIT;")
                 .map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            p.root.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&p.root).map_err(|e| e.to_string())?;
         }
-        let proof = ControlProof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let proof =
+            ControlProof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         if proof.identity != initial.identity {
             return Err("移行先台帳の実体が変更されています".into());
         }
@@ -138,9 +140,10 @@ impl Local {
     }
     fn guard(&self, p: &Placement<'_>) -> Result<(), String> {
         p.guard()?;
-        if ControlProof::read(&self.file.metadata().map_err(|e| e.to_string())?)? != self.proof
+        if ControlProof::read(&crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?)?
+            != self.proof
             || ControlProof::read(
-                &std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
+                &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
             )? != self.proof
             || schema(&self.db)? != self.expected_schema
         {
@@ -194,9 +197,11 @@ impl Local {
         })
     }
     fn committed(&mut self, p: &Placement<'_>) -> Result<(), String> {
-        self.file.sync_all().map_err(|e| e.to_string())?;
-        p.root.sync_all().map_err(|e| e.to_string())?;
-        let proof = ControlProof::read(&self.file.metadata().map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&p.root).map_err(|e| e.to_string())?;
+        let proof = ControlProof::read(
+            &crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?,
+        )?;
         if proof.identity != self.proof.identity {
             return Err("移行先台帳の同期中に実体が変更されています".into());
         }
@@ -215,10 +220,11 @@ impl Local {
                 p.root.as_raw_fd(),
                 base.as_ptr(),
                 libc::O_RDWR | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                0,
             )
         })?;
-        let fd = file.metadata().map_err(|e| e.to_string())?;
-        let path = std::fs::symlink_metadata(p.pending.target.join(REGISTRY))
+        let fd = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+        let path = crate::native_fs::symlink_metadata(p.pending.target.join(REGISTRY))
             .map_err(|e| e.to_string())?;
         if !regular(&fd, true) || !regular(&path, true) || !id.matches(&fd) || !id.matches(&path) {
             return Err("移行先台帳の本文が差し替え・リンク化されています".into());
@@ -316,10 +322,10 @@ impl Placement<'_> {
                     0o600,
                 )
             })?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            self.root.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&self.root).map_err(|e| e.to_string())?;
             let identity = serde_json::to_string(&Identity::read(
-                &file.metadata().map_err(|e| e.to_string())?,
+                &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
             )?)
             .map_err(|e| e.to_string())?;
             local.guard(self)?;
@@ -342,7 +348,7 @@ impl Placement<'_> {
         local.committed(self)?;
         // Identity and the complete new plan are durable before any truncation.
         image.write_owned(&mut output, cancelled)?;
-        self.root.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.root).map_err(|e| e.to_string())?;
         local.registry_file(self, &local.saved()?)?;
         verify_registry_image(
             &self.pending.target,
@@ -440,5 +446,5 @@ pub(super) fn admitted_control(p: &Placement<'_>, expected: &str) -> Result<Stri
     Ok(saved.control.ok_or("制御記録がありません")?.0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

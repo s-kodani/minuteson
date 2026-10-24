@@ -15,6 +15,11 @@ const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const MAX_SPEAKERS: u32 = 100;
 pub(super) const MAX_SEGMENTS: usize = 100_000;
+// sherpa-onnx 1.13.8 ComputeResult timestamps frame centers, including half
+// the Pyannote receptive field (991 / 2 / 16000 = 30.969 ms). Allow that
+// terminal offset plus float32 error near the WAV limit and printed rounding.
+// Accepted ends are still clamped to the exact input duration before storage.
+const TERMINAL_TOLERANCE_US: i64 = 50_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -214,9 +219,7 @@ pub(crate) fn parse_with_merges(
             || speaker as usize >= MAX_SEGMENTS
             || start_us >= duration_us
             || end_us <= start_us
-            // float32 seconds plus the printed millisecond rounding can
-            // overrun the terminal sample by up to ~16ms near the WAV limit.
-            || end_us > duration_us.saturating_add(20_000)
+            || end_us > duration_us.saturating_add(TERMINAL_TOLERANCE_US)
             // Native sorting precedes millisecond rounding; two printed
             // equal starts need not have ascending speaker IDs.
             || previous.is_some_and(|p| start_us < p)
@@ -490,7 +493,11 @@ fn run_track_inner(
         ))
         .arg(format!(
             "--clustering.cluster-threshold={}",
-            decimal(config.cluster_threshold_milli)
+            decimal(if config.cluster_threshold_milli == 0 {
+                500
+            } else {
+                config.cluster_threshold_milli
+            })
         ))
         .arg("--clustering.compute-confidence=false")
         .arg(format!(
@@ -499,11 +506,19 @@ fn run_track_inner(
         ))
         .arg(format!(
             "--min-duration-on={}",
-            decimal(config.min_duration_on_ms)
+            decimal(if config.min_duration_on_ms == 0 {
+                300
+            } else {
+                config.min_duration_on_ms
+            })
         ))
         .arg(format!(
             "--min-duration-off={}",
-            decimal(config.min_duration_off_ms)
+            decimal(if config.min_duration_off_ms == 0 {
+                500
+            } else {
+                config.min_duration_off_ms
+            })
         ))
         .arg(&wav);
     if crate::local_engine::resident::enabled() {
@@ -511,9 +526,13 @@ fn run_track_inner(
             .runtime_libraries
             .iter()
             .filter(|f| {
-                f.path
-                    .file_name()
-                    .is_some_and(|n| n == "libsherpa-onnx-c-api.dylib")
+                f.path.file_name().is_some_and(|n| {
+                    n == if cfg!(windows) {
+                        "sherpa-onnx-c-api.dll"
+                    } else {
+                        "libsherpa-onnx-c-api.dylib"
+                    }
+                })
             })
             .collect();
         if libraries.len() != 1 {
@@ -521,6 +540,7 @@ fn run_track_inner(
         }
         command.arg("--library").arg(&libraries[0].path);
     }
+    crate::local_engine::native_environment(command);
     let mut child = crate::local_engine::resident::Run::spawn(
         &mut launch,
         "sherpa",

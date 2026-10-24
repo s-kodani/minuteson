@@ -46,10 +46,7 @@ impl Default for StopDecision {
 }
 impl StopDecision {
     pub fn visible(&self) -> bool {
-        matches!(
-            self.phase,
-            DecisionPhase::Confirming | DecisionPhase::Stopping | DecisionPhase::Failed
-        )
+        matches!(self.phase, DecisionPhase::Confirming)
     }
 }
 
@@ -99,7 +96,10 @@ impl StopDecisionStore {
         }
         state.recording_revision = state.recording_revision.max(recording.revision);
         let value = &mut state.decision;
-        if value.visible() {
+        if matches!(
+            value.phase,
+            DecisionPhase::Confirming | DecisionPhase::Stopping
+        ) {
             return Ok((value.clone(), false));
         }
         if !matches!(

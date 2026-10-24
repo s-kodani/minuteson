@@ -33,6 +33,7 @@ export function useDataOperation() {
       accept(next);
       const value = await invoke<DataAvailability>("get_data_operation_availability");
       if (!value || typeof value.available !== "boolean" || (value.reason !== null && typeof value.reason !== "string") || value.available !== (value.reason === null)) throw Error("利用可能状態を確認できません。");
+      if (value.deletionAvailable !== undefined && (typeof value.deletionAvailable !== "boolean" || !(value.deletionReason === null || typeof value.deletionReason === "string") || value.deletionAvailable !== (value.deletionReason === null))) throw Error("削除の受付状態を確認できません。");
       const supported = Object.hasOwn(next, "deletionPreview");
       const listing = supported ? await invoke<DeletionListing>("get_deletion_items") : null;
       if (listing) assertDeletionListing(listing);

@@ -501,11 +501,13 @@ fn restore_journal_partial_copy_and_repeated_cleanup_remove_only_registered_owne
             }
             builder.create(folder).unwrap();
             journal
-                .record(folder, &std::fs::symlink_metadata(folder).unwrap())
+                .record(folder, &crate::native_fs::symlink_metadata(folder).unwrap())
                 .unwrap();
         }
         let mut file = private_file(&path).unwrap();
-        journal.record(&path, &file.metadata().unwrap()).unwrap();
+        journal
+            .record(&path, &crate::native_fs::metadata(&file).unwrap())
+            .unwrap();
         file.write_all(b"partial").unwrap();
         file.sync_all().unwrap();
     }

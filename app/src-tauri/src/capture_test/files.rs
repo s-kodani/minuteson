@@ -9,6 +9,182 @@ use std::path::PathBuf;
 
 const MANIFEST_LIMIT: u64 = 256 * 1024;
 const AUDIO_LIMIT: u64 = 128 * 1024 * 1024;
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_five_second_synthetic_capture_validates_and_releases_audio() {
+    windows_synthetic_capture_case("--synthetic-clock-overlap");
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_five_second_clock_anomalies_validate_and_release_audio() {
+    windows_synthetic_capture_case("--synthetic-clock-cases");
+}
+
+#[cfg(all(test, windows))]
+fn windows_synthetic_capture_case(scenario: &str) {
+    let directory = TestDirectory::new().unwrap();
+    let request = super::Request {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        microphone_uid: "synthetic-microphone".into(),
+        capture_scope: crate::capture_scope::CaptureScope {
+            mode: "system".into(),
+            application: None,
+        },
+        expected_import: super::ImportExpectation {
+            token: None,
+            revision: 0,
+            busy: false,
+        },
+    };
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
+    let child = super::command(&binary, &directory.path, &request)
+        .unwrap()
+        .arg("--synthetic")
+        .arg(scenario)
+        .args(["--synthetic-startup-delay-ms", "500"])
+        .spawn()
+        .unwrap();
+    let child = super::Probe(std::sync::Mutex::new(child));
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(manifest) = directory.manifest().unwrap() {
+            assert_eq!(manifest.state, "starting");
+            manifest.require_owner(&request).unwrap();
+            assert!(verify(&directory, &request, &|| false).is_err());
+            break;
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        assert!(child.exited().unwrap().is_none());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Reproduce a Windows reader/scanner denying replacement during startup.
+    // The helper must retain and atomically publish the same staged snapshot.
+    use std::os::windows::fs::OpenOptionsExt;
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(directory.path.join("manifest.json"))
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        drop(reader);
+    });
+    let transitions = std::cell::Cell::new(0);
+    super::watch(
+        &directory,
+        &child,
+        &request,
+        &std::sync::atomic::AtomicBool::new(false),
+        std::time::Duration::from_secs(15),
+        || {
+            transitions.set(transitions.get() + 1);
+            Ok(())
+        },
+    )
+    .unwrap();
+    release.join().unwrap();
+    assert_eq!(transitions.get(), 1);
+    let raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(raw["consoleWindowPresent"], false);
+    if scenario == "--synthetic-clock-overlap" {
+        // Overlap now switches to the monotone sample map before any raw
+        // segment is sealed, rather than adjusting an already appended map.
+        assert_eq!(raw["timingEstimated"], true);
+        let diagnostic: serde_json::Value =
+            serde_json::from_reader(directory.open("capture-clock.json", 128 * 1024).unwrap())
+                .unwrap();
+        for lane in ["microphone", "system"] {
+            assert_eq!(raw[lane]["clockBoundaryAdjustments"], 0);
+            assert_eq!(raw[lane]["frames"], 240_000);
+            assert_eq!(diagnostic[lane]["estimatedPackets"], 499);
+            assert_eq!(
+                diagnostic[lane]["firstAnomalies"][0]["reason"],
+                "overlapping_timestamp"
+            );
+        }
+    } else {
+        assert_eq!(raw["timingEstimated"], true);
+        let diagnostic: serde_json::Value =
+            serde_json::from_reader(directory.open("capture-clock.json", 128 * 1024).unwrap())
+                .unwrap();
+        assert_eq!(diagnostic["state"], "saved");
+        assert_eq!(diagnostic["ownerId"], request.run_id);
+        for lane in ["microphone", "system"] {
+            assert_eq!(diagnostic[lane]["equalTimestampPackets"], 1);
+            assert_eq!(diagnostic[lane]["reversedTimestampPackets"], 2);
+            assert_eq!(diagnostic[lane]["timestampErrorPackets"], 1);
+            assert!(
+                diagnostic[lane]["sampleCountFallbackPackets"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            assert!(
+                diagnostic[lane]["devicePositionFallbackPackets"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            assert_eq!(diagnostic[lane]["savedFrames"], raw[lane]["frames"]);
+            // All selected PCM survives. The only excluded frames are beyond
+            // the shared five-second window, including the known 20 ms gap.
+            let received = diagnostic[lane]["observedPackets"].as_u64().unwrap() * 480;
+            assert_eq!(raw[lane]["frames"], received.min(240_000 - 960));
+            let events = diagnostic[lane]["firstAnomalies"].as_array().unwrap();
+            assert!(events.iter().any(|e| e["reason"] == "equal_timestamp"));
+            assert!(events.iter().any(|e| e["reason"] == "reversed_timestamp"));
+            assert!(events.len() <= 16);
+            assert!(diagnostic[lane]["recentPackets"].as_array().unwrap().len() <= 32);
+        }
+    }
+    let ready = verify(&directory, &request, &|| false).unwrap();
+    assert!(ready.microphone.as_ref().unwrap().info.frames > 0);
+    assert!(ready.system.is_some());
+    directory.cleanup().unwrap();
+    assert!(!directory.path.join("microphone.caf").exists());
+    assert!(!directory.path.join("system.caf").exists());
+    assert!(!directory.path.join("capture-clock.json").exists());
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_five_second_initialization_failure_retains_the_primary_error() {
+    let directory = TestDirectory::new().unwrap();
+    let mut request = super::tests::request();
+    request.microphone_uid = "synthetic-microphone".into();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
+    let child = super::command(&binary, &directory.path, &request)
+        .unwrap()
+        .args(["--synthetic", "--parent-pid", "4294967295"])
+        .spawn()
+        .unwrap();
+    let child = super::Probe(std::sync::Mutex::new(child));
+    let error = super::watch(
+        &directory,
+        &child,
+        &request,
+        &std::sync::atomic::AtomicBool::new(false),
+        std::time::Duration::from_secs(5),
+        || panic!("failed initialization cannot enter recording"),
+    )
+    .unwrap_err();
+    assert_eq!(error, "capture parent unavailable");
+    let diagnostic: serde_json::Value =
+        serde_json::from_reader(directory.open("capture-clock.json", 128 * 1024).unwrap()).unwrap();
+    assert_eq!(diagnostic["state"], "failed");
+    assert_eq!(diagnostic["error"], "capture parent unavailable");
+    assert!(verify(&directory, &request, &|| false).is_err());
+    assert!(!directory.path.join("microphone.caf").exists());
+    assert!(!directory.path.join("system.caf").exists());
+    child.terminate().unwrap();
+}
+#[cfg(unix)]
 const FILES: [&str; 5] = [
     "manifest.json",
     "microphone.caf",
@@ -16,13 +192,27 @@ const FILES: [&str; 5] = [
     "input-levels.json",
     "stop.request",
 ];
+#[cfg(windows)]
+const FILES: [&str; 11] = [
+    "manifest.json",
+    "microphone.caf",
+    "system.caf",
+    "input-levels.json",
+    "stop.request",
+    "input-status.json",
+    "microphone-selection.status.json",
+    "microphone-selection.request",
+    "capture-clock.json",
+    "input-events.json",
+    "input-journal-status.json",
+];
 
 /// Only this newly allocated directory is owned. Cleanup never recursively
 /// traverses a cache, follows links, or removes unknown files after a crash.
 pub(super) struct TestDirectory {
     pub(super) path: PathBuf,
     pin: File,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     owner: Option<super::journal::Area>,
 }
 impl TestDirectory {
@@ -33,23 +223,28 @@ impl TestDirectory {
             .tempdir()
             .map_err(|e| e.to_string())?;
         let path = directory.path().canonicalize().map_err(|e| e.to_string())?;
-        let pin = File::open(&path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&path)?;
+        #[cfg(windows)]
+        let pin = crate::windows_files::open_metadata(&path)?;
+        #[cfg(not(windows))]
+        let pin = crate::input_levels::open_capture_directory(&path)?;
         let _ = directory.keep();
         Ok(Self {
             path,
             pin,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             owner: None,
         })
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn new_owned(
         registry: &std::sync::Arc<super::journal::Registry>,
         request: super::Request,
     ) -> Result<Self, String> {
         Self::restore_owned(registry.allocate(request)?)
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn restore_owned(owner: super::journal::Area) -> Result<Self, String> {
         Ok(Self {
             path: owner.path(),
@@ -57,7 +252,7 @@ impl TestDirectory {
             owner: Some(owner),
         })
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn recover_owned(owner: super::journal::Area) -> Result<(), String> {
         let quiet = owner.quiet()?;
         match std::fs::symlink_metadata(owner.path()) {
@@ -72,7 +267,7 @@ impl TestDirectory {
             }
         }
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(super) fn inherit_lease(&self, command: &mut std::process::Command) -> Result<i32, String> {
         self.check_owner()?;
         self.owner
@@ -81,13 +276,13 @@ impl TestDirectory {
             .inherit(command)
     }
     pub(super) fn release_parent_lease(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(owner) = &self.owner {
             owner.release_parent_lease();
         }
     }
     fn check_owner(&self) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(owner) = &self.owner {
             owner.validate_directory()?;
         }
@@ -105,7 +300,13 @@ impl TestDirectory {
         }
         #[cfg(not(unix))]
         {
-            Err("このOSの録音前テストは未対応です".into())
+            let current = crate::windows_files::directory(&self.path)?;
+            if crate::windows_files::identity(&current)?
+                != crate::windows_files::identity(&self.pin)?
+            {
+                return Err("テストの一時保存先が変更されています".into());
+            }
+            Ok(())
         }
     }
     pub(super) fn open(&self, name: &str, maximum: u64) -> Result<File, String> {
@@ -138,8 +339,15 @@ impl TestDirectory {
         }
         #[cfg(not(unix))]
         {
-            let _ = maximum;
-            Err("このOSの録音前テストは未対応です".into())
+            let file = crate::windows_files::read(
+                &crate::windows_files::path(&self.pin)?.join(name),
+                true,
+            )?;
+            if file.metadata().map_err(|e| e.to_string())?.len() > maximum {
+                return Err("テストのファイルが大きすぎます".into());
+            }
+            self.check_owner()?;
+            Ok(file)
         }
     }
     pub(super) fn request_stop(&self) -> Result<(), String> {
@@ -174,11 +382,22 @@ impl TestDirectory {
         }
         #[cfg(not(unix))]
         {
-            Err("このOSの録音前テストは未対応です".into())
+            let path = crate::windows_files::path(&self.pin)?.join("stop.request");
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(file) => file.sync_all().map_err(|e| e.to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    self.open("stop.request", 0).map(|_| ())
+                }
+                Err(e) => Err(e.to_string()),
+            }
         }
     }
     pub(super) fn cleanup(&self) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(owner) = &self.owner {
             // A parent crash or dropped wrapper is not evidence of the
             // helper's exit. Hold a separately acquired lease while removing
@@ -205,21 +424,32 @@ impl TestDirectory {
         if entries.len() > FILES.len() {
             return Err("一時保存先に未登録のファイルがあります。削除していません".into());
         }
+        #[cfg(windows)]
+        let mut identities = std::collections::BTreeMap::new();
         for entry in &entries {
             let name = entry.file_name();
             let name = name.to_str().ok_or("一時ファイル名が不正です")?;
-            self.open(
+            let validated = self.open(
                 name,
                 if name == "manifest.json" {
                     MANIFEST_LIMIT
                 } else if name == "input-levels.json" {
                     16 * 1024
+                } else if name == "capture-clock.json" {
+                    128 * 1024
                 } else if name == "stop.request" {
                     0
                 } else {
                     AUDIO_LIMIT
                 },
             )?;
+            #[cfg(windows)]
+            identities.insert(
+                entry.file_name(),
+                crate::windows_files::Identity::file(&validated)?,
+            );
+            #[cfg(not(windows))]
+            let _ = validated;
         }
         #[cfg(unix)]
         {
@@ -237,7 +467,16 @@ impl TestDirectory {
         }
         #[cfg(not(unix))]
         {
-            Err("このOSの録音前テストは未対応です".into())
+            for entry in entries {
+                self.check_owner()?;
+                let path = crate::windows_files::path(&self.pin)?.join(entry.file_name());
+                let expected = identities
+                    .get(&entry.file_name())
+                    .ok_or("テストファイルの検証証拠がありません")?;
+                crate::windows_files::remove_owned(&path, expected, false)?;
+            }
+            let expected = crate::windows_files::Identity::file(&self.pin)?;
+            crate::windows_files::remove_owned(&self.path, &expected, true)
         }
     }
     pub(super) fn manifest(&self) -> Result<Option<Manifest>, String> {
@@ -318,6 +557,8 @@ pub(super) struct Manifest {
     errors: Vec<String>,
     #[serde(default)]
     system_audio_unreceived: bool,
+    #[serde(default)]
+    microphone_audio_unreceived: bool,
     capture_test: Window,
     capture_clock: Option<CaptureClock>,
     microphone: Track,
@@ -335,7 +576,7 @@ impl Manifest {
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
-            || self.backend != "coreaudio"
+            || self.backend != crate::recorder::capture_backend()
             || self.target_pids
                 != request
                     .capture_scope
@@ -380,7 +621,7 @@ impl Manifest {
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
-            || self.backend != "coreaudio"
+            || self.backend != crate::recorder::capture_backend()
             || self.state != "starting"
                 && self.target_application_identity != request.capture_scope.application
             || self.target_pids
@@ -431,7 +672,7 @@ pub(super) struct TrackProof {
     pub(super) info: TrackInfo,
 }
 pub(super) struct Ready {
-    pub(super) microphone: TrackProof,
+    pub(super) microphone: Option<TrackProof>,
     pub(super) system: Option<TrackProof>,
 }
 impl TrackProof {
@@ -498,7 +739,11 @@ pub(super) fn verify(
         .ok_or("テストの取得時計がありません")?;
     if first < start
         || first >= end
-        || clock.domain != "mach_continuous_time"
+        || end.checked_sub(start) != Some(5_000_000_000)
+        || !matches!(
+            clock.domain.as_str(),
+            "mach_continuous_time" | "query_performance_counter"
+        )
         || !(0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
         || !(0..=9_007_199_254_740_991).contains(&clock.uncertainty_ns)
     {
@@ -515,6 +760,8 @@ pub(super) fn verify(
             || t.frames == 0
             || t.frames > rate as u64 * 5
             || t.append_failures != 0
+            || t.clock_failure.is_some()
+            || t.callback_count == Some(0)
             || !(1..=8).contains(&t.channels.unwrap_or(0))
         {
             return Err("テスト音声のフレーム数・形式・書込み状態が不正です".into());
@@ -563,8 +810,15 @@ pub(super) fn verify(
         })
     };
     let system_unreceived = manifest.system_audio_unreceived;
-    if system_unreceived {
-        let t = &manifest.system;
+    let microphone_unreceived = manifest.microphone_audio_unreceived;
+    if system_unreceived && microphone_unreceived {
+        return Err("マイク・PC音声を取得できませんでした".into());
+    }
+    for (unreceived, name, t) in [
+        (microphone_unreceived, "microphone.caf", &manifest.microphone),
+        (system_unreceived, "system.caf", &manifest.system),
+    ] {
+        if !unreceived { continue; }
         if t.frames != 0
             || t.callback_count != Some(0)
             || t.sample_rate.is_some()
@@ -575,39 +829,28 @@ pub(super) fn verify(
                 .as_ref()
                 .is_none_or(|segments| !segments.is_empty())
         {
-            return Err("PC音声の未受信記録に書込み・形式・取得時刻の矛盾があります".into());
+            return Err(format!("{name}の未受信記録に書込み・形式・取得時刻の矛盾があります"));
         }
         // Absence is not an empty/corrupt saved CAF. Reject even a dangling
         // link; never discard a payload or pass it off as unreceived audio.
-        match std::fs::symlink_metadata(directory.path.join("system.caf")) {
+        match std::fs::symlink_metadata(directory.path.join(name)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            _ => return Err("PC音声の未受信記録に音声ファイルが存在します".into()),
+            _ => return Err(format!("{name}の未受信記録に音声ファイルが存在します")),
         }
     }
-    if manifest
-        .microphone
-        .clock_segments
-        .as_ref()
-        .and_then(|s| s.first())
-        .map(|s| s.timeline_start_us)
-        .unwrap_or(-1)
-        .min(if system_unreceived {
-            i64::MAX
-        } else {
-            manifest
-                .system
-                .clock_segments
-                .as_ref()
-                .and_then(|s| s.first())
-                .map(|s| s.timeline_start_us)
-                .unwrap_or(-1)
-        })
-        != 0
+    let first_start = |unreceived: bool, track: &Track| {
+        if unreceived { i64::MAX } else {
+            track.clock_segments.as_ref().and_then(|s| s.first())
+                .map(|s| s.timeline_start_us).unwrap_or(-1)
+        }
+    };
+    if first_start(microphone_unreceived, &manifest.microphone)
+        .min(first_start(system_unreceived, &manifest.system)) != 0
     {
         return Err("テストの共通原点が最初の保存音声と一致しません".into());
     }
     Ok(Ready {
-        microphone: track("microphone.caf", manifest.microphone)?,
+        microphone: if microphone_unreceived { None } else { Some(track("microphone.caf", manifest.microphone)?) },
         system: if system_unreceived {
             None
         } else {

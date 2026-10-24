@@ -5,6 +5,7 @@ pub(crate) fn input() -> MinutesInput {
     use crate::storage::{AnalysisSpeaker, AnalysisUtterance, AnalysisView};
     MinutesInput {
         analysis: AnalysisView {
+            review_ranges: vec![],
             id: "analysis".into(),
             meeting_id: "meeting".into(),
             content_hash: "a".repeat(64),

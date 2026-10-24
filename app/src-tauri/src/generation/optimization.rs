@@ -413,6 +413,7 @@ fn real_token_counter_builds_and_replays_complete_plans() {
     let root_path = root.path().canonicalize().unwrap();
     let worker = Fingerprint::capture(&worker, &|| false).unwrap();
     let snapshot = resident::Snapshot {
+        gpu: None,
         protocol: 1,
         engine: "llama".into(),
         name: "mon-llama-worker".into(),

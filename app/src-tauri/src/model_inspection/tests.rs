@@ -329,17 +329,26 @@ fn replacement_and_modification_during_hashing_are_detected() {
             if n == 3 {
                 let bytes = std::fs::read(&path).unwrap();
                 if replace {
-                    std::fs::rename(&path, dir.path().join("saved-cli")).unwrap();
+                    let renamed = std::fs::rename(&path, dir.path().join("saved-cli"));
+                    #[cfg(windows)]
+                    if renamed.is_err() {
+                        return true;
+                    }
+                    renamed.unwrap();
                 }
-                std::fs::write(
+                let written = std::fs::write(
                     &path,
                     if replace {
                         bytes
                     } else {
                         vec![b'z'; manifest.files[0].expected_size.unwrap() as usize]
                     },
-                )
-                .unwrap();
+                );
+                #[cfg(windows)]
+                if written.is_err() {
+                    return true;
+                }
+                written.unwrap();
             }
             false
         });

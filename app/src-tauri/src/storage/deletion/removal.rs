@@ -675,7 +675,7 @@ fn inspect(
         Ok(proof)
     } else {
         let mut file = dir.regular(leaf)?;
-        let before = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let before = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         if before != *expected {
             return Err("削除対象の実体・内容条件が変更されています".into());
         }
@@ -696,7 +696,8 @@ fn inspect(
         }
         dir.verify_file(leaf, &file)?;
         if length != before.size
-            || Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != before
+            || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?
+                != before
             || target.sha256.as_deref() != Some(format!("{:x}", digest.finalize()).as_str())
         {
             return Err("削除対象の内容SHA・実体が一致しません".into());
@@ -708,7 +709,7 @@ fn observed_proof(dir: &Directory, leaf: &str, directory: bool) -> Result<Proof,
     if directory {
         dir.child(leaf)?.ok_or("移動対象がありません")?.proof()
     } else {
-        Proof::read(&dir.regular(leaf)?.metadata().map_err(|e| e.to_string())?)
+        Proof::read(&crate::native_fs::metadata(&dir.regular(leaf)?).map_err(|e| e.to_string())?)
     }
 }
 fn missing(entry: &Entry) -> Option<Entry> {
@@ -1010,6 +1011,6 @@ pub(super) fn run_observed(
 ) -> Result<(), String> {
     run_inner(storage, receipt, check, event)
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "removal_tests.rs"]
 mod tests;

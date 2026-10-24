@@ -5,20 +5,51 @@ import { topOpenModal } from "./modal-state";
 import { ActionIcon } from "./action-icon";
 
 let activeClose: ((restore: boolean) => void) | null = null;
+const dismissals = new Set<() => void>();
 // A confirmation takes precedence; do not move focus away from its controls.
-export function closeInfoPopovers() { activeClose?.(false); }
+export function closeInfoPopovers() { dismissals.forEach(close => close()); }
 
 export function InfoPopover({ label, children, details }: { label: string; children: ReactNode; details?: ReactNode }) {
   const id = useId(), titleId = `${id}-title`, detailsId = `${id}-details`;
   const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false), [expanded, setExpanded] = useState(false);
+  const [mode, setMode] = useState<"hover" | "pinned" | null>(null), [expanded, setExpanded] = useState(false);
+  const open = mode !== null, currentMode = useRef(mode); currentMode.current = mode;
+  const hoverTimer = useRef<number | undefined>(undefined), leaveTimer = useRef<number | undefined>(undefined);
+  const clearTimers = () => { window.clearTimeout(hoverTimer.current); window.clearTimeout(leaveTimer.current); hoverTimer.current = leaveTimer.current = undefined; };
   const liveClose = useRef<(restore: boolean) => void>(() => {});
   const position = useRef<() => void>(() => {});
   liveClose.current = restore => {
-    setOpen(false);
+    clearTimers(); currentMode.current = null; setMode(null);
     const button = trigger.current;
     if (restore && button?.isConnected && !button.matches(":disabled") && button.getClientRects().length && !button.closest("[hidden], [inert], dialog:not([open])")) button.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    const dismiss = () => liveClose.current(false);
+    dismissals.add(dismiss);
+    return () => { dismissals.delete(dismiss); clearTimers(); };
+  }, []);
+  const enter = (event: React.PointerEvent) => {
+    if (event.pointerType !== "mouse") return;
+    window.clearTimeout(leaveTimer.current);
+    if (currentMode.current || hoverTimer.current !== undefined) return;
+    hoverTimer.current = window.setTimeout(() => {
+      hoverTimer.current = undefined;
+      const button = trigger.current, modal = topOpenModal();
+      if (button?.isConnected && button.getClientRects().length && !button.closest("[hidden], [inert], dialog:not([open])") && (!modal || modal.contains(button))) setMode("hover");
+    }, 200);
+  };
+  const leave = () => {
+    window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined;
+    window.clearTimeout(leaveTimer.current);
+    if (currentMode.current === "hover") leaveTimer.current = window.setTimeout(() => {
+      if (currentMode.current === "hover" && !popup.current?.contains(document.activeElement)) liveClose.current(false);
+    }, 150);
+  };
+  const toggle = () => {
+    clearTimers();
+    if (currentMode.current === "pinned") liveClose.current(true);
+    else { currentMode.current = "pinned"; setMode("pinned"); if (open) closeButton.current?.focus({ preventScroll: true }); }
   };
   useLayoutEffect(() => {
     const element = popup.current, button = trigger.current;
@@ -44,7 +75,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
       element.dataset.side = placement.side;
     };
     position.current = place;
-    place(); closeButton.current?.focus({ preventScroll: true });
+    place(); if (currentMode.current === "pinned") closeButton.current?.focus({ preventScroll: true });
     const escape = (event: KeyboardEvent) => {
       if (appShortcut(event) === "cancel") { event.preventDefault(); event.stopImmediatePropagation(); close(true); }
       else if (event.key === "Tab" && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && element.contains(document.activeElement)) {
@@ -60,7 +91,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
       const path = event.composedPath();
       if (!path.includes(element) && !path.includes(button)) {
         // Switching to another info icon must not restore the old trigger.
-        close(!(event.target instanceof Element && event.target.closest(".info-trigger")));
+        close(currentMode.current === "pinned" && !(event.target instanceof Element && event.target.closest(".info-trigger")));
       }
     };
     const focusChanged = () => {
@@ -69,7 +100,8 @@ export function InfoPopover({ label, children, details }: { label: string; child
     };
     const resize = new ResizeObserver(place); resize.observe(element); resize.observe(button);
     const hidden = new MutationObserver(() => { focusChanged(); place(); });
-    hidden.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "open", "disabled"] });
+    hidden.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "open", "disabled", "inert", "class"] });
+    focusChanged();
     document.addEventListener("keydown", escape, true);
     document.addEventListener("click", outside, true);
     document.addEventListener("focusin", focusChanged);
@@ -78,6 +110,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
     window.visualViewport?.addEventListener("resize", place);
     window.visualViewport?.addEventListener("scroll", place);
     return () => {
+      clearTimers();
       if (activeClose === close) activeClose = null;
       if (element.matches(":popover-open")) element.hidePopover();
       resize.disconnect(); hidden.disconnect();
@@ -92,10 +125,10 @@ export function InfoPopover({ label, children, details }: { label: string; child
   }, [open]);
   useLayoutEffect(() => { if (open) position.current(); });
   return <div className="info-shell">
-    <button ref={trigger} type="button" className="info-trigger" aria-label={`${label}の説明を開く`} aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onClick={() => open ? liveClose.current(true) : setOpen(true)}><span aria-hidden="true">ⓘ</span></button>
-    <div ref={popup} id={id} popover="manual" role="dialog" aria-modal="false" aria-labelledby={titleId} className="info-popover">
+    <button ref={trigger} type="button" className="info-trigger" aria-label={`${label}の説明を開く`} aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onPointerEnter={enter} onPointerLeave={leave} onClick={toggle}><span aria-hidden="true">ⓘ</span></button>
+    <div ref={popup} id={id} popover="manual" role="dialog" aria-modal="false" aria-labelledby={titleId} className="info-popover" onPointerEnter={enter} onPointerLeave={leave} onFocusCapture={() => { if (currentMode.current === "hover") { clearTimers(); currentMode.current = "pinned"; setMode("pinned"); } }}>
       <div className="info-popover-head"><h3 id={titleId}>{label}</h3><button ref={closeButton} type="button" className="info-close icon-button" aria-label={`${label}の説明を閉じる`} title="説明を閉じる" onClick={() => liveClose.current(true)}><ActionIcon name="close" /></button></div>
-      <p>{children}</p>
+      <div className="info-popover-content">{children}</div>
       {details && <><a href={`#${detailsId}`} aria-expanded={expanded} aria-controls={detailsId} onClick={event => { event.preventDefault(); setExpanded(value => !value); }}>{expanded ? "詳しい説明を閉じる" : "詳しい説明"}</a><div id={detailsId} className="info-details" hidden={!expanded}>{details}</div></>}
     </div>
   </div>;

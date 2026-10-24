@@ -391,7 +391,7 @@ impl Storage {
         let tx = db.transaction().map_err(|e| e.to_string())?;
         let (view, _, working_hash) = working(&tx, meeting)?;
         Ok(Context {
-            supported: cfg!(target_os = "macos"),
+            supported: cfg!(any(target_os = "macos", windows)),
             analysis_id: view.id.clone(),
             working_hash,
             book_hash: book_hash(&tx)?,
@@ -1076,7 +1076,7 @@ fn publish_matches_observed(
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     pub(super) fn fixture() -> (tempfile::TempDir, Storage, String, String) {
@@ -1157,7 +1157,7 @@ mod tests {
     ) -> (JobSnapshot, JobSpec, Plan) {
         let c = s.voice_context(m).unwrap();
         let fp = crate::local_engine::Fingerprint {
-            path: PathBuf::from("/test-only"),
+            path: PathBuf::from(crate::test_support::absolute("/test-only")),
             size: 1,
             sha256: "a".repeat(64),
         };

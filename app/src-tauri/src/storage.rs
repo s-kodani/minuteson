@@ -38,6 +38,9 @@ pub(crate) mod markdown_generation_tests;
 pub(crate) mod meeting_mix;
 mod meeting_mix_reset;
 mod meeting_playback;
+pub(crate) mod meeting_access;
+#[cfg(test)]
+mod meeting_access_tests;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
@@ -48,7 +51,7 @@ mod model_placements;
 pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) mod read_cache;
 mod recording_preparation;
 pub(crate) mod recordings;
@@ -163,6 +166,7 @@ pub struct FileAsset {
 pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
+    meeting_owners: meeting_access::Owners,
     restored_inputs: Mutex<restored_input::Registry>,
     pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
@@ -172,11 +176,11 @@ pub struct Storage {
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
     deletion_fence: deletion::fence::Fence,
     recovery_hold: bool,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     managed_anchor: deletion::fs::RootAnchor,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     native_models_root: PathBuf,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     flac_history: Option<std::sync::Arc<recordings::flac::relocation::Aliases>>,
 }
 
@@ -190,7 +194,7 @@ impl Storage {
         &self.root
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn verify_bootstrap_database(&self) -> Result<(), String> {
         self.managed_anchor.verify_sqlite_header()
     }
@@ -200,7 +204,7 @@ impl Storage {
             || self.deletion_fence.restart_required()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn deletion_resume_restart_required(&self) -> bool {
         self.deletion_fence.resume_restart_required()
     }
@@ -214,7 +218,7 @@ impl Storage {
     pub(crate) fn require_data_writable(&self) -> Result<(), String> {
         if self.recovery_hold {
             Err("保存先を復旧しました。中断操作の再確認が必要なため閲覧のみ利用できます。元の記録とファイルを保持しています".into())
-        } else if self.deletion_fence.pending() {
+        } else if self.deletion_fence.pending() && self.deletion_fence.blocked() {
             Err("未完了の会議削除／音声削除／モデル削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
         } else if self.deletion_fence.restart_required() {
             Err(
@@ -248,26 +252,26 @@ impl Storage {
     // macOS production always supplies its separate native model location.
     #[cfg(any(test, not(target_os = "macos")))]
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             Self::open_inner(
                 root,
                 None,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 None,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 None,
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 None,
             )
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Self::open_inner(root)
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn open_with_models(
         root: PathBuf,
         models_root: PathBuf,
@@ -275,16 +279,16 @@ impl Storage {
         Self::open_inner(
             root,
             Some(models_root),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             None,
         )
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn open_with_history(
         admission: &crate::bootstrap::placement::NativeHistoryAdmission<'_, '_>,
     ) -> Result<Self, String> {
@@ -303,7 +307,7 @@ impl Storage {
         Ok(storage)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn open_recovered(
         root: PathBuf,
         models: PathBuf,
@@ -312,13 +316,13 @@ impl Storage {
         Self::open_inner(root, Some(models), None, None, Some(admission)).map_err(|e| e.to_string())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn initialize_rebinding_scratch(root: &Path, journal: &Path) -> Result<(), String> {
         drop(backup::scratch::Registry::open_at(root, journal)?);
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn ancillary_binding_changed(
         root: &Path,
         journal: &Path,
@@ -335,12 +339,12 @@ impl Storage {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn inspect_rebinding(root: &Path, cache: &Path) -> Result<Vec<String>, String> {
         deletion::relocation::receiver::inspect_rebinding(root, cache, Self::validate_rebinding)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn validate_rebinding(db: &Connection) -> Result<Vec<String>, String> {
         deletion::database::trusted_schema(db)?;
         let integrity: String = db
@@ -367,27 +371,33 @@ impl Storage {
 
     fn open_inner(
         root: PathBuf,
-        #[cfg(unix)] models_root: Option<PathBuf>,
-        #[cfg(target_os = "macos")] history: Option<
+        #[cfg(any(unix, windows))] models_root: Option<PathBuf>,
+        #[cfg(any(target_os = "macos", windows))] history: Option<
             std::sync::Arc<deletion::relocation::receiver::Aliases>,
         >,
-        #[cfg(target_os = "macos")] flac_history: Option<
+        #[cfg(any(target_os = "macos", windows))] flac_history: Option<
             std::sync::Arc<recordings::flac::relocation::Aliases>,
         >,
-        #[cfg(target_os = "macos")] recovery: Option<&crate::bootstrap::recovery::Admission>,
+        #[cfg(any(target_os = "macos", windows))] recovery: Option<
+            &crate::bootstrap::recovery::Admission,
+        >,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
         // Managed children still must match this canonical root exactly.
         let root = root.canonicalize()?;
-        #[cfg(unix)]
+        #[cfg(windows)]
+        crate::windows_files::local_ntfs(&root)?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&root)?;
+        #[cfg(any(unix, windows))]
         let root_directory = deletion::fs::RootAnchor::directory(&root)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let recovery_content = recovery
             .map(|admission| admission.capture_content())
             .transpose()?;
         let mut flags = rusqlite::OpenFlags::default();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if recovery.is_some() {
             flags.remove(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
         }
@@ -402,7 +412,7 @@ impl Storage {
         // writes, temporary registries or filesystem cleanup can begin.
         empty_or_current_database(&connection)?;
         let mut recovery_hold = false;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(admission) = recovery {
             // Verify again through SQLite before any mutable startup work.
             // Admission checks only metadata and never closes another live DB FD.
@@ -417,20 +427,21 @@ impl Storage {
         connection.execute_batch(
             "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
         )?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(admission) = recovery {
             managed_anchor = managed_anchor.with_startup_binding(admission.previous_identities());
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(history) = history {
             managed_anchor = managed_anchor.with_inspection_history(history)?;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
-        initialize_database(&mut connection)?;
-        #[cfg(unix)]
+        initialize_database(&mut connection)
+            .map_err(|e| format!("会議DBの初期化に失敗しました: {e:?}"))?;
+        #[cfg(any(unix, windows))]
         deletion::startup::inspect(&connection, &managed_anchor, &native_models_root)?;
         let pending_deletion = deletion::fence::has_pending(&connection)?;
         let deletion_fence = deletion::fence::Fence::open(&connection)?;
@@ -447,20 +458,21 @@ impl Storage {
             meeting_mix_reset::initialize(&mut connection, &root)?;
             connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
             connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 let registry = match recovery {
                     Some(admission) => {
                         backup::scratch::Registry::open_at(&root, &admission.scratch_root())?
                     }
                     None => backup::scratch::Registry::open(&root)?,
                 };
-                #[cfg(not(target_os = "macos"))]
-                let registry = backup::scratch::Registry::open(&root)?;
+                #[cfg(not(any(target_os = "macos", windows)))]
+                let registry = backup::scratch::Registry::open(&root)
+                    .map_err(|e| format!("一時領域の初期化に失敗しました: {e}"))?;
                 scratch = Some(registry);
             }
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             {
                 scratch = None;
             }
@@ -473,7 +485,7 @@ impl Storage {
         } else {
             scratch = None;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         managed_anchor.seal_controls()?;
         if recovery_hold {
             connection.authorizer(Some(deletion::fence::readonly))?;
@@ -481,6 +493,7 @@ impl Storage {
         Ok(Self {
             root,
             connection: Mutex::new(connection),
+            meeting_owners: Default::default(),
             restored_inputs: Mutex::new(restored_input::Registry::default()),
             feature_vectors: Mutex::default(),
             execution_progress: Mutex::default(),
@@ -489,11 +502,11 @@ impl Storage {
             scratch,
             deletion_fence,
             recovery_hold,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             managed_anchor,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             native_models_root,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             flac_history,
         })
     }
@@ -672,7 +685,7 @@ impl Storage {
         {
             return Err("管理領域から外れるパスです".into());
         }
-        Ok(self.root.join(relative))
+        Ok(crate::native_fs::join(&self.root, relative))
     }
 
     // Called only after the recorder has finished and closed a managed file.
@@ -701,7 +714,7 @@ impl Storage {
         if relative_text.contains('\\') {
             return Err("管理パスに使用できない文字があります".into());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if deletion::audio::is_audio_media(media_type) {
             let db = self
                 .connection
@@ -736,7 +749,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if deletion::audio::is_audio_media(media_type) {
             deletion::audio::require_source(&db, meeting_id)?;
         }

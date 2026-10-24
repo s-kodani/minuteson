@@ -60,6 +60,7 @@ export class RecordingInputQueue{
     if(attempt.action!=="receive"){head.confirmed=true;if(attempt.action==="close"){head.closed=true;head.shown=false;}}
     return r.recipientId===this.recipientId;
   }
+  defer(attempt:QueueAttempt){const h=this.heads.get(attempt.input);if(h?.pending.get(attempt.action)===attempt)h.pending.delete(attempt.action);}
   fail(attempt:QueueAttempt){const h=this.heads.get(attempt.input);if(h?.pending.get(attempt.action)===attempt){h.pending.delete(attempt.action);h.failed.set(attempt.action,attempt);}}
   rendered(id:string,generation:number,at:number){
     if(!this.at(at))return;for(const h of this.heads.values())if(h.active&&h.shown&&h.notice.id===id&&h.notice.delivery?.generation===generation&&h.notice.recipientId===this.recipientId&&leased(h.notice))h.renderIntent=true;

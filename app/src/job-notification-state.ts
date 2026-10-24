@@ -28,6 +28,7 @@ const notice = (job: NotificationJob, message: string, level: ToastLevel = "info
 export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded" | "voice" | "completion";
 export function verifiedJobOutput(job: NotificationJob, value: unknown): VerifiedJobPublication {
   const proof = value as { job?: NotificationJob; contentHash?: string; publicationState?: string; warnings?: unknown } | null;
+  if (proof?.warnings !== undefined && (!Array.isArray(proof.warnings) || proof.warnings.length > 100 || proof.warnings.some(v=>typeof v!=="string"||v.length>2048))) throw Error("ジョブの要確認情報を検証できません。");
   const receipt = proof?.job && { ...proof.job, meetingTitle: job.meetingTitle };
   assertNotificationJobs(receipt ? [receipt] : null);
   if (!receipt || job.state !== "succeeded" || receipt.id !== job.id || identity(receipt) !== identity(job)

@@ -3,7 +3,7 @@ export interface MinutesRuntime {
   jobId: string; specHash: string; attempt: number; unitIndex: number;
   invocation: string; invocationOrder: number; startedAtUtcMs: number; sequence: number;
   phase: "verifying" | "starting" | "input" | "generating" | "saving";
-  backend?: "cpu" | "metal" | null;
+  backend?: "cpu" | "metal" | "vulkan" | null;
   merge: boolean; elapsedMs: number;
 }
 const phases = ["verifying", "starting", "input", "generating", "saving"];
@@ -12,7 +12,7 @@ export function acceptMinutesRuntime(prior: MinutesRuntime | undefined, value: u
   const v = value as MinutesRuntime;
   if (typeof v.jobId !== "string" || typeof v.specHash !== "string" || typeof v.invocation !== "string" || !v.invocation
     || ![v.attempt, v.unitIndex, v.invocationOrder, v.startedAtUtcMs, v.sequence, v.elapsedMs].every(n => Number.isSafeInteger(n) && n >= 0)
-    || v.backend != null && !["cpu","metal"].includes(v.backend)
+    || v.backend != null && !["cpu","metal","vulkan"].includes(v.backend)
     || typeof v.merge !== "boolean" || !phases.includes(v.phase)) return prior;
   if (prior && prior.jobId === v.jobId && (v.attempt < prior.attempt || v.attempt === prior.attempt && prior.specHash !== v.specHash)) return prior;
   if (prior && prior.jobId === v.jobId && prior.attempt === v.attempt && prior.specHash === v.specHash) {
@@ -27,6 +27,6 @@ export function minutesRuntimeDetail(job: AnalysisJob, runtime: MinutesRuntime |
     || runtime.specHash !== job.specHash || runtime.attempt !== job.attempt || runtime.unitIndex !== job.completedUnits
     || job.totalUnits === null || runtime.unitIndex >= job.totalUnits) return undefined;
   const phase = ({ verifying: "モデルと入力を確認中", starting: "エンジンを起動中", input: "入力を解析中", generating: runtime.merge ? "下書きを統合中" : "本文を生成中", saving: "結果を確認・保存中" })[runtime.phase];
-  const backend = runtime.backend === "metal" ? "GPU · " : runtime.backend === "cpu" ? "CPU · " : "";
+  const backend = runtime.backend === "metal" || runtime.backend === "vulkan" ? "GPU · " : runtime.backend === "cpu" ? "CPU · " : "";
   return `${runtime.unitIndex + 1}工程目：${backend}${phase}`;
 }

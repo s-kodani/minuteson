@@ -2,8 +2,15 @@
 //! Production callers hold and verify the selected bootstrap's OS lock.
 //! The existing inode journal records empty files BEFORE any copied payload.
 use super::backup::scratch::{self, Registry, Stage};
+#[cfg(windows)]
+use crate::bootstrap::windows_io as libc;
+#[cfg(windows)]
+use crate::bootstrap::windows_io::{AsRawFd, FromRawFd};
 use std::fs::File;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -28,33 +35,28 @@ fn open(config: &Path, create: bool) -> Result<Option<Arc<Registry>>, String> {
 }
 
 fn open_in_root(config: &Path, path: &Path, create: bool) -> Result<Option<Arc<Registry>>, String> {
-    let new = match std::fs::symlink_metadata(&path) {
+    let new = match crate::native_fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !create {
                 return Ok(None);
             }
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&path)
-                .map_err(|e| e.to_string())?;
-            File::open(config)
-                .and_then(|f| f.sync_all())
-                .map_err(|e| e.to_string())?;
+            crate::native_fs::private_directories(&path, false)?;
+            crate::native_fs::sync_path(&config)?;
             true
         }
         Ok(_) => false,
         Err(e) => return Err(e.to_string()),
     };
-    let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    let metadata = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
     if !metadata.is_dir()
-        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.mode() & 0o077 != 0
         || path.canonicalize().map_err(|e| e.to_string())? != path
     {
         return Err("読取用一時領域の実体・非公開権限が不正です。既存対象を保持します".into());
     }
     // An initialization gap contains no payload. Do not adopt that directory,
     // unknown content, or a marker/name pattern as permission to erase files.
-    if !new && std::fs::symlink_metadata(path.join(".mon-scratch.sqlite3")).is_err() {
+    if !new && crate::native_fs::symlink_metadata(path.join(".mon-scratch.sqlite3")).is_err() {
         return Err("読取用一時領域の所有台帳がありません。既存対象を保持します".into());
     }
     let registry = Registry::open(&path)?;
@@ -89,21 +91,22 @@ impl Snapshot {
         }
         let path = self.path().join(name);
         scratch::check_creation(&path)?;
-        let file = std::fs::OpenOptions::new()
+        let mut options = std::fs::OpenOptions::new();
+        options
             .read(true)
             .write(true)
             .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|e| e.to_string())?;
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&path)?;
         scratch::record_file(&path, &file)?;
-        File::open(self.path())
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_path(&self.path())?;
         Ok(file)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

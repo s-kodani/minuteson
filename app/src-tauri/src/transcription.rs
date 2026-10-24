@@ -1,10 +1,13 @@
 //! Local whisper.cpp execution. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
 mod guard;
+mod recovery;
+pub(crate) use recovery::ReviewRange;
 mod restore;
 pub(crate) mod vad;
 pub(crate) mod wave;
 pub(crate) mod whisper;
+mod windows_acceleration;
 pub(crate) use restore::restore_saved_results;
 pub(crate) const QUALITY_FAILURE_PREFIX: &str = "文字起こしの反復検査: ";
 
@@ -261,6 +264,7 @@ fn verify_saved_pcm(
 #[serde(rename_all = "camelCase")]
 enum RecognitionPolicy {
     GuardedVocabularyV2,
+    AdaptiveRecoveryV3,
 }
 
 // Frozen for new jobs only. `use_gpu` requests the engine's GPU backend; when
@@ -269,11 +273,12 @@ enum RecognitionPolicy {
 #[serde(rename_all = "camelCase")]
 enum AccelerationPolicy {
     AutoMetalV1,
+    AutoVulkanV1,
 }
 
 impl AccelerationPolicy {
     fn configure(self, engine: &mut WhisperConfig) {
-        if cfg!(target_os = "macos") {
+        if self == Self::AutoMetalV1 && cfg!(target_os = "macos") {
             engine.use_gpu = true;
         }
     }
@@ -316,6 +321,17 @@ struct Unit {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Checkpoint {
     outputs: Vec<UnitOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acceleration: Option<windows_acceleration::Resolved>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_recovery: Option<PendingRecovery>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PendingRecovery {
+    index: usize,
+    reference: ResultReference,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -345,6 +361,7 @@ enum RecognitionMode {
     Hinted,
     Unhinted,
     Fallback,
+    Recovered,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -361,8 +378,32 @@ fn checked_output(
     rejected: Option<&[u8]>,
     duration: i64,
 ) -> Result<Vec<whisper::Segment>, String> {
+    if parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3)
+        && output
+            .recognition
+            .as_ref()
+            .is_some_and(|a| a.mode == RecognitionMode::Recovered)
+    {
+        let unit = parameters
+            .units
+            .get(output.index)
+            .ok_or("再認識の処理単位がありません")?;
+        let rate = u64::from(parameters.source.tracks[unit.track_index].sample_rate);
+        let first = (unit.core_first - unit.window_first) * 16_000 / rate;
+        let end = (unit.core_end - unit.window_first) * 16_000 / rate;
+        if rejected.is_some()
+            || output
+                .recognition
+                .as_ref()
+                .is_some_and(|a| a.rejected.is_some() || !a.reasons.is_empty())
+        {
+            return Err("再認識の採用記録が不正です".into());
+        }
+        return recovery::checked(bytes, &parameters.engine.model.path, duration, first, end)
+            .map(|v| v.0);
+    }
     let segments = whisper::parse_output(bytes, &parameters.engine.model.path, duration)?;
-    if parameters.recognition_policy != Some(RecognitionPolicy::GuardedVocabularyV2) {
+    if parameters.recognition_policy.is_none() {
         if output.recognition.is_some() {
             return Err("旧認識方式に新しい採用記録があります".into());
         }
@@ -454,6 +495,13 @@ pub(crate) fn restore_checkpoint_references(
             )?;
         }
     }
+    if let Some(pending) = &mut checkpoint.pending_recovery {
+        (pending.reference.json_asset_id, pending.reference.json_hash) = map(
+            Role::TranscriptionResult,
+            &pending.reference.json_asset_id,
+            &pending.reference.json_hash,
+        )?;
+    }
     serde_json::to_value(checkpoint).map_err(|e| e.to_string())
 }
 
@@ -478,7 +526,10 @@ fn decode_parameters(
     }
     if parameters.resident_runtime.is_none()
         || parameters.optimization_version != Some(crate::current_formats::OPTIMIZATION)
-        || parameters.recognition_policy != Some(RecognitionPolicy::GuardedVocabularyV2)
+        || !matches!(
+            parameters.recognition_policy,
+            Some(RecognitionPolicy::GuardedVocabularyV2 | RecognitionPolicy::AdaptiveRecoveryV3)
+        )
         || spec.kind != JobKind::Transcription
         || parameters.schema_version != crate::current_formats::TRANSCRIPTION
         || parameters.known_input.is_none()
@@ -496,7 +547,7 @@ fn decode_parameters(
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
     }
-    if parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2)
+    if parameters.recognition_policy.is_some()
         && parameters
             .vocabulary
             .as_ref()
@@ -520,7 +571,11 @@ fn checked_checkpoint(
         .transpose()
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    if checkpoint.outputs.len() as i64 != job.completed_units
+    if checkpoint
+        .pending_recovery
+        .as_ref()
+        .is_some_and(|p| p.index != checkpoint.outputs.len())
+        || checkpoint.outputs.len() as i64 != job.completed_units
         || checkpoint
             .outputs
             .iter()
@@ -637,7 +692,8 @@ pub(crate) fn enqueue_with_stamp(
     verification.finish(&|| false)?;
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::GuardedVocabularyV2),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
+        let acceleration_policy=if cfg!(target_os="macos"){Some(AccelerationPolicy::AutoMetalV1)}else if cfg!(windows)&&resident_runtime.as_ref().is_some_and(|r|r.gpu.is_some()){Some(AccelerationPolicy::AutoVulkanV1)}else{None};
+        let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::AdaptiveRecoveryV3),acceleration_policy};
         Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
@@ -688,6 +744,34 @@ pub(crate) fn process(
         let mut runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
         if let Some(policy) = parameters.acceleration_policy {
             policy.configure(&mut runtime);
+        }
+        if parameters.acceleration_policy == Some(AccelerationPolicy::AutoVulkanV1) {
+            if checkpoint.acceleration.is_none() {
+                if !checkpoint.outputs.is_empty() {
+                    return Err(
+                        "保存済み区間に対応するGPU固定情報がありません。結果を保持しています"
+                            .into(),
+                    );
+                }
+                let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, 0)?;
+                let Some(resolved) =
+                    windows_acceleration::resolve(&runtime, &directory, &cancelled)?
+                else {
+                    return Ok(None);
+                };
+                checkpoint.acceleration = Some(resolved);
+                progress(storage.save_job_checkpoint(
+                    job_id,
+                    job.completed_units,
+                    job.completed_units,
+                    serde_json::to_value(&checkpoint).map_err(|e| e.to_string())?,
+                )?);
+            }
+            checkpoint
+                .acceleration
+                .as_ref()
+                .unwrap()
+                .configure(&mut runtime)?;
         }
         runtime.verify(&cancelled)?;
         managed::verify(
@@ -785,17 +869,90 @@ pub(crate) fn process(
                 }
                 cancelled()
             };
-            let Some(outcome) = guard::run(
-                &runtime,
-                &directory,
-                duration,
-                parameters.recognition_policy.is_some(),
-                parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2),
-                parameters.vocabulary.as_ref(),
-                &observed_cancelled,
-            )?
-            else {
-                return Ok(None);
+            let adaptive =
+                parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3);
+            let guarded = if checkpoint.pending_recovery.is_some() {
+                Err(format!("{}再認識を再開", QUALITY_FAILURE_PREFIX))
+            } else {
+                guard::run(
+                    &runtime,
+                    &directory,
+                    duration,
+                    parameters.recognition_policy.is_some(),
+                    parameters.recognition_policy.is_some(),
+                    parameters.vocabulary.as_ref(),
+                    &observed_cancelled,
+                )
+            };
+            let (outcome, recovered) = match guarded {
+                Ok(Some(value)) => (value, false),
+                Ok(None) => return Ok(None),
+                Err(error) if adaptive && error.starts_with(QUALITY_FAILURE_PREFIX) => {
+                    let state = checkpoint
+                        .pending_recovery
+                        .as_ref()
+                        .map(|pending| {
+                            let bytes = storage.read_analysis_result(
+                                &spec.meeting_id,
+                                &pending.reference.json_asset_id,
+                                &pending.reference.json_hash,
+                            )?;
+                            serde_json::from_slice::<recovery::State>(&bytes)
+                                .map_err(|e| e.to_string())
+                        })
+                        .transpose()?;
+                    let rate = u64::from(parameters.source.tracks[unit.track_index].sample_rate);
+                    let first = (unit.core_first - unit.window_first) * 16_000 / rate;
+                    let end = (unit.core_end - unit.window_first) * 16_000 / rate;
+                    let path = recovery::run(
+                        &runtime,
+                        &parameters.engine.model.path,
+                        &directory,
+                        first,
+                        end,
+                        state,
+                        &observed_cancelled,
+                        &mut |state| {
+                            let path = directory
+                                .join(format!("recovery-progress-{}.json", uuid::Uuid::new_v4()));
+                            crate::restored_processing::write_new(
+                                &path,
+                                &serde_json::to_vec(state).map_err(|e| e.to_string())?,
+                            )?;
+                            let asset = storage.register_analysis_artifact(
+                                &spec.meeting_id,
+                                &path,
+                                "application/json",
+                            )?;
+                            checkpoint.pending_recovery = Some(PendingRecovery {
+                                index,
+                                reference: ResultReference {
+                                    json_asset_id: asset.id,
+                                    json_hash: asset.content_hash,
+                                },
+                            });
+                            progress(storage.save_job_checkpoint(
+                                job_id,
+                                index as i64,
+                                index as i64,
+                                serde_json::to_value(&checkpoint).map_err(|e| e.to_string())?,
+                            )?);
+                            Ok(())
+                        },
+                    )?;
+                    let Some(selected) = path else {
+                        return Ok(None);
+                    };
+                    (
+                        guard::Outcome {
+                            selected,
+                            rejected: None,
+                            reasons: vec![],
+                        },
+                        true,
+                    )
+                }
+                Err(error) => return Err(error),
             };
             storage.clear_completion_progress(job_id);
             if cancelled() {
@@ -813,7 +970,7 @@ pub(crate) fn process(
             )?;
             let register_result = |path: &std::path::Path| -> Result<_, String> {
                 let mut result_path = path.to_owned();
-                if runtime.model.path != parameters.engine.model.path {
+                if !recovered && runtime.model.path != parameters.engine.model.path {
                     let bytes =
                         crate::restored_processing::read_local(path, 8 * 1024 * 1024, &cancelled)?;
                     let normalized = whisper::logical_output(
@@ -841,19 +998,23 @@ pub(crate) fn process(
                     json_asset_id: r.id,
                     json_hash: r.content_hash,
                 });
-            let recognition = (parameters.recognition_policy
-                == Some(RecognitionPolicy::GuardedVocabularyV2))
-            .then(|| RecognitionAudit {
-                mode: if rejected.is_some() {
-                    RecognitionMode::Fallback
-                } else if runtime.prompt.is_empty() {
-                    RecognitionMode::Unhinted
-                } else {
-                    RecognitionMode::Hinted
-                },
-                reasons: outcome.reasons,
-                rejected,
-            });
+            let recognition = parameters
+                .recognition_policy
+                .is_some()
+                .then(|| RecognitionAudit {
+                    mode: if recovered {
+                        RecognitionMode::Recovered
+                    } else if rejected.is_some() {
+                        RecognitionMode::Fallback
+                    } else if runtime.prompt.is_empty() {
+                        RecognitionMode::Unhinted
+                    } else {
+                        RecognitionMode::Hinted
+                    },
+                    reasons: outcome.reasons,
+                    rejected,
+                });
+            checkpoint.pending_recovery = None;
             checkpoint.outputs.push(UnitOutput {
                 index,
                 wav_asset_id: wav.id,
@@ -886,6 +1047,7 @@ pub(crate) fn process(
         check_source(storage, &spec, &parameters)?;
         optimization.finish(&cancelled)?;
         let mut utterances = Vec::new();
+        let mut review_ranges = Vec::<recovery::ReviewRange>::new();
         managed::verify(
             &spec.profile_snapshot,
             Execution::Whisper(&parameters.engine),
@@ -906,6 +1068,34 @@ pub(crate) fn process(
             let known_end = run.map_or(track.end_us, |run| run.end_us);
             let duration = ((unit.window_end - unit.window_first) * 1_000_000
                 / u64::from(track.sample_rate)) as i64;
+            if output
+                .recognition
+                .as_ref()
+                .is_some_and(|a| a.mode == RecognitionMode::Recovered)
+            {
+                let bytes = storage.read_analysis_result(
+                    &spec.meeting_id,
+                    &output.json_asset_id,
+                    &output.json_hash,
+                )?;
+                let rate = u64::from(track.sample_rate);
+                let (_, state) = recovery::checked(
+                    &bytes,
+                    &parameters.engine.model.path,
+                    duration,
+                    (unit.core_first - unit.window_first) * 16_000 / rate,
+                    (unit.core_end - unit.window_first) * 16_000 / rate,
+                )?;
+                let window_start = (unit.window_first * 1_000_000 / rate) as i64;
+                for (first, end) in state.review() {
+                    review_ranges.push(recovery::ReviewRange {
+                        track_id: track.id.clone(),
+                        start_us: origin + window_start + first,
+                        end_us: (origin + window_start + end).min(known_end),
+                        reason: "repetition_after_recovery".into(),
+                    });
+                }
+            }
             for segment in saved_output(storage, &spec, &parameters, output, duration)? {
                 let window_start = unit.window_first * 1_000_000 / u64::from(track.sample_rate);
                 let midpoint = (segment.start_us as u64 + segment.end_us as u64) / 2 + window_start;
@@ -935,11 +1125,31 @@ pub(crate) fn process(
         });
         check_source(storage, &spec, &parameters)?;
         let mut config = serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint","vocabulary":parameters.vocabulary});
+        review_ranges.sort_by_key(|r| (r.track_id.clone(), r.start_us, r.end_us));
+        let mut merged = Vec::<ReviewRange>::new();
+        for range in review_ranges {
+            if let Some(last) = merged.last_mut().filter(|r| {
+                r.track_id == range.track_id
+                    && r.reason == range.reason
+                    && r.end_us >= range.start_us
+            }) {
+                last.end_us = last.end_us.max(range.end_us);
+            } else {
+                merged.push(range);
+            }
+        }
+        let review_ranges = merged;
+        config["reviewRanges"] = serde_json::to_value(&review_ranges).map_err(|e| e.to_string())?;
+        config["completionStatus"] = serde_json::json!(if review_ranges.is_empty() {
+            "complete"
+        } else {
+            "needs_review"
+        });
         if let Some(policy) = parameters.recognition_policy {
             config["recognitionPolicy"] =
                 serde_json::to_value(policy).map_err(|e| e.to_string())?;
         }
-        if parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2) {
+        if parameters.recognition_policy.is_some() {
             config["recognitionAudit"] = serde_json::json!(checkpoint.outputs.iter().map(|o| serde_json::json!({"index":o.index,"mode":o.recognition.as_ref().map(|a|a.mode),"reasons":o.recognition.as_ref().map(|a|&a.reasons)})).collect::<Vec<_>>());
         }
         if let Some(policy) = parameters.acceleration_policy {

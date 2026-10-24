@@ -1,5 +1,6 @@
+use crate::native_fs::Metadata;
 use sha2::{Digest, Sha256};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -28,12 +29,14 @@ impl ExportController {
 }
 #[derive(Debug, PartialEq, Eq)]
 struct Fingerprint {
+    #[cfg(windows)]
+    created: std::time::SystemTime,
     size: u64,
     modified: std::time::SystemTime,
     hash: String,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     device: u64,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     inode: u64,
 }
 fn fingerprint_with(
@@ -41,7 +44,7 @@ fn fingerprint_with(
     maximum: u64,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Fingerprint>, String> {
-    let metadata = match std::fs::symlink_metadata(path) {
+    let metadata = match crate::native_fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
@@ -49,8 +52,9 @@ fn fingerprint_with(
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("保存先は通常ファイルにしてください（リンクやフォルダーは不可）".into());
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         if metadata.nlink() != 1 {
             return Err("複数の場所を参照するファイルには書き出せません".into());
@@ -60,7 +64,10 @@ fn fingerprint_with(
         return Err("置換対象のファイルが大きすぎます".into());
     }
     let mut file = File::open(path).map_err(|e| e.to_string())?;
-    if !same_file(&metadata, &file.metadata().map_err(|e| e.to_string())?) {
+    if !same_file(
+        &metadata,
+        &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+    ) {
         return Err("保存先が変更されました".into());
     }
     let mut hash = Sha256::new();
@@ -82,29 +89,34 @@ fn fingerprint_with(
         }
         hash.update(&buffer[..count]);
     }
-    let after = file.metadata().map_err(|e| e.to_string())?;
+    let after = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
     if !same_file(&metadata, &after) || bytes != metadata.len() {
         return Err("保存先が変更されました".into());
     }
     Ok(Some(Fingerprint {
+        #[cfg(windows)]
+        created: metadata.created().map_err(|e| e.to_string())?,
         size: bytes,
         modified: metadata.modified().map_err(|e| e.to_string())?,
         hash: format!("{:x}", hash.finalize()),
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         device: {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             metadata.dev()
         },
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         inode: {
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
             metadata.ino()
         },
     }))
 }
 fn same_file(a: &Metadata, b: &Metadata) -> bool {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         if a.dev() != b.dev() || a.ino() != b.ino() {
             return false;
@@ -116,6 +128,8 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
         && a.modified().ok() == b.modified().ok()
 }
 pub(crate) struct Destination {
+    #[cfg(windows)]
+    _pins: Vec<File>,
     pub path: PathBuf,
     parent: PathBuf,
     parent_metadata: Metadata,
@@ -172,6 +186,8 @@ impl Destination {
             return Err(format!("絶対パスの{label}保存先を選択してください"));
         }
         let name = path.file_name().ok_or("保存先ファイル名がありません")?;
+        #[cfg(windows)]
+        let pins = crate::windows_files::parents(path.parent().ok_or("保存先の親がありません")?)?;
         let parent = path
             .parent()
             .ok_or("保存先フォルダーがありません")?
@@ -181,13 +197,16 @@ impl Destination {
         if parent.starts_with(&managed_root) {
             return Err("アプリ管理データの中へは書き出せません".into());
         }
-        let parent_metadata = std::fs::metadata(&parent).map_err(|e| e.to_string())?;
+        let parent_metadata =
+            crate::native_fs::symlink_metadata(&parent).map_err(|e| e.to_string())?;
         if !parent_metadata.is_dir() {
             return Err("保存先フォルダーがありません".into());
         }
         let path = parent.join(name);
         let before = fingerprint_with(&path, maximum, cancelled)?;
         Ok(Self {
+            #[cfg(windows)]
+            _pins: pins,
             path,
             parent,
             parent_metadata,
@@ -215,13 +234,17 @@ impl Destination {
                 .suffix(".part")
                 .tempfile_in(&self.parent)
                 .map_err(|e| e.to_string())?;
+            #[cfg(windows)]
+            crate::windows_files::set_private(temporary.path())?;
             write(temporary.as_file_mut())?;
             temporary.as_file().sync_all().map_err(|e| e.to_string())?;
             // Directory mtime/size changes when our temporary file is created;
             // compare its identity, not those mutable fields.
-            let current = std::fs::metadata(&self.parent).map_err(|e| e.to_string())?;
-            #[cfg(unix)]
+            let current =
+                crate::native_fs::symlink_metadata(&self.parent).map_err(|e| e.to_string())?;
+            #[cfg(any(unix, windows))]
             {
+                #[cfg(unix)]
                 use std::os::unix::fs::MetadataExt;
                 if self.parent_metadata.dev() != current.dev()
                     || self.parent_metadata.ino() != current.ino()
@@ -246,10 +269,7 @@ impl Destination {
                     .map_err(|e| e.to_string())?;
             }
             published = true;
-            #[cfg(unix)]
-            File::open(&self.parent)
-                .and_then(|f| f.sync_all())
-                .map_err(|e| e.to_string())?;
+            crate::native_fs::sync_directory(&self.parent)?;
             Ok(())
         })();
         result.map_err(|message| PublishError { published, message })

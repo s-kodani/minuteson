@@ -2,8 +2,20 @@
 //! thousands of open writer locks or an unbounded copy of original JSON bytes.
 use super::*;
 use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+fn owner() -> Result<u32, String> {
+    #[cfg(unix)]
+    {
+        Ok(unsafe { libc::geteuid() })
+    }
+    #[cfg(windows)]
+    {
+        crate::windows_files::current_owner()
+    }
+}
 
 const FILES: [(&str, u64); 3] = [
     ("input-events.json", 65 * 1024),
@@ -20,8 +32,8 @@ struct DirectoryStamp {
 }
 impl DirectoryStamp {
     fn read(file: &File) -> Result<Self, String> {
-        let m = file.metadata().map_err(|e| e.to_string())?;
-        if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } {
+        let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+        if !m.is_dir() || m.uid() != owner()? {
             return Err("入力履歴の保存先の所有が不正です".into());
         }
         Ok(Self {
@@ -44,10 +56,10 @@ struct FileStamp {
 }
 impl FileStamp {
     fn read(file: &File, name: &str, limit: u64) -> Result<Self, String> {
-        let m = file.metadata().map_err(|e| e.to_string())?;
+        let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !m.is_file()
             || m.nlink() != 1
-            || m.uid() != unsafe { libc::geteuid() }
+            || m.uid() != owner()?
             || m.len() == 0
             || m.len() > limit
             || (name != "manifest.json" && m.mode() & 0o077 != 0)
@@ -78,26 +90,41 @@ fn directory(
     let mut parent = root.try_clone().map_err(|e| e.to_string())?;
     let mut chain = vec![DirectoryStamp::read(&parent)?];
     for name in ["meetings", meeting, "audio", session] {
-        let name = std::ffi::CString::new(name).map_err(|e| e.to_string())?;
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY
-                    | libc::O_DIRECTORY
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC
-                    | libc::O_NONBLOCK,
-            )
-        };
-        if fd < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::NotFound {
-                return Ok((chain, None));
+        #[cfg(unix)]
+        {
+            let name = std::ffi::CString::new(name).map_err(|e| e.to_string())?;
+            let fd = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY
+                        | libc::O_DIRECTORY
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC
+                        | libc::O_NONBLOCK,
+                )
+            };
+            if fd < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Ok((chain, None));
+                }
+                return Err(error.to_string());
             }
-            return Err(error.to_string());
+            parent = unsafe { File::from_raw_fd(fd) };
         }
-        parent = unsafe { File::from_raw_fd(fd) };
+        #[cfg(windows)]
+        {
+            let path = crate::windows_files::path(&parent)?.join(name);
+            let _pins =
+                crate::windows_files::parents(path.parent().ok_or("入力履歴の親がありません")?)?;
+            match crate::native_fs::symlink_metadata(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((chain, None)),
+                Err(e) => return Err(e.to_string()),
+                Ok(_) => {}
+            }
+            parent = crate::windows_files::directory(&path)?;
+        }
         let stamp = DirectoryStamp::read(&parent)?;
         if stamp.device != chain[0].device {
             return Err("入力履歴の保存先が別媒体へ切り替わっています".into());

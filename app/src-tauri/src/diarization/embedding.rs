@@ -27,10 +27,13 @@ impl ExtractorConfig {
             .runtime_libraries
             .iter()
             .filter(|proof| {
-                proof
-                    .path
-                    .file_name()
-                    .is_some_and(|name| name == "libsherpa-onnx-c-api.dylib")
+                proof.path.file_name().is_some_and(|name| {
+                    name == if cfg!(windows) {
+                        "sherpa-onnx-c-api.dll"
+                    } else {
+                        "libsherpa-onnx-c-api.dylib"
+                    }
+                })
             })
             .collect();
         if matches.is_empty() {
@@ -53,7 +56,7 @@ impl ExtractorConfig {
     }
 
     fn validate(&self, engine: &SherpaConfig) -> Result<(), String> {
-        if !cfg!(target_os = "macos") {
+        if !cfg!(any(target_os = "macos", windows)) {
             return Err("保存区間の特徴量抽出は現在macOSだけに対応しています".into());
         }
         engine.validate_settings(None)?;

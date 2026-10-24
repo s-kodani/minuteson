@@ -9,6 +9,10 @@ pub(crate) const MAX_TOTAL: u64 = 32 * 1024 * 1024 * 1024;
 // An identifier, never a user-selected local path. Resolution happens only at
 // the native acquisition boundary against the app's own resource directory.
 pub(crate) const BUNDLED_WHISPER: &str = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
+pub(crate) const BUNDLED_WINDOWS: &str = "mon-bundled://windows-runtime-v1/runtime.tar";
+pub(crate) fn is_bundled(url: &str) -> bool {
+    matches!(url, BUNDLED_WHISPER | BUNDLED_WINDOWS)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -183,6 +187,18 @@ impl Recipe {
                 {
                     return Err("同梱実行ファイルの識別子・版・対象・構成が不正です".into());
                 }
+            } else if source.url == BUNDLED_WINDOWS {
+                if self.manifest.target != Target::WindowsX86_64
+                    || source.archive.is_none()
+                    || !matches!(
+                        file.role,
+                        crate::model_inspection::Role::Executable
+                            | crate::model_inspection::Role::RuntimeLibrary
+                            | crate::model_inspection::Role::Notice
+                    )
+                {
+                    return Err("Windows同梱素材の対象・構成が不正です".into());
+                }
             } else {
                 validate_url(&source.url)?;
             }
@@ -208,7 +224,7 @@ impl Recipe {
                 .filter(|n| *n <= MAX_TOTAL)
                 .ok_or("ダウンロード合計容量の上限は32GiBです")?;
         }
-        if self.has_bundled()
+        if self.sources.iter().any(|s| s.url == BUNDLED_WHISPER)
             && !self.manifest.files.iter().zip(&self.sources).any(|(f, s)| {
                 f.role == crate::model_inspection::Role::Asr && s.url.starts_with("https://")
             })
@@ -239,7 +255,7 @@ impl Recipe {
         let mut seen = std::collections::BTreeSet::new();
         let mut total = 0_u64;
         for (file, source) in self.manifest.files.iter().zip(&self.sources) {
-            if source.url == BUNDLED_WHISPER {
+            if is_bundled(&source.url) {
                 continue;
             }
             let size = match &source.archive {
@@ -255,13 +271,13 @@ impl Recipe {
         Ok(total)
     }
     pub(crate) fn has_bundled(&self) -> bool {
-        self.sources.iter().any(|s| s.url == BUNDLED_WHISPER)
+        self.sources.iter().any(|s| is_bundled(&s.url))
     }
     pub(crate) fn bundled_bytes(&self) -> Result<u64, String> {
         Ok(self
             .sources
             .iter()
-            .find(|s| s.url == BUNDLED_WHISPER)
+            .find(|s| is_bundled(&s.url))
             .and_then(|s| s.archive.as_ref())
             .map_or(0, |a| a.expected_size))
     }

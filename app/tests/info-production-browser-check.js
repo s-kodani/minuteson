@@ -13,9 +13,12 @@ async (page,capturePath)=>{
   };
   await page.locator('.sidebar').getByRole("button",{name:"設定",exact:true}).click();
   await page.getByRole("heading",{name:"設定",exact:true}).waitFor();
-  for(const [label,text] of [["表示テーマ","OSの明るさ"],["バックアップと追加復元","置き換えません"],["共通用語","次回"]]){
+  for(const [label,text] of [["表示テーマ","OSの明るさ"],["バックアップと追加復元","置き換えません"]]){
     await visit(label,text);results.push(`current ${label} help dismisses by keyboard and restores focus`);
   }
+  await page.locator('.sidebar').getByRole("button",{name:"プロンプト",exact:true}).click();
+  await visit("共通用語","次回");
+  await page.locator('.sidebar').getByRole("button",{name:"設定",exact:true}).click();
   for(const label of ["要確認データ","モデル本体削除","モデル配置記録","プロファイル構成記録"]){
     check(await info(label).count()===0,`${label}: retired maintenance help remains`);
   }

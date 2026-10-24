@@ -17,6 +17,13 @@ const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false }
 const operationEntries = ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
 window.isTauri = true; mockWindows("main");
 export const dataSaveIPC = async (command, args) => {
+  if (command === "get_meeting_deletion_availability") {
+    if (f.meetingAvailabilityFail) throw Error("合成削除可否の読込失敗");
+    return args.meetingIds.map(meetingId => {
+      const blockers = f.meetingBlockers?.[meetingId] ?? [];
+      return {meetingId,available:blockers.length===0,blockers:structuredClone(blockers)};
+    });
+  }
   // Read-only help starts hidden in fixtures that do not own its native window.
   // Showing/closing still requires a dedicated mock, not a catch-all success.
   if (command === "get_recorder_info") return false;
@@ -41,13 +48,14 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") {
     const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker;
-    const result = { available: reason === null, reason };
+    const deletionReason=reason==="録音通知履歴の確認・更新中"?null:reason;
+    const result = { available: reason === null, reason, deletionAvailable:deletionReason===null, deletionReason };
     if (f.holdAvailability) return new Promise(resolve => { f.availabilityComplete = () => resolve(result); });
     return result;
   }
   if (command === "get_storage_bootstrap") {
     const pending = f.pendingMove ?? (f.snapshot.kind === "relocation" && f.snapshot.attentionRequired && !f.snapshot.restartRequired ? f.snapshot.relocationPreview : null);
-    return { meetingRoot: f.snapshot.restartRequired ? f.snapshot.relocationReceipt?.destination ?? "/safe/root" : "/safe/root", activeMeetingRoot: "/safe/root", restartRequired: f.snapshot.restartRequired, modelsRoot: "/safe/app-data/models", bootstrapPath: "/safe/config/bootstrap.json", revision: f.snapshot.relocationReceipt ? 2 : 0, origin: f.snapshot.restartRequired ? "relocated" : "default", pendingOperationId: pending?.operationId ?? null, pendingTarget: pending?.destination ?? null, keptMoves: structuredClone(f.keptMoves) };
+    return { meetingRoot: f.snapshot.restartRequired ? f.snapshot.relocationReceipt?.destination ?? "/safe/root" : f.meetingRoot ?? "/safe/root", activeMeetingRoot: f.meetingRoot ?? "/safe/root", restartRequired: f.snapshot.restartRequired, modelsRoot: f.modelsRoot ?? "/safe/app-data/models", bootstrapPath: "/safe/config/bootstrap.json", revision: f.snapshot.relocationReceipt ? 2 : 0, origin: f.snapshot.restartRequired ? "relocated" : "default", pendingOperationId: pending?.operationId ?? null, pendingTarget: pending?.destination ?? null, keptMoves: structuredClone(f.keptMoves) };
   }
   if (command === "review_storage_move") {
     if (!f.pendingMove || f.blocker || f.snapshot.busy) throw Error("未完了移動を確認できません");

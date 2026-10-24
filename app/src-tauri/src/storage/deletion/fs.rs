@@ -7,7 +7,7 @@ use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod sqlite_lock_tests {
     use super::*;
 

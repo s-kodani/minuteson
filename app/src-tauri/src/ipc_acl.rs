@@ -32,6 +32,7 @@ mod tests {
             "save_minutes_markdown",
             "save_ui_preferences",
             "get_internal_logs",
+            "get_meeting_deletion_availability",
         ] {
             assert!(
                 acl.resolve_access(command, "main", "main", &Origin::Local)
@@ -47,6 +48,45 @@ mod tests {
                 assert!(
                     acl.resolve_access(command, label, label, &Origin::Local)
                         .is_none(),
+                    "{label}: {command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn custom_titlebar_controls_keep_existing_panel_and_origin_boundaries() {
+        let acl = authority();
+        let remote = Origin::Remote {
+            url: "https://example.invalid/".parse().unwrap(),
+        };
+        for command in [
+            "plugin:window|minimize",
+            "plugin:window|toggle_maximize",
+            "plugin:window|start_dragging",
+            "plugin:window|close",
+        ] {
+            assert!(
+                acl.resolve_access(command, "main", "main", &Origin::Local)
+                    .is_some(),
+                "{command}"
+            );
+            assert!(
+                acl.resolve_access(command, "main", "main", &remote)
+                    .is_none(),
+                "{command}"
+            );
+            for label in [
+                "recorder",
+                "recorder-info",
+                "recording-confirmation",
+                "unknown",
+            ] {
+                let allowed = label == "recorder" && command == "plugin:window|start_dragging";
+                assert_eq!(
+                    acl.resolve_access(command, label, label, &Origin::Local)
+                        .is_some(),
+                    allowed,
                     "{label}: {command}"
                 );
             }

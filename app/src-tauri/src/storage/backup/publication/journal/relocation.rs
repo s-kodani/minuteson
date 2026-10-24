@@ -58,7 +58,7 @@ pub(super) fn effective(
         || p.source_root != saved.manifest.root
         || !p
             .root
-            .matches(&std::fs::symlink_metadata(root).map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::symlink_metadata(root).map_err(|e| e.to_string())?)
     {
         return Err("復元所有対応表の対象・ルートが一致しません".into());
     }
@@ -96,7 +96,7 @@ pub(super) fn start_local_scope(root: &Path, db: &Connection, id: &str) -> Resul
     if !effective
         .manifest
         .root
-        .matches(&std::fs::symlink_metadata(root).map_err(|e| e.to_string())?)
+        .matches(&crate::native_fs::symlink_metadata(root).map_err(|e| e.to_string())?)
     {
         return Err("復元再開の保存先証拠が一致しません".into());
     }
@@ -152,7 +152,7 @@ pub(in crate::storage::backup) fn build(
         if !source
             .manifest
             .root
-            .matches(&std::fs::symlink_metadata(root).map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::symlink_metadata(root).map_err(|e| e.to_string())?)
         {
             continue;
         }
@@ -189,7 +189,9 @@ pub(in crate::storage::backup) fn build(
             operation: id.clone(),
             created: created(&db, &id)?,
             source_root: original_root,
-            root: Identity::read(&std::fs::symlink_metadata(&target).map_err(|e| e.to_string())?)?,
+            root: Identity::read(
+                &crate::native_fs::symlink_metadata(&target).map_err(|e| e.to_string())?,
+            )?,
             paths,
         })
         .map_err(|e| e.to_string())?;
@@ -212,5 +214,5 @@ pub(in crate::storage::backup) fn build(
     Ok(records)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

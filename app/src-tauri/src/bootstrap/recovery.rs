@@ -1,6 +1,7 @@
 //! Startup-only rebinding at the registered path. Historical ownership and
 //! consent are archived, never rewritten into authority over copied files.
 use super::*;
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,7 +48,7 @@ impl Recovery {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
             .open(path.join("previous-bootstrap.json"))
             .map_err(|e| e.to_string())?;
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        let metadata = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !regular(&metadata, true) || metadata.len() > LIMIT {
             return Err("復旧前の起動設定の保存記録が不正です".into());
         }
@@ -104,7 +105,7 @@ impl ContentGuard {
     }
 }
 fn content_proof(path: &Path) -> Result<Option<(String, u64)>, String> {
-    let m = match std::fs::symlink_metadata(path) {
+    let m = match crate::native_fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
@@ -172,7 +173,7 @@ fn observation(root: &Path) -> Result<String, String> {
         "meetings.sqlite3-shm",
         "meetings.sqlite3-journal",
     ] {
-        let metadata = match std::fs::symlink_metadata(root.join(name)) {
+        let metadata = match crate::native_fs::symlink_metadata(root.join(name)) {
             Ok(metadata) => Some(metadata),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.to_string()),
@@ -207,15 +208,18 @@ fn verify_observation(root: &Path, expected: &str) -> Result<(), String> {
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = std::fs::OpenOptions::new()
+    let mut options = std::fs::OpenOptions::new();
+    options
         .write(true)
         .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| e.to_string())?;
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    crate::windows_files::set_private(path)?;
     file.write_all(bytes)
-        .and_then(|_| file.sync_all())
+        .and_then(|_| crate::native_fs::sync_handle(&file))
         .map_err(|e| e.to_string())
 }
 
@@ -267,11 +271,8 @@ impl Bootstrap {
         };
         let id = Uuid::new_v4().to_string();
         let workspace = self.config.join(format!(".bootstrap-recovery-{id}"));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&workspace)
-            .map_err(|e| e.to_string())?;
-        self.directory.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::private_directories(&workspace, false)?;
+        crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         // Copies are owned and journalled independently of any stale cache.
         let source_observation = observation(&actual.path)?;
         let mut pending = Storage::inspect_rebinding(&actual.path, &workspace)?;
@@ -297,10 +298,7 @@ impl Bootstrap {
         // and the new scratch journal are durable. Crashes leave retained data.
         write_new(&workspace.join("previous-bootstrap.json"), &loaded.bytes)?;
         let scratch = workspace.join("scratch");
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&scratch)
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::private_directories(&scratch, false)?;
         Storage::initialize_rebinding_scratch(&actual.path, &scratch)?;
         let record = Record {
             revision: previous
@@ -317,9 +315,7 @@ impl Bootstrap {
             &workspace.join("recovery.json"),
             &serde_json::to_vec(&record).map_err(|e| e.to_string())?,
         )?;
-        File::open(&workspace)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_path(&&workspace)?;
         recovery_checkpoint("before_publication");
         actual.verify()?;
         verify_observation(&actual.path, &source_observation)?;
@@ -444,5 +440,5 @@ fn recovery_checkpoint(_name: &str) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

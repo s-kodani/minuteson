@@ -378,7 +378,9 @@ fn verify_inspection_files(
 ) -> Result<(), String> {
     for (name, file, proof) in files {
         root.verify_file(name, file)?;
-        if fs::Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != *proof {
+        if fs::Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?
+            != *proof
+        {
             return Err("削除履歴の読取中にDB・WAL・共有ファイルが変更されています".into());
         }
     }
@@ -444,6 +446,9 @@ fn inspection_database_inner(
     create: &dyn Fn() -> Result<crate::storage::read_cache::Snapshot, String>,
     force_copy: bool,
 ) -> Result<InspectionDatabase, String> {
+    #[cfg(windows)]
+    use crate::bootstrap::windows_io::OsStrExt;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     anchor.verify()?;
     let root = anchor.directory_ref()?;
@@ -464,7 +469,8 @@ fn inspection_database_inner(
     ] {
         if owned_root.optional_kind(name)?.is_some() {
             let file = owned_root.regular(name)?;
-            let proof = fs::Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+            let proof =
+                fs::Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
             proof.validate(false)?;
             files.push((name.into(), file, proof));
         }
@@ -543,7 +549,7 @@ fn private_wal_snapshot(
         let mut input = source.try_clone().map_err(|e| e.to_string())?;
         input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let mut output = snapshot.create_file(name)?;
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         if name == "meetings.sqlite3" {
             read_copy_checkpoint("database_registered", snapshot.path());
         }
@@ -566,7 +572,7 @@ fn private_wal_snapshot(
             copied = copied
                 .checked_add(count as u64)
                 .ok_or("読取用コピーの容量が範囲外です")?;
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             if name == "meetings.sqlite3" {
                 read_copy_checkpoint("database_chunk", snapshot.path());
             }
@@ -574,10 +580,10 @@ fn private_wal_snapshot(
         if copied != proof.size {
             return Err("読取用コピー中にDB・WALの容量が変更されています".into());
         }
-        output.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&output).map_err(|e| e.to_string())?;
         verify_inspection_files(root, files)?;
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     read_copy_checkpoint("wal_copied", snapshot.path());
     // SQLite may rebuild the WAL index, but only inside the owned copy. Record
     // its empty inode before SQLite can write any shared-memory payload.
@@ -585,13 +591,13 @@ fn private_wal_snapshot(
         .create_file("meetings.sqlite3-shm")?
         .sync_all()
         .map_err(|e| e.to_string())?;
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     read_copy_checkpoint("index_registered", snapshot.path());
     verify_inspection_files(root, files)?;
     Ok(snapshot)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn read_copy_checkpoint(label: &str, path: &Path) {
     if std::env::var("MON_SYNTHETIC_READ_COPY_CHECKPOINT")
         .ok()
@@ -607,7 +613,7 @@ fn read_copy_checkpoint(label: &str, path: &Path) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn publish_read_copy_ready(
     marker: &Path,
     path: &Path,
@@ -650,7 +656,7 @@ fn verify_registry_unchanged(
     admission.verify()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

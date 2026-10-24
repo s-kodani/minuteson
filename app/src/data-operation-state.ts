@@ -1,3 +1,4 @@
+import { nativeAbsolutePath } from "./native-path.ts";
 import { assertModelDeletionPreview, assertModelDeletionReceipt, type ModelDeletionPreview, type ModelDeletionReceipt } from "./model-deletion-operation-state.ts";
 import { assertDeletionPreview, assertDeletionReceipt, type DeletionPreview, type DeletionReceipt } from "./deletion-state.ts";
 import { assertAudioDeletionPreview, assertAudioDeletionReceipt, type AudioDeletionPreview, type AudioDeletionReceipt } from "./audio-deletion-operation-state.ts";
@@ -30,7 +31,7 @@ export interface DataSnapshot { modelDeletionPreview?: ModelDeletionPreview | nu
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
 export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "keep" | "delete_including_unregistered" | "review_remaining" }
-export interface DataAvailability { available: boolean; reason: string | null }
+export interface DataAvailability { available: boolean; reason: string | null; deletionAvailable?: boolean; deletionReason?: string | null }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
@@ -72,7 +73,7 @@ export function assertDataSnapshot(s: DataSnapshot): void {
       || (s.restorePreview && (r.batchId !== s.restorePreview.batchId || r.archiveId !== s.restorePreview.archiveId
         || r.deletedAudioMeetingCount !== s.restorePreview.deletedAudioMeetingCount || r.deletedAudioAssetCount !== s.restorePreview.deletedAudioAssetCount))) fail();
   }
-  const path = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && p.length <= 4096 && !p.includes("\0");
+  const path = (p: unknown): p is string => nativeAbsolutePath(p);
   if (s.relocationPreview !== null) {
     const p = s.relocationPreview;
     if (!p || s.kind !== "relocation" || !uuid.test(p.confirmationId) || !uuid.test(p.operationId)

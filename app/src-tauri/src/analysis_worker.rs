@@ -21,9 +21,10 @@ struct State {
     import_intent: bool,
     model_preparation: Option<std::sync::Arc<AtomicBool>>,
     data_maintenance: Option<std::sync::Arc<AtomicBool>>,
+    meeting_deletions: std::collections::HashMap<String, std::sync::Arc<AtomicBool>>,
     export_intent: bool,
     storage_restart_required: bool,
-    notice_writers: Vec<std::sync::Arc<AtomicBool>>,
+    notice_writers: Vec<data_maintenance::NoticeWriter>,
 }
 
 impl State {
@@ -42,8 +43,8 @@ impl State {
     }
 
     fn cancel_notice_writers(&self) {
-        for cancel in &self.notice_writers {
-            cancel.store(true, Ordering::SeqCst);
+        for writer in &self.notice_writers {
+            writer.cancel.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -171,10 +172,10 @@ impl AnalysisController {
                     return;
                 }
                 state.wake = false;
-                app.state::<Storage>().acquire_local_inference_job()
+                app.state::<Storage>().acquire_owned_inference_job()
             };
             match claimed {
-                Ok(Some(job)) => {
+                Ok(Some((job, _meeting_owner))) => {
                     let _log_scope =
                         crate::internal_logs::Scope::enter(crate::internal_logs::Context {
                             category: job.kind.clone(),
@@ -432,6 +433,7 @@ impl AnalysisController {
                 app.state::<Storage>().pause_for_exit()?;
             }
             controller.shutdown.store(true, Ordering::SeqCst);
+            for cancel in state.meeting_deletions.values() { cancel.store(true, Ordering::SeqCst); }
             state.cancel_notice_writers();
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
@@ -470,6 +472,7 @@ impl AnalysisController {
         self.shutdown.store(true, Ordering::SeqCst);
         state.cancel_notice_writers();
         if cancel_work {
+            for cancel in state.meeting_deletions.values() { cancel.store(true, Ordering::SeqCst); }
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
                 cancel.store(true, Ordering::SeqCst);
@@ -504,6 +507,7 @@ impl AnalysisController {
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
         while state.busy
+            || !state.meeting_deletions.is_empty()
             || state.model_preparation.is_some()
             || state.data_maintenance.is_some()
             || (include_notices && !state.notice_writers.is_empty())

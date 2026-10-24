@@ -167,7 +167,7 @@ impl Storage {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage::backup) fn write_image(
     db: &Connection,
     target: &Path,

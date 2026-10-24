@@ -4,17 +4,36 @@ use super::{wave, Output, Request, MAX_DIMENSION, VERSION};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn dlopen(path: *const c_char, flags: i32) -> *mut c_void;
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
     fn dlclose(handle: *mut c_void) -> i32;
 }
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LoadLibraryExW(path:*const u16,file:*mut c_void,flags:u32)->*mut c_void;
+    fn GetProcAddress(module:*mut c_void,name:*const c_char)->*mut c_void;
+    fn FreeLibrary(module:*mut c_void)->i32;
+}
 struct Library(*mut c_void);
 impl Library {
     fn open(path: &Path) -> Result<Self, String> {
+        #[cfg(windows)]
+        let pointer = {
+            use std::os::windows::ffi::OsStrExt;
+            if !path.is_absolute(){return Err("fixed runtime must be absolute".into());}
+            let wide:Vec<u16>=path.as_os_str().encode_wide().chain(Some(0)).collect();
+            // Restrict dependencies to this DLL's directory and trusted system
+            // directories. Never load dependencies from the current directory.
+            unsafe {LoadLibraryExW(wide.as_ptr(),std::ptr::null_mut(),0x100|0x1000)}
+        };
+        #[cfg(unix)]
         let path = CString::new(path.to_str().ok_or("invalid library path")?)
             .map_err(|e| e.to_string())?;
         // Darwin RTLD_NOW | RTLD_LOCAL; resolve required symbols before inference.
+        #[cfg(unix)]
         let pointer = unsafe { dlopen(path.as_ptr(), 2 | 4) };
         if pointer.is_null() {
             Err("could not load fixed speaker runtime".into())
@@ -24,7 +43,10 @@ impl Library {
     }
     fn symbol(&self, name: &str) -> Result<*mut c_void, String> {
         let name = CString::new(name).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
         let symbol = unsafe { dlsym(self.0, name.as_ptr()) };
+        #[cfg(windows)]
+        let symbol = unsafe { GetProcAddress(self.0, name.as_ptr()) };
         if symbol.is_null() {
             Err("fixed speaker runtime is missing a required symbol".into())
         } else {
@@ -35,7 +57,10 @@ impl Library {
 impl Drop for Library {
     fn drop(&mut self) {
         unsafe {
+            #[cfg(unix)]
             dlclose(self.0);
+            #[cfg(windows)]
+            FreeLibrary(self.0);
         }
     }
 }

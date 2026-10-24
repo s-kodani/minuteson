@@ -45,7 +45,7 @@ pub(super) fn unused_identity(db: &Connection, id: &str) -> Result<bool, String>
 }
 pub(super) fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, String> {
     let result = load_history(db, id)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some((record, placed)) = result {
         let removed = deletion::models::intent::removal::deleted(db, id)?;
         return Ok(Some((record, placed && !removed)));
@@ -264,9 +264,9 @@ impl Storage {
             .map(|id| {
                 let (record, placed) =
                     load_history(&db, &id)?.ok_or("モデル配置記録がありません")?;
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 let body_removed = deletion::models::intent::removal::deleted(&db, &id)?;
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 let body_removed = false;
                 let receipt = receipt(&record, placed)?;
                 let engine =

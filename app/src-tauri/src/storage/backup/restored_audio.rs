@@ -5,15 +5,15 @@ pub(super) fn operation_key(archive: &str, meeting: &str) -> String {
     format!("restored-audio-unavailable:{archive}:{meeting}")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::{
     archive, check_cancelled, ledger, restore_fixed::workspace::seal::SealedWorkspace,
     restore_ids::RestoreIds,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::storage::deletion::audio::restored::History;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::storage) struct Meeting {
     pub(in crate::storage) source: String,
     pub(in crate::storage) target: String,
@@ -21,7 +21,7 @@ pub(in crate::storage) struct Meeting {
     pub(in crate::storage) history: History,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::storage) struct Seed {
     batch: String,
     archive: String,
@@ -29,7 +29,7 @@ pub(in crate::storage) struct Seed {
     meetings: Vec<Meeting>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Seed {
     pub(in crate::storage::backup) fn prepare(
         sealed: &SealedWorkspace,

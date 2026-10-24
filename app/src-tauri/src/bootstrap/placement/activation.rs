@@ -297,11 +297,8 @@ impl Placement<'_> {
         // Even a previously uncertain admission commit must be durable before
         // normal startup writes. Admission authorizes mutations, not a claim
         // that the original copied bytes remain forever unchanged.
-        self.file.sync_all().map_err(|e| e.to_string())?;
-        self.bootstrap
-            .directory
-            .sync_all()
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.bootstrap.directory).map_err(|e| e.to_string())?;
         if !self.admitted(root, a)? {
             return Err("初回起動の承認結果が欠落しています".into());
         }
@@ -519,5 +516,5 @@ fn activation_checkpoint(name: &str) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

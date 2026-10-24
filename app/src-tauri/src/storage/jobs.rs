@@ -282,11 +282,23 @@ impl Storage {
         if !valid_hash(&content_hash) || content_hash != computed {
             return Err("保存結果の内容が変更されています。成功通知を保留します".into());
         }
+        let warnings = if matches!(job.kind.as_str(), "transcription" | "diarization") {
+            let count:i64=tx.query_row("SELECT coalesce(json_array_length(json_extract(config_json,'$.reviewRanges')),0) FROM analysis_revisions WHERE id=?1",params![id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if count > 0 {
+                vec![format!(
+                    "認識できない区間が{count}件あります。会議を開いて音声を確認してください。"
+                )]
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
         Ok(NotificationOutput {
             job,
             content_hash,
             publication_state,
-            warnings: vec![],
+            warnings,
         })
     }
 
@@ -304,6 +316,23 @@ impl Storage {
                 .map_err(|e| e.to_string())?
         };
         for id in ids {
+            let skip = {
+                let db = self
+                    .connection
+                    .lock()
+                    .map_err(|_| "DBロックを取得できません")?;
+                let meeting: String = db
+                    .query_row(
+                        "SELECT meeting_id FROM processing_jobs WHERE id=?1",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                super::meeting_access::reserved(&db, &meeting)?
+            };
+            if skip {
+                continue;
+            }
             self.resume_job(&id)?;
         }
         Ok(())
@@ -348,14 +377,27 @@ impl Storage {
         &self,
         kind: Option<JobKind>,
     ) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(kind)
+        self.acquire_filtered_job(kind, false)
+            .map(|v| v.map(|(job, _)| job))
     }
 
     pub(crate) fn acquire_local_inference_job(&self) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(None)
+        self.acquire_filtered_job(None, false)
+            .map(|v| v.map(|(job, _)| job))
     }
 
-    fn acquire_filtered_job(&self, kind: Option<JobKind>) -> Result<Option<JobSnapshot>, String> {
+    pub(crate) fn acquire_owned_inference_job(
+        &self,
+    ) -> Result<Option<(JobSnapshot, super::meeting_access::MeetingWork)>, String> {
+        self.acquire_filtered_job(None, true)
+            .map(|v| v.map(|(job, owner)| (job, owner.expect("owned job"))))
+    }
+
+    fn acquire_filtered_job(
+        &self,
+        kind: Option<JobKind>,
+        owned: bool,
+    ) -> Result<Option<(JobSnapshot, Option<super::meeting_access::MeetingWork>)>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -363,12 +405,17 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
+        let unreserved = if super::meeting_access::installed(&transaction)? {
+            " AND meeting_id NOT IN (SELECT meeting_id FROM temp.mon_meeting_deletion_guard)"
+        } else {
+            ""
+        };
         let recording_active: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing', 'recording', 'stopping'))",
+            &format!("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing', 'recording', 'stopping'){unreserved})"),
             [], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         let job_active: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'))",
+            &format!("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'){unreserved})"),
             [], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         if recording_active || job_active {
@@ -390,8 +437,11 @@ impl Storage {
                 }
                 let id: String = row.get(0).map_err(|e| e.to_string())?;
                 let meeting: String = row.get(1).map_err(|e| e.to_string())?;
+                if super::meeting_access::reserved(&transaction, &meeting)? {
+                    continue;
+                }
                 let job_kind: String = row.get(4).map_err(|e| e.to_string())?;
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if matches!(
                     job_kind.as_str(),
                     "transcription"
@@ -405,7 +455,7 @@ impl Storage {
                 )? {
                     continue;
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 let _ = job_kind;
                 selected = Some((
                     id,
@@ -434,6 +484,11 @@ impl Storage {
             &input_hash,
         )?;
         verify_latest_checkpoint(&transaction, &id)?;
+        let owner = if owned {
+            Some(self.begin_meeting_work_locked(&transaction, &meeting_id, "job", Some(&id))?)
+        } else {
+            None
+        };
         let now = now_ms()?;
         transaction.execute(
             "UPDATE processing_jobs SET state = 'running', started_at = COALESCE(started_at, ?1), updated_at = ?1 WHERE id = ?2 AND state = 'queued'",
@@ -442,7 +497,7 @@ impl Storage {
         let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
         crate::internal_logs::job(&snapshot);
-        Ok(Some(snapshot))
+        Ok(Some((snapshot, owner)))
     }
 
     #[allow(dead_code)]
@@ -1101,7 +1156,7 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
 }
 
 fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if matches!(
         kind,
         "transcription"
@@ -1112,7 +1167,7 @@ fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<()
     ) {
         super::deletion::audio::require_source(db, meeting)?;
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = (db, kind, meeting);
     Ok(())
 }

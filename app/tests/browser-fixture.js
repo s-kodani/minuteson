@@ -40,6 +40,7 @@ fixture.promptPreferences = {id:"minutes_prompt_preferences",lockVersion:0,paylo
 fixture.failPromptSave = false;
 fixture.losePromptResponse = false;
 const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
+fixture.setRecognitionReview=(ranges,empty=false)=>{const value=currentAnalysis();value.reviewRanges=structuredClone(ranges);if(empty)value.utterances=[];return fixture.emitTranscriptChange();};
 const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
   versions: [analysis, fixture.candidate,...(fixture.consolidationHistory??[])].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
 const switchDraft = (nextId) => {

@@ -10,7 +10,7 @@ async function(page) {
   const toggle=panel.getByRole('checkbox',{name:'発話区間検知（VAD）',exact:true});
   const apply=panel.getByRole('button',{name:'VAD設定を適用',exact:true});
   const reset=panel.getByRole('button',{name:'標準値に戻す',exact:true});
-  const field=label=>panel.getByLabel(label,{exact:true});
+  const field=label=>panel.getByRole('spinbutton',{name:label,exact:true});
   check(await toggle.isChecked(),'VAD not enabled by default');
   check(await panel.getByRole('button',{name:'VAD詳細設定',exact:true}).count()===0,'obsolete disclosure exists');
   check(await panel.getByRole('spinbutton').count()===6,'six options missing');
@@ -34,6 +34,11 @@ async function(page) {
   const callsBefore=await page.evaluate(()=>window.modelDownloadFixture.calls.filter(c=>['start_model_download','check_model_compatibility'].includes(c.command)).length);
   await toggle.uncheck();
   check(await field('発話判定の閾値').isDisabled(),'off leaves numeric input active');
+  await panel.getByRole('button',{name:'発話判定の閾値の説明を開く',exact:true}).click();
+  const help=page.getByRole('dialog',{name:'発話判定の閾値',exact:true});await help.waitFor();
+  check((await help.innerText()).includes('小声も除外されやすくなります'),'disabled field help is unavailable');
+  check(await panel.locator('label .info-trigger').count()===0,'help button nested in input label');
+  await page.keyboard.press('Escape');await help.waitFor({state:'hidden'});
   await apply.click();
   await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.enabled===false);
   check(await field('発話判定の閾値').inputValue()==='0.75','turning off reset numeric options');
@@ -57,9 +62,9 @@ async function(page) {
     await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     const metrics=await panel.evaluate(el=>({
       gap:getComputedStyle(el.querySelector('.vad-fields')).gap,
-      labels:[...el.querySelectorAll('.vad-fields>label')].map(l=>({gap:getComputedStyle(l).gap,r:l.getBoundingClientRect().right})),
+      labels:[...el.querySelectorAll('.vad-fields>.info-field')].map(l=>({gap:getComputedStyle(l).gap,r:l.getBoundingClientRect().right})),
       inputs:[...el.querySelectorAll('input[type=number]')].map(i=>({h:i.getBoundingClientRect().height,font:getComputedStyle(i).fontSize,bg:getComputedStyle(i).backgroundColor})),
-      buttons:[...el.querySelectorAll('button')].map(b=>b.getBoundingClientRect().height),
+      buttons:[...el.querySelectorAll('.vad-actions button')].map(b=>b.getBoundingClientRect().height),
       actions:getComputedStyle(el.querySelector('.vad-actions')).gap,
       overflow:document.documentElement.scrollWidth>innerWidth
     }));

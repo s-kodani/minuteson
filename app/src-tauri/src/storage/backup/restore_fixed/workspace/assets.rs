@@ -60,7 +60,7 @@ impl<C: Fn() -> bool> WorkspaceAssets<'_, '_, '_, C> {
         for part in ["meetings", meeting.as_str(), "restored"] {
             directory.push(part);
             scratch::directories(&directory)?;
-            if !std::fs::symlink_metadata(&directory)
+            if !crate::native_fs::symlink_metadata(&directory)
                 .map_err(|e| e.to_string())?
                 .is_dir()
                 || directory.canonicalize().map_err(|e| e.to_string())? != directory
@@ -87,10 +87,13 @@ impl<C: Fn() -> bool> Assets for WorkspaceAssets<'_, '_, '_, C> {
         check_cancelled(self.cancelled)?;
         if bytes.len() as u64 != entry.size
             || format!("{:x}", Sha256::digest(&bytes)) != entry.sha256
-            || !same_file(&before, &file.metadata().map_err(|e| e.to_string())?)
             || !same_file(
                 &before,
-                &std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
+                &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+            )
+            || !same_file(
+                &before,
+                &crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
             )
             || path.canonicalize().map_err(|e| e.to_string())? != path
         {

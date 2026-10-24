@@ -274,7 +274,7 @@ impl FixedWorkspace {
                 fixed.absent_source_asset(&meeting, &id)?;
                 // Seal walks all minted parents, including missing assets. Make
                 // only private owned directories, never dummy audio bodies.
-                let destination = self.stage.path().join(&relative);
+                let destination = crate::native_fs::join(self.stage.path(), &relative);
                 scratch::directories(destination.parent().ok_or("復元先フォルダーがありません")?)?;
                 continue;
             }
@@ -287,7 +287,7 @@ impl FixedWorkspace {
             // generated relative path so copy_asset still rejects leaf/parent
             // symlinks and replacement, rather than following a substituted file.
             let input = source.owned_asset_path(&id)?;
-            let destination = self.stage.path().join(&relative);
+            let destination = crate::native_fs::join(self.stage.path(), &relative);
             let directory = destination.parent().ok_or("復元先フォルダーがありません")?;
             scratch::directories(directory)?;
             // Archive payload hashes can differ from source hashes after
@@ -349,7 +349,7 @@ impl FixedWorkspace {
         }
         let mut query = source
             .database
-            .prepare("SELECT meeting_id,manifest_asset_id,manifest_hash FROM audio_import_commits")
+            .prepare("SELECT meeting_id,manifest_asset_id,manifest_hash FROM audio_import_commits WHERE manifest_asset_id IS NOT NULL AND manifest_hash IS NOT NULL")
             .map_err(|e| e.to_string())?;
         let mut rows = query.query([]).map_err(|e| e.to_string())?;
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {

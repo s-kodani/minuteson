@@ -42,8 +42,9 @@ mockIPC(async (command, args) => {
   }
   if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です" };
   if (command === "review_meeting_deletion" || command === "review_pending_deletion") {
+    if (d.reviewRejected) { d.reviewRejected=false; throw "meeting_deletion_not_started:確認の直前に対象会議の処理が始まりました"; }
     if (command === "review_pending_deletion" && d.invalidPendingReview) throw Error("模擬完了記録の検証失敗");
-    if (f.blocker || f.snapshot.busy || (command === "review_meeting_deletion" && d.blocked)) throw Error("処理の停止を待ってください");
+    if (f.meetingBlockers?.[args.meetingId]?.length || f.snapshot.busy || (command === "review_meeting_deletion" && d.blocked)) throw Error("対象会議の処理の停止を待ってください");
     d.last = null;
     const p = command === "review_pending_deletion" ? { ...d.pendingPreview, confirmationId: crypto.randomUUID() } : makePreview(args.meetingId);
     if (!p || (command === "review_pending_deletion" && p.operationId !== args.operationId)) throw Error("削除対象が不明です");
@@ -70,6 +71,7 @@ mockIPC(async (command, args) => {
     return page;
   }
   if (command === "start_data_operation" && f.snapshot.kind === "deletion") {
+    if (d.executeRejected) { d.executeRejected=false; throw "meeting_deletion_not_started:実行の直前に対象会議の処理が始まりました"; }
     const r = args.request, p = f.snapshot.deletionPreview;
     if (d.mode === "lostNoCommit") throw Error("模擬受付応答喪失・未受付");
     if (JSON.stringify(r) === JSON.stringify(d.last) && (f.snapshot.busy || ["completed", "attention"].includes(f.snapshot.phase) || (["refresh", "review_remaining"].includes(r.action) && f.snapshot.phase === "ready"))) return structuredClone(f.snapshot);
@@ -134,4 +136,23 @@ mockIPC(async (command, args) => {
   if (command === "finish_main_close" && d.quitFail) throw Error("模擬終了失敗");
   return dataSaveIPC(command, args);
 }, { shouldMockEvents: true });
+// Dedicated local regression page. These controls only change this in-memory
+// IPC fixture; the production workspace never imports this module.
+const scopedScenario = new URLSearchParams(location.search).get("scoped");
+if (scopedScenario) {
+  f.meetings[0].lifecycle = "recording";
+  f.meetings[0].sourceType = "recording";
+  f.meetings[1].lifecycle = "recorded";
+  f.meetings[1].sourceType = "recording";
+  f.blocker = "AI処理中";
+  if (scopedScenario === "active") f.meetingBlockers = { [f.meetings[0].id]: [{kind:"job",reason:"この会議のジョブ・結果保存が完了していません",jobId:crypto.randomUUID()}] };
+  if (scopedScenario === "failure") f.meetingAvailabilityFail = true;
+  if (scopedScenario === "review-race") d.reviewRejected = true;
+  if (scopedScenario === "execute-race") d.executeRejected = true;
+  const controls = document.createElement("aside");
+  controls.setAttribute("aria-label", "合成データのテスト操作");
+  const button = document.createElement("button"); button.textContent = "合成ジョブ停止・削除可否応答を復旧";
+  button.onclick = () => { f.meetingBlockers = {}; f.meetingAvailabilityFail = false; };
+  controls.append(button); document.body.prepend(controls);
+}
 await import("../src/main.tsx");

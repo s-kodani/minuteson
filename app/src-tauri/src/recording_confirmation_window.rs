@@ -1,7 +1,6 @@
 use crate::recorder::RecorderController;
 use crate::recording_confirmation::{
-    css_anchor_to_physical, fitted_size, popup_position, DecisionPhase, StopDecision,
-    StopDecisionStore,
+    css_anchor_to_physical, fitted_size, popup_position, StopDecision, StopDecisionStore,
 };
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::Storage;
@@ -76,15 +75,9 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
     }
 }
 pub fn session_changed(app: &AppHandle, recording: &RecordingSnapshot) -> StopDecision {
-    let previous = app.state::<StopDecisionStore>().snapshot();
     let value = app.state::<StopDecisionStore>().observe(recording);
     emit(app, &value);
-    if previous.visible()
-        && matches!(
-            value.phase,
-            DecisionPhase::Completed | DecisionPhase::Cancelled
-        )
-    {
+    if !value.visible() {
         restore(app, &value, false);
     }
     value
@@ -131,6 +124,10 @@ pub fn request_recording_confirmation(
     } else {
         store.request(&recording, window.label(), title)?
     };
+    if !value.visible() {
+        emit(app, &value);
+        return Ok(value);
+    }
     let present = || -> Result<(), String> {
         // Read-only help cannot cover a confirmation or steal its focus back.
         crate::recorder_info::hide(app, false)?;
@@ -232,10 +229,13 @@ fn decide_recording_confirmation_blocking(
         expected_preparing,
         &app.state::<SessionStore>().snapshot(),
     )?;
-    emit(app, &store.snapshot());
+    let accepted = store.snapshot();
+    emit(app, &accepted);
+    restore(app, &accepted, false);
     if let Err(error) = RecorderController::stop_session(app, &session) {
         let value = store.fail(&id, error);
         emit(app, &value);
+        restore(app, &value, false);
         return Ok(value);
     }
     Ok(session_changed(

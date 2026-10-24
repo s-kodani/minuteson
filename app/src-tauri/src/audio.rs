@@ -1,5 +1,6 @@
+use crate::native_fs::Metadata;
 use sha2::{Digest, Sha256};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::time::SystemTime;
 
@@ -53,7 +54,7 @@ impl VerifiedAudio {
         if cancelled() {
             return Err("音声ファイルの照合を中断しました".into());
         }
-        let before = file.metadata().map_err(|e| e.to_string())?;
+        let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() != expected_size {
             return Err("音声ファイルのサイズが保存時と一致しません".into());
         }
@@ -98,7 +99,7 @@ impl VerifiedAudio {
             return Ok(audio);
         }
         file.rewind().map_err(|e| e.to_string())?;
-        let before = file.metadata().map_err(|e| e.to_string())?;
+        let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() != expected_size {
             return Err("音声ファイルのサイズが保存時と一致しません".into());
         }
@@ -171,7 +172,8 @@ impl VerifiedAudio {
     }
 
     pub(crate) fn check_unchanged(&self) -> Result<(), String> {
-        let metadata: Metadata = self.file.metadata().map_err(|e| e.to_string())?;
+        let metadata: Metadata =
+            crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?;
         if reuse::stamp(&metadata) != self.identity
             || metadata.len() != self.size
             || metadata.modified().map_err(|e| e.to_string())? != self.modified
@@ -183,7 +185,7 @@ impl VerifiedAudio {
 
     pub(crate) fn cache_stamp(&self) -> Result<String, String> {
         self.check_unchanged()?;
-        let metadata = self.file.metadata().map_err(|e| e.to_string())?;
+        let metadata = crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -378,7 +380,7 @@ pub(crate) fn inspect_recorded_caf(
     mut file: File,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(PcmFormat, u64, String), String> {
-    let before = file.metadata().map_err(|error| error.to_string())?;
+    let before = crate::native_fs::metadata(&file).map_err(|error| error.to_string())?;
     if !before.is_file() {
         return Err("録音音声が通常ファイルではありません".into());
     }
@@ -423,7 +425,7 @@ pub(crate) fn inspect_recorded_caf(
         }
         position = end;
     }
-    let after = file.metadata().map_err(|error| error.to_string())?;
+    let after = crate::native_fs::metadata(&file).map_err(|error| error.to_string())?;
     if position != size
         || !pending.is_empty()
         || after.len() != size
@@ -591,7 +593,10 @@ pub(crate) mod tests {
         .err()
         .unwrap();
         assert!(error.contains("中断"), "{error}");
-        assert_eq!(file.metadata().unwrap().len(), bytes.len() as u64);
+        assert_eq!(
+            crate::native_fs::metadata(&file).unwrap().len(),
+            bytes.len() as u64
+        );
         checks.set(0);
         let error = inspect_recorded_caf(file.try_clone().unwrap(), &|| {
             checks.set(checks.get() + 1);

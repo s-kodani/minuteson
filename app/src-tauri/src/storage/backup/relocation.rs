@@ -3,10 +3,15 @@
 //! or unfinished audio) below meetings/ and temp/. Root control journals/models
 //! stay at the source; their rebinding is a separate, still-required operation.
 use super::*;
+#[cfg(windows)]
+use crate::bootstrap::windows_io as libc;
 use rusqlite::types::ValueRef;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 pub(crate) mod control;
 
@@ -138,14 +143,14 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn directory(path: &Path) -> Result<Metadata, String> {
-    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
         return Err("移動対象のフォルダーまたは親が変更されています".into());
     }
     Ok(m)
 }
 fn database_proof(path: &Path) -> Result<Proof, String> {
-    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_file() || m.nlink() != 1 {
         return Err("旧保存先のDBは単独の通常ファイルである必要があります".into());
     }
@@ -246,13 +251,14 @@ fn inspect_file(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(Proof, u64, String), String> {
     directory(path.parent().ok_or("移動ファイルの親がありません")?)?;
-    let m = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_file() || m.nlink() != 1 {
         return Err("移動対象のリンク・特殊ファイルは採用しません".into());
     }
     let proof = Proof::read(&m)?;
     let (size, hash) = digest_file(path, cancelled)?;
-    if Proof::read(&std::fs::symlink_metadata(path).map_err(|e| e.to_string())?)? != proof {
+    if Proof::read(&crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?)? != proof
+    {
         return Err("移動対象の実体が検査中に変更されています".into());
     }
     Ok((proof, size, hash))
@@ -261,7 +267,7 @@ fn inventory(root: &Path, cancelled: &impl Fn() -> bool) -> Result<Vec<Observed>
     directory(root)?;
     let mut queue = Vec::new();
     for base in ["meetings", "temp"] {
-        match std::fs::symlink_metadata(root.join(base)) {
+        match crate::native_fs::symlink_metadata(root.join(base)) {
             Ok(_) => queue.push(base.to_owned()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
@@ -274,9 +280,9 @@ fn inventory(root: &Path, cancelled: &impl Fn() -> bool) -> Result<Vec<Observed>
         if found.len() >= MAX_ENTRIES || name.split('/').count() > 128 {
             return Err("移動対象のファイル数・深さが安全上限を超えています".into());
         }
-        let path = root.join(&name);
+        let path = crate::native_fs::join(&root, &name);
         directory(path.parent().ok_or("移動対象の親がありません")?)?;
-        let m = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let m = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         let proof = Proof::read(&m)?;
         let (is_directory, size, hash) = if m.is_dir() {
             directory(&path)?;
@@ -372,20 +378,21 @@ fn copy_file(
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(source)
         .map_err(|e| e.to_string())?;
-    if Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != node.proof {
+    if Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)? != node.proof {
         return Err("移動元のファイルが確認後に変更されています".into());
     }
     let mut output = private_file(target)?;
     let (_, hash) = stream(&mut input, Some(&mut output), node.entry.size, cancelled)?;
     if Some(&hash) != node.entry.hash.as_ref()
-        || Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != node.proof
-        || Proof::read(&std::fs::symlink_metadata(source).map_err(|e| e.to_string())?)?
+        || Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)?
+            != node.proof
+        || Proof::read(&crate::native_fs::symlink_metadata(source).map_err(|e| e.to_string())?)?
             != node.proof
     {
         return Err("移動元の内容・実体がコピー中に変更されています".into());
     }
     directory(source.parent().ok_or("移動元の親がありません")?)?;
-    output.sync_all().map_err(|e| e.to_string())
+    crate::native_fs::sync_handle(&output).map_err(|e| e.to_string())
 }
 
 impl Storage {
@@ -414,12 +421,12 @@ impl Storage {
         check_capacity(&image, bytes)?;
         for node in &source {
             check(cancelled)?;
-            let path = image.join(&node.entry.relative_path);
+            let path = crate::native_fs::join(&image, &node.entry.relative_path);
             if node.entry.directory {
                 scratch::directories(&path)?;
             } else {
                 copy_file(
-                    &self.root.join(&node.entry.relative_path),
+                    &crate::native_fs::join(&self.root, &node.entry.relative_path),
                     &path,
                     node,
                     cancelled,
@@ -429,13 +436,12 @@ impl Storage {
         // Synchronize child names before the image root. No source checkpoint,
         // removal, ID remapping, model redaction, or old-root mutation occurs.
         for node in source.iter().rev().filter(|n| n.entry.directory) {
-            File::open(image.join(&node.entry.relative_path))
-                .and_then(|f| f.sync_all())
-                .map_err(|e| e.to_string())?;
+            crate::native_fs::sync_path(&crate::native_fs::join(
+                &image,
+                &node.entry.relative_path,
+            ))?;
         }
-        File::open(&image)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_path(&&image)?;
         let copied = inventory(&image, cancelled)?;
         if source
             .iter()
@@ -461,13 +467,13 @@ impl Storage {
         let path = stage.path().join("relocation-manifest.json");
         let mut saved = private_file(&path)?;
         saved.write_all(&bytes).map_err(|e| e.to_string())?;
-        saved.sync_all().map_err(|e| e.to_string())?;
-        let manifest_proof = Proof::read(&saved.metadata().map_err(|e| e.to_string())?)?;
-        File::open(stage.path())
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        let database_proof =
-            Proof::read(&std::fs::symlink_metadata(&database).map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_handle(&saved).map_err(|e| e.to_string())?;
+        let manifest_proof =
+            Proof::read(&crate::native_fs::metadata(&saved).map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_path(&stage.path())?;
+        let database_proof = Proof::read(
+            &crate::native_fs::symlink_metadata(&database).map_err(|e| e.to_string())?,
+        )?;
         let snapshot = NativeSnapshot {
             stage_identity: Identity::read(&directory(stage.path())?)?,
             image_identity: Identity::read(&directory(&image)?)?,
@@ -531,8 +537,8 @@ impl NativeSnapshot<'_> {
             return Ok(None);
         };
         let node = &self.source[index];
-        let metadata =
-            std::fs::symlink_metadata(self.source_root().join(path)).map_err(|e| e.to_string())?;
+        let metadata = crate::native_fs::symlink_metadata(self.source_root().join(path))
+            .map_err(|e| e.to_string())?;
         if Proof::read(&metadata)? != node.proof {
             return Err("元の所有対象の実体・内容が変更されています".into());
         }
@@ -570,14 +576,14 @@ impl NativeSnapshot<'_> {
                     .ok_or("移動ファイルのSHAがありません")?,
             )
         };
-        let source = self.image.join(name);
+        let source = crate::native_fs::join(&self.image, name);
         directory(source.parent().ok_or("移動コピーの親がありません")?)?;
         let mut input = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(&source)
             .map_err(|e| e.to_string())?;
-        if Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != *proof {
+        if Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)? != *proof {
             return Err("検証済みコピーが配置前に変更されています".into());
         }
         check(cancelled)?;
@@ -585,13 +591,15 @@ impl NativeSnapshot<'_> {
         std::io::Seek::seek(output, std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let (_, actual) = stream(&mut input, Some(output), size, cancelled)?;
         if actual != *hash
-            || Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != *proof
-            || Proof::read(&std::fs::symlink_metadata(&source).map_err(|e| e.to_string())?)?
+            || Proof::read(&crate::native_fs::metadata(&input).map_err(|e| e.to_string())?)?
                 != *proof
+            || Proof::read(
+                &crate::native_fs::symlink_metadata(&source).map_err(|e| e.to_string())?,
+            )? != *proof
         {
             return Err("検証済みコピーの配置中に内容・実体が変更されています".into());
         }
-        output.sync_all().map_err(|e| e.to_string())
+        crate::native_fs::sync_handle(&output).map_err(|e| e.to_string())
     }
     pub(crate) fn manifest(&self) -> &Manifest {
         &self.manifest
@@ -732,5 +740,5 @@ pub(crate) fn verify_placed_image_with_controls(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

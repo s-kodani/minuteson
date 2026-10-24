@@ -2,10 +2,11 @@
 //! SQLite image still contains machine-local settings. A portable exporter must
 //! explicitly omit/redact those fields before publishing an external archive.
 use super::*;
+use crate::native_fs::Metadata;
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::OpenFlags;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::Ordering;
 
@@ -19,7 +20,7 @@ pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
 pub(crate) mod recovery;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) mod relocation;
 pub(in crate::storage) mod scratch;
 
@@ -66,7 +67,7 @@ pub(crate) fn omitted_processing_asset(
         {
             return Err("除外ファイルの配置先が差し替えられています".into());
         }
-        match std::fs::symlink_metadata(path) {
+        match crate::native_fs::symlink_metadata(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
             Ok(_) => return Err("未配置の除外ファイルの場所に予期しない実体があります".into()),
@@ -214,13 +215,16 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         self.require_data_writable()?;
+        if super::meeting_access::any_reserved(&db)? || super::deletion::fence::has_pending(&db)? {
+            return Err("未完了の会議削除があります。削除の完了・保持を確認してください".into());
+        }
         if self.retired.load(Ordering::Acquire) {
             return Err("旧保存先の書込みは停止済みです。再起動してください".into());
         }
         if self.maintenance.load(Ordering::Acquire) {
             return Err("保存領域の操作が既に進行中です".into());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Err(error) = self.managed_anchor.verify() {
             // Never preview or copy a replacement root/DB, then unlock the
             // cached old connection as if that replacement were trusted.
@@ -412,9 +416,7 @@ fn snapshot_database(
             .map_err(|e| e.to_string())?;
         target.close().map_err(|(_, e)| e.to_string())?;
     }
-    File::open(database)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| e.to_string())?;
+    crate::native_fs::sync_file(database)?;
     Ok(())
 }
 
@@ -709,13 +711,17 @@ fn private_file(path: &Path) -> Result<File, String> {
         options.mode(0o600);
     }
     let file = options.open(path).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    crate::windows_files::set_private(path)?;
     scratch::record_file(path, &file)?;
     Ok(file)
 }
 
 fn same_file(before: &Metadata, after: &Metadata) -> bool {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[allow(unused_imports)]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         if before.dev() != after.dev()
             || before.ino() != after.ino()
@@ -732,7 +738,7 @@ fn same_file(before: &Metadata, after: &Metadata) -> bool {
 }
 
 fn open_source(path: &Path) -> Result<(File, Metadata), String> {
-    let before = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let before = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !before.is_file() {
         return Err("管理対象は通常ファイルに限ります".into());
     }
@@ -744,7 +750,10 @@ fn open_source(path: &Path) -> Result<(File, Metadata), String> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options.open(path).map_err(|e| e.to_string())?;
-    if !same_file(&before, &file.metadata().map_err(|e| e.to_string())?) {
+    if !same_file(
+        &before,
+        &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+    ) {
         return Err("管理ファイルが変更されています".into());
     }
     Ok((file, before))
@@ -799,10 +808,13 @@ fn copy_asset(
     let mut output = private_file(target)?;
     let (_, hash) = stream(&mut input, Some(&mut output), expected, cancelled)?;
     if hash != asset.content_hash
-        || !same_file(&before, &input.metadata().map_err(|e| e.to_string())?)
         || !same_file(
             &before,
-            &std::fs::symlink_metadata(source).map_err(|e| e.to_string())?,
+            &crate::native_fs::metadata(&input).map_err(|e| e.to_string())?,
+        )
+        || !same_file(
+            &before,
+            &crate::native_fs::symlink_metadata(source).map_err(|e| e.to_string())?,
         )
         || source.canonicalize().map_err(|e| e.to_string())? != source
     {
@@ -814,12 +826,13 @@ fn copy_asset(
 fn digest_file(path: &Path, cancelled: &impl Fn() -> bool) -> Result<(u64, String), String> {
     let (mut file, before) = open_source(path)?;
     let result = stream(&mut file, None, before.len(), cancelled)?;
-    if !same_file(&before, &file.metadata().map_err(|e| e.to_string())?)
-        || !same_file(
-            &before,
-            &std::fs::symlink_metadata(path).map_err(|e| e.to_string())?,
-        )
-    {
+    if !same_file(
+        &before,
+        &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+    ) || !same_file(
+        &before,
+        &crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?,
+    ) {
         return Err("バックアップ検証中にファイルが変更されています".into());
     }
     Ok(result)

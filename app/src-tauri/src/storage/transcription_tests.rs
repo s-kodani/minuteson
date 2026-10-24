@@ -384,7 +384,7 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .unwrap()
         .to_string();
     assert_eq!(spec.parameters["schemaVersion"], 4);
-    assert_eq!(spec.parameters["recognitionPolicy"], "guardedVocabularyV2");
+    assert_eq!(spec.parameters["recognitionPolicy"], "adaptiveRecoveryV3");
     assert_eq!(
         spec.parameters.get("accelerationPolicy"),
         cfg!(target_os = "macos").then_some(&serde_json::json!("autoMetalV1"))

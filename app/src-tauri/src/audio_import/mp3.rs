@@ -322,7 +322,7 @@ pub(super) fn decode(
     info.validate()?;
     Ok(info)
 }
-fn caf_header(rate: u32, channels: u32, frames: u64) -> Result<Vec<u8>, String> {
+pub(super) fn caf_header(rate: u32, channels: u32, frames: u64) -> Result<Vec<u8>, String> {
     let length = frames
         .checked_mul(u64::from(channels) * 4)
         .and_then(|n| n.checked_add(4))

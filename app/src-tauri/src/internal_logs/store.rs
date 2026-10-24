@@ -33,6 +33,10 @@ fn owned_name(name: &str) -> Option<i64> {
         .flatten()
 }
 pub(super) fn open_read(path: &Path) -> Result<File, String> {
+    #[cfg(windows)]
+    {
+        return crate::windows_files::read(path, true);
+    }
     let metadata = path.symlink_metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("ログが通常ファイルではありません".into());
@@ -97,6 +101,8 @@ impl Store {
             return Err("ログ保存先にリンクは使用できません".into());
         }
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(&root)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -160,8 +166,9 @@ impl Store {
             }
             let segment = &self.segments[0];
             // Only remove files this service recognizes and can safely open.
-            open_read(&segment.path)?;
-            std::fs::remove_file(&segment.path).map_err(|e| e.to_string())?;
+            let checked = open_read(&segment.path)?;
+            let proof = crate::native_fs::metadata(&checked).map_err(|e| e.to_string())?;
+            crate::native_fs::remove_owned(&segment.path, &proof).map_err(|e| e.to_string())?;
             total -= segment.bytes;
             self.segments.remove(0);
             self.status.history_truncated = true;

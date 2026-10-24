@@ -119,6 +119,31 @@ fn metal_offload(log: &str) -> Option<(u32, u32)> {
 pub(super) fn metal_evidence(log: &str) -> Option<(String, u32)> {
     Some((metal_device(log)?, metal_offload(log)?.0))
 }
+pub(super) fn vulkan_device(log: &str) -> Option<String> {
+    let mut selected = None;
+    for line in log.lines() {
+        let Some((_, rest)) = line.split_once("using device ") else {
+            continue;
+        };
+        let id = rest.split_whitespace().next()?;
+        let number = id.strip_prefix("Vulkan")?;
+        if number.is_empty()
+            || !number.bytes().all(|b| b.is_ascii_digit())
+            || selected.as_deref().is_some_and(|prior| prior != id)
+        {
+            return None;
+        }
+        selected = Some(id.to_owned());
+    }
+    selected
+}
+pub(super) fn vulkan_evidence(log: &str) -> Option<(String, u32)> {
+    Some((vulkan_device(log)?, metal_offload(log)?.0))
+}
+pub(super) fn vulkan_matches(log: &str, device: &str, layers: u32) -> bool {
+    vulkan_device(log).as_deref() == Some(device)
+        && metal_offload(log).is_some_and(|(actual, total)| actual == layers.min(total))
+}
 pub(super) fn metal_matches(log: &str, device: &str, requested_layers: u32) -> bool {
     metal_device(log).as_deref() == Some(device)
         && metal_offload(log).is_some_and(|(actual, total)| actual == requested_layers.min(total))

@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { IssueNotice } from "./toast";
@@ -48,13 +49,11 @@ export function SpeakerCompletionSettings({ locked = false, embedded = false }: 
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
   return <section className={embedded ? "voice-matching-settings ai-settings-group" : "analysis-card voice-matching-settings"} aria-label="未検出発言の話者補完">
-    {embedded ? <h3>未検出発言の話者補完</h3> : <h2>未検出発言の話者補完</h2>}
-    <p>話者不明の発言を、文字起こし区間の声の特徴量が最も近い同じトラックの話者に割り当てます。以下の閾値は「要確認」の判定基準です。類似度または次点との差が基準未達の場合や同点の場合は、要確認の印を付けて適用します。類似度は確率ではありません。候補が1人の場合は次点との差を使いません。</p>
+    <div className="heading-with-info">{embedded ? <h3>未検出発言の話者補完</h3> : <h2>未検出発言の話者補完</h2>}<InfoPopover label="未検出発言の話者補完"><p>話者不明の発言を、文字起こし区間の声の特徴量が最も近い同じトラックの話者に割り当てます。以下の閾値は「要確認」の判定基準です。類似度または次点との差が基準未達の場合や同点の場合は、要確認の印を付けて適用します。類似度は確率ではありません。候補が1人の場合は次点との差を使いません。</p><p>次に開始する補完から適用します。新しい話者分離後に自動実行します。手動で不明にした発言や音声欠損をまたぐ発言は補完しません。</p></InfoPopover></div>
     <fieldset className="vad-fields" disabled={locked || busy || !saved || uncertain}>
       <label><span>類似度の下限</span><input type="number" min="0" max="1" step="0.01" value={similarity} onChange={e => setSimilarity(e.target.value)} /></label>
       <label><span>次点との差の下限</span><input type="number" min="0" max="1" step="0.01" value={margin} onChange={e => setMargin(e.target.value)} /></label>
     </fieldset>
-    <p>次に開始する補完から適用します。新しい話者分離後に自動実行します。手動で不明にした発言や音声欠損をまたぐ発言は補完しません。</p>
     <IssueNotice scope="speaker-completion-settings" type="settings" label="話者補完設定" message={error || validation} />
     <div className="analysis-actions">
       <button type="button" disabled={locked || busy || !changed || !!validation || uncertain} onClick={() => void apply()}>適用</button>

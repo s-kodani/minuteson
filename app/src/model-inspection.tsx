@@ -1,3 +1,4 @@
+import { InfoPopover } from "./info-popover";
 import { VoiceMatchingSettings } from "./voice-matching-settings";
 import { SpeakerCompletionSettings } from "./speaker-completion-settings";
 import type { ModelDeletionControl } from "./model-deletion";
@@ -265,7 +266,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       })} />}
     {(!selectedWhisper || !whisperPreferences) && <p>文字起こしモデルを選択すると設定できます。読込エラーは「ローカルAI」を確認してください。</p>}
     </section>
-    <section className="ai-settings-group" aria-label="話者分離のCPU使用量"><h3>話者分離のCPU使用量</h3>
+    <section className="ai-settings-group" aria-label="話者分離のCPU使用量"><div className="heading-with-info"><h3>話者分離のCPU使用量</h3><InfoPopover label="話者分離のCPU使用量">同じモデルでCPUの使用量を調整します。変更は次に開始する処理から適用します。</InfoPopover></div>
     {selectedDiarization ? <div className="diarization-performance">
       <div className="model-selection-row"><label>話者分離のCPU使用量<select aria-label="話者分離のCPU使用量" value={threadChoice} disabled={disabled || cpuThreads === null} onChange={event => setThreadChoice(event.target.value)}>
         {cpuThreads !== null && ![4, 8].includes(cpuThreads) && <option value={cpuThreads}>現在の設定（{cpuThreads}スレッド）</option>}
@@ -275,10 +276,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         if (!entry || !canReviewApplication(entry)) throw Error("使用中の話者モデルを確認できません。");
         setTarget("話者分離"); await apply(entry, Number(threadChoice));
       })}>CPU使用量を適用</button></div>
-      <p>同じモデルでCPUの使用量を調整します。変更は次に開始する処理から適用します。</p>
     </div> : <p>話者分離モデルを選択すると設定できます。</p>}
     </section>
-    <section className="ai-settings-group" aria-label="自動の話者統合"><h3>自動の話者統合</h3>
+    <section className="ai-settings-group" aria-label="自動の話者統合"><div className="heading-with-info"><h3>自動の話者統合</h3><InfoPopover label="自動の話者統合">人数が「自動」のときのまとめやすさを調整します。強くすると話者の増えすぎを抑えられますが、別人を同じ話者にまとめる場合があります。次に開始する処理から適用します。</InfoPopover></div>
     {selectedDiarization ? <div className="diarization-performance">
       <div className="model-selection-row"><label>自動の話者統合<select aria-label="自動の話者統合" value={thresholdChoice} disabled={disabled || clusterThreshold === null} onChange={event => setThresholdChoice(event.target.value)}>
         {clusterThreshold !== null && !automaticMergeChoices.some(choice => choice.value === clusterThreshold) && <option value={clusterThreshold}>現在の設定（{clusterThreshold / 1000}）</option>}
@@ -288,7 +288,6 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         if (!entry || !canReviewApplication(entry)) throw Error("使用中の話者モデルを確認できません。");
         setTarget("自動の話者統合"); await apply(entry, undefined, Number(thresholdChoice));
       })}>統合の強さを適用</button></div>
-      <p>人数が「自動」のときのまとめやすさを調整します。強くすると話者の増えすぎを抑えられますが、別人を同じ話者にまとめる場合があります。次に開始する処理から適用します。</p>
     </div> : <p>話者分離モデルを選択すると設定できます。</p>}
     </section>
     <VoiceMatchingSettings embedded locked={disabled} />

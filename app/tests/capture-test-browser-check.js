@@ -65,26 +65,26 @@ async page=>{
     results.push("cancellation remains busy until native termination; terminal cancelled ownership is explicitly discarded before reuse");
 
     await boot();await page.evaluate(()=>window.closeFixture.testLost=true);await start().click();await accept().click();
-    await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
+    await modal().locator(".action-error[role=alert]").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByText("テストの入力を初期化しています",{exact:true}).waitFor();
     check(await count("start_capture_test")===1&&await normal().isDisabled(),"lost accepted reply replayed or enabled capture");
     const firstPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,firstPoll);check(await count("start_capture_test")===1,"read replayed start");
     results.push("lost accepted start reply is reconciled by read-only ownership polling, never by resubmitting capture");
 
     await boot();await page.evaluate(()=>window.closeFixture.testAbsentStart=true);await start().click();await accept().click();
-    await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
+    await modal().locator(".action-error[role=alert]").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
     const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);
     check(await count("start_capture_test")===1&&await start().isDisabled()&&await normal().isDisabled(),"unknown absence allowed replay");
     results.push("missing result after an uncertain start stays unknown and blocks new recording without guessing that audio stopped");
 
-    await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);await start().click();await accept().click();await modal().getByRole("alert").waitFor();
+    await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);await start().click();await accept().click();await modal().locator(".action-error[role=alert]").waitFor();
     check(await count("start_capture_test")===0,"failed draft save started test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("failed pending-edit save prevents test admission and retains existing meetings/input");
 
     await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardFailure=true);await discard().click();
     await page.getByRole("alert").filter({hasText:"模擬テスト回収未完了"}).first().waitFor();
-    await normal().click();const n=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await n.getByRole("alert").waitFor();
+    await normal().click();const n=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await n.locator(".action-error[role=alert]").waitFor();
     check(await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"failed discard saved normal meeting or started capture");await n.getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("failed private-audio collection prevents normal recording and meeting creation even after a second confirmation");
 
@@ -141,7 +141,7 @@ async page=>{
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
     await application.selectOption(await application.locator('option').nth(1).getAttribute("value"));
     await closeDetails();
-    await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await modal().getByRole("alert").waitFor();
+    await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await modal().locator(".action-error[role=alert]").waitFor();
     check(await count("start_capture_test")===0,"restarted app accepted test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("application restart during edit flushing rejects test before admission without falling back to whole-system capture");
 

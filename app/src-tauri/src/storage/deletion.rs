@@ -1,40 +1,43 @@
 //! Meeting deletion is staged: consent, fixed file removal, then row removal.
 //! User-facing deletion requires shared admission and explicit scope review.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod audio;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod audio_supersession;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod automatic;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod completion;
 pub(in crate::storage) mod database;
 
 // Read-only native-image inspection; not a deletion or cutover capability.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage) fn verify_known_history_schema(
     db: &rusqlite::Connection,
 ) -> Result<(), String> {
     database::trusted_history_schema(db).map(|_| ())
 }
 pub(in crate::storage) mod fence;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod files;
 #[cfg(unix)]
 pub(in crate::storage) mod fs;
-#[cfg(unix)]
+#[cfg(windows)]
+#[path = "deletion/fs_windows.rs"]
+pub(in crate::storage) mod fs;
+#[cfg(any(unix, windows))]
 mod intent;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod models;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod operations;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) mod relocation;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod removal;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod renewal;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::storage) mod startup;
 
 #[cfg(all(test, unix))]

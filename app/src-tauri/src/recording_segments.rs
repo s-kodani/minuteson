@@ -3,11 +3,14 @@
 //! Keep descriptors bounded independently of a long recording's segment count.
 use crate::audio::VerifiedAudio;
 use crate::audio_clock::{ClockChunk, ClockLayout, ClockSegment};
+use crate::native_fs::Metadata;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 const MAX_SEGMENTS: u32 = 32_768;
@@ -67,7 +70,7 @@ impl Status {
         frames > 0 && self.agrees_with_closed(prefix, frames)
     }
     pub(crate) fn agrees_with_unreceived(&self, prefix: &Prefix) -> bool {
-        prefix.lane() == Lane::System && self.agrees_with_closed(prefix, 0)
+        (prefix.lane() == Lane::System || cfg!(windows)) && self.agrees_with_closed(prefix, 0)
     }
     fn agrees_with_closed(&self, prefix: &Prefix, frames: u64) -> bool {
         self.schema_version == 2
@@ -139,9 +142,9 @@ struct Stamp {
 }
 impl Stamp {
     fn of(file: &File) -> Result<Self, String> {
-        let m = file.metadata().map_err(|e| e.to_string())?;
+        let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !m.is_file()
-            || m.uid() != unsafe { libc::geteuid() }
+            || m.uid() != crate::native_fs::current_owner()?
             || m.nlink() != 1
             || m.mode() & 0o077 != 0
         {
@@ -270,24 +273,51 @@ fn valid_hash(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn open_at(directory: &File, name: &str) -> Result<Option<File>, String> {
-    // Names come exclusively from Lane plus a bounded integer. A JSON-supplied
-    // audioName is compared with this canonical name, never passed to openat.
-    let name = std::ffi::CString::new(name).map_err(|_| "原音声のファイル名が不正です")?;
-    let descriptor = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-        )
-    };
-    if descriptor < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(None);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        if name.is_empty() || name.contains(['/', '\\', ':', '\0']) || matches!(name, "." | "..") {
+            return Err("原PCMファイル名が不正です".into());
         }
-        return Err(error.to_string());
+        let path = crate::windows_files::path(directory)?.join(name);
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(7)
+            .custom_flags(0x00200000)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        };
+        if crate::windows_files::identity(&file)?.2 != 1
+            || !file.metadata().map_err(|e| e.to_string())?.is_file()
+        {
+            return Err("原PCMの実体・リンク数が不正です".into());
+        }
+        return Ok(Some(file));
     }
-    Ok(Some(unsafe { File::from_raw_fd(descriptor) }))
+    #[cfg(unix)]
+    {
+        // Names come exclusively from Lane plus a bounded integer. A JSON-supplied
+        // audioName is compared with this canonical name, never passed to openat.
+        let name = std::ffi::CString::new(name).map_err(|_| "原音声のファイル名が不正です")?;
+        let descriptor = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(error.to_string());
+        }
+        Ok(Some(unsafe { File::from_raw_fd(descriptor) }))
+    }
 }
 fn required(directory: &File, name: &str) -> Result<File, String> {
     open_at(directory, name)?.ok_or("原音声の確定範囲に不足するファイルがあります".into())
@@ -408,7 +438,7 @@ impl Prefix {
                     .map(|v| (v.as_secs(), v.subsec_nanos()))
             ])
         }
-        let directory = self.directory.metadata().map_err(|e| e.to_string())?;
+        let directory = crate::native_fs::metadata(&self.directory).map_err(|e| e.to_string())?;
         let entries: Vec<_> = self
             .entries
             .iter()
@@ -446,8 +476,8 @@ impl Prefix {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         let current = crate::input_levels::open_capture_directory(path)?;
-        let actual = current.metadata().map_err(|e| e.to_string())?;
-        let pinned = self.directory.metadata().map_err(|e| e.to_string())?;
+        let actual = crate::native_fs::metadata(&current).map_err(|e| e.to_string())?;
+        let pinned = crate::native_fs::metadata(&self.directory).map_err(|e| e.to_string())?;
         if !actual.is_dir()
             || actual.dev() != pinned.dev()
             || actual.ino() != pinned.ino()
@@ -563,8 +593,8 @@ impl Prefix {
         if !crate::input_levels::valid_owner(owner) {
             return Err("原音声セグメントの録音IDが不正です".into());
         }
-        let m = directory.metadata().map_err(|e| e.to_string())?;
-        if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } {
+        let m = crate::native_fs::metadata(&directory).map_err(|e| e.to_string())?;
+        if !m.is_dir() || m.uid() != crate::native_fs::current_owner()? {
             return Err("原音声セグメントの管理先が不正です".into());
         }
         cancelled(check)?;
@@ -730,5 +760,5 @@ impl Prefix {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

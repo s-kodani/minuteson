@@ -170,6 +170,76 @@ fn fixed_protocol_keeps_overlapping_and_disjoint_intervals_without_fabricating_c
 }
 
 #[test]
+fn terminal_receptive_field_offset_is_clamped_to_recorded_audio() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = config(directory.path());
+    // Regression: 592,718 samples at 16 kHz. The native result's final
+    // receptive-field center is 27.125 ms beyond the actual last sample.
+    let duration = 37_044_875;
+    let bytes = output(
+        &runtime,
+        None,
+        "0.031 -- 19.336 speaker_00\n20.062 -- 37.072 speaker_00\n",
+    );
+    let expected = vec![
+        Segment {
+            start_us: 31_000,
+            end_us: 19_336_000,
+            speaker: 0,
+        },
+        Segment {
+            start_us: 20_062_000,
+            end_us: duration,
+            speaker: 0,
+        },
+    ];
+    assert_eq!(
+        parse_output(&bytes, &runtime, None, duration).unwrap(),
+        expected
+    );
+    validate_saved_segments(&expected, None, duration).unwrap();
+    let mut logical = runtime.clone();
+    for proof in [
+        &mut logical.executable,
+        &mut logical.segmentation_model,
+        &mut logical.embedding_model,
+    ] {
+        proof.path = PathBuf::from(format!("mon-unavailable:{}", proof.sha256));
+    }
+    let normalized = logical_output(&bytes, &runtime, &logical, None, duration).unwrap();
+    assert_eq!(
+        parse_output(&normalized, &logical, None, duration).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn terminal_tolerance_is_bounded_and_does_not_relax_saved_timestamps() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path());
+    // Includes the receptive-field offset, float32 error near the WAV limit,
+    // and millisecond printing. Gross overruns must still fail.
+    for duration in [1_000_000, 134_000_000_000] {
+        let rows = format!("0.000 -- {}.{:03} speaker_00\n", duration / 1_000_000, 50);
+        let segments =
+            parse_output(&output(&config, None, &rows), &config, None, duration).unwrap();
+        assert_eq!(segments[0].end_us, duration);
+        let rows = format!("0.000 -- {}.{:03} speaker_00\n", duration / 1_000_000, 51);
+        assert!(parse_output(&output(&config, None, &rows), &config, None, duration).is_err());
+        assert!(validate_saved_segments(
+            &[Segment {
+                start_us: 0,
+                end_us: duration + 1,
+                speaker: 0
+            }],
+            None,
+            duration
+        )
+        .is_err());
+    }
+}
+
+#[test]
 fn rejects_wrong_protocol_identity_settings_order_times_labels_and_extra_columns() {
     let directory = tempfile::tempdir().unwrap();
     let config = config(directory.path());
@@ -177,7 +247,7 @@ fn rejects_wrong_protocol_identity_settings_order_times_labels_and_extra_columns
         "-0.001 -- 0.200 speaker_00\n",
         "NaN -- 0.200 speaker_00\n",
         "0.0 -- 0.200 speaker_00\n",
-        "0.000 -- 1.021 speaker_00\n",
+        "0.000 -- 1.051 speaker_00\n",
         "0.000 -- 0.000 speaker_00\n",
         "1.000 -- 1.001 speaker_00\n",
         "999999999999999999999.000 -- 1.000 speaker_00\n",

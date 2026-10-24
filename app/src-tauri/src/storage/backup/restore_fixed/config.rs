@@ -372,6 +372,15 @@ impl FixedData<'_, '_> {
             value["manualUtteranceSplits"] =
                 serde_json::to_value(operations).map_err(|e| e.to_string())?;
         }
+        if let Some(ranges) = value.get_mut("reviewRanges").and_then(Value::as_array_mut) {
+            for range in ranges {
+                let track = range["trackId"]
+                    .as_str()
+                    .ok_or("要確認範囲のトラックがありません")?
+                    .to_owned();
+                range["trackId"] = json!(self.ids.get("audio_tracks", meeting, &track)?);
+            }
+        }
         if let Some(lineages) = original.get("sourceRecognitionLineages") {
             let old: Vec<String> =
                 serde_json::from_value(lineages.clone()).map_err(|e| e.to_string())?;

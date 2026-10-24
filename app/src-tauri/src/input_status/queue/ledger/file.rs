@@ -243,9 +243,15 @@ mod native {
 #[cfg(unix)]
 pub(super) use native::Store;
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[path = "file_windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub(super) use windows::Store;
+
+#[cfg(not(any(unix, windows)))]
 pub(super) struct Store;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl Store {
     pub(super) fn open(_: &std::fs::File) -> Result<(Self, Option<Vec<u8>>), String> {
         Err("このOSの通知台帳は未対応です".into())

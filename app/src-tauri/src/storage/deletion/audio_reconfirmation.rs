@@ -663,6 +663,6 @@ pub(crate) fn synthetic_saved(storage: &Storage, operation: &str) -> (String, St
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_reconfirmation_tests.rs"]
 mod tests;

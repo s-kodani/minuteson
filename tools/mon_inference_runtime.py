@@ -11,7 +11,11 @@ from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
-import mon_whisper_runtime as asr
+if os.name != 'nt':
+    import mon_whisper_runtime as asr
+else:
+    # Windows consumes the shared source transformations, not the Mac builder.
+    asr = None
 
 ROOT = Path(__file__).resolve().parents[1]
 LLAMA_COMMIT = "edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc"
@@ -70,7 +74,7 @@ def replace(text, old, new):
 
 def patch_whisper(root):
     source = root / "examples/cli/cli.cpp"
-    text = source.read_text()
+    text = source.read_text(encoding="utf8")
     text = replace(text, "int main(int argc, char ** argv)", "int mon_whisper(int argc, char ** argv)")
     text = replace(text, "struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);", '''static whisper_context * cached = nullptr;
     static std::string model_key;
@@ -87,7 +91,7 @@ def patch_whisper(root):
     if (ctx) whisper_reset_timings(ctx);''')
     text = replace(text, "    whisper_free(ctx);", "    // The worker owns the model until shutdown; whisper_full resets unit state.")
     text = text.replace('#include "whisper.h"', '#include "whisper.h"\n#include <chrono>')
-    source.write_text(text)
+    source.write_text(text,encoding="utf8")
     with (root / "CMakeLists.txt").open("a") as output:
         output.write('''\nadd_executable(mon-whisper-worker examples/cli/cli.cpp mon/whisper-main.cpp)
 target_include_directories(mon-whisper-worker PRIVATE mon examples)
@@ -98,17 +102,17 @@ target_compile_features(mon-whisper-worker PRIVATE cxx_std_17)
 
 def patch_llama(root):
     source = root / "tools/completion/completion.cpp"
-    text = source.read_text()
+    text = source.read_text(encoding="utf8")
     # Reuse the constructor's exact model-derived sampler preparation on every
     # subsequent request too (GGUF defaults, EOG biases), while keeping the new
     # request's grammar and seed. Do not approximate those defaults in MON.
     common = root / "common/common.cpp"
-    body = common.read_text()
+    body = common.read_text(encoding="utf8")
     first = body.index("    // updates params.sampling\n")
     last = body.index("    // init the backend samplers", first)
     sampling = body[first:last].replace("params.sampling", "sparams")
     body += "\nvoid mon_request_sampling_defaults(llama_model * model, common_params_sampling & sparams) {\n    const llama_vocab * vocab = llama_model_get_vocab(model);\n" + sampling + "}\n"
-    common.write_text(body)
+    common.write_text(body,encoding="utf8")
     text = replace(text, "int llama_completion(int argc, char ** argv);", "void mon_request_sampling_defaults(llama_model *, common_params_sampling &);\nint llama_completion(int argc, char ** argv);")
     text = replace(text, "int llama_completion(int argc, char ** argv) {", """// Destroy cached GPU resources explicitly before backend static destructors.
 static common_init_result_ptr mon_cached;
@@ -171,7 +175,7 @@ int llama_completion(int argc, char ** argv) {""")
     if final_return < 0: raise ValueError("completion return missing")
     text=text[:final_return]+"    if(mon_prefix_enabled) mon_prefix_tokens.assign(embd_inp.begin(),embd_inp.begin()+mon_system_tokens);\n"+text[final_return:]
     text = replace(text, "    llama_backend_free();", "    // Model/context lifetime belongs to the worker.")
-    source.write_text(text)
+    source.write_text(text,encoding="utf8")
     with (root / "CMakeLists.txt").open("a") as output:
         output.write('''\nadd_executable(mon-llama-worker tools/completion/completion.cpp mon/llama-main.cpp mon/llama-tokenize.cpp)
 target_include_directories(mon-llama-worker PRIVATE mon common)
@@ -199,7 +203,7 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
         package = cache / "package"
         stamp = recipe_hash()
         if package.exists() and (package / "build-info.json").exists():
-            info = json.loads((package / "build-info.json").read_text())
+            info = json.loads((package / "build-info.json").read_text(encoding="utf8"))
             if info.get("recipeSha256") == stamp:
                 verify(package)
                 return package
@@ -238,8 +242,8 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
             # Include the original source notices alongside the derived workers.
             for name, path in [("whisper-MIT.txt",roots["whisper"]/"LICENSE"),("llama-MIT.txt",roots["llama"]/"LICENSE"),("nlohmann-MIT.txt",roots["llama"]/"vendor/nlohmann/json.hpp")]:
                 if name.startswith("nlohmann"):
-                    header = path.read_text().split("#ifndef")[0]
-                    license_text = (ROOT/"third-party/notices/spdx-MIT-template.txt").read_text().replace("<year> <copyright holders>", "2013 - 2025 Niels Lohmann")
+                    header = path.read_text(encoding="utf8").split("#ifndef")[0]
+                    license_text = (ROOT/"third-party/notices/spdx-MIT-template.txt").read_text(encoding="utf8").replace("<year> <copyright holders>", "2013 - 2025 Niels Lohmann")
                     (pending/name).write_text(header + "\n" + license_text)
                 else: shutil.copyfile(path,pending/name)
             shutil.copyfile(license_file,pending/"sherpa-Apache-2.0.txt")
@@ -252,7 +256,7 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
 
 
 def verify(package):
-    index = json.loads((package / "runtime-index.json").read_text())
+    index = json.loads((package / "runtime-index.json").read_text(encoding="utf8"))
     if len(index) != 3 or {i["engine"] for i in index} != set(NAMES):
         raise ValueError("invalid worker index")
     for item in index:

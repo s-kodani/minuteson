@@ -4,19 +4,26 @@ use super::*;
 use crate::audio::flac::{encode_segment_file, PcmSource, SavedFlac};
 use crate::audio::VerifiedAudio;
 use crate::audio_clock::ClockSegment;
+#[cfg(windows)]
+use crate::bootstrap::windows_io as libc;
+#[cfg(windows)]
+use crate::bootstrap::windows_io::{AsRawFd, FromRawFd};
 use crate::recording_segments::{FlacGroup, Prefix};
 use std::io::Seek;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 mod files;
 mod inventory;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
 pub(in crate::storage) use inventory::{inspect_workspaces, WorkspaceFiles};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod dense_tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,7 +94,7 @@ pub(super) struct Publication {
     plan_name: &'static str,
     documents: Vec<(String, Stamp)>,
     tracks: Vec<Track>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     recovery_rebind: Option<relocation::RecoveryRebind>,
 }
 const PLAN: &str = "final-flac.json";
@@ -204,6 +211,10 @@ impl Publication {
             && !(manifest.system_audio_unreceived
                 && audio_prefixes.len() == 1
                 && audio_prefixes[0].lane() == crate::recording_segments::Lane::Microphone)
+            && !(cfg!(windows)
+                && manifest.microphone_audio_unreceived
+                && audio_prefixes.len() == 1
+                && audio_prefixes[0].lane() == crate::recording_segments::Lane::System)
         {
             return Err("原音声の未取得範囲と録音manifestが一致しません".into());
         }
@@ -257,7 +268,7 @@ impl Publication {
             &audio_prefixes,
             all_groups,
             &|| false,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             None,
         )
     }
@@ -300,21 +311,21 @@ impl Publication {
             }
         }
         let input_hash = partial::input_hash(review_hash, origin, prefixes)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let recovery_rebind = relocation::recovery_input(storage, base, content_hash)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(proof) = &recovery_rebind {
             proof.verify_document_before_conversion(
                 &Directory::open(&storage.root.join(base))?,
                 document,
             )?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let input_hash = recovery_rebind
             .as_ref()
             .map(|p| p.input_hash().to_owned())
             .unwrap_or(input_hash);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = (content_hash, document);
         Self::prepare_groups(
             storage,
@@ -324,7 +335,7 @@ impl Publication {
             &prefixes.iter().collect::<Vec<_>>(),
             all_groups,
             cancelled,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             recovery_rebind,
         )
     }
@@ -337,7 +348,9 @@ impl Publication {
         prefixes: &[&Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
         cancelled: &impl Fn() -> bool,
-        #[cfg(target_os = "macos")] recovery_rebind: Option<relocation::RecoveryRebind>,
+        #[cfg(any(target_os = "macos", windows))] recovery_rebind: Option<
+            relocation::RecoveryRebind,
+        >,
     ) -> Result<Self, String> {
         partial::check_cancel(cancelled)?;
         storage.require_data_writable()?;
@@ -376,12 +389,12 @@ impl Publication {
         let (plan_bytes, plan_stamp) = root
             .read_json(plan_name)?
             .ok_or("FLAC確定計画がありません")?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if let Some(proof) = &recovery_rebind {
             proof.verify_plan(&plan_bytes)?;
         }
         let mut plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         relocation::effective_plan(storage, &root.path, plan_name, &plan_bytes, &mut plan)?;
         if plan.schema_version != 1
             || plan.input_hash != input_hash
@@ -442,7 +455,7 @@ impl Publication {
             plan_name,
             documents: Vec::new(),
             tracks,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             recovery_rebind,
         };
         result.verify(storage)?;
@@ -465,7 +478,7 @@ impl Publication {
             .read_json(name)?
             .ok_or("部分救出の記録がありません")?;
         if current != bytes {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             if let Some(proof) = &self.recovery_rebind {
                 proof.require_document(&self.root, &current, value)?;
                 self.root.json(name, value, Some(&stamp))?;
@@ -482,7 +495,7 @@ impl Publication {
             } else {
                 return Err("部分救出の記録と確認済み範囲が一致しません".into());
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", windows)))]
             return Err("部分救出の記録と確認済み範囲が一致しません".into());
         }
         self.documents.push((name.into(), stamp));
@@ -608,7 +621,7 @@ fn convert(
         if let Some((bytes, stamp)) = directory.read_json(&receipt_name)? {
             let mut checkpoint: Checkpoint =
                 serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             if relocation::effective_checkpoint(
                 storage,
                 &directory.path,
@@ -647,7 +660,7 @@ fn convert(
             } else {
                 (checkpoint, stamp)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", windows)))]
             (checkpoint, stamp)
         } else {
             if directory.optional(&final_name, false)?.is_some() {
@@ -690,8 +703,8 @@ fn convert(
             receipt_stamp = directory.read_json(&receipt_name)?.unwrap().1;
         }
         let file = directory.create(&receipt.staging_name)?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        directory.file.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&directory.file).map_err(|e| e.to_string())?;
         #[cfg(test)]
         crash_point("created-before-identity");
         receipt.staging_identity = Some(Identity::file(&file)?);
@@ -747,8 +760,8 @@ fn convert(
     receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
     // Also re-sync an already published object after restart; existence alone
     // is not proof that its previous directory sync completed.
-    file.sync_all().map_err(|e| e.to_string())?;
-    directory.file.sync_all().map_err(|e| e.to_string())?;
+    crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+    crate::native_fs::sync_handle(&directory.file).map_err(|e| e.to_string())?;
     #[cfg(test)]
     crash_point("published");
     let relative = directory
@@ -849,9 +862,12 @@ pub(super) fn crash_point(phase: &str) {
     if std::env::var("MON_FINAL_FLAC_CRASH_PHASE").as_deref() == Ok(phase)
         && std::env::var("MON_FINAL_FLAC_CRASH_CHILD").as_deref() == Ok("synthetic-only")
     {
+        #[cfg(unix)]
         unsafe {
             libc::kill(libc::getpid(), libc::SIGKILL);
         }
+        #[cfg(windows)]
+        std::process::abort();
         panic!("synthetic crash injection did not terminate its owned child");
     }
 }

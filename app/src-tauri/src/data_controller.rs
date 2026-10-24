@@ -3,11 +3,11 @@
 //! never substitute for the verified selection. No work runs on the UI thread.
 use crate::analysis_worker::AnalysisController;
 use crate::storage::backup::{archive::BackupReceipt, operations::*};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::storage::deletion::audio::operations as audio_deletion;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::storage::deletion::models::operations as model_deletion;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::storage::deletion::operations as deletion;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -20,15 +20,15 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use uuid::Uuid;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod automatic;
 mod dialog;
 mod work;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use work::{AudioTarget, ModelTarget};
 use work::{Completion, Work};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn finish_interrupted_deletions(app: &AppHandle) -> Result<(), String> {
     automatic::run(app)
 }
@@ -104,17 +104,17 @@ pub(crate) struct Snapshot {
     pub restore_receipt: Option<RestoreReceipt>,
     pub relocation_preview: Option<MovePreview>,
     pub relocation_receipt: Option<MoveReceipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub deletion_preview: Option<deletion::Preview>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub deletion_receipt: Option<deletion::Receipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub audio_deletion_preview: Option<audio_deletion::Preview>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub audio_deletion_receipt: Option<audio_deletion::Receipt>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub model_deletion_preview: Option<model_deletion::Preview>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub model_deletion_receipt: Option<model_deletion::Receipt>,
     pub restart_required: bool,
     pub error_message: Option<String>,
@@ -136,17 +136,17 @@ impl Default for Snapshot {
             restore_receipt: None,
             relocation_preview: None,
             relocation_receipt: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             deletion_preview: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             deletion_receipt: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             audio_deletion_preview: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             audio_deletion_receipt: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             model_deletion_preview: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             model_deletion_receipt: None,
             restart_required: false,
             error_message: None,
@@ -159,13 +159,13 @@ impl Default for Snapshot {
 enum Selection {
     Backup(PreparedBackup),
     Restore(PreparedRestore),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     Relocation(crate::bootstrap::movement::Prepared),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     Deletion(deletion::Prepared),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     AudioDeletion(audio_deletion::Prepared),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     ModelDeletion(model_deletion::Prepared),
 }
 
@@ -174,13 +174,13 @@ impl Selection {
         match self {
             Self::Backup(p) => p.preview().confirmation_id,
             Self::Restore(p) => p.preview().confirmation_id,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             Self::Relocation(p) => p.preview().confirmation_id,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::Deletion(p) => p.preview().confirmation_id,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::AudioDeletion(p) => p.preview().confirmation_id,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Self::ModelDeletion(p) => p.preview().confirmation_id,
         }
     }
@@ -244,11 +244,11 @@ impl DataController {
         }
         // Check an accepted request BEFORE its old confirmation: refreshing
         // mints a new ID, and a lost refresh response still has to be replayable.
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_completed = s.snapshot.deletion_receipt.is_some()
             || s.snapshot.audio_deletion_receipt.is_some()
             || s.snapshot.model_deletion_receipt.is_some();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let deletion_completed = false;
         if s.request.as_ref() == Some(request)
             && (s.snapshot.busy
@@ -262,13 +262,13 @@ impl DataController {
         {
             return Ok(true);
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_resolution = matches!(
             (&s.selection, request.action),
             (Some(Selection::Deletion(_)), Action::Refresh)
         ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_resolution = deletion_resolution
             || matches!(
                 (&s.selection, request.action),
@@ -276,7 +276,7 @@ impl DataController {
             )
             || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_resolution = deletion_resolution
             || matches!(
                 (&s.selection, request.action),
@@ -284,14 +284,14 @@ impl DataController {
             )
             || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let deletion_resolution = false;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_resume = (matches!(&s.selection, Some(Selection::Deletion(p)) if p.preview().pending)
             || matches!(&s.selection, Some(Selection::AudioDeletion(p)) if p.preview().pending)
             || matches!(&s.selection, Some(Selection::ModelDeletion(p)) if p.preview().pending))
             && !deletion_completed;
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let deletion_resume = false;
         if s.closing
             || s.snapshot.busy
@@ -312,7 +312,7 @@ impl DataController {
             (Selection::Backup(_), Action::Publish)
                 | (Selection::Restore(_), Action::Publish | Action::Refresh)
         );
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let allowed = allowed
             || match (selection, request.action) {
                 (Selection::Relocation(_), Action::Refresh) => true,
@@ -320,7 +320,7 @@ impl DataController {
                 (Selection::Relocation(p), Action::Keep) => p.preview().pending,
                 _ => false,
             };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let allowed = allowed
             || match (selection, request.action) {
                 (Selection::Deletion(_), Action::Refresh) => true,
@@ -353,7 +353,7 @@ impl DataController {
                 }
                 _ => false,
             };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let allowed = allowed
             || match (selection, request.action) {
                 (Selection::AudioDeletion(_), Action::Refresh) => true,
@@ -375,7 +375,7 @@ impl DataController {
                 }
                 _ => false,
             };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let allowed = allowed
             || match (selection, request.action) {
                 (Selection::ModelDeletion(_), Action::Refresh) => true,
@@ -486,7 +486,7 @@ impl DataController {
         s.snapshot.backup_receipt = completion.backup;
         s.snapshot.restore_receipt = completion.restore;
         s.snapshot.relocation_receipt = completion.relocation;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             s.snapshot.deletion_receipt = completion.deletion;
             s.snapshot.audio_deletion_receipt = completion.audio_deletion;
@@ -495,11 +495,11 @@ impl DataController {
         s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let deletion_completed = s.snapshot.deletion_receipt.is_some()
             || s.snapshot.audio_deletion_receipt.is_some()
             || s.snapshot.model_deletion_receipt.is_some();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let deletion_completed = false;
         let published = s.snapshot.backup_receipt.is_some()
             || s.snapshot.restore_receipt.is_some()
@@ -530,11 +530,11 @@ impl DataController {
             _ => None,
         };
         s.snapshot.relocation_preview = match &s.selection {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             Some(Selection::Relocation(p)) => Some(p.preview()),
             _ => None,
         };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             s.snapshot.deletion_preview = match &s.selection {
                 Some(Selection::Deletion(p)) => Some(p.preview()),
@@ -599,7 +599,7 @@ impl DataController {
         Ok(snapshot)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn review_move(app: &AppHandle) -> Result<Snapshot, String> {
         let lease = work::Admission::acquire(app)?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Relocation)?;
@@ -610,11 +610,11 @@ impl DataController {
     }
 
     pub(crate) fn start(app: &AppHandle, request: Request) -> Result<Snapshot, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let mut deletion_admission = None;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let mut audio_admission = None;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let mut model_admission = None;
         {
             let controller = app.state::<Self>();
@@ -625,18 +625,18 @@ impl DataController {
             if Self::request_replay(&s, &request)? {
                 return Ok(s.snapshot.clone());
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(Selection::Deletion(p)) = &s.selection {
                 let v = p.preview();
-                deletion_admission = Some(
+                deletion_admission = Some((v.meeting_id,
                     if v.pending || app.state::<Storage>().data_write_blocked() {
                         Some(v.operation_id)
                     } else {
                         None
                     },
-                );
+                ));
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(Selection::ModelDeletion(p)) = &s.selection {
                 let v = p.preview();
                 model_admission = Some(
@@ -647,22 +647,22 @@ impl DataController {
                     },
                 );
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(Selection::AudioDeletion(p)) = &s.selection {
                 audio_admission = Some(p.admission_operation().map(str::to_owned));
             }
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let lease = if let Some(operation) = model_admission {
             work::Admission::acquire_model_deletion(app, operation.as_deref())?
         } else if let Some(operation) = audio_admission {
-            work::Admission::acquire_audio_deletion(app, operation.as_deref())?
-        } else if let Some(operation) = deletion_admission {
-            work::Admission::acquire_deletion(app, operation.as_deref())?
+            work::Admission::acquire_audio_deletion(app, operation.as_deref()).map_err(|e|format!("audio_deletion_not_started:{e}"))?
+        } else if let Some((meeting, operation)) = deletion_admission {
+            work::Admission::acquire_meeting_deletion(app, &meeting, operation.as_deref()).map_err(|e|format!("meeting_deletion_not_started:{e}"))?
         } else {
             work::Admission::acquire(app)?
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let lease = work::Admission::acquire(app)?;
         if let Some((work, cancel, snapshot)) = app.state::<Self>().begin_request(request)? {
             let token = snapshot.token.clone().ok_or("データ操作IDがありません")?;
@@ -674,13 +674,16 @@ impl DataController {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn review_deletion(
         app: &AppHandle,
         id: String,
         pending: bool,
     ) -> Result<Snapshot, String> {
-        let lease = work::Admission::acquire_deletion(app, pending.then_some(id.as_str()))?;
+        let meeting = if pending {
+            app.state::<Storage>().deletion_operation_meeting(&id)?
+        } else { id.clone() };
+        let lease = work::Admission::acquire_meeting_deletion(app, &meeting, pending.then_some(id.as_str())).map_err(|e|format!("meeting_deletion_not_started:{e}"))?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Deletion)?;
         let token = snapshot
             .token
@@ -696,7 +699,7 @@ impl DataController {
         );
         Ok(snapshot)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn deletion_page(
         &self,
         confirmation: &str,
@@ -715,7 +718,7 @@ impl DataController {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn review_audio_deletion(
         app: &AppHandle,
         target: work::AudioTarget,
@@ -724,7 +727,7 @@ impl DataController {
             work::AudioTarget::Pending(id) => Some(id.as_str()),
             _ => None,
         };
-        let lease = work::Admission::acquire_audio_deletion(app, operation)?;
+        let lease = work::Admission::acquire_audio_deletion(app, operation).map_err(|e|format!("audio_deletion_not_started:{e}"))?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::AudioDeletion)?;
         let token = snapshot
             .token
@@ -740,7 +743,7 @@ impl DataController {
         );
         Ok(snapshot)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn audio_deletion_page(
         &self,
         confirmation: &str,
@@ -759,7 +762,7 @@ impl DataController {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn review_model_deletion(
         app: &AppHandle,
         target: work::ModelTarget,
@@ -789,7 +792,7 @@ impl DataController {
         );
         Ok(snapshot)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn model_deletion_page(
         &self,
         confirmation: &str,
@@ -826,7 +829,7 @@ impl DataController {
                         Self::emit(&worker, snapshot);
                     }
                 };
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 let completion = work.run_with_bootstrap_admitted(
                     &worker.state::<Storage>(),
                     &worker.state::<crate::bootstrap::Bootstrap>(),
@@ -834,7 +837,7 @@ impl DataController {
                     &progress,
                     lease.proof(),
                 );
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", windows)))]
                 let completion = work.run_admitted(
                     &worker.state::<Storage>(),
                     &cancelled,
@@ -886,7 +889,7 @@ impl DataController {
                 && s.snapshot.relocation_receipt.is_none()
                 && !s.snapshot.attention_required
                 && {
-                    #[cfg(unix)]
+                    #[cfg(any(unix, windows))]
                     {
                         s.snapshot.deletion_receipt.is_none()
                             && s.snapshot.model_deletion_receipt.is_none()
@@ -907,7 +910,7 @@ impl DataController {
                                 .as_ref()
                                 .is_some_and(|p| p.pending)
                     }
-                    #[cfg(not(unix))]
+                    #[cfg(not(any(unix, windows)))]
                     {
                         true
                     }
@@ -998,15 +1001,15 @@ impl DataController {
         if s.selection.is_none() {
             s.snapshot.backup_preview = None;
             s.snapshot.restore_preview = None;
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if s.snapshot.deletion_receipt.is_none() {
                 s.snapshot.deletion_preview = None;
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if s.snapshot.model_deletion_receipt.is_none() {
                 s.snapshot.model_deletion_preview = None;
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if s.snapshot.audio_deletion_receipt.is_none() {
                 s.snapshot.audio_deletion_preview = None;
             }

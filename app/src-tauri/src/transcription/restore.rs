@@ -93,8 +93,14 @@ pub(crate) fn restore_saved_results(
                 return Err("文字起こし結果のモデル名が固定SHAの記録と一致しません".into());
             }
             let recognized = whisper::parse_output(&bytes, Path::new(name), old_duration)?;
+            recovery::rebind_json(&mut raw, model_names, &before.engine.model.path)?;
             raw["params"]["model"] = json!(before.engine.model.path);
             let logical_before = serde_json::to_vec(&raw).map_err(|e| e.to_string())?;
+            recovery::rebind_json(
+                &mut raw,
+                &[before.engine.model.path.to_string_lossy().into_owned()],
+                &after.engine.model.path,
+            )?;
             raw["params"]["model"] = json!(after.engine.model.path);
             let rebuilt = serde_json::to_vec(&raw).map_err(|e| e.to_string())?;
             if whisper::parse_output(&rebuilt, &after.engine.model.path, old_duration)?
@@ -121,6 +127,35 @@ pub(crate) fn restore_saved_results(
         for (id, hash, _, rebuilt) in rewritten {
             assets.write(Role::TranscriptionResult, id, hash, &rebuilt)?;
         }
+    }
+    if let Some(pending) = checkpoint.pending_recovery {
+        let bytes = assets.read(
+            Role::TranscriptionResult,
+            &pending.reference.json_asset_id,
+            &pending.reference.json_hash,
+        )?;
+        let mut state: recovery::State =
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let unit = before
+            .units
+            .get(pending.index)
+            .ok_or("再認識の保存位置がありません")?;
+        let rate = u64::from(before.source.tracks[unit.track_index].sample_rate);
+        let first = (unit.core_first - unit.window_first) * 16_000 / rate;
+        let end = (unit.core_end - unit.window_first) * 16_000 / rate;
+        let duration = ((unit.window_end - unit.window_first) * 1_000_000 / rate) as i64;
+        state.rebind_models(model_names, &before.engine.model.path)?;
+        state.validate_input(first, end, duration, &before.engine.model.path)?;
+        state.rebind_models(
+            &[before.engine.model.path.to_string_lossy().into_owned()],
+            &after.engine.model.path,
+        )?;
+        assets.write(
+            Role::TranscriptionResult,
+            &pending.reference.json_asset_id,
+            &pending.reference.json_hash,
+            &serde_json::to_vec(&state).map_err(|e| e.to_string())?,
+        )?;
     }
     if cancelled() {
         return Err("文字起こし成果物の復元が中断されました".into());

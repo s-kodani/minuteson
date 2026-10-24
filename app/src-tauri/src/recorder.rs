@@ -19,6 +19,8 @@ struct ActiveCapture {
     writes: crate::recording_writes::WriteReader,
     input_status: Arc<Mutex<crate::input_status::StatusReader>>,
     selection_revision: u64,
+    #[cfg(windows)]
+    _job: crate::local_engine::windows::Job,
 }
 
 #[derive(Default)]
@@ -90,7 +92,7 @@ fn recording_command(
         .arg("--mode")
         .arg(&scope.mode)
         .arg("--backend")
-        .arg("coreaudio")
+        .arg(capture_backend())
         .arg("--scenario")
         .arg(format!("mon-app-{}", scope.mode))
         .arg("--stop-on-file")
@@ -99,6 +101,8 @@ fn recording_command(
         .arg("--until-stopped")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.stderr(Stdio::piped());
     if let Some(uid) = microphone_uid {
         command.arg("--microphone-uid").arg(uid);
     }
@@ -111,6 +115,14 @@ fn recording_command(
             .arg(serde_json::to_string(identity).map_err(|e| e.to_string())?);
     }
     Ok(command)
+}
+
+pub(crate) fn capture_backend() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "wasapi"
+    } else {
+        "coreaudio"
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -495,6 +507,9 @@ impl RecorderController {
         speaker_counts: &crate::storage::recordings::SpeakerCounts,
     ) -> Result<RecordingSnapshot, String> {
         app.state::<Storage>().require_data_writable()?;
+        let meeting_owner =
+            app.state::<Storage>()
+                .begin_meeting_work(meeting_id, "recording", None)?;
         let inputs = Self::inputs(app)?;
         if let Some(uid) = microphone_uid {
             inputs.require_microphone(uid)?;
@@ -517,7 +532,7 @@ impl RecorderController {
         }
         let config = RecordingConfig {
             mode: scope.mode.clone(),
-            backend: "coreaudio".into(),
+            backend: capture_backend().into(),
             target_pids: scope
                 .application
                 .as_ref()
@@ -537,41 +552,93 @@ impl RecorderController {
             .join("audio")
             .join(&session.id);
         let output = storage.managed_path(&relative)?;
-        let launch =
-            (|| -> Result<(Child, PathBuf, crate::recording_writes::WriteReader, crate::input_status::StatusReader), String> {
-                std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
-                let root = storage
-                    .managed_path(Path::new("meetings"))?
-                    .parent()
-                    .ok_or("保存先が不正です")?
-                    .canonicalize()
-                    .map_err(|error| error.to_string())?;
-                if output.canonicalize().map_err(|error| error.to_string())? != root.join(&relative)
-                {
-                    return Err("録音先が管理領域外です".into());
-                }
-                if std::fs::read_dir(&output)
-                    .map_err(|error| error.to_string())?
-                    .next()
-                    .is_some()
-                {
-                    return Err("録音先に既存ファイルがあります".into());
-                }
-                let writes = crate::recording_writes::WriteReader::pin(&root.join(&relative))?;
-                let input_status = crate::input_status::StatusReader::pin(&root.join(&relative))?;
-                let child = recording_command(
-                    &binary,
-                    &output,
-                    std::process::id(),
-                    microphone_uid,
-                    scope,
-                    &session.id,
-                )?
-                .spawn()
+        let launch = (|| {
+            std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+            let root = storage
+                .managed_path(Path::new("meetings"))?
+                .parent()
+                .ok_or("保存先が不正です")?
+                .canonicalize()
                 .map_err(|error| error.to_string())?;
-                Ok((child, root.join(&relative), writes, input_status))
-            })();
-        let (child, level_directory, writes, input_status) = match launch {
+            if output.canonicalize().map_err(|error| error.to_string())? != root.join(&relative) {
+                return Err("録音先が管理領域外です".into());
+            }
+            if std::fs::read_dir(&output)
+                .map_err(|error| error.to_string())?
+                .next()
+                .is_some()
+            {
+                return Err("録音先に既存ファイルがあります".into());
+            }
+            let writes = crate::recording_writes::WriteReader::pin(&root.join(&relative))?;
+            let input_status = crate::input_status::StatusReader::pin(&root.join(&relative))?;
+            let mut command = recording_command(
+                &binary,
+                &output,
+                std::process::id(),
+                microphone_uid,
+                scope,
+                &session.id,
+            )?;
+            #[cfg(windows)]
+            let job = {
+                use std::os::windows::process::CommandExt;
+                use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+                crate::local_engine::windows::initialize().map_err(|e| e.to_string())?;
+                command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+                crate::local_engine::windows::Job::new().map_err(|e| e.to_string())?
+            };
+            #[cfg(not(windows))]
+            let job = ();
+            let mut child = command.spawn().map_err(|error| error.to_string())?;
+            #[cfg(windows)]
+            if let Some(stderr) = child.stderr.take() {
+                let context = crate::internal_logs::Context {
+                    category: "recording".into(),
+                    meeting_id: Some(session.meeting_id.clone()),
+                    operation_id: Some(session.id.clone()),
+                    ..Default::default()
+                };
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let mut input = std::io::BufReader::new(stderr);
+                    let mut line = Vec::new();
+                    loop {
+                        line.clear();
+                        match std::io::Read::by_ref(&mut input)
+                            .take(4097)
+                            .read_until(b'\n', &mut line)
+                        {
+                            Ok(0) | Err(_) => break,
+                            _ => {}
+                        }
+                        if line.len() > 4096 {
+                            continue;
+                        }
+                        if let Ok(value) = std::str::from_utf8(&line) {
+                            if value.starts_with("mon_capture_") {
+                                crate::internal_logs::detail(
+                                    context.clone(),
+                                    "recording",
+                                    "info",
+                                    Duration::ZERO,
+                                    value.trim(),
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+
+            #[cfg(windows)]
+            if let Err(error) = job.assign_and_resume(&child) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+            Ok::<_, String>((child, root.join(&relative), writes, input_status, job))
+        })();
+        let (child, level_directory, writes, input_status, job) = match launch {
             Ok(child) => child,
             Err(error) => {
                 let _ = storage.fail_recording(&session.id);
@@ -589,6 +656,8 @@ impl RecorderController {
             writes,
             input_status: Arc::new(Mutex::new(input_status)),
             selection_revision: 0,
+            #[cfg(windows)]
+            _job: job,
         });
         let snapshot = publish_after_unlock(
             active,
@@ -609,7 +678,10 @@ impl RecorderController {
         let worker_session = session.id.clone();
         // Supervision starts independently of the focus-driven panel. A
         // delayed/failed UI must not leave an exited helper unobserved.
-        std::thread::spawn(move || watch_probe(worker_app, child, worker_session, output));
+        std::thread::spawn(move || {
+            let _meeting_owner = meeting_owner;
+            watch_probe(worker_app, child, worker_session, output)
+        });
         Ok(snapshot)
     }
 
@@ -901,6 +973,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn notification_owner_does_not_hold_capture_or_child_lock_while_reader_is_busy() {
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().canonicalize().unwrap();
@@ -1021,7 +1094,7 @@ mod tests {
             "--mode",
             "system",
             "--backend",
-            "coreaudio",
+            if cfg!(windows) { "wasapi" } else { "coreaudio" },
             "--scenario",
             "mon-app-system",
             "--stop-on-file",
@@ -1214,6 +1287,25 @@ mod tests {
 }
 
 pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let installed = exe
+            .parent()
+            .ok_or("アプリの場所がありません")?
+            .join("mon-windows-capture.exe");
+        let candidate = if installed.is_file() {
+            installed
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries/mon-windows-capture-x86_64-pc-windows-msvc.exe")
+        };
+        let path = candidate.canonicalize().map_err(|_| {
+            "Windows録音ヘルパーがありません。アプリを再ビルドしてください".to_string()
+        })?;
+        crate::windows_files::read(&path, false)?;
+        return Ok(path);
+    }
     if !cfg!(target_os = "macos") {
         return Err("この録音プローブはmacOS専用です".into());
     }

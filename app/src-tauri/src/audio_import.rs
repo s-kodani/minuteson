@@ -1,14 +1,16 @@
 //! Local file import. Paths never become permanent analysis dependencies.
 mod mp3;
+#[cfg(windows)]
+mod pcm;
 use crate::audio::VerifiedAudio;
-use crate::local_engine::{Fingerprint, ManagedChild, StableFile};
+use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
 use crate::storage::{imports::ImportSnapshot, Storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,26 +144,30 @@ pub(crate) fn decode(
     if &header == b"ID3" || (header[0] == 0xff && header[1] & 0xe0 == 0xe0) {
         return mp3::decode(input, output, cancelled);
     }
+    #[cfg(windows)]
+    if &header == b"RIF" || &header == b"fLa" {
+        return pcm::decode(input, output, cancelled);
+    }
     helper.verify(cancelled)?;
     let watch = StableFile::watch(helper)?;
     let report = tempfile::Builder::new()
         .prefix(".mon-import-report-")
         .tempfile_in(scratch)
         .map_err(|e| e.to_string())?;
-    let mut child = ManagedChild::direct(
-        Command::new(&helper.path)
-            .arg("--import-audio")
-            .arg(input)
-            .arg(output.unwrap_or(Path::new("-")))
-            .arg(std::process::id().to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(
-                report.as_file().try_clone().map_err(|e| e.to_string())?,
-            ))
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| e.to_string())?,
-    );
+    let mut launch = OwnedCommand::new(&helper.path)?;
+    launch
+        .command
+        .arg("--import-audio")
+        .arg(input)
+        .arg(output.unwrap_or(Path::new("-")))
+        .arg(std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            report.as_file().try_clone().map_err(|e| e.to_string())?,
+        ))
+        .stderr(Stdio::null());
+    crate::local_engine::native_environment(&mut launch.command);
+    let mut child = launch.spawn().map_err(|e| e.to_string())?;
     let started = Instant::now();
     let status = loop {
         check_cancelled(cancelled)?;
@@ -236,7 +242,11 @@ pub(crate) fn available_bytes(root: &Path) -> Result<u64, String> {
         .checked_mul(stats.f_frsize as u64)
         .ok_or("保存先容量が範囲外です".into())
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn available_bytes(root: &Path) -> Result<u64, String> {
+    crate::windows_files::available(root)
+}
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn available_bytes(_: &Path) -> Result<u64, String> {
     Err("このOSの音声取り込みはまだ接続されていません".into())
 }
@@ -313,6 +323,7 @@ pub(crate) fn import_configured(
     if !created || snapshot.state != "copying" {
         return Err("この取り込みは既に進行中または終了しています".into());
     }
+    let _meeting_owner = storage.begin_meeting_work(&snapshot.meeting_id, "import", None)?;
     let base = match storage.audio_import_directory(&snapshot) {
         Ok(base) => base,
         Err(error) => {
@@ -418,10 +429,7 @@ pub(crate) fn import_configured(
         pending
             .persist_noclobber(base.join("manifest.json"))
             .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        File::open(&base)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        crate::native_fs::sync_directory(&base)?;
         progress("saving", decoded.frames);
         storage.finalize_audio_import_cancellable(&snapshot.id, cancelled)
     })();

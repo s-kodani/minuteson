@@ -4,6 +4,31 @@ async (page) => {
   const popup = (name = "PCの音声") => page.getByRole("dialog", { name, exact: true });
   const close = async (name = "PCの音声") => { await page.keyboard.press("Escape"); await popup(name).waitFor({ state: "hidden" }); check(await trigger(name).evaluate(e => e === document.activeElement), "focus not returned to info icon"); };
   const open = async (name = "PCの音声") => { await trigger(name).click(); await popup(name).waitFor(); };
+  const background = page.getByRole("textbox", { name: "背景の入力" });
+  await background.focus();
+  await trigger().hover(); await page.waitForTimeout(80);
+  check(!await popup().isVisible(), "hover opened before the delay");
+  await popup().waitFor();
+  check(await background.evaluate(e => e === document.activeElement), "hover stole background focus");
+  await popup().hover(); await page.waitForTimeout(300);
+  check(await popup().isVisible(), "crossing into popup closed hover help");
+  await page.mouse.move(700, 500); await popup().waitFor({ state: "hidden" });
+  check(await background.evaluate(e => e === document.activeElement), "hover dismissal stole focus");
+  await trigger().hover(); await popup().waitFor(); await trigger().click();
+  await page.mouse.move(700, 500); await page.waitForTimeout(300);
+  check(await popup().isVisible(), "clicking a hover popup failed to pin it");
+  await trigger().click(); await popup().waitFor({ state: "hidden" });
+  await page.mouse.move(700, 500);
+  await trigger().hover(); await page.mouse.move(700, 500); await page.waitForTimeout(300);
+  check(!await popup().isVisible(), "cancelled hover timer reopened help");
+  results.push("delayed hover preserves focus, survives popup entry, closes on leave, pins on click and cancels pending opening");
+
+  if (await page.evaluate(() => navigator.maxTouchPoints > 0)) {
+    await trigger().tap(); await popup().waitFor();
+    await page.touchscreen.tap(700, 500); await popup().waitFor({ state: "hidden" });
+    await trigger().tap(); await popup().waitFor(); await trigger().tap(); await popup().waitFor({ state: "hidden" });
+    results.push("touch opens pinned help and dismisses with an outside tap or repeated icon tap");
+  }
   await trigger().focus(); await page.keyboard.press("Enter"); await popup().waitFor();
   check(await trigger().getAttribute("aria-expanded") === "true", "expanded state missing");
   check(await popup().getAttribute("aria-modal") === "false", "help made background modal");
@@ -71,6 +96,12 @@ async (page) => {
   check(await modal.isVisible(), "outside help click closed parent modal");
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" });
   results.push("confirmation takes precedence; nested help Escape/outside close only help and retain visible loss warning");
+
+  await trigger().hover(); await page.evaluate(() => window.infoFixture.confirm());
+  await modal.waitFor(); await page.waitForTimeout(300);
+  check(!await popup().isVisible(), "pending hover opened above a confirmation");
+  await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" });
+  results.push("a pending hover cannot open after a confirmation takes precedence");
 
   await open(); await page.evaluate(() => window.infoFixture.setHidden(true)); await popup().waitFor({ state: "hidden" });
   await page.evaluate(() => window.infoFixture.setHidden(false)); await open();

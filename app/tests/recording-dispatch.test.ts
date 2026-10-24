@@ -24,7 +24,7 @@ test("input preparation has no permanent permission-help button or modal",()=>{
 test("production recording and five-second tests select audio-only taps with no screen fallback",()=>{
   for(const file of ["recorder.rs","capture_test.rs"]){
     const native=readFileSync(new URL(`../src-tauri/src/${file}`,import.meta.url),"utf8");
-    assert.match(native,/\.arg\("--backend"\)\s*\.arg\("coreaudio"\)/);
+    assert.match(native,/\.arg\("--backend"\)\s*\.arg\((?:crate::recorder::)?capture_backend\(\)\)/);
     assert.doesNotMatch(native,/\.arg\("screencapturekit"\)/);
   }
   const catalog=readFileSync(new URL("../../probes/macos-capture/Sources/MONMacOSCapture/CaptureApplications.swift",import.meta.url),"utf8");

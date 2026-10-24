@@ -25,13 +25,36 @@ async (page, capturePath = path => path) => {
   await page.getByRole("alert").filter({ hasText: "確定済みの起動診断が変更" }).waitFor(); await noWorkspace();
   results.push("read failure preserves cause; contradictory ready reply cannot unlock blocked workspace");
 
-  for (const variant of ["read-fail", "invalid", "starting"]) {
-    await boot(variant); if (variant !== "starting") await page.getByRole("alert").waitFor();
+  for (const variant of ["read-fail", "invalid"]) {
+    await boot(variant); await page.getByRole("alert").waitFor();
     await noWorkspace(); check(await quit().count() === 0, "unverified admission enabled special failure exit");
     check((await commands()).length === 1, "unknown startup automatically retried");
     if (variant === "read-fail") { await page.evaluate(() => { window.startupFixture.readFail = false; }); await reload().click(); await quit().waitFor(); }
   }
-  results.push("unreadable, forged and unsettled reports fail closed; manual read may verify original failure");
+  results.push("unreadable and forged reports fail closed; manual read may verify original failure");
+
+  for (const phase of ["ready", "blocked"]) {
+    await page.goto(`http://127.0.0.1:1420/?fixture=transition-${phase}`);
+    await page.getByRole("main", { name: "起動確認", exact: true }).waitFor();
+    const center = await page.getByRole("status").evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, width: innerWidth, height: innerHeight };
+    });
+    check(Math.abs(center.x - center.width / 2) < 2 && Math.abs(center.y - center.height / 2) < 2,
+      "startup message is not centered in the viewport");
+    check(await page.getByRole("heading", { name: "保存先の起動確認", exact: true }).count() === 0,
+      "normal pending startup showed the diagnostic page");
+    check(await page.getByRole("main", { name: "通常画面", exact: true }).count() === 0,
+      "workspace mounted before confirmed admission");
+    if (phase === "ready") await page.getByRole("main", { name: "通常画面", exact: true }).waitFor();
+    else { await quit().waitFor(); await noWorkspace(); }
+    const settled = (await commands()).length;
+    await page.waitForTimeout(450);
+    check((await commands()).length === settled && settled >= 2,
+      "startup did not reread pending memory or kept polling a settled result");
+    check((await commands()).every(c => c === "get_startup_report"), "pending startup invoked storage work");
+  }
+  results.push("pending startup reads memory until ready/blocked, then stops; normal startup needs no confirmation");
 
   await boot("selection"); await page.getByText("選択先は未確定です。エラー本文から推測しません。", { exact: true }).waitFor(); await noWorkspace();
   check((await page.locator("main").innerText()).includes("保存先の起動設定の検証"), "wrong failure stage displayed");

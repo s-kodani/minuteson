@@ -27,6 +27,40 @@ pub(super) struct CaptureEnd {
 }
 
 impl CaptureManifest {
+    pub(super) fn validated_unreceived_microphone(&self, owner: &str) -> Result<bool, String> {
+        if !self.microphone_audio_unreceived {
+            return Ok(false);
+        }
+        let track = &self.microphone;
+        if !cfg!(windows)
+            || self.schema_version != crate::current_formats::CAPTURE
+            || self.state != "saved"
+            || !self.errors.is_empty()
+            || self.recording_owner_id.as_deref() != Some(owner)
+            || !crate::input_levels::valid_owner(owner)
+            || self.capture_end.is_none()
+            || self.capture_clock.is_none()
+            || track.frames != 0
+            || track.callback_count != 0
+            || track.append_failures != 0
+            || track.sample_rate.is_some()
+            || track.channels.is_some()
+            || track.capture_failure.is_some()
+            || track.capture_failure_detail.is_some()
+            || track.clock_segments.as_deref() != Some(&[])
+        {
+            return Err("未取得のマイク音声の形式・終了証拠が不正です".into());
+        }
+        #[cfg(windows)]
+        if !track
+            .raw_segments
+            .as_ref()
+            .is_some_and(|s| s.capacity_owner(owner, crate::recording_segments::Lane::Microphone))
+        {
+            return Err("未取得のマイク音声の原PCM証拠がありません".into());
+        }
+        Ok(true)
+    }
     pub(super) fn validated_unreceived_system(&self, owner: &str) -> Result<bool, String> {
         if !self.system_audio_unreceived {
             return Ok(false);
@@ -37,7 +71,7 @@ impl CaptureManifest {
             status.capacity_owner(owner, crate::recording_segments::Lane::System)
         });
         #[cfg(not(unix))]
-        let empty_raw = false;
+        let empty_raw = cfg!(windows);
         if self.schema_version != crate::current_formats::CAPTURE
             || self.state != "saved"
             || !self.errors.is_empty()
@@ -62,8 +96,10 @@ impl CaptureManifest {
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
         match (self.schema_version, &self.capture_clock) {
             (crate::current_formats::CAPTURE, Some(clock))
-                if clock.domain == "mach_continuous_time"
-                    && (0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
+                if matches!(
+                    clock.domain.as_str(),
+                    "mach_continuous_time" | "query_performance_counter"
+                ) && (0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
                     && (0..=9_007_199_254_740_991).contains(&clock.uncertainty_ns) =>
             {
                 Ok(Some(clock))
@@ -114,9 +150,9 @@ impl CaptureTrack {
             .clock_segments
             .as_deref()
             .ok_or("録音の時刻補正区間がありません")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let segmented = self.raw_segments.is_some();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let segmented = false;
         let limit = if segmented {
             crate::audio_clock::MAX_CLOCK_SEGMENTS

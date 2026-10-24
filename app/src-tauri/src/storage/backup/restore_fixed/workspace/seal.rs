@@ -25,7 +25,7 @@ fn uuid(value: &str) -> bool {
 }
 
 fn root(stage: &scratch::Stage) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(stage.path()).map_err(|e| e.to_string())?;
+    let metadata = crate::native_fs::symlink_metadata(stage.path()).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         return Err("復元専用領域が変更されています".into());
     }
@@ -40,7 +40,8 @@ fn root(stage: &scratch::Stage) -> Result<PathBuf, String> {
 }
 
 fn regular(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    let metadata = crate::native_fs::symlink_metadata(path)
+        .map_err(|e| format!("復元ファイル確認 {}: {e}", path.display()))?;
     if !metadata.is_file() {
         return Err("復元管理対象は通常ファイルに限ります".into());
     }
@@ -64,15 +65,15 @@ fn asset_path(root: &Path, id: &str, meeting: &str, relative: &str) -> Result<Pa
     let mut directory = root.to_path_buf();
     for component in ["meetings", meeting, "restored"] {
         directory.push(component);
-        if !std::fs::symlink_metadata(&directory)
-            .map_err(|e| e.to_string())?
+        if !crate::native_fs::symlink_metadata(&directory)
+            .map_err(|e| format!("復元親フォルダー {}: {e}", directory.display()))?
             .is_dir()
             || directory.canonicalize().map_err(|e| e.to_string())? != directory
         {
             return Err("復元管理ファイルの親パスが変更されています".into());
         }
     }
-    Ok(root.join(relative))
+    Ok(crate::native_fs::join(root, relative))
 }
 
 fn verify_assets(db: &Connection, root: &Path, check: &impl Fn() -> bool) -> Result<u64, String> {
@@ -101,10 +102,11 @@ fn verify_assets(db: &Connection, root: &Path, check: &impl Fn() -> bool) -> Res
             let mut path = root.to_path_buf();
             for component in Path::new(&relative).components() {
                 path.push(component);
-                match std::fs::symlink_metadata(&path) {
+                match crate::native_fs::symlink_metadata(&path) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
                     Err(e) => return Err(e.to_string()),
-                    Ok(info) if info.is_dir() && path != root.join(&relative) => {}
+                    Ok(info)
+                        if info.is_dir() && path != crate::native_fs::join(root, &relative) => {}
                     Ok(_) => return Err("除外されたPCM・ログの保存先に追加物があります".into()),
                 }
             }
@@ -140,7 +142,8 @@ fn inventory(
             .strip_prefix(root)
             .map_err(|e| e.to_string())?
             .to_str()
-            .ok_or("復元ファイル名が不正です")?;
+            .ok_or("復元ファイル名が不正です")?
+            .replace('\\', "/");
         if kind.is_file() {
             if relative != "fixed.sqlite3" {
                 let known:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM file_assets WHERE relative_path=?1 AND state='ready')",params![relative],|r|r.get(0)).map_err(|e|e.to_string())?;
@@ -268,8 +271,10 @@ impl FixedWorkspace {
         if actual != expected || self.missing_assets != expected {
             return Err("復元データの欠損成果物が除外記録と一致しません".into());
         }
-        let bytes = verify_assets(&self.database, &owned, check)?;
-        inventory(&self.database, &owned, &owned, 0, check)?;
+        let bytes = verify_assets(&self.database, &owned, check)
+            .map_err(|e| format!("復元音声確認: {e}"))?;
+        inventory(&self.database, &owned, &owned, 0, check)
+            .map_err(|e| format!("復元領域確認: {e}"))?;
         if self
             .database
             .query_row(

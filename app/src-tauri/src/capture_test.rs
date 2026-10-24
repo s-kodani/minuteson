@@ -3,6 +3,9 @@
 mod files;
 #[cfg(target_os = "macos")]
 mod journal;
+#[cfg(windows)]
+#[path = "capture_test/journal_windows.rs"]
+mod journal;
 pub(crate) mod recovery;
 #[cfg(test)]
 mod tests;
@@ -107,6 +110,34 @@ struct State {
 pub(crate) struct CaptureTests(Mutex<State>);
 struct Probe(Mutex<Child>);
 impl Probe {
+    #[cfg(windows)]
+    fn failure_detail(&self) -> Option<String> {
+        use std::{io::Read, os::windows::io::AsRawHandle};
+        let mut child = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let pipe = child.stderr.as_mut()?;
+        let mut available = 0;
+        // Only consume bytes already in the pipe. An inherited writer must
+        // never make cancellation or error reporting wait indefinitely.
+        if unsafe {
+            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                pipe.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        } == 0
+            || available == 0
+        {
+            return None;
+        }
+        let mut bytes = vec![0; (available as usize).min(8192)];
+        let count = pipe.read(&mut bytes).ok()?;
+        let text = String::from_utf8_lossy(&bytes[..count]);
+        let detail = text.trim();
+        (!detail.is_empty()).then(|| detail.to_owned())
+    }
     fn exited(&self) -> Result<Option<std::process::ExitStatus>, String> {
         self.0
             .lock()
@@ -134,13 +165,18 @@ fn command(
 ) -> Result<Command, String> {
     request.validate()?;
     let mut command = Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
     command
         .arg("--output")
         .arg(directory)
         .arg("--mode")
         .arg(&request.capture_scope.mode)
         .arg("--backend")
-        .arg("coreaudio")
+        .arg(crate::recorder::capture_backend())
         .arg("--scenario")
         .arg("mon-five-second-test")
         .arg("--stop-on-file")
@@ -153,6 +189,8 @@ fn command(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.stderr(Stdio::piped());
     if let Some(identity) = &request.capture_scope.application {
         command
             .arg("--pid")
@@ -162,7 +200,7 @@ fn command(
     }
     Ok(command)
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn owned_command(
     binary: &std::path::Path,
     directory: &files::TestDirectory,
@@ -170,9 +208,15 @@ fn owned_command(
 ) -> Result<Command, String> {
     let mut launch = command(binary, &directory.path, request)?;
     let descriptor = directory.inherit_lease(&mut launch)?;
+    #[cfg(target_os = "macos")]
     launch
         .arg("--capture-test-lease-fd")
         .arg(descriptor.to_string());
+    #[cfg(windows)]
+    {
+        let _ = descriptor;
+        launch.arg("--capture-test-lease-stdin").arg("1");
+    }
     Ok(launch)
 }
 impl CaptureTests {
@@ -445,14 +489,14 @@ impl CaptureTests {
                             None
                         };
                     let binary = crate::recorder::probe_path(&app)?;
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", windows))]
                     let directory = Arc::new(
                         app.state::<Self>()
                             .lock()?
                             .ownership
                             .allocate(request.clone())?,
                     );
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(not(any(target_os = "macos", windows)))]
                     let directory = Arc::new(files::TestDirectory::new()?);
                     Self::update(&app, &id, |run| {
                         run.directory = Some(directory.clone());
@@ -462,9 +506,9 @@ impl CaptureTests {
                     if cancelled() {
                         return Err("録音前テストを取り消しました".into());
                     }
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", windows))]
                     let mut launch = owned_command(&binary, &directory, &request)?;
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(not(any(target_os = "macos", windows)))]
                     let mut launch = command(&binary, &directory.path, &request)?;
                     let spawned = launch.spawn().map_err(|e| e.to_string());
                     // The command's pre_exec closure owns a duplicate. Release
@@ -539,7 +583,7 @@ impl CaptureTests {
                 match result {
                     Ok(ready) if !cancelled() => {
                         run.snapshot.phase = "ready".into();
-                        run.snapshot.microphone = Some(ready.microphone.info.clone());
+                        run.snapshot.microphone = ready.microphone.as_ref().map(|track| track.info.clone());
                         run.snapshot.system = ready.system.as_ref().map(|track| track.info.clone());
                         run.ready = Some(ready);
                     }
@@ -658,7 +702,7 @@ impl CaptureTests {
         }
         let ready = run.ready.as_ref().ok_or("検証済み音声がありません")?;
         let track = match kind {
-            "mic" => &ready.microphone,
+            "mic" => ready.microphone.as_ref().ok_or("マイク音声は未受信のため再生できません。マイクを確認して再テストしてください")?,
             "system" => ready
                 .system
                 .as_ref()
@@ -715,6 +759,15 @@ fn watch(
             }
             if status.success() && !cancel.load(Ordering::Acquire) {
                 return Ok(());
+            }
+            if cancel.load(Ordering::Acquire) {
+                return Err("録音前テストを取り消しました".into());
+            }
+            #[cfg(windows)]
+            if let Some(reason) = child.failure_detail() {
+                return Err(format!(
+                    "録音前テストを開始・保存できませんでした: {reason}"
+                ));
             }
             return Err("テストを取り消したか、録音ヘルパーが保存を完了できませんでした".into());
         }

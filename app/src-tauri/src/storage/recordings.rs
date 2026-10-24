@@ -4,10 +4,12 @@ use serde::Deserialize;
 use std::fs::File;
 
 mod clock;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::storage) mod flac;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod partial;
+#[cfg(windows)]
+mod windows;
 use clock::{CaptureClock, CaptureEnd};
 #[cfg(all(test, unix))]
 pub(crate) use flac::tests::{
@@ -33,6 +35,8 @@ struct CaptureManifest {
     #[serde(default)]
     system_audio_unreceived: bool,
     #[serde(default)]
+    microphone_audio_unreceived: bool,
+    #[serde(default)]
     capture_clock: Option<CaptureClock>,
     #[serde(default)]
     capture_end: Option<CaptureEnd>,
@@ -55,7 +59,7 @@ struct CaptureTrack {
     capture_failure_detail: Option<String>,
     #[serde(default)]
     clock_segments: Option<Vec<crate::audio_clock::ClockSegment>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[serde(default)]
     raw_segments: Option<crate::recording_segments::Status>,
 }
@@ -136,7 +140,10 @@ impl RecordingConfig {
             return Err("マイクの識別情報が不正です".into());
         }
         if !matches!(self.mode.as_str(), "system" | "application")
-            || !matches!(self.backend.as_str(), "screencapturekit" | "coreaudio")
+            || !matches!(
+                self.backend.as_str(),
+                "screencapturekit" | "coreaudio" | "wasapi"
+            )
         {
             return Err("録音方式が不正です".into());
         }
@@ -182,7 +189,7 @@ pub(crate) struct ClosedInputRecording {
 impl Storage {
     pub(crate) fn verify_closed_input_storage(&self) -> Result<(), String> {
         self.require_data_writable()?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.managed_anchor.verify()?;
         if self.root.canonicalize().map_err(|e| e.to_string())? != self.root {
             return Err("保存後通知の管理領域が変更されています".into());
@@ -536,7 +543,7 @@ impl Storage {
         load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません".into())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn verify_completed_raw_prefixes(
         &self,
         base: &Path,
@@ -560,8 +567,8 @@ impl Storage {
             )?;
             match (prefix, &track.raw_segments) {
                 (Some(prefix), Some(status))
-                    if lane == Lane::System
-                        && manifest.system_audio_unreceived
+                    if ((lane == Lane::System && manifest.system_audio_unreceived)
+                        || (lane == Lane::Microphone && manifest.microphone_audio_unreceived))
                         && status.agrees_with_unreceived(&prefix) =>
                 {
                     prefix.verify_at(&self.root.join(base), &|| false)?;
@@ -594,6 +601,7 @@ impl Storage {
                 .map_err(|_| "DBロックを取得できません".to_string())?;
             load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません")?
         };
+        let _meeting_owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
         if !matches!(
             session.state.as_str(),
             "recording" | "stopping" | "interrupted"
@@ -655,7 +663,12 @@ impl Storage {
         {
             return Err("録音manifestと開始条件が一致しません".into());
         }
-        let mic_format = manifest.microphone.validated_format()?;
+        let mic_unreceived = manifest.validated_unreceived_microphone(session_id)?;
+        let mic_format = if mic_unreceived {
+            None
+        } else {
+            Some(manifest.microphone.validated_format()?)
+        };
         let unreceived = manifest.validated_unreceived_system(session_id)?;
         let system_format = if unreceived {
             None
@@ -663,9 +676,20 @@ impl Storage {
             Some(manifest.system.validated_format()?)
         };
         let capture_clock = manifest.validated_capture_clock()?;
-        let mic_timeline = manifest
-            .microphone
-            .validated_timeline(capture_clock.is_some())?;
+        if mic_unreceived && unreceived {
+            return Err("両方の入力が未取得の録音は完了できません".into());
+        }
+        let mic_timeline = if mic_unreceived {
+            clock::CaptureTimeline {
+                start_us: 0,
+                end_us: 0,
+                segments: &[],
+            }
+        } else {
+            manifest
+                .microphone
+                .validated_timeline(capture_clock.is_some())?
+        };
         let system_timeline = if unreceived {
             clock::CaptureTimeline {
                 start_us: 0,
@@ -677,7 +701,9 @@ impl Storage {
                 .system
                 .validated_timeline(capture_clock.is_some())?
         };
-        let first_saved_us = if unreceived {
+        let first_saved_us = if mic_unreceived {
+            system_timeline.start_us
+        } else if unreceived {
             mic_timeline.start_us
         } else {
             mic_timeline.start_us.min(system_timeline.start_us)
@@ -709,8 +735,32 @@ impl Storage {
         } else {
             "{\"timeline_alignment\":\"unverified\"}".into()
         };
-        let mic_file =
-            self.checked_capture_file(&base.join("microphone.caf"), Some(&manifest.microphone))?;
+        let mic_file = if mic_unreceived {
+            let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
+            if crate::input_levels::open_capture_file_at_optional(&directory, "microphone.caf")?
+                .is_some()
+            {
+                return Err("未取得のマイク音声に音声ファイルがあります".into());
+            }
+            None
+        } else {
+            Some(
+                self.checked_capture_file(
+                    &base.join("microphone.caf"),
+                    Some(&manifest.microphone),
+                )?,
+            )
+        };
+        // Existing Windows protocol-2 jobs/recordings retain their old evidence.
+        // Once a producer advertises raw v2, both lanes must verify completely.
+        #[cfg(windows)]
+        let raw_prefixes = if manifest.microphone.raw_segments.is_some()
+            || manifest.system.raw_segments.is_some()
+        {
+            Some(self.verify_completed_raw_prefixes(&base, &manifest, session_id)?)
+        } else {
+            None
+        };
         let system_file = if unreceived {
             let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
             if crate::input_levels::open_capture_file_at_optional(&directory, "system.caf")?
@@ -722,6 +772,16 @@ impl Storage {
         } else {
             Some(self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?)
         };
+        #[cfg(windows)]
+        let publication = Some(windows::Publication::prepare(
+            self,
+            &base,
+            &manifest_file.hash,
+            &manifest,
+            mic_file.as_ref(),
+            system_file.as_ref(),
+            raw_prefixes.as_deref(),
+        )?);
         #[cfg(unix)]
         let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
         #[cfg(unix)]
@@ -758,7 +818,7 @@ impl Storage {
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(publication) = &publication {
             publication.verify(self)?;
         }
@@ -769,11 +829,11 @@ impl Storage {
             "application/json",
             now,
         )?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let converted = publication.is_some();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let converted = false;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(publication) = &publication {
             publication.insert(
                 &transaction,
@@ -786,13 +846,16 @@ impl Storage {
             )?;
         }
         if !converted {
-            let mut tracks = vec![(
-                "mic",
-                &mic_file,
-                mic_format,
-                &mic_timeline,
-                manifest.microphone.frames,
-            )];
+            let mut tracks = Vec::new();
+            if let (Some(mic_file), Some(mic_format)) = (&mic_file, mic_format) {
+                tracks.push((
+                    "mic",
+                    mic_file,
+                    mic_format,
+                    &mic_timeline,
+                    manifest.microphone.frames,
+                ));
+            }
             if let (Some(system_file), Some(system_format)) = (&system_file, system_format) {
                 tracks.push((
                     "system",
@@ -841,7 +904,7 @@ impl Storage {
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(publication) = &publication {
             publication.verify(self)?;
         }
@@ -941,6 +1004,10 @@ impl Storage {
         if size_bytes < if caf.is_some() { 16 } else { 2 } {
             return Err("録音ファイルが短すぎます".into());
         }
+        // The producer flushes and closes each Windows CAF before publishing
+        // state=saved. FlushFileBuffers on this read-only verification handle
+        // would fail with ACCESS_DENIED; verification must not acquire a writer.
+        #[cfg(unix)]
         handle.sync_all().map_err(|error| error.to_string())?;
         Ok(CapturedFile {
             relative: relative.to_owned(),
@@ -1063,7 +1130,7 @@ pub(in crate::storage) mod tests {
             capture_failure: None,
             capture_failure_detail: None,
             clock_segments: None,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             raw_segments: None,
         };
         assert_eq!(track.validated_format().unwrap(), (8000, 1, 14_460_000_000));

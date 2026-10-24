@@ -162,7 +162,7 @@ impl Storage {
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         check_cancelled(check)?;
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         if !ids.source().deleted_audio.is_empty() {
             return Err("Windowsの削除済み音声の追加復元は保留中です".into());
         }
@@ -210,7 +210,7 @@ impl Storage {
             return Ok(Publication::AlreadyPublished);
         }
         sealed.verify(check)?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let unavailable = if ids.source().deleted_audio.is_empty() {
             None
         } else {
@@ -280,7 +280,7 @@ impl Storage {
                 return Err("復元バッチの同時公開を確定できません".into());
             }
             installed.completed(&tx)?;
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::retain(
                     &tx,
@@ -306,7 +306,7 @@ impl Storage {
             if let Some(p) = ids.source().manifest.voice_matching_preferences {
                 crate::storage::voice_preferences::restore(&tx, p)?;
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::verify_retained(
                     &tx,

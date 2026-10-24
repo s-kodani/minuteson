@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { acceptStartupReport, startupStageLabels, type StartupReport } from "./startup-attention-state";
 import { CommonModal } from "./common-modal";
+import { PlatformContext } from "./platform";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
@@ -16,6 +17,13 @@ function useStartupReport() {
     finally { reading.current = false; if (active.current) setBusy(false); }
   };
   useEffect(() => { active.current = true; void read(); return () => { active.current = false; }; }, []);
+  useEffect(() => {
+    // Only reread the in-memory startup result while native setup is pending.
+    // A confirmed failure or an invalid/unreadable reply still needs review.
+    if (report?.phase !== "starting" || busy || error) return;
+    const timer = window.setTimeout(() => void read(), 200);
+    return () => window.clearTimeout(timer);
+  }, [report, busy, error]);
   const quit = async () => {
     if (closing.current || current.current?.phase !== "blocked") return;
     closing.current = true; setQuitting(true); setError("");
@@ -32,7 +40,7 @@ export function StartupGate({ children }: { children: ReactNode }) {
   // Browser-only preview is not a native admission proof and cannot invoke
   // desktop operations. A desktop reader failure never mounts normal UI.
   return !isTauri() || state.report?.phase === "ready" ? <>
-    {children}
+    <PlatformContext.Provider value={state.report?.platform ?? "other"}>{children}</PlatformContext.Provider>
     {state.report?.recovery && <CommonModal portal open={!recoveryDismissed} onDismiss={() => setRecoveryDismissed(true)} dismissLabel="閉じる" dismissText="復旧結果を閉じる" restoreTarget={() => document.querySelector<HTMLElement>(".sidebar button:not(:disabled)")} aria-labelledby="startup-recovery-title" aria-describedby="startup-recovery-description">
       <h2 id="startup-recovery-title">{state.report.recovery.reviewRequired ? "中断操作の再確認が必要です" : "保存先の情報を修復しました"}</h2>
       {state.report.recovery.reviewRequired ? <>
@@ -41,7 +49,9 @@ export function StartupGate({ children }: { children: ReactNode }) {
       </> : <p id="startup-recovery-description">保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
-  </> : <StartupAttention state={state} />;
+  </> : !state.error && (!state.report || state.report.phase === "starting")
+    ? <main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main>
+    : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
   const { report, error, busy, quitting, read, quit } = state, f = report?.failure;

@@ -55,6 +55,11 @@ struct Node {
 // still has an inherited duplicate before exec. Keep this field after SQLite
 // in Placement so its explicit release occurs only after the connection closes.
 struct PlacementLock(File);
+impl crate::native_fs::MetadataSource for PlacementLock {
+    fn native_metadata(&self) -> std::io::Result<Metadata> {
+        crate::native_fs::metadata(&self.0)
+    }
+}
 impl std::ops::Deref for PlacementLock {
     type Target = File;
     fn deref(&self) -> &File {
@@ -124,7 +129,7 @@ fn read_identity(json: &str, digest: &str) -> Result<Identity, String> {
     }
     serde_json::from_str(json).map_err(|e| e.to_string())
 }
-fn descriptor(fd: i32) -> Result<File, String> {
+fn descriptor(fd: Descriptor) -> Result<File, String> {
     if fd < 0 {
         Err(std::io::Error::last_os_error().to_string())
     } else {
@@ -181,7 +186,7 @@ impl Bootstrap {
             .map_err(|e| e.to_string())?;
         if !pending
             .target_directory
-            .matches(&root.metadata().map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::metadata(&root).map_err(|e| e.to_string())?)
         {
             return Err("配置先が開く途中で変更されています".into());
         }
@@ -189,7 +194,7 @@ impl Bootstrap {
         let path = self.config.join(&name);
         let name_c = cstring(&name)?;
         self.guard_directory()?;
-        let new = match std::fs::symlink_metadata(&path) {
+        let new = match crate::native_fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
             Ok(_) => false,
             Err(e) => return Err(e.to_string()),
@@ -213,11 +218,12 @@ impl Bootstrap {
         let file = descriptor(unsafe {
             libc::openat(self.directory.as_raw_fd(), name_c.as_ptr(), flags, 0o600)
         })?;
-        let initial = ControlProof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let initial =
+            ControlProof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         let lock_name = format!(".relocation-{}.lock", pending.operation_id);
         let lock_path = self.config.join(&lock_name);
         let lock_name_c = cstring(&lock_name)?;
-        let new_lock = match std::fs::symlink_metadata(&lock_path) {
+        let new_lock = match crate::native_fs::symlink_metadata(&lock_path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
             Ok(_) => false,
             Err(e) => return Err(e.to_string()),
@@ -242,7 +248,7 @@ impl Bootstrap {
                 0o600,
             )
         })?;
-        ControlProof::read(&lock.metadata().map_err(|e| e.to_string())?)?;
+        ControlProof::read(&crate::native_fs::metadata(&lock).map_err(|e| e.to_string())?)?;
         lock.try_lock()
             .map_err(|e| format!("配置台帳を別の操作が使用中です: {e}"))?;
         let mut lock = PlacementLock(lock);
@@ -252,11 +258,15 @@ impl Bootstrap {
         );
         if new_lock {
             lock.write_all(marker.as_bytes())
-                .and_then(|_| lock.sync_all())
+                .and_then(|_| crate::native_fs::sync_handle(&lock))
                 .map_err(|e| e.to_string())?;
-            self.directory.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         } else {
-            if lock.metadata().map_err(|e| e.to_string())?.len() != marker.len() as u64 {
+            if crate::native_fs::metadata(&lock)
+                .map_err(|e| e.to_string())?
+                .len()
+                != marker.len() as u64
+            {
                 return Err("配置ロックの記録が不正です".into());
             }
             let mut bytes = vec![0u8; marker.len()];
@@ -265,10 +275,11 @@ impl Bootstrap {
                 return Err("配置ロックの確認対象が一致しません".into());
             }
         }
-        let lock_proof = ControlProof::read(&lock.metadata().map_err(|e| e.to_string())?)?;
+        let lock_proof =
+            ControlProof::read(&crate::native_fs::metadata(&lock).map_err(|e| e.to_string())?)?;
         if new {
-            file.sync_all().map_err(|e| e.to_string())?;
-            self.directory.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         } else if initial.size == 0 {
             return Err("未確定の配置台帳を再初期化しません。移動先を保持します".into());
         }
@@ -279,7 +290,7 @@ impl Bootstrap {
         .map_err(|e| e.to_string())?;
         if !initial
             .identity
-            .matches(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
+            .matches(&crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
         {
             return Err("配置台帳が開く途中で差し替えられています".into());
         }
@@ -350,8 +361,8 @@ impl Bootstrap {
             .map_err(|e| e.to_string())?;
             db.execute_batch("PRAGMA user_version=2; COMMIT;")
                 .map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            self.directory.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         }
         let integrity: String = db
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
@@ -415,10 +426,11 @@ impl Bootstrap {
             // may be opened for writes. No old-ledger conversion is performed.
             db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE;").map_err(|e|e.to_string())?;
             db.execute_batch("COMMIT;").map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            self.directory.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&self.directory).map_err(|e| e.to_string())?;
         }
-        let proof = ControlProof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let proof =
+            ControlProof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         if proof.identity != initial.identity {
             return Err("配置台帳の実体が変更されています".into());
         }
@@ -454,7 +466,7 @@ impl Placement<'_> {
         let mut seen = std::collections::BTreeSet::new();
         while let Some(relative) = paths.pop() {
             check(cancelled)?;
-            let path = self.pending.target.join(&relative);
+            let path = crate::native_fs::join(&self.pending.target, &relative);
             for child in std::fs::read_dir(&path).map_err(|e| e.to_string())? {
                 check(cancelled)?;
                 let child = child.map_err(|e| e.to_string())?;
@@ -524,16 +536,19 @@ impl Placement<'_> {
             || !self
                 .pending
                 .target_directory
-                .matches(&self.root.metadata().map_err(|e| e.to_string())?)
+                .matches(&crate::native_fs::metadata(&self.root).map_err(|e| e.to_string())?)
             || ControlProof::read(
-                &std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
+                &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
             )? != self.proof
-            || ControlProof::read(&self.file.metadata().map_err(|e| e.to_string())?)? != self.proof
             || ControlProof::read(
-                &std::fs::symlink_metadata(&self.lock_path).map_err(|e| e.to_string())?,
+                &crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?,
+            )? != self.proof
+            || ControlProof::read(
+                &crate::native_fs::symlink_metadata(&self.lock_path).map_err(|e| e.to_string())?,
             )? != self.lock_proof
-            || ControlProof::read(&self.lock.metadata().map_err(|e| e.to_string())?)?
-                != self.lock_proof
+            || ControlProof::read(
+                &crate::native_fs::metadata(&self.lock).map_err(|e| e.to_string())?,
+            )? != self.lock_proof
             || schema(&self.db)? != self.expected_schema
         {
             return Err("配置先・台帳の実体または形式が変更されています".into());
@@ -566,16 +581,15 @@ impl Placement<'_> {
     }
     fn committed(&mut self) -> Result<(), String> {
         self.uncertain = true;
-        self.file.sync_all().map_err(|e| e.to_string())?;
-        self.bootstrap
-            .directory
-            .sync_all()
-            .map_err(|e| e.to_string())?;
-        let proof = ControlProof::read(&self.file.metadata().map_err(|e| e.to_string())?)?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.bootstrap.directory).map_err(|e| e.to_string())?;
+        let proof = ControlProof::read(
+            &crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?,
+        )?;
         if proof.identity != self.proof.identity
-            || !proof
-                .identity
-                .matches(&std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)
+            || !proof.identity.matches(
+                &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
+            )
         {
             return Err("配置台帳の同期中に実体が変更されています".into());
         }
@@ -622,9 +636,13 @@ impl Placement<'_> {
                     fd.as_raw_fd(),
                     part.as_ptr(),
                     libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    0,
                 )
             })?;
-            self.metadata_matches(node, &next.metadata().map_err(|e| e.to_string())?)?;
+            self.metadata_matches(
+                node,
+                &crate::native_fs::metadata(&next).map_err(|e| e.to_string())?,
+            )?;
             self.metadata_matches(node, &directory(&self.pending.target.join(&path))?)?;
             fd = next;
         }
@@ -666,8 +684,8 @@ impl Placement<'_> {
     }
     fn node_path(&self, node: &Node) -> Result<Metadata, String> {
         let _ = self.parent(&node.entry.relative_path)?;
-        let path = self.pending.target.join(&node.entry.relative_path);
-        let m = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let path = crate::native_fs::join(&self.pending.target, &node.entry.relative_path);
+        let m = crate::native_fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         if node.entry.directory {
             directory(&path)?;
         }
@@ -759,11 +777,15 @@ impl Placement<'_> {
                             parent.as_raw_fd(),
                             base.as_ptr(),
                             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                            0,
                         )
                     })?;
-                    fd.sync_all().map_err(|e| e.to_string())?;
-                    parent.sync_all().map_err(|e| e.to_string())?;
-                    self.record_owned(&name, &fd.metadata().map_err(|e| e.to_string())?)?;
+                    crate::native_fs::sync_handle(&fd).map_err(|e| e.to_string())?;
+                    crate::native_fs::sync_handle(&parent).map_err(|e| e.to_string())?;
+                    self.record_owned(
+                        &name,
+                        &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
+                    )?;
                 } else {
                     let fd = descriptor(unsafe {
                         libc::openat(
@@ -777,9 +799,12 @@ impl Placement<'_> {
                             0o600,
                         )
                     })?;
-                    fd.sync_all().map_err(|e| e.to_string())?;
-                    parent.sync_all().map_err(|e| e.to_string())?;
-                    self.record_owned(&name, &fd.metadata().map_err(|e| e.to_string())?)?;
+                    crate::native_fs::sync_handle(&fd).map_err(|e| e.to_string())?;
+                    crate::native_fs::sync_handle(&parent).map_err(|e| e.to_string())?;
+                    self.record_owned(
+                        &name,
+                        &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
+                    )?;
                 }
             }
             let node = self.nodes.get(&name).ok_or("配置対象がありません")?.clone();
@@ -790,20 +815,24 @@ impl Placement<'_> {
                         parent.as_raw_fd(),
                         base.as_ptr(),
                         libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                        0,
                     )
                 })?;
-                self.metadata_matches(&node, &fd.metadata().map_err(|e| e.to_string())?)?;
+                self.metadata_matches(
+                    &node,
+                    &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
+                )?;
                 // The ownership row was FULL-committed BEFORE payload write or
                 // truncating an owned, explicitly resumed partial file.
                 snapshot.write_placement_file(&name, &mut fd, cancelled)?;
                 self.node_path(&node)?;
                 self.check_file(&node, cancelled)?;
             }
-            parent.sync_all().map_err(|e| e.to_string())?;
+            crate::native_fs::sync_handle(&parent).map_err(|e| e.to_string())?;
             self.record_copied(&name)?;
         }
         self.verify(snapshot, cancelled)?;
-        self.root.sync_all().map_err(|e| e.to_string())?;
+        crate::native_fs::sync_handle(&self.root).map_err(|e| e.to_string())?;
         if self.progress()?.state != "ready" {
             self.guard()?;
             self.db
@@ -825,9 +854,13 @@ impl Placement<'_> {
                 parent.as_raw_fd(),
                 base.as_ptr(),
                 libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                0,
             )
         })?;
-        self.metadata_matches(node, &fd.metadata().map_err(|e| e.to_string())?)?;
+        self.metadata_matches(
+            node,
+            &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
+        )?;
         let mut buffer = [0u8; 65536];
         let mut sha = Sha256::new();
         let mut size = 0u64;
@@ -846,7 +879,10 @@ impl Placement<'_> {
             sha.update(&buffer[..n]);
         }
         self.node_path(node)?;
-        self.metadata_matches(node, &fd.metadata().map_err(|e| e.to_string())?)?;
+        self.metadata_matches(
+            node,
+            &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
+        )?;
         if size != node.entry.size || Some(format!("{:x}", sha.finalize())) != node.entry.hash {
             return Err("配置済みファイルのサイズ・SHAが一致しません。上書きしません".into());
         }
@@ -893,5 +929,5 @@ impl Placement<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

@@ -104,7 +104,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       await Promise.all(Array.from(closing.current.keys(), closeToken));
       if (detached) unregister();
     };
-    const unregister = registerPlaybackStop(stop);
+    const unregister = registerPlaybackStop(stop, meetingId);
     const otherStarted = (event: Event) => { if ((event as CustomEvent<string>).detail !== owner) clear(); };
     window.addEventListener("mon-audio-start", otherStarted);
     const timer = window.setInterval(() => { if (player.snapshot().playing) refresh((value) => value + 1); }, 100);
@@ -121,7 +121,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       void stop().catch(() => {});
       clock.dispose();
     };
-  }, [clock, player, owner,nativePreparations]);
+  }, [clock, player, owner,nativePreparations,meetingId]);
 
   const startInner = async (analysisId: string, utteranceId: string, reference?: DraftUtteranceAudioRequest | MeetingPlaybackRequest | MarkdownIntervalRequest | VoiceSamplePlaybackRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore, preserveFollow = false) => {
     if (locked) return;

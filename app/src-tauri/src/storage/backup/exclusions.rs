@@ -26,7 +26,7 @@ pub(super) fn retain(
     ids.source()
         .deleted_audio
         .verify_omissions(&ids.source().manifest.omitted_assets)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let mut checked_deleted = std::collections::BTreeSet::new();
     for item in &ids.source().manifest.omitted_assets {
         check_cancelled(cancelled)?;
@@ -36,9 +36,9 @@ pub(super) fn retain(
             archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
             archive::OmittedReason::NativeLog => "native_log",
             archive::OmittedReason::SourceAudioDeleted => {
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 return Err("Windowsの削除済み音声の追加復元は保留中です".into());
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     if checked_deleted.insert(item.meeting_id.clone()) {
                         let op = ids.get(

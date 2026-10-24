@@ -635,6 +635,6 @@ fn keep_inner(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "audio_intent_tests.rs"]
 mod tests;

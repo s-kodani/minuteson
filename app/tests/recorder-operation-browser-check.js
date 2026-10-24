@@ -35,23 +35,22 @@ async (page, capturePath = path => path) => {
   const main = await context.newPage(), info = await context.newPage();
   const toast = () => main.locator(".toast-card").filter({ hasText: "録音パネルのウィンドウ操作：" });
   const open = () => page.getByRole("button", { name: "メインを開く", exact: true });
-  const marker = () => page.getByRole("button", { name: "録音パネルの説明を開く", exact: true });
-  const waitMarker = () => page.waitForFunction(() => document.querySelector(".recorder-info-trigger button")?.dataset.helpError === "true");
+  const waitMarker = async () => check(await page.locator(".recorder-info-trigger,.recorder-operation-badge").count()===0,"mini retained help or attention");
   try {
-    await page.setViewportSize({ width: 360, height: 116 }); await page.goto("http://127.0.0.1:1420/?window=recorder");
+    await page.setViewportSize({ width: 227, height: 101 }); await page.goto("http://127.0.0.1:1420/?window=recorder");
     await open().waitFor(); await page.getByText("00:00:45", { exact: true }).waitFor();
     await main.goto("http://127.0.0.1:1420/");
     await info.setViewportSize({ width: 360, height: 340 }); await info.goto("http://127.0.0.1:1420/?window=recorder-info");
     await open().click(); await toast().waitFor(); await waitMarker();
-    check(await page.getByText("要対応", { exact: true }).isVisible(), "attention lacks visible short text");
+    check(await page.getByText("要対応", { exact: true }).count()===0, "mini retained attention text");
     await info.getByText(failure, { exact: false }).waitFor();
     check(await page.locator(".mini-shell").evaluate(e => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1), "long error clipped mini controls");
-    check(await page.locator('[data-input-kind="microphone"]').evaluate(e => e.clientWidth >= 75) && await page.locator('[data-input-kind="system"]').evaluate(e => e.clientWidth >= 65), "help/operation marker squeezed input labels");
+    check(await page.locator('.mini-source-label').evaluateAll(labels=>labels.length===0), "help/operation marker squeezed input labels");
     check(await page.getByRole("button", { name: "停止", exact: true }).isEnabled(), "diagnostic disabled actual stop");
     check(calls.filter(c => c.command === "open_main_window").length === 1, "window action automatically replayed");
     check(entries[0].message.includes(failure), "shared cause lost detail");
-    await page.screenshot({ path: capturePath("operation-mini-error-360x116.png") });
-    results.push("long window error routes to one main toast and scrollable info; compact marker does not clip stop");
+    await page.screenshot({ path: capturePath("operation-mini-error-227x101.png") });
+    results.push("long window error routes to one main toast and scrollable info; mini remains quiet and stop stays usable");
 
     const first = structuredClone(entries[0]);
     await toast().getByRole("button", { name: "エラー通知を閉じる", exact: true }).click(); await toast().waitFor({ state: "hidden" });
@@ -63,7 +62,7 @@ async (page, capturePath = path => path) => {
     results.push("dismissal retains cause/event identity, and blank reloaded mini cannot fabricate resolution");
 
     failOpen = false; await open().click();
-    await page.waitForFunction(() => document.querySelector(".recorder-info-trigger button")?.dataset.helpError === "false");
+    await info.getByText(first.message, { exact: false }).waitFor({state:"hidden"});
     check(entries[0].message === null && calls.filter(c => c.command === "open_main_window").length === 2, "explicit successful retry did not resolve exact operation");
     results.push("only an explicit successful original action resolves window-operation attention");
 

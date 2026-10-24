@@ -41,7 +41,9 @@ impl Scope {
         CACHE.with(|c| {
             if let Some(cache) = c.borrow().as_ref() {
                 for e in cache.entries.values() {
-                    if stamp(&e.audit.metadata().map_err(|e| e.to_string())?) != e.identity {
+                    if stamp(&crate::native_fs::metadata(&e.audit).map_err(|e| e.to_string())?)
+                        != e.identity
+                    {
                         return Err("処理中に検証済み音声が変更されました".into());
                     }
                 }
@@ -64,8 +66,9 @@ impl Drop for Scope {
     }
 }
 pub(crate) fn stamp(m: &Metadata) -> String {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         format!(
             "{}:{}:{}:{}:{}:{}:{}",
@@ -78,7 +81,7 @@ pub(crate) fn stamp(m: &Metadata) -> String {
             m.ctime_nsec()
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         format!("{}:{:?}:{:?}", m.len(), m.modified(), m.created())
     }
@@ -92,7 +95,7 @@ pub(super) fn open(
     if cancelled() {
         return Err("音声ファイルの照合を中断しました".into());
     }
-    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    let metadata = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.len() != size {
         return Err("音声ファイルのサイズが保存時と一致しません".into());
     }
@@ -112,7 +115,9 @@ pub(super) fn open(
     let Some(entry) = entry else {
         return Ok(None);
     };
-    if stamp(&entry.audit.metadata().map_err(|e| e.to_string())?) != entry.identity {
+    if stamp(&crate::native_fs::metadata(&entry.audit).map_err(|e| e.to_string())?)
+        != entry.identity
+    {
         return Err("検証済み音声が変更されました".into());
     }
     let audio = VerifiedAudio {
@@ -179,7 +184,7 @@ mod tests {
     fn read(path: &std::path::Path, hash: &str) -> Result<VerifiedAudio, String> {
         VerifiedAudio::open(
             File::open(path).unwrap(),
-            path.metadata().unwrap().len(),
+            crate::native_fs::metadata(&path).unwrap().len(),
             hash,
         )
     }
@@ -206,7 +211,7 @@ mod tests {
             assert!(read(path, &"0".repeat(64)).is_err());
             assert!(VerifiedAudio::open_cancellable(
                 File::open(path).unwrap(),
-                path.metadata().unwrap().len(),
+                crate::native_fs::metadata(&path).unwrap().len(),
                 hash,
                 &|| true
             )
@@ -222,7 +227,10 @@ mod tests {
         let (_root, path, bytes, hash) = fixture();
         let scope = Scope::enter().unwrap();
         let original = read(&path, &hash).unwrap();
-        let modified = path.metadata().unwrap().modified().unwrap();
+        let modified = crate::native_fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap();
         let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         file.seek(SeekFrom::End(-4)).unwrap();
         file.write_all(&1.0_f32.to_le_bytes()).unwrap();

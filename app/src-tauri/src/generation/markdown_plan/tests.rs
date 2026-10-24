@@ -79,7 +79,7 @@ fn current_prompts_preserve_metadata_and_partition_every_utf8_byte_with_rounded_
 #[test]
 fn empty_or_impossible_inputs_fail_without_admitting_a_truncated_plan() {
     let mut input = input();
-    for value in [0, 2047, 60001] {
+    for value in [0, 2047, 262145, usize::MAX] {
         assert!(build(&input, value).is_err());
     }
     let end = input.analysis.utterances[0].end_us;
@@ -96,6 +96,16 @@ fn empty_or_impossible_inputs_fail_without_admitting_a_truncated_plan() {
         u.effective_text = " \n".into();
     }
     assert!(build(&input, 5400).is_err());
+}
+#[test]
+fn reviewed_large_context_admits_complete_plans_without_changing_legacy_plans() {
+    let input = input();
+    let legacy = build(&input, 5400).unwrap();
+    for limit in [60001, 131072, 262144] {
+        let plan = build(&input, limit).unwrap();
+        validate_coverage(&input, &plan).unwrap();
+        assert_eq!(plan, legacy);
+    }
 }
 #[test]
 fn merge_compression_consumes_all_parts_and_replays_deterministically() {

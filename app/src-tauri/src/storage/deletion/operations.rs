@@ -487,7 +487,7 @@ impl Prepared {
         confirmation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        admission.validate_active()?;
+        admission.validate_meeting(&self.preview.meeting_id)?;
         let check = || check() || admission.cancelled();
         self.confirmation(confirmation)?;
         if !self.preview.reconfirmation_allowed {
@@ -532,7 +532,7 @@ impl Prepared {
         check: &impl Fn() -> bool,
         progress: &impl Fn(&str),
     ) -> Result<Receipt, String> {
-        admission.validate_active()?;
+        admission.validate_meeting(&self.preview.meeting_id)?;
         let check = || check() || admission.cancelled();
         self.confirmation(confirmation)?;
         if !self.preview.execute_allowed {
@@ -658,7 +658,7 @@ impl Prepared {
         confirmation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Receipt, String> {
-        admission.validate_active()?;
+        admission.validate_meeting(&self.preview.meeting_id)?;
         let check = || check() || admission.cancelled();
         self.confirmation(confirmation)?;
         authorize_review(storage, Some(&self.preview.operation_id))?;
@@ -674,7 +674,7 @@ impl Prepared {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "operations_tests.rs"]
 mod tests;
 

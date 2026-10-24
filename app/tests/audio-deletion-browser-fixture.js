@@ -1,5 +1,6 @@
 // Development-only IPC simulation. Never invokes native audio/file operations.
 import { mockIPC } from "./startup-ready-mocks.ts";
+import { emit } from "@tauri-apps/api/event";
 import { stampFixtureDraft } from "./transcript-draft-fixture.js";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
@@ -54,7 +55,14 @@ export const audioDeletionIPC = async (command, args) => {
   if (command === "get_analysis_flow") return null;
   if (command === "get_minutes_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };
   if (command === "review_meeting_audio_deletion" || command === "review_pending_audio_deletion") {
-    if (f.blocker || f.snapshot.busy || (command === "review_meeting_audio_deletion" && (d.blocked || args.meetingId !== f.meetings[0].id))) throw Error("音声の停止・再検査が必要です");
+    if(d.admissionHold){
+      const id=crypto.randomUUID();
+      await emit("deletion-notice-wait",{id,waiting:true});
+      await new Promise(resolve=>{d.releaseAdmission=resolve;});
+      await emit("deletion-notice-wait",{id,waiting:false});
+      if(d.admissionTimeout)throw "audio_deletion_not_started:通知履歴の処理が終わらないため、削除を開始できませんでした";
+    }
+    if ((f.blocker && f.blocker!=="録音通知履歴の確認・更新中") || f.snapshot.busy || (command === "review_meeting_audio_deletion" && (d.blocked || args.meetingId !== f.meetings[0].id))) throw Error("音声の停止・再検査が必要です");
     const p = command === "review_meeting_audio_deletion" ? makePreview() : { ...d.pendingPreview, confirmationId: crypto.randomUUID() };
     if (!p || (command === "review_pending_audio_deletion" && p.operationId !== args.operationId)) throw Error("不明な操作");
     d.last = null;

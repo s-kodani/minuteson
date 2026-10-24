@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ArchivedInputSession,checkedArchivedInputPage,checkedArchivedInputBatch,type ArchivedInputBatch,type ArchivedInputRow} from "../src/archived-input-state.ts";
+import {unpackNoticeReply,ArchivedInputSession,checkedArchivedInputPage,checkedArchivedInputBatch,type ArchivedInputBatch,type ArchivedInputRow} from "../src/archived-input-state.ts";
 import {ArchivedInputController,type ArchivedAttempt} from "../src/archived-input-controller.ts";
 import type {InputNotice} from "../src/recording-input-state.ts";
 const id=(i:number)=>`${i.toString(16).padStart(8,"0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
@@ -175,4 +175,19 @@ test("caller mutation cannot rewrite accepted evidence or retained loss floors",
   assert.equal(s.read(1)[0].delivery!.status.sourceEpoch,1);assert.equal(s.diagnostics()!.loss.microphone,2);
   s.read(2)[0].delivery!.status.sourceEpoch=99;s.diagnostics()!.loss.microphone=99;
   assert.equal(s.read(3)[0].delivery!.status.sourceEpoch,1);assert.equal(s.diagnostics()!.loss.microphone,2);
+});
+
+test("explicit history pause does not accept an empty result or a receipt",()=>{
+  assert.deepEqual(unpackNoticeReply({paused:true,value:null}),{paused:true,value:null});
+  assert.deepEqual(unpackNoticeReply({paused:false,value:page()}).value,page());
+  for(const value of [{paused:true,value:page()},{paused:false,value:null},{paused:1,value:null},{paused:true,value:null,extra:1}])assert.throws(()=>unpackNoticeReply(value));
+});
+test("paused meetings retain diagnostics and unrelated meetings remain available",()=>{
+  const c=create(),data=batch();data.noticeLoss.microphone=3;c.acceptPage(page([row(data)]),null,0);
+  const request=c.paint(0).attempts[0];c.defer(request);
+  assert.equal(c.paint(10).views[0].reception.microphone,"none");
+  c.acceptPage(page([{...row(null),issue:"paused"}]),null,20);
+  const view=c.paint(20).views[0];assert.equal(view.loss.microphone,3);assert.equal(view.unavailable,false);assert.equal(view.notices.length,0);
+  c.retainMeetings(new Set());assert.equal(c.complete(request,receipt(request),30),false);assert.equal(c.paint(30).views.length,0);
+  assert.throws(()=>checkedArchivedInputPage(page([{...row(data),issue:"paused"}]),null));
 });

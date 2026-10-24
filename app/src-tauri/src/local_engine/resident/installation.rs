@@ -6,23 +6,86 @@ use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Accelerated {
+    pub name: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Snapshot {
     pub protocol: u32,
     pub engine: String,
     pub name: String,
     pub bytes: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<Accelerated>,
 }
 impl Snapshot {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.protocol == 2 {
+            let name = match self.engine.as_str() {
+                "whisper" => "whisper-cli.exe",
+                "llama" => "llama-completion.exe",
+                "sherpa" => "sherpa-onnx-offline-speaker-diarization.exe",
+                _ => return Err("未知のWindows推論エンジンです".into()),
+            };
+            if self.name != name
+                || self.gpu.is_some()
+                || self.bytes == 0
+                || self.bytes > 128 * 1024 * 1024
+                || !crate::model_download_ipc::hash(&self.sha256)
+            {
+                return Err("Windows推論ランタイムの固定情報が不正です".into());
+            }
+            return Ok(());
+        }
         let name = match self.engine.as_str() {
+            #[cfg(windows)]
+            "whisper" => "mon-whisper-worker.exe",
+            #[cfg(windows)]
+            "llama" => "mon-llama-worker.exe",
+            #[cfg(windows)]
+            "sherpa" => "mon-sherpa-worker.exe",
+            #[cfg(not(windows))]
             "whisper" => "mon-whisper-worker",
+            #[cfg(not(windows))]
             "llama" => "mon-llama-worker",
+            #[cfg(not(windows))]
             "sherpa" => "mon-sherpa-worker",
             _ => return Err("未知の常駐推論エンジンです".into()),
         };
+        let accelerated_name = match self.engine.as_str() {
+            "whisper" => "mon-whisper-vulkan-worker.exe",
+            "llama" => "mon-llama-vulkan-worker.exe",
+            _ => "",
+        };
+        if let Some(gpu) = &self.gpu {
+            if accelerated_name.is_empty()
+                || gpu.name != accelerated_name
+                || gpu.bytes == 0
+                || gpu.bytes > 128 * 1024 * 1024
+                || !crate::model_download_ipc::hash(&gpu.sha256)
+            {
+                return Err("固定Vulkanワーカーの定義が不正です".into());
+            }
+        }
+        // Saved worker names are portable provenance. Resolution still requires
+        // the original binary; restoring a job never changes its OS or engine.
+        let portable_name = match self.engine.as_str() {
+            "whisper" => "mon-whisper-worker",
+            "llama" => "mon-llama-worker",
+            "sherpa" => "mon-sherpa-worker",
+            _ => "",
+        };
         if self.protocol != 1
-            || self.name != name
+            || (self.name != name
+                && self.name != portable_name
+                && self.name != format!("{portable_name}.exe")
+                && !(!accelerated_name.is_empty()
+                    && self.name == accelerated_name
+                    && self.gpu.is_none()))
             || self.bytes == 0
             || self.bytes > 128 * 1024 * 1024
             || self.sha256.len() != 64
@@ -35,6 +98,18 @@ impl Snapshot {
         }
         Ok(())
     }
+    pub(crate) fn accelerated(&self) -> Result<Self, String> {
+        self.validate()?;
+        let gpu = self.gpu.as_ref().ok_or("固定Vulkanワーカーがありません")?;
+        Ok(Self {
+            protocol: 1,
+            engine: self.engine.clone(),
+            name: gpu.name.clone(),
+            bytes: gpu.bytes,
+            sha256: gpu.sha256.clone(),
+            gpu: None,
+        })
+    }
     pub(crate) fn accepts(&self, kind: &str) -> Result<(), String> {
         self.validate()?;
         if kind != self.engine
@@ -46,6 +121,19 @@ impl Snapshot {
         Ok(())
     }
     pub(crate) fn resolve(&self, root: &Path) -> Result<Fingerprint, String> {
+        #[cfg(windows)]
+        if self.protocol == 2 {
+            self.validate()?;
+            let proof = Fingerprint {
+                path: crate::windows_runtime::resources()?
+                    .join(&self.engine)
+                    .join(&self.name),
+                size: self.bytes,
+                sha256: self.sha256.clone(),
+            };
+            proof.verify(&|| false)?;
+            return Ok(proof);
+        }
         self.resolve_from(root, || Ok(resources()?.join(&self.name)))
     }
     fn resolve_from(
@@ -89,9 +177,7 @@ impl Snapshot {
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(e) => return Err(e.to_string()),
                 }
-                File::open(&directory)
-                    .and_then(|f| f.sync_all())
-                    .map_err(|e| e.to_string())
+                crate::native_fs::sync_directory(&directory)
             })();
             let _ = std::fs::remove_file(&temporary);
             install?;
@@ -111,6 +197,50 @@ impl Snapshot {
         };
         proof.verify(&|| false)?;
         Ok(proof)
+    }
+}
+
+#[cfg(test)]
+mod portable_metadata_tests {
+    use super::*;
+    #[test]
+    fn cross_platform_worker_metadata_preserves_windows_gpu_and_legacy_protocol_two() {
+        for engine in ["whisper", "llama", "sherpa"] {
+            let mut saved = Snapshot {
+                protocol: 1,
+                engine: engine.into(),
+                name: format!("mon-{engine}-worker.exe"),
+                bytes: 1024,
+                sha256: "a".repeat(64),
+                gpu: None,
+            };
+            saved.validate().unwrap();
+            if engine != "sherpa" {
+                saved.gpu = Some(Accelerated {
+                    name: format!("mon-{engine}-vulkan-worker.exe"),
+                    bytes: 2048,
+                    sha256: "b".repeat(64),
+                });
+                saved.validate().unwrap();
+                let bytes = serde_json::to_vec(&saved).unwrap();
+                assert_eq!(serde_json::from_slice::<Snapshot>(&bytes).unwrap(), saved);
+            }
+            saved.gpu = None;
+            saved.protocol = 2;
+            saved.name = match engine {
+                "whisper" => "whisper-cli.exe",
+                "llama" => "llama-completion.exe",
+                _ => "sherpa-onnx-offline-speaker-diarization.exe",
+            }
+            .into();
+            saved.validate().unwrap();
+            saved.gpu = Some(Accelerated {
+                name: "mon-llama-vulkan-worker.exe".into(),
+                bytes: 2048,
+                sha256: "b".repeat(64),
+            });
+            assert!(saved.validate().is_err());
+        }
     }
 }
 #[cfg(unix)]
@@ -133,6 +263,10 @@ fn ensure_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn resources() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        return Ok(crate::windows_runtime::resources()?.join("workers"));
+    }
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let parent = executable.parent().ok_or("アプリの実行位置がありません")?;
     if parent.file_name().is_some_and(|v| v == "MacOS") {
@@ -147,6 +281,23 @@ fn resources() -> Result<PathBuf, String> {
         .map_err(|_| "常駐推論ランタイムをビルドしてください".to_string())?)
 }
 pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, String> {
+    #[cfg(windows)]
+    {
+        let path = crate::windows_runtime::resources()?
+            .join("workers")
+            .join("runtime-index.json");
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        if bytes.len() > 65536 {
+            return Err("Windows推論定義が上限を超えています".into());
+        }
+        let entries: Vec<Snapshot> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let snapshot = entries
+            .into_iter()
+            .find(|s| s.engine == engine)
+            .ok_or("Windows推論エンジンがありません")?;
+        snapshot.resolve(root)?;
+        return Ok(Some(snapshot));
+    }
     // Existing fixtures deliberately exercise their frozen single-shot engines.
     // Resident lifecycle tests construct and bind an explicit snapshot instead.
     #[cfg(test)]
@@ -234,6 +385,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
         name: format!("mon-{engine}-worker"),
         bytes: SYNTHETIC.len() as u64,
         sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
+        gpu: None,
     };
     let cache = root.join("inference-runtimes");
     ensure_directory(&cache)?;
@@ -267,6 +419,7 @@ mod installation_tests {
             name: "mon-sherpa-worker".into(),
             bytes: bytes.len() as u64,
             sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+            gpu: None,
         };
         let scope = crate::local_engine::verification::Scope::enter(true).unwrap();
         let proof = snapshot

@@ -85,6 +85,7 @@ fn remaining(
     excluded: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Vec<RootObject>, String> {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let mut result = Vec::new();
     for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
@@ -109,7 +110,7 @@ fn remaining(
         if result.len() >= LIMIT || path.len() > 1024 {
             return Err("旧保存先の残存対象が安全上限を超えています".into());
         }
-        let m = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        let m = crate::native_fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
         let registry = path == ".mon-scratch.sqlite3";
         result.push(RootObject {
             path,

@@ -36,6 +36,13 @@ impl Scope {
             }
             if let Some(snapshot) = snapshot {
                 snapshot.validate()?;
+                #[cfg(windows)]
+                if snapshot.protocol == 2 {
+                    // Native Windows CLI binaries use the same frozen inputs
+                    // and Job Object teardown; they do not speak resident v1.
+                    snapshot.resolve(root)?;
+                    return Ok(Self);
+                }
                 *cell.borrow_mut() = Some(Job {
                     root: root.to_owned(),
                     snapshot: snapshot.clone(),
@@ -64,6 +71,7 @@ pub(crate) fn discard_trial() {
 }
 
 struct Worker {
+    runtime_sha256: String,
     child: ManagedChild,
     input: ChildStdin,
     output: ChildStdout,
@@ -76,8 +84,8 @@ struct Worker {
     startup_path: PathBuf,
 }
 impl Worker {
-    fn launch(job: &Job, directory: &Path) -> Result<Self, String> {
-        let proof = job.snapshot.resolve(&job.root)?;
+    fn launch(job: &Job, directory: &Path, snapshot: &Snapshot) -> Result<Self, String> {
+        let proof = snapshot.resolve(&job.root)?;
         proof.verify(&|| false)?;
         let watched = StableFile::watch(&proof)?;
         let mut launch = OwnedCommand::new(&proof.path)?;
@@ -98,6 +106,7 @@ impl Worker {
             .stdout(Stdio::piped())
             .stderr(startup)
             .arg("--mon-resident-v1");
+        super::native_environment(&mut launch.command);
         let mut child = launch.spawn().map_err(|e| e.to_string())?;
         let input = child
             .child
@@ -120,6 +129,7 @@ impl Worker {
             }
         }
         Ok(Self {
+            runtime_sha256: snapshot.sha256.clone(),
             child,
             input,
             output,
@@ -173,6 +183,33 @@ impl Worker {
         }
         let mut block = [0; 8192];
         for _ in 0..8 {
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::AsRawHandle;
+                let mut available = 0;
+                if unsafe {
+                    windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                        self.output.as_raw_handle(),
+                        std::ptr::null_mut(),
+                        0,
+                        std::ptr::null_mut(),
+                        &mut available,
+                        std::ptr::null_mut(),
+                    )
+                } == 0
+                {
+                    if std::io::Error::last_os_error().raw_os_error() == Some(109)
+                        && !self.pending.is_empty()
+                    {
+                        break;
+                    }
+                    self.failed = true;
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                if available == 0 {
+                    break;
+                }
+            }
             match self.output.read(&mut block) {
                 Ok(0) => {
                     self.failed = true;
@@ -208,7 +245,12 @@ impl Worker {
                         use std::os::unix::process::ExitStatusExt;
                         return Ok(Some(ExitStatus::from_raw(0)));
                     }
-                    #[cfg(not(unix))]
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::ExitStatusExt;
+                        return Ok(Some(ExitStatus::from_raw(0)));
+                    }
+                    #[cfg(not(any(unix, windows)))]
                     {
                         return Err("常駐推論はこのOSに対応していません".into());
                     }
@@ -265,9 +307,6 @@ impl Run {
                 return launch.spawn().map(Self::Direct).map_err(|e| e.to_string());
             };
             job.snapshot.accepts(kind)?;
-            if job.worker.is_none() {
-                job.worker = Some(Worker::launch(job, directory)?);
-            }
             let args = launch
                 .command
                 .get_args()
@@ -282,6 +321,43 @@ impl Run {
             // the native engine's arguments, never its program or guard entry.
             #[cfg(target_os = "macos")]
             let args = args.into_iter().skip(5).collect();
+            #[cfg(windows)]
+            let selected = {
+                let gpu = if kind == "llama_tokenize" {
+                    job.worker.as_ref().is_some_and(|worker| {
+                        job.snapshot
+                            .gpu
+                            .as_ref()
+                            .is_some_and(|gpu| gpu.sha256 == worker.runtime_sha256)
+                    })
+                } else if kind == "whisper" {
+                    !args.iter().any(|v| v == "--no-gpu")
+                } else if kind == "llama" || kind == "llama_prefix" {
+                    args.windows(2).any(|v| {
+                        matches!(v[0].as_str(), "--n-gpu-layers" | "-ngl" | "--gpu-layers")
+                            && v[1].parse::<u32>().is_ok_and(|n| n > 0)
+                    })
+                } else {
+                    false
+                };
+                if gpu {
+                    job.snapshot.accelerated()?
+                } else {
+                    job.snapshot.clone()
+                }
+            };
+            #[cfg(not(windows))]
+            let selected = job.snapshot.clone();
+            if job
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.runtime_sha256 != selected.sha256)
+            {
+                return Err("保存したCPU/GPU実行構成が区間間で変更されています".into());
+            }
+            if job.worker.is_none() {
+                job.worker = Some(Worker::launch(job, directory, &selected)?);
+            }
             job.worker
                 .as_mut()
                 .unwrap()

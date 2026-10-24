@@ -461,7 +461,7 @@ pub(crate) fn inspect(
 
 // Test fixtures own every supplied storage/model/audio path. Exercise the real
 // bootstrap, held snapshot, native copy and installed journal, not JSON mocks.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_remove_kept_audio_record(
     storage: &crate::storage::Storage,
     operation: &str,
@@ -496,7 +496,7 @@ pub(crate) fn synthetic_remove_kept_audio_record(
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_consent_record(
     storage: &crate::storage::Storage,
     operation: &str,
@@ -504,7 +504,7 @@ pub(crate) fn synthetic_consent_record(
     storage.connection.lock().unwrap().query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,created_at) FROM maintenance_operations WHERE id=?1",[operation],|r|r.get(0)).unwrap()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_meeting_reconfirmation_records(
     storage: &crate::storage::Storage,
 ) -> Vec<(String, String, i64)> {
@@ -518,7 +518,7 @@ pub(crate) fn synthetic_meeting_reconfirmation_records(
     rows
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_model_reconfirmation_records(
     storage: &crate::storage::Storage,
 ) -> Vec<(String, String, String, i64)> {
@@ -537,7 +537,7 @@ pub(crate) fn synthetic_model_reconfirmation_records(
     }).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_reconfirmation_cancel_at(
     storage: &crate::storage::Storage,
     operation: &str,
@@ -574,7 +574,7 @@ pub(crate) fn synthetic_reconfirmation_cancel_at(
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Report {
     use crate::bootstrap::Bootstrap;
     use std::os::unix::fs::DirBuilderExt;
@@ -638,7 +638,7 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
     report
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_keep_meeting(storage: &crate::storage::Storage, meeting: &str) -> String {
     let lease = crate::analysis_worker::AnalysisController::default()
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
@@ -674,7 +674,7 @@ pub(crate) fn synthetic_keep_meeting(storage: &crate::storage::Storage, meeting:
     operation
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_restored_audio_operation(
     storage: &crate::storage::Storage,
     meeting: &str,
@@ -685,7 +685,7 @@ pub(crate) fn synthetic_restored_audio_operation(
     operation
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_restored_audio_paths(
     storage: &crate::storage::Storage,
     operation: &str,
@@ -705,14 +705,14 @@ pub(crate) fn synthetic_restored_audio_paths(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_all_deletion_evidence(storage: &crate::storage::Storage) -> String {
     storage.connection.lock().unwrap().query_row(
         "SELECT json_array((SELECT json_group_array(json(item)) FROM (SELECT json_array(rowid,id,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at) item FROM maintenance_operations ORDER BY rowid)),(SELECT json_group_array(json(item)) FROM (SELECT json_array(rowid,operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) item FROM maintenance_paths ORDER BY rowid)))", [], |r| r.get(0),
     ).unwrap()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn synthetic_audio_operation_record(
     storage: &crate::storage::Storage,
     operation: &str,
