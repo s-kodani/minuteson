@@ -2,6 +2,7 @@ mod analysis_flow;
 mod analysis_preparation;
 mod analysis_worker;
 mod application_close;
+mod recording_recovery;
 mod audio;
 mod audio_clock;
 mod audio_import;
@@ -1877,6 +1878,7 @@ async fn close_recording_input_notice(
 struct ApplicationCloseActivity {
     analysis_busy: bool,
     model_preparation_busy: bool,
+    recording_recovery_busy: bool,
 }
 #[tauri::command]
 fn get_application_close_activity(
@@ -1890,6 +1892,7 @@ fn get_application_close_activity(
     Ok(ApplicationCloseActivity {
         analysis_busy,
         model_preparation_busy,
+        recording_recovery_busy: window.state::<recording_recovery::Recovery>().busy(),
     })
 }
 
@@ -2207,6 +2210,7 @@ pub fn run() {
         .manage(startup_attention::Startup::default())
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
+        .manage(recording_recovery::Recovery::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
         .manage(recorder_panel::PanelVisibility::default())
@@ -2363,17 +2367,7 @@ pub fn run() {
                     eprintln!("中断処理の自動整理に失敗しました: {error}");
                 }
                 // Recovery can hash hours of audio, so never hold up window startup.
-                match handle.state::<Storage>().recover_completed_recordings() {
-                    Ok(ids) if !ids.is_empty() => {
-                        let _ = handle.emit("recordings-recovered", ids);
-                        let _ = AnalysisController::kick(&handle);
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        internal_logs::report_error("recovery", &error);
-                        eprintln!("録音回復の確認に失敗しました: {error}");
-                    }
-                }
+                recording_recovery::run(&handle);
             });
             if let Err(error) = AnalysisController::kick(app.handle()) {
                 internal_logs::report_error("analysis", &error);
@@ -2391,6 +2385,7 @@ pub fn run() {
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 internal_logs::get_internal_logs,
+                recording_recovery::get_recording_recovery,
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
                 startup_instance::get_startup_instance,

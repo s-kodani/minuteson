@@ -6,9 +6,9 @@ const registry = new ProgressRegistry();
 export const useProgressItems = () => useSyncExternalStore(registry.subscribe, registry.getSnapshot);
 export const useJobReadStatus = () => useSyncExternalStore(registry.subscribe, registry.getReadSnapshot);
 
-export function usePublishJobReadStatus(error: string | null) {
-  useEffect(() => { registry.setReadStatus(error); }, [error]);
-  useEffect(() => () => registry.setReadStatus(null), []);
+export function usePublishJobReadStatus(error: string | null, owner = "analysis") {
+  useEffect(() => { registry.setReadStatus(error, owner); }, [error, owner]);
+  useEffect(() => () => registry.setReadStatus(null, owner), [owner]);
 }
 
 export function usePublishProgress(owner: string, items: (OperationProgress | null)[]) {
@@ -36,7 +36,7 @@ export function OperationProgressBar({ progress }: { progress: OperationProgress
   </div>;
 }
 
-export function CommonOperationProgress() {
+export function CommonOperationProgress({ onOpenJobs }: { onOpenJobs?: () => void }) {
   const items = orderedProgress(useProgressItems());
   const element = useRef<HTMLElement>(null), visible = items.length > 0;
   useLayoutEffect(() => {
@@ -54,5 +54,6 @@ export function CommonOperationProgress() {
   if (!visible) return null;
   return <section ref={element} className="common-operation-progress" aria-label="進行中の処理">
     <OperationProgressBar progress={items[0]} />
+    {items.length > 1 && <button type="button" className="small-secondary progress-jobs-link" onClick={onOpenJobs}>進行中の処理 {items.length} 件 · ジョブ一覧で確認</button>}
   </section>;
 }

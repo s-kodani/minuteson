@@ -32,6 +32,7 @@ mod tests {
             "save_minutes_markdown",
             "save_ui_preferences",
             "get_internal_logs",
+            "get_recording_recovery",
             "get_startup_instance",
             "get_residency_state",
             "hide_main_to_background",

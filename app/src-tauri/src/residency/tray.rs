@@ -117,7 +117,9 @@ pub(super) fn status(app: &tauri::AppHandle) -> String {
                     .state::<crate::capture_test::CaptureTests>()
                     .snapshot(None)
                     .is_ok_and(|s| s.is_some_and(|s| s.is_busy()));
-                if analysis || model || import || data || test {
+                if app.state::<crate::recording_recovery::Recovery>().busy() {
+                    "録音を回復中".into()
+                } else if analysis || model || import || data || test {
                     "処理中".into()
                 } else {
                     "待機中".into()

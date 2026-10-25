@@ -164,6 +164,7 @@ impl Startup {
                 && !matches!(
                     command,
                     "get_internal_logs"
+                        | "get_recording_recovery"
                         | "get_storage_bootstrap"
                         | "list_meetings"
                         | "get_meeting"

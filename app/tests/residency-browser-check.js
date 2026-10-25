@@ -23,6 +23,14 @@ async page=>{
     check(await count("cancel_audio_import")===0&&await count("cancel_data_operation")===0&&await count("finish_main_close")===0,"hiding analysis cancelled jobs");
     results.push("analysis continues in background without cancellation or exit commands");
 
+    for (const platform of ["windows", "macos"]) {
+      await boot(platform);await page.evaluate(()=>{window.closeFixture.activity.recordingRecoveryBusy=true;});
+      await request(false);await background().getByText(/録音の回復/).waitFor();
+      await accept().click();await page.waitForFunction(()=>window.closeFixture.hidden);
+      check(await count("hide_main_to_background")===1&&await count("finish_main_close")===0,"recovery background storage exited app");
+      results.push(`${platform}: recovery alone requires background continuation consent`);
+    }
+
     await boot();await page.evaluate(()=>{window.closeFixture.residency={supported:true,canBackground:false,trayAvailable:false,dockAvailable:false,error:"画面を開き直せません"};});await request(false);
     await page.getByRole("alert").filter({hasText:"画面を開き直せません"}).waitFor();check(await count("hide_main_to_background")===0&&await count("finish_main_close")===0,"missing tray hid window");
     results.push("no return path preserves the window before native hide");

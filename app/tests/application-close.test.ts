@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertCloseContext, assertCloseTargets, closeMessage, dataNeedsConsent, importNeedsConsent, waitForImportStop, waitForRecordingSave, type CloseContext } from "../src/application-close.ts";
+import { assertCloseContext, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, waitForImportStop, waitForRecordingSave, type CloseContext } from "../src/application-close.ts";
 const token = "11111111-1111-4111-8111-111111111111";
 const other = "21111111-1111-4111-8111-111111111111";
 const context = (): CloseContext => ({ recording: { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null }, importing: { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null }, data: { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false }, activity: { analysisBusy: false, modelPreparationBusy: false } });
@@ -63,4 +63,15 @@ test("recording failures, stale states, new sessions and time limits retain the 
   await assert.rejects(waitForRecordingSave(saving, async () => ({ ...saving, sessionId: other })), /変更/u);
   let clock = 0;
   await assert.rejects(waitForRecordingSave(saving, async () => saving, async () => { clock += 60_000; }, () => clock), /まだ完了/u);
+});
+
+
+test("recovery activity is validated and a newly started recovery invalidates old exit consent", () => {
+  const idle = context();
+  const recovering = {...idle, activity:{...idle.activity, recordingRecoveryBusy:true}};
+  assertCloseContext(recovering);
+  assert.equal(closeTarget(recovering), "録音の回復");
+  assert.throws(()=>assertCloseTargets(idle,recovering), /回復/);
+  assert.throws(()=>assertCloseContext({...idle,activity:{...idle.activity,recordingRecoveryBusy:"unknown" as unknown as boolean}}), /回復/);
+  assertCloseTargets(recovering,idle);
 });

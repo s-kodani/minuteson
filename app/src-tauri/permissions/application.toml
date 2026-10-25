@@ -4,6 +4,7 @@
 identifier = "main-commands"
 description = "Application commands for main only."
 commands.allow = [
+  "get_recording_recovery",
   "get_residency_state",
   "hide_main_to_background",
   "get_startup_instance",

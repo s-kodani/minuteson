@@ -1,6 +1,7 @@
 // Keep synchronized with generate_handler!; checked by test_mon_tauri_platform.py.
 pub const COMMANDS: &[&str] = &[
     "get_internal_logs",
+    "get_recording_recovery",
     "get_startup_report",
     "quit_blocked_startup",
     "get_startup_instance",

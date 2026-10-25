@@ -10,17 +10,17 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
+  kind: "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
-  return [...items].sort((a, b) => priority[a.state] - priority[b.state]);
+  return [...items].sort((a, b) => Number(b.kind === "recording_recovery" && b.state === "running") - Number(a.kind === "recording_recovery" && a.state === "running") || priority[a.state] - priority[b.state]);
 }
 
 export function progressPercent(completed: number | null, total: number | null): number | null {
@@ -147,7 +147,11 @@ export class ProgressRegistry {
     this.snapshot = [...this.owners.values()].flat();
     this.listeners.forEach(listener => listener());
   }
-  setReadStatus(error: string | null) {
+  private readSources = new Map<string, string | null>([["analysis", null]]);
+  setReadStatus(error: string | null, owner = "analysis") {
+    this.readSources.set(owner, error);
+    const sources = [...this.readSources.values()];
+    error = sources.filter((v): v is string => !!v).join("\n") || (sources.some(v => v === null) ? null : "");
     const state = error === null ? "loading" : error ? "error" : "ready";
     const message = error ?? "";
     if (this.readSnapshot.state === state && this.readSnapshot.message === message) return;
