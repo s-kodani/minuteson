@@ -50,6 +50,7 @@ commands.allow = [
   "get_capture_inputs",
   "get_capture_test_levels",
   "get_capture_test_snapshot",
+  "reconcile_capture_test_start",
   "get_current_analysis",
   "get_data_operation",
   "get_data_operation_availability",

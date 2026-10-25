@@ -21,7 +21,21 @@ async page=>{
       check(await page.evaluate(()=>window.closeFixture.calls.every(c=>!["get_capture_test_recovery","retry_capture_test_recovery","start_capture_test","start_recording"].includes(c.command))),"UI initiated cleanup or recording");
       results.push(`backend ${phase} state has no cleanup UI and does not block settings/back navigation`);
     }
-    await boot("attention");await page.evaluate(()=>window.closeFixture.request(true));
+    await boot("attention");
+    await page.getByRole("button",{name:"新しい録音",exact:true}).click();
+    await page.locator(".capture-test-panel > button").click();
+    const consent=page.getByRole("dialog",{name:"5秒の録音前テストを開始しますか？",exact:true});
+    await consent.getByRole("button",{name:"5秒テストを開始する",exact:true}).click();
+    await consent.locator(".action-error[role=alert]:visible").waitFor();
+    await consent.getByRole("button",{name:"確認を閉じる",exact:true}).click();
+    await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="reconcile_capture_test_start"));
+    await page.locator(".capture-test-dialog").getByRole("button",{name:"確認を閉じる",exact:true}).click();
+    await page.getByRole("button",{name:"設定",exact:true}).click();
+    await page.getByRole("heading",{name:"設定",exact:true}).waitFor();
+    check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="start_capture_test").length===1&&window.closeFixture.testRetired.length===1),"rejected start was replayed or not fenced");
+    check(await page.getByText("開始要求の受付結果が未確認です。開始は再送しません。",{exact:true}).count()===0,"rejected start remained pending");
+    results.push("cleanup rejection fences the absent start, restores navigation and does not resend capture");
+    await page.evaluate(()=>window.closeFixture.request(true));
     await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="finish_main_close"));
     check(await page.getByRole("dialog",{name:"未回収のテスト音声を保持して終了しますか？",exact:true}).count()===0,"obsolete exit confirmation remains");
     results.push("retained test audio does not add an exit dialog or force deletion");

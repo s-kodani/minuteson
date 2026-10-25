@@ -41,6 +41,7 @@ mod tests {
             "recover_startup_instance",
             "retry_startup",
             "get_meeting_deletion_availability",
+            "reconcile_capture_test_start",
         ] {
             assert!(
                 acl.resolve_access(command, "main", "main", &Origin::Local)

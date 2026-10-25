@@ -35,7 +35,7 @@ const f = window.closeFixture = {
   showQueueBlockers:()=>{for(const key of ["block1","block2","block3"])toasts.show({key,level:"error",message:`合成優先通知 ${key}`});},
   failRecordingSnapshot:false,
   persistInputQueueFixture:()=>sessionStorage.setItem("MON_INPUT_QUEUE_FIXTURE",JSON.stringify({recording:f.recording,inputStatus:f.inputStatus,queueState:f.queueState,refreshInputStatus:f.refreshInputStatus,meetings:data.meetings})),
-  captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
+  captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testReconcileFailure:false,testRetired:[],testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
   captureRecovery:recoverySeed?JSON.parse(recoverySeed):{schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null},recoveryReadFailure:false,recoveryRetryLost:false,recoveryRetryKeepsAttention:false,recoveryRetryHoldAck:false,recoveryPendingReplies:[],
   testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
   testChanged:patch=>{if(!f.captureTest)throw Error("模擬テストなし");f.captureTest={...f.captureTest,...patch,revision:f.captureTest.revision+1};},
@@ -80,9 +80,15 @@ mockIPC(async (command, args) => {
     if(f.testReadFailure)throw Error("模擬テスト状態読戻し失敗");
     if(args?.runId&&args.runId!==f.captureTest?.runId)throw Error("模擬テスト所有変更");return clone(f.captureTest);
   }
+  if(command==="reconcile_capture_test_start"){
+    if(f.testReconcileFailure)throw Error("模擬テスト受付確認失敗");
+    if(f.captureTest){if(f.captureTest.runId!==args.runId)throw Error("模擬テスト所有変更");return clone(f.captureTest);}
+    f.testRetired.push(args.runId);return null;
+  }
   if(command==="start_capture_test"){
     if(f.captureRecovery.phase!=="clear")throw Error("模擬テスト音声の回復が未完了");
     const r=args.request;
+    if(f.testRetired.includes(r.runId))throw Error("模擬テスト開始IDは解放済み");
     if(f.captureTest||!["idle","error"].includes(f.recording.phase)||r.expectedImport.token!==f.importing.token||(!r.expectedImport.busy&&r.expectedImport.revision!==f.importing.revision))throw Error("模擬テスト開始条件変更");
     if(f.testAbsentStart)throw Error("模擬テスト受付結果不明");
     f.captureTest={schemaVersion:1,revision:1,runId:r.runId,phase:"preparing",busy:true,microphoneUid:r.microphoneUid,

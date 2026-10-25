@@ -60,6 +60,7 @@ pub const COMMANDS: &[&str] = &[
     "render_recording_input_notice",
     "close_recording_input_notice",
     "get_capture_test_snapshot",
+    "reconcile_capture_test_start",
     "start_capture_test",
     "cancel_capture_test",
     "discard_capture_test",

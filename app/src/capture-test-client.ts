@@ -1,6 +1,7 @@
 import {checkedCaptureTest,checkedCaptureTestRequest,reconcileCaptureTest,type CaptureTestRequest,type CaptureTestSnapshot} from "./capture-test-state.ts";
 export interface CaptureTestBridge{
   read():Promise<unknown|null>;start(request:CaptureTestRequest):Promise<unknown>;
+  reconcileStart(runId:string):Promise<unknown|null>;
   cancel(runId:string):Promise<unknown>;discard(runId:string):Promise<void>;
 }
 export type CaptureTestView={snapshot:CaptureTestSnapshot|null;pending:CaptureTestRequest|null;connected:boolean;commandBusy:boolean;error:string};
@@ -26,10 +27,17 @@ export class CaptureTestClient{
     const epoch=this.epoch;
     const job=(async()=>{
       try{
-        const value=await this.bridge.read();
+        let value=await this.bridge.read();
         if(epoch!==this.epoch)return this.view.snapshot;
+        if(value===null&&this.view.pending){
+          // A plain empty read cannot rule out a delayed start. Native
+          // reconciliation either returns that run or fences its ID before
+          // confirming that it can never start later.
+          value=await this.bridge.reconcileStart(this.view.pending.runId);
+          if(epoch!==this.epoch)return this.view.snapshot;
+          if(value===null){this.change({snapshot:null,pending:null,connected:true,error:""});return null;}
+        }
         if(value===null){
-          if(this.view.pending)throw Error("テストの受付結果を確認できません。開始は再送していません。");
           if(this.view.snapshot?.busy)throw Error("進行中のテストの停止結果を確認できません。");
           this.change({snapshot:null,connected:true,error:""});return null;
         }

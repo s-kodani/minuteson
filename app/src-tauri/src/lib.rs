@@ -1604,6 +1604,23 @@ async fn get_capture_test_snapshot(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+async fn reconcile_capture_test_start(
+    window: WebviewWindow,
+    run_id: String,
+) -> Result<Option<capture_test::Snapshot>, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::with_transition(&app, || {
+            app.state::<capture_test::CaptureTests>().reconcile_start(&run_id)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn start_capture_test(
     window: WebviewWindow,
     request: capture_test::Request,
@@ -2458,6 +2475,7 @@ pub fn run() {
                 render_recording_input_notice,
                 close_recording_input_notice,
                 get_capture_test_snapshot,
+                reconcile_capture_test_start,
                 start_capture_test,
                 cancel_capture_test,
                 discard_capture_test,

@@ -11,6 +11,7 @@ import type {CaptureScope} from "./capture-scope-state";
 export function useCaptureTest(){
   const [client]=useState(()=>new CaptureTestClient({
     read:()=>invoke("get_capture_test_snapshot"),start:request=>invoke("start_capture_test",{request}),
+    reconcileStart:runId=>invoke("reconcile_capture_test_start",{runId}),
     cancel:runId=>invoke("cancel_capture_test",{runId}),discard:runId=>invoke("discard_capture_test",{runId}),
   }));
   const view=useSyncExternalStore(client.subscribe,client.getSnapshot);

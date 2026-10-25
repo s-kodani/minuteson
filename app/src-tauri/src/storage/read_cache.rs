@@ -8,7 +8,7 @@ use crate::bootstrap::windows_io as libc;
 use crate::bootstrap::windows_io::{AsRawFd, FromRawFd};
 use std::fs::File;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;

@@ -174,6 +174,25 @@ fn test_admission_is_single_owner_one_shot_and_has_no_meeting_identity() {
     assert!(controller.require_empty().is_ok());
 }
 #[test]
+fn absent_start_reconciliation_retires_late_requests_without_releasing_recovery_or_another_run() {
+    let (controller, _fixture) = controller();
+    let rejected = request();
+    assert!(controller.reconcile_start(&rejected.run_id).unwrap().is_none());
+    assert!(controller.reserve(rejected.clone()).is_err());
+    controller.require_exit_ready().unwrap();
+    let accepted = request();
+    controller.reserve(accepted.clone()).unwrap();
+    assert_eq!(controller.reconcile_start(&accepted.run_id).unwrap().unwrap().run_id, accepted.run_id);
+    assert!(controller.reconcile_start(&rejected.run_id).is_err());
+    assert!(controller.require_exit_ready().is_err());
+    assert!(controller.reconcile_start("invalid").is_err());
+    controller.lock().unwrap().current = None;
+    controller.lock().unwrap().ownership.attention("retained old journal".into());
+    assert!(controller.reconcile_start(&rejected.run_id).unwrap().is_none());
+    assert!(controller.require_empty().is_err());
+    controller.require_exit_ready().unwrap();
+}
+#[test]
 fn test_exit_seal_rechecks_pending_tests_and_blocks_late_capture_until_abort() {
     let (controller, _fixture) = controller();
     controller.seal_exit().unwrap();

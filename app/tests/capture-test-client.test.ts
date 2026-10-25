@@ -14,6 +14,7 @@ function fixture(){
   const calls:string[]=[];
   const bridge:CaptureTestBridge={
     read:async()=>{calls.push("read");return structuredClone(native);},
+    reconcileStart:async()=>{calls.push("reconcile");return structuredClone(native);},
     start:async()=>{calls.push("start");native=snapshot();return structuredClone(native);},
     cancel:async()=>{calls.push("cancel");native=snapshot("cancelling",3);return structuredClone(native);},
     discard:async()=>{calls.push("discard");native=null;},
@@ -38,9 +39,37 @@ test("lost accepted start reply is recovered by reading the same owner without r
 });
 test("absent or foreign results after lost start do not authorize another capture",async()=>{
   const f=fixture();await f.client.refresh();f.bridge.start=async()=>{f.calls.push("start");throw Error("unknown acceptance");};
+  f.bridge.reconcileStart=async()=>{throw Error("native reconciliation unavailable");};
   await assert.rejects(f.client.start(request()));await assert.rejects(f.client.refresh());
   assert.equal(f.client.blocked(),true);f.set({...snapshot(),runId:"a69b7530-c4b4-40f2-b2c5-50e28244e86d"});
   await assert.rejects(f.client.refresh());await assert.rejects(f.client.start({...request(),runId:"a69b7530-c4b4-40f2-b2c5-50e28244e86d"}));
+  assert.equal(f.calls.filter(c=>c==="start").length,1);
+});
+test("a rejected start is retired by native reconciliation and no longer blocks exit or a fresh ID",async()=>{
+  const f=fixture();await f.client.refresh();
+  const start=f.bridge.start;
+  f.bridge.start=async()=>{f.calls.push("start");throw Error("test audio recovery pending");};
+  await assert.rejects(f.client.start(request()));
+  assert.equal(f.client.getSnapshot().pending?.runId,id);
+  assert.equal(await f.client.refresh(),null);
+  assert.equal(f.client.getSnapshot().pending,null);
+  assert.equal(f.client.blocked(),false);
+  assert.equal(f.calls.filter(c=>c==="reconcile").length,1);
+  await assert.rejects(f.client.start(request()));
+  f.bridge.start=start;
+  const next={...request(),runId:"a69b7530-c4b4-40f2-b2c5-50e28244e86d"};
+  f.bridge.start=async()=>{f.calls.push("start");f.set({...snapshot(),runId:next.runId});return {...snapshot(),runId:next.runId};};
+  await f.client.start(next);
+  assert.equal(f.client.getSnapshot().snapshot?.runId,next.runId);
+});
+test("reconciliation of an apparently absent start recovers a late accepted run without replay",async()=>{
+  const f=fixture();await f.client.refresh();
+  f.bridge.start=async()=>{f.calls.push("start");throw Error("lost reply");};
+  await assert.rejects(f.client.start(request()));
+  f.bridge.reconcileStart=async()=>snapshot("recording",2);
+  assert.equal((await f.client.refresh())?.phase,"recording");
+  assert.equal(f.client.getSnapshot().pending,null);
+  assert.equal(f.client.blocked(),true);
   assert.equal(f.calls.filter(c=>c==="start").length,1);
 });
 test("a pre-start delayed empty read cannot erase the accepted run",async()=>{

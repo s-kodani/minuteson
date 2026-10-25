@@ -17,6 +17,9 @@ use std::time::UNIX_EPOCH;
 
 #[cfg(test)]
 mod tests;
+mod retired;
+#[cfg(test)]
+mod retired_tests;
 
 const SCHEMA: &str = "
 CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),proof TEXT NOT NULL,hash TEXT NOT NULL);
@@ -279,8 +282,15 @@ impl Registry {
                 .and_then(|_| certificate_file.sync_all())
                 .map_err(|e| e.to_string())?;
             pin.sync_all().map_err(|e| e.to_string())?;
-        } else if certificate(&certificate_file)? != actual {
-            return Err("テスト所有証明と台帳の実体が一致しません".into());
+        } else {
+            let saved = certificate(&certificate_file)?;
+            if saved != actual {
+                // Completed histories are retained verbatim. A changed device
+                // number never authorizes collecting old audio or rewriting
+                // its ownership proofs into authority over new objects.
+                retired::archive(&parent, &pin, &actual, &saved)?;
+                return Self::open(app_data);
+            }
         }
         for name in ["ownership.sqlite3-wal", "ownership.sqlite3-shm"] {
             match std::fs::symlink_metadata(root.join(name)) {

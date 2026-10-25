@@ -249,6 +249,29 @@ impl CaptureTests {
         }
         Ok(())
     }
+    // Caller holds RecorderController's transition lock, the same lock used
+    // by start. Retiring an absent ID prevents an already queued start from
+    // appearing after the UI has confirmed absence and allowed exit/retry.
+    pub(crate) fn reconcile_start(&self, id: &str) -> Result<Option<Snapshot>, String> {
+        if !crate::input_levels::valid_owner(id) {
+            return Err("録音前テストの開始IDが不正です".into());
+        }
+        let mut state = self.lock()?;
+        if state.closing {
+            return Err("アプリの終了処理が進行中です".into());
+        }
+        if let Some(run) = &state.current {
+            if run.request.run_id != id {
+                return Err("別の録音前テストが残っています".into());
+            }
+            return Ok(Some(run.snapshot.clone()));
+        }
+        if !state.used.contains(id) && state.used.len() >= 4096 {
+            return Err("録音前テストの開始IDの上限に達しました".into());
+        }
+        state.used.insert(id.to_string());
+        Ok(None)
+    }
     pub(crate) fn seal_exit(&self) -> Result<(), String> {
         let mut state = self.lock()?;
         if state.current.is_some() || state.closing || state.ownership.checking() {

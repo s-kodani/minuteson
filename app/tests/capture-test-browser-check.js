@@ -75,7 +75,7 @@ async page=>{
     const firstPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,firstPoll);check(await count("start_capture_test")===1,"read replayed start");
     results.push("lost accepted start reply is reconciled by read-only ownership polling, never by resubmitting capture");
 
-    await boot();await page.evaluate(()=>window.closeFixture.testAbsentStart=true);await start().click();await accept().click();
+    await boot();await page.evaluate(()=>{window.closeFixture.testAbsentStart=true;window.closeFixture.testReconcileFailure=true;});await start().click();await accept().click();
     await modal().locator(".action-error[role=alert]:visible").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
     const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);

@@ -58,6 +58,12 @@ impl Ownership {
     }
     pub(super) fn require_clear(&self) -> Result<(), String> {
         if self.blocked() {
+            if self.snapshot.phase == "attention" {
+                return Err(format!(
+                    "一時テスト音声の所有情報を確認できないため録音を開始できません。既存の音声は保持しています。アプリは終了できます。詳細: {}",
+                    self.snapshot.error_message.as_deref().unwrap_or("所有情報の確認が未完了です")
+                ));
+            }
             return Err(
                 "一時テスト音声をバックグラウンドで整理しています。安全に解放できるまで録音は開始できません。少し待って再試行してください".into(),
             );
