@@ -1,6 +1,6 @@
 import type { OfficialModelOption } from "./model-download-state";
 import type { ModelPlacementEntry } from "./model-inspection-state";
-import { canReviewApplication, type ModelProfileView } from "./model-profile-state.ts";
+import { canReviewApplication, type ModelProfileComponent, type ModelProfileView } from "./model-profile-state.ts";
 
 const modelRoles = new Set(["llm", "asr", "vad", "segmentation", "speaker_embedding"]);
 const retiredRecipes = new Set(["36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"]);
@@ -50,6 +50,32 @@ export interface ModelChoice {
   option?: OfficialModelOption;
   entry?: ModelPlacementEntry;
   packageIds: string[];
+}
+function containsModelFiles(entry: ModelPlacementEntry, option: OfficialModelOption, role?: string): boolean {
+  if (entry.sourceType === "download" && entry.download?.recipeHash === option.review.recipeHash) return true;
+  const required = option.review.manifest.files.filter(file => role ? file.role === role : modelRoles.has(file.role));
+  return required.length > 0 && required.every(file => entry.modelFiles?.some(installed =>
+    installed.role === file.role && installed.size === file.expectedSize && installed.sha256 === file.expectedHash));
+}
+export type ModelChoiceAction = "in_use" | "add_vad" | "use" | "update_runtime" | "download";
+// An applied, checked package is independent of a new catalog's transport
+// archive. A rebuilt shared archive must not erase the current configuration.
+// This is presentation only: preparing another runtime keeps the strict recipe
+// and compatibility checks in canReuseOfficialModel / useModel.
+export function modelChoiceAction(choice: ModelChoice | undefined, entries: ModelPlacementEntry[], used?: ModelProfileComponent): ModelChoiceAction {
+  if (!choice) return "download";
+  const option = choice.option;
+  const installed = entries.filter(entry => choice.packageIds.includes(entry.packageId) && entry.placementRecorded && entry.bodyRemoved !== true);
+  const applied = installed.find(entry => entry.packageId === used?.packageId && entry.engine === used.engine);
+  if (applied && used?.settingsMatch && used.compatibilityCurrent && canReviewApplication(applied)
+    && applied.compatibility?.operationId === used.checkOperationId
+    && (!option || containsModelFiles(applied, option))) return "in_use";
+  if (choice.entry) return "use";
+  if (option?.review.manifest.engine === "whisper.cpp"
+    && option.review.manifest.files.some(file => file.role === "vad")
+    && installed.some(entry => entry.modelFiles?.some(file => file.role === "asr"))
+    && !installed.some(entry => containsModelFiles(entry, option, "vad"))) return "add_vad";
+  return installed.length ? "update_runtime" : "download";
 }
 export function modelChoices(engine: string, entries: ModelPlacementEntry[], options: OfficialModelOption[], profiles: ModelProfileView[]): ModelChoice[] {
   const groups = installedModelGroups(entries.filter(entry => !isRetiredModel(entry)), profiles);

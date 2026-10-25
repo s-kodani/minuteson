@@ -1,4 +1,5 @@
 import type { AnalysisJob } from "./analysis-state.ts";
+import type { RecordingSnapshot } from "./session.ts";
 import { bytesLabel, importLabel, type ImportSnapshot } from "./import-state.ts";
 
 export interface OperationProgress {
@@ -9,13 +10,13 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
+  kind: "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
@@ -45,6 +46,17 @@ export function importProgress(snapshot: ImportSnapshot | null): OperationProgre
     kind: "audio_import", state: snapshot.phase === "waiting" ? "queued" : snapshot.phase === "cancelling" ? "pausing" : "running",
     label: importLabel(snapshot.phase), completed: known ? snapshot.completed : null, total: known ? total : null,
     detail: known ? snapshot.phase === "copying" ? `${bytesLabel(snapshot.completed)} / ${bytesLabel(total)}` : `${snapshot.completed.toLocaleString("ja-JP")} / ${total!.toLocaleString("ja-JP")} フレーム` : undefined,
+  };
+}
+
+export function recordingSaveProgress(snapshot: RecordingSnapshot | null, title?: string): OperationProgress | null {
+  if (!snapshot || !["stopping", "saving"].includes(snapshot.phase) || !snapshot.sessionId || !snapshot.meetingId) return null;
+  return {
+    id: `recording-save:${snapshot.sessionId}`, target: title || "録音した会議",
+    kind: "recording_save", state: "running", meetingId: snapshot.meetingId,
+    label: snapshot.phase === "stopping" ? "録音を停止中" : "録音を保存中",
+    completed: null, total: null,
+    detail: "アプリの終了時は、保存完了を待ちます。",
   };
 }
 

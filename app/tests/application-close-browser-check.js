@@ -22,7 +22,7 @@ async (page) => {
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
   const request = () => page.evaluate(() => window.closeFixture.request(true));
-  const dismissFailed = async name => { await modal(name).getByRole("alert").waitFor(); await modal(name).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal(name).waitFor({ state: "hidden" }); };
+  const dismissFailed = async name => { await modal(name).locator(".action-error").waitFor(); await modal(name).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal(name).waitFor({ state: "hidden" }); };
   let stage = "setup";
   try {
     stage = "start-decline"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await modal(startTitle).waitFor();
@@ -46,8 +46,9 @@ async (page) => {
     check(await count("start_recording") === 0 && await page.locator("#recording-title").inputValue() === "終了検査の会議", "save failure started or erased original meeting context");
     results.push("failed edit flush retains meeting context and does not call recording start");
 
-    stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await modal(startTitle).getByRole("alert").waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);
-    check(await page.getByRole("button", { name: "録音を開始", exact: true }).isDisabled() && await page.evaluate(() => window.closeFixture.recording.phase === "preparing"), "lost response fabricated idle");
+    stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await modal(startTitle).locator(".action-error").waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);
+    const newStart = page.getByRole("button", { name: "録音を開始", exact: true });
+    check((await newStart.count() === 0 || await newStart.isDisabled()) && await page.evaluate(() => window.closeFixture.recording.phase === "preparing"), "lost response fabricated idle");
     results.push("lost accepted-start acknowledgement retains canonical preparing state without replay");
 
     stage = "start-import-scope"; await boot(true); await configureImport(false); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().waitFor(); check((await modal(startTitle).innerText()).includes("合成会議.m4a") && (await modal(startTitle).innerText()).includes("元ファイルと保存済み会議を保持"), "start lost import scope"); await page.keyboard.press("Escape"); await modal(startTitle).waitFor({ state: "hidden" }); check(await count("start_recording") === 0 && await count("cancel_audio_import") === 0, "decline cancelled import");

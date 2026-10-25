@@ -3,7 +3,7 @@
 import { mockIPC as nativeMockIPC } from "@tauri-apps/api/mocks";
 export { mockWindows } from "@tauri-apps/api/mocks";
 export const mockIPC: typeof nativeMockIPC = (callback, options) => nativeMockIPC((command, args) => {
-  if (command === "get_startup_report") return { schemaVersion: 1, phase: "ready", failure: null };
+  if (command === "get_startup_report") return { schemaVersion: 1, phase: "ready", failure: null, ...(new URLSearchParams(location.search).has("resident") ? { platform: new URLSearchParams(location.search).get("resident") === "macos" ? "macos" : "windows" } : {}) };
   // Window chrome may mount on Windows before the fixture's workspace providers.
   if (command === "plugin:window|title") return document.title;
   if (command === "plugin:window|is_maximized") return false;

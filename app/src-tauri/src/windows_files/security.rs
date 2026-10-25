@@ -34,7 +34,7 @@ fn sid_text(sid: PSID) -> Result<String, String> {
         )))
     }
 }
-fn current_sid() -> Result<String, String> {
+pub(crate) fn current_sid() -> Result<String, String> {
     let mut token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return Err(std::io::Error::last_os_error().to_string());

@@ -22,12 +22,14 @@ try {
     $tauriArgs += @('--', '--locked')
     & npm @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed ($LASTEXITCODE)." }
+    $baseConfig = Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
+    $productName = if ($Qa) { (Get-Content -LiteralPath 'src-tauri/tauri.qa.conf.json' -Raw | ConvertFrom-Json).productName } else { $baseConfig.productName }
+    $installerName = '{0}_{1}_x64-setup.exe' -f $productName, $baseConfig.version
+    $installer = Get-Item -LiteralPath (Join-Path $PSScriptRoot "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/$installerName")
     if (-not $Qa) {
-        $installers = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis') -Filter '*.exe' -File)
-        if ($installers.Count -eq 0) { throw 'No public installer was produced.' }
-        foreach ($installer in $installers) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
-            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $env:MON_WINDOWS_CERTIFICATE_THUMBPRINT -or -not $signature.TimeStamperCertificate) { throw 'Public installer signature verification failed.' }
-        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $env:MON_WINDOWS_CERTIFICATE_THUMBPRINT -or -not $signature.TimeStamperCertificate) { throw 'Public installer signature verification failed.' }
     }
+    $flavor = if ($Qa) { 'qa' } else { 'release' }
+    & "$PSScriptRoot/../tools/publish-windows-installer.ps1" -Installer $installer.FullName -Flavor $flavor
 } finally { Pop-Location }

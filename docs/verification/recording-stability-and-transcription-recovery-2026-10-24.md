@@ -34,7 +34,7 @@
 
 ## Windows成果物
 
-- 更新用QAインストーラー: `output/windows-qa/MON-QA-recording-recovery-20261024-setup.exe`
+- 更新用QAインストーラー（常に最新版）: `output/windows-qa/MON-QA-setup.exe`
 - SHA-256: `C0DC02EEF31DD4685A966AC3D6D82B05145AD59741493431515555E988EB289F`
 - 最終録音ヘルパーSHA-256: `A5C8BD3A208C8EADB8AC4F5CE97F728FAD791327A8550A8E6EEB70DB9C37BE2C`。ビルド済みヘルパーと同梱用ステージの一致を確認。
 - 実行ファイルのリリースビルド後、最終ヘルパーでNSISを再作成した。QA用であり公開版の署名は付けていない。既存のインストール先は変更していない。

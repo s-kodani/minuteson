@@ -56,11 +56,11 @@ Taoの装飾なしウィンドウでも既定の影とネイティブのcaption�
 
 ## 検証・配布
 
-- CTest：3件成功。ログ `output/windows-qa/capture-fix-native-clock-queue.log`。
-- Win32外枠：1試験内9条件成功。ログ `output/windows-qa/capture-fix-native-frames.log`。
+- CTest：3件成功。ログ `output/windows-qa-work/capture-fix-native-clock-queue.log`。
+- Win32外枠：1試験内9条件成功。ログ `output/windows-qa-work/capture-fix-native-frames.log`。
 - フロントエンド：775成功・1除外。TypeScript検査成功。
-- 合成UI：ミニパネル、説明、停止確認、および削除メニューと設定カードの実DOM検査。ログ・画像は `output/windows-qa/capture-fix-*`。
-- Rust全体回帰：最終759成功・失敗0・33除外（340.92秒）。ログ `output/windows-qa/capture-fix-rust-tests-final.log`。初回の旧時刻補正回数を要求していた1件は、新しい推定理由・全240,000フレーム保持の検査へ更新し、単独・全体の両方で再確認した。
+- 合成UI：ミニパネル、説明、停止確認、および削除メニューと設定カードの実DOM検査。ログ・画像は `output/windows-qa-work/capture-fix-*`。
+- Rust全体回帰：最終759成功・失敗0・33除外（340.92秒）。ログ `output/windows-qa-work/capture-fix-rust-tests-final.log`。初回の旧時刻補正回数を要求していた1件は、新しい推定理由・全240,000フレーム保持の検査へ更新し、単独・全体の両方で再確認した。
 - 修正版QAインストーラー：生成成功。`app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/MON QA_0.1.0_x64-setup.exe`、268,294,816バイト（255.87MiB）。SHA-256 `938140c24dd87c2008301d5e1291e61eddc2bbbd88b60e3daefec8de0a7eabd4`。署名状態は `NotSigned`（QA）。公開署名・実録音の確認を成功扱いにはしない。
 - 同梱録音ヘルパー：723,456バイト、SHA-256 `e758941cf27875138ae639f0eb4c1f161a65af043ee77cecbd1eef0a4cee1539`。試験したヘルパー、sidecar入力、release配布ファイルの3点が一致する。
-- ビルド記録：`output/windows-qa/capture-fix-qa-build.log` と `capture-fix-build-report.json`。追加ダウンロード0バイト、累計26,042,589,935バイトで30GiB以内。インストール済みアプリの更新・利用者データへの書込みは行っていない。
+- ビルド記録：`output/windows-qa-work/capture-fix-qa-build.log` と `capture-fix-build-report.json`。追加ダウンロード0バイト、累計26,042,589,935バイトで30GiB以内。インストール済みアプリの更新・利用者データへの書込みは行っていない。

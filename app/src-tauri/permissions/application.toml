@@ -4,6 +4,13 @@
 identifier = "main-commands"
 description = "Application commands for main only."
 commands.allow = [
+  "get_residency_state",
+  "hide_main_to_background",
+  "get_startup_instance",
+  "acknowledge_startup_activation",
+  "open_existing_instance",
+  "recover_startup_instance",
+  "retry_startup",
   "acknowledge_archived_recording_input_notice",
   "apply_model_profile_application",
   "begin_transcript_draft",

@@ -72,7 +72,7 @@ function WindowTitlebar() {
     <div className="windows-titlebar-controls">
       <button type="button" aria-label="最小化" title="最小化" disabled={busy} onClick={() => void run("最小化", () => nativeWindow.minimize())}><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.5h10" /></svg></button>
       <button type="button" aria-label={maximized ? "元のサイズに戻す" : "最大化"} title={maximized ? "元のサイズに戻す" : "最大化"} disabled={busy} onClick={() => void toggleMaximized()}><svg viewBox="0 0 12 12" aria-hidden="true">{maximized ? <path d="M3.5 3.5v-2h7v7h-2m-7-5h7v7h-7z" /> : <path d="M1.5 1.5h9v9h-9z" />}</svg></button>
-      <button type="button" className="windows-titlebar-close" aria-label="ウィンドウを閉じる" title="閉じる" disabled={busy} onClick={() => void run("ウィンドウを閉じる", () => nativeWindow.close())}><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1.5 1.5 9 9m0-9-9 9" /></svg></button>
+      <button type="button" className="windows-titlebar-close" aria-label="ウィンドウを閉じる" title="トレイにしまう" disabled={busy} onClick={() => void run("ウィンドウを閉じる", () => nativeWindow.close())}><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1.5 1.5 9 9m0-9-9 9" /></svg></button>
     </div>
   </div>;
 }

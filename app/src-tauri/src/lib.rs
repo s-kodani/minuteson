@@ -59,6 +59,8 @@ mod session;
 mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
+mod startup_instance;
+mod residency;
 mod storage;
 mod transcription;
 mod voice;
@@ -1500,6 +1502,7 @@ async fn finish_main_close(
     quit: bool,
     expected: Option<application_close::CloseExpectations>,
 ) -> Result<(), String> {
+    if cfg!(any(windows,target_os="macos"))&&!quit{return Err("画面の収納とアプリの終了は別の操作です".into());}
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
@@ -1517,8 +1520,9 @@ async fn finish_main_close(
     {
         return Err("録音開始の停止待ちが進行中です。完了後に終了してください".into());
     }
-    if window.state::<SessionStore>().snapshot().is_active() {
-        if quit {
+    let recording = window.state::<SessionStore>().snapshot();
+    if recording.is_active() {
+        if quit || !recording.can_hide_main_window() {
             return Err("録音の停止と保存が完了していません".into());
         }
         return window.hide().map_err(|error| error.to_string());
@@ -2025,14 +2029,7 @@ fn open_main_window(window: WebviewWindow) -> Result<(), String> {
     if window.label() != "recorder" {
         return Err("Only the recorder panel can reopen the main window".into());
     }
-    let main = window
-        .app_handle()
-        .get_webview_window("main")
-        .ok_or("Main window unavailable")?;
-    main.show().map_err(|error| error.to_string())?;
-    main.set_focus().map_err(|error| error.to_string())?;
-    recorder_panel::main_focus_changed(window.app_handle(), true);
-    Ok(())
+    residency::restore(window.app_handle())
 }
 
 #[tauri::command]
@@ -2186,8 +2183,15 @@ fn save_transcript_draft(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
-    if let Some(code) = local_engine::guard_entry() {
-        std::process::exit(code);
+    if let Some(code) = local_engine::guard_entry() {std::process::exit(code);}
+    #[cfg(target_os="macos")]
+    {if let Some(code)=residency::supervisor_entry(){std::process::exit(code);}residency::prepare_supervisor();}
+    #[cfg(windows)]
+    {
+        if let Some(code) = startup_instance::supervisor_entry() { std::process::exit(code); }
+        // Start the narrow restart relay before assigning the application job.
+        // It owns no storage and exits with its parent unless restart is approved.
+        startup_instance::prepare_supervisor();
     }
     let context = tauri::generate_context!();
     #[cfg(target_os = "windows")]
@@ -2201,6 +2205,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
     builder
         .manage(startup_attention::Startup::default())
+        .manage(startup_instance::Instance::default())
+        .manage(residency::Residency::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
         .manage(recorder_panel::PanelVisibility::default())
@@ -2225,6 +2231,7 @@ pub fn run() {
                     .map_err(|e| e.to_string()),
             );
             app.manage(logs);
+            residency::initialize(app.handle());
             internal_logs::phase("application", None, None, "starting", None);
             #[cfg(target_os = "windows")]
             if let Err(error) = local_engine::windows::initialize() {
@@ -2244,7 +2251,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             rounded_windows::configure(app.handle())?;
             #[cfg(windows)]
-            windows_appearance::configure(app.handle())?;
+            if let Err(error) = windows_appearance::configure(app.handle()) {
+                internal_logs::report_error("windows_appearance", &error);
+            }
             let root = match app.path().app_data_dir() {
                 Ok(root) => root,
                 Err(error) => {
@@ -2262,6 +2271,19 @@ pub fn run() {
             };
             #[cfg(any(target_os = "macos", windows))]
             {
+                #[cfg(windows)]
+                {
+                    let connected = app.path().app_config_dir().map_err(|e| e.to_string()).and_then(|config| startup_instance::initialize(app.handle(), &config));
+                    match connected {
+                        Ok(true) => {}
+                        result => {
+                            let message = result.err().unwrap_or_else(|| "既存のMONを開き直すか、確認して再起動できます。".into());
+                            app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageSelection, message, None, app.path().app_config_dir().ok().as_deref()))?;
+                            startup_attention::show(app.handle());
+                            return Ok(());
+                        }
+                    }
+                }
                 let admission = app
                     .path()
                     .app_config_dir()
@@ -2276,8 +2298,16 @@ pub fn run() {
                     .and_then(|config| startup_attention::admit_storage(&config, &root));
                 match admission {
                     Ok((storage, selection)) => {
+                        let recovery = match selection.startup_recovery_view(&storage) {
+                            Ok(recovery) => recovery,
+                            Err(error) => {
+                                app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageAdmission, error, Some(selection.root()), app.path().app_config_dir().ok().as_deref()))?;
+                                startup_attention::show(app.handle());
+                                return Ok(());
+                            }
+                        };
                         app.state::<startup_attention::Startup>()
-                            .set_recovery(selection.startup_recovery_view(&storage)?)?;
+                            .set_recovery(recovery)?;
                         app.manage(storage);
                         app.manage(selection);
                     }
@@ -2308,12 +2338,20 @@ pub fn run() {
                     return Ok(());
                 }
             }
+            let prepared = ImportController::recover(app.handle()).and_then(|_| {
+                if !app.state::<Storage>().data_write_blocked() {
+                    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                    capture_test::CaptureTests::initialize(app.handle(), &root)?;
+                }
+                Ok(())
+            });
+            if let Err(error) = prepared {
+                app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageAdmission, error, Some(&root), None))?;
+                startup_attention::show(app.handle());
+                return Ok(());
+            }
             app.state::<startup_attention::Startup>().ready()?;
             internal_logs::phase("application", None, None, "ready", None);
-            ImportController::recover(app.handle())?;
-            if !app.state::<Storage>().data_write_blocked() {
-                capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
-            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 if handle.state::<Storage>().data_write_blocked() {
@@ -2337,7 +2375,9 @@ pub fn run() {
                     }
                 }
             });
-            AnalysisController::kick(app.handle())?;
+            if let Err(error) = AnalysisController::kick(app.handle()) {
+                internal_logs::report_error("analysis", &error);
+            }
             Ok(())
         })
         .invoke_handler(|invoke| {
@@ -2353,6 +2393,13 @@ pub fn run() {
                 internal_logs::get_internal_logs,
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
+                startup_instance::get_startup_instance,
+                startup_instance::acknowledge_startup_activation,
+                startup_instance::open_existing_instance,
+                startup_instance::recover_startup_instance,
+                startup_instance::retry_startup,
+                residency::get_residency_state,
+                residency::hide_main_to_background,
                 model_official_catalog::get_official_model_options,
                 model_download_ipc::start_model_download,
                 model_download_ipc::get_model_download_lifetime,
@@ -2509,7 +2556,7 @@ pub fn run() {
             if window.state::<startup_attention::Startup>().blocked() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    window.app_handle().exit(0);
+                    if cfg!(any(windows,target_os="macos")){if window.label()=="main" {let _=window.app_handle().get_webview_window("main").map(residency::hide_main_to_background);}}else{window.app_handle().exit(0);}
                 }
                 return;
             }
@@ -2541,9 +2588,6 @@ pub fn run() {
                     api.prevent_close();
                     if window.state::<StopDecisionStore>().snapshot().visible() {
                         recording_confirmation_window::focus(window.app_handle());
-                    } else if window.state::<SessionStore>().snapshot().is_active() {
-                        let _ = window.hide();
-                        let _ = recorder_panel::synchronize(window.app_handle(), Some(false));
                     } else {
                         let _ =
                             window.emit("main-close-requested", serde_json::json!({"quit": false}));
@@ -2554,7 +2598,10 @@ pub fn run() {
         .build(context)
         .expect("failed to start mon desktop")
         .run(|app, event| {
+            #[cfg(target_os="macos")]
+            if let RunEvent::Reopen{..}=&event {let _=residency::restore(app);}
             if let RunEvent::Exit = event {
+                residency::stopping(app);
                 internal_logs::phase("application", None, None, "stopped", None);
                 if let Some(logs) = app.try_state::<internal_logs::LogService>() {
                     logs.flush();
@@ -2571,8 +2618,7 @@ pub fn run() {
                         return;
                     }
                     if let Some(main) = app.get_webview_window("main") {
-                        let _ = main.show();
-                        let _ = main.set_focus();
+                        let _ = residency::restore(app);
                         let _ =
                             main.emit("main-close-requested", serde_json::json!({"quit": true}));
                     }

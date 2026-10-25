@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { canonicalRecipe, downloadByteTotals, downloadDigest, type OfficialModelOption } from "../src/model-download-state.ts";
-import { canReuseOfficialModel, installedModelGroups, matchesOfficialModel, modelChoices, modelDisplayName } from "../src/model-selection-state.ts";
+import { canReuseOfficialModel, installedModelGroups, matchesOfficialModel, modelChoices, modelChoiceAction, modelDisplayName } from "../src/model-selection-state.ts";
 import type { ModelPlacementEntry } from "../src/model-inspection-state.ts";
 import type { ModelProfileView } from "../src/model-profile-state.ts";
 
@@ -115,4 +115,68 @@ test("Sherpa keeps model identity but reacquires the package with the voice C AP
       expectedHash:"ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1",
     });
   }
+});
+
+function checkedSelection(option: OfficialModelOption) {
+  const installed = entry(option, "11111111-1111-4111-8111-111111111111");
+  const operationId = "22222222-2222-4222-8222-222222222222";
+  installed.download!.recipeHash = "b".repeat(64);
+  installed.compatibility = { operationId, packageId: installed.packageId, reviewHash: installed.reviewHash,
+    adapterRevision: 1, state: "succeeded", errorMessage: null };
+  const used = { roles: ["asr"], packageId: installed.packageId, modelName: installed.modelName, modelVersion: installed.modelVersion,
+    engine: installed.engine as "whisper.cpp" | "sherpa-onnx" | "llama.cpp", checkOperationId: operationId, settingsMatch: true, compatibilityCurrent: true };
+  const profiles: ModelProfileView[] = [{ name: "standard", id: "33333333-3333-4333-8333-333333333333", profileVersion: 1,
+    configurationComplete: false, components: [used] }];
+  return { installed, used, profiles };
+}
+function whisperWithVad(): OfficialModelOption {
+  const option = structuredClone(options[0]);
+  option.review.manifest.engine = "whisper.cpp";
+  for (const file of option.review.manifest.files) if (file.role === "llm") file.role = "asr";
+  option.review.manifest.files.push({ relativePath: "models/vad.bin", role: "vad", expectedSize: 123, expectedHash: "e".repeat(64) });
+  return option;
+}
+
+test("rebuilding a shared runtime archive does not turn applied checked models into downloads or VAD upgrades", () => {
+  for (const option of [whisperWithVad(), options.find(o => o.review.manifest.engine === "sherpa-onnx")!, options[0]]) {
+    const { installed, used, profiles } = checkedSelection(option);
+    const choice = modelChoices(installed.engine, [installed], [option], profiles)[0];
+    assert.equal(modelChoiceAction(choice, [installed], used), "in_use");
+    // Keep runtime admission strict even when the applied selection is usable.
+    if (installed.engine !== "llama.cpp") assert.equal(choice.entry, undefined);
+  }
+});
+
+test("an installed VAD with changed transport metadata offers runtime preparation, never a nonexistent missing VAD", () => {
+  const option = whisperWithVad(), { installed } = checkedSelection(option);
+  const choice = modelChoices(installed.engine, [installed], [option], [])[0];
+  assert.equal(modelChoiceAction(choice, [installed]), "update_runtime");
+  installed.modelFiles = installed.modelFiles!.filter(file => file.role !== "vad");
+  assert.equal(modelChoiceAction(choice, [installed]), "add_vad");
+  installed.modelFiles.push({ role: "vad", size: 123, sha256: "f".repeat(64) });
+  assert.equal(modelChoiceAction(choice, [installed]), "add_vad", "different VAD bytes cannot satisfy the required model");
+});
+
+test("applied state requires matching settings, current exact compatibility evidence and available complete model files", () => {
+  const option = whisperWithVad(), { installed, used, profiles } = checkedSelection(option);
+  const choice = modelChoices(installed.engine, [installed], [option], profiles)[0];
+  for (const patch of [{ settingsMatch: false }, { compatibilityCurrent: false }, { checkOperationId: "44444444-4444-4444-8444-444444444444" }]) {
+    assert.notEqual(modelChoiceAction(choice, [installed], { ...used, ...patch }), "in_use");
+  }
+  assert.notEqual(modelChoiceAction(choice, [{ ...installed, compatibility: null }], used), "in_use");
+  assert.equal(modelChoiceAction(choice, [{ ...installed, bodyRemoved: true }], used), "download");
+  assert.equal(modelChoiceAction(choice, [{ ...installed, placementRecorded: false }], used), "download");
+  const withoutVad = { ...installed, modelFiles: installed.modelFiles!.filter(file => file.role !== "vad") };
+  assert.equal(modelChoiceAction(choice, [withoutVad], used), "add_vad");
+});
+
+test("another selected model and an unapplied current package retain their own actions", () => {
+  const option = whisperWithVad(), { installed, used, profiles } = checkedSelection(option);
+  const current = { ...installed, download: { ...installed.download!, recipeHash: option.review.recipeHash } };
+  const choice = modelChoices(current.engine, [current], [option], profiles)[0];
+  assert.equal(modelChoiceAction(choice, [current], { ...used, packageId: "55555555-5555-4555-8555-555555555555" }), "use");
+  const other = structuredClone(option); other.id = "other-model"; other.review.recipeHash = "f".repeat(64);
+  other.review.manifest.files.find(file => file.role === "asr")!.expectedHash = "c".repeat(64);
+  const different = modelChoices(installed.engine, [installed], [other], profiles).find(c => c.value === "official:other-model");
+  assert.equal(modelChoiceAction(different, [installed], used), "download");
 });

@@ -19,6 +19,10 @@ async page=>{
     });
     check(!bounds.overflow&&!bounds.pageOverflow,`horizontal overflow ${JSON.stringify(bounds)}`);
     if(desktop)check(!bounds.scrolls&&bounds.bottom<=bounds.viewport,`desktop scroll ${JSON.stringify(bounds)}`);
+    const selects=await workspace().getByRole('combobox').evaluateAll(fields=>fields.map(field=>{
+      const css=getComputedStyle(field);return {arrow:css.backgroundImage,padding:parseFloat(css.paddingRight),cursor:css.cursor,disabled:field.disabled};
+    }));
+    check(selects.every(field=>field.arrow!=='none'&&field.padding>=40&&field.cursor===(field.disabled?'not-allowed':'pointer')),'recording select lost its visible arrow or dropdown affordance');
   };
   const boot=async()=>{
     await page.goto('http://127.0.0.1:1420/');await page.waitForFunction(()=>!!window.closeFixture);

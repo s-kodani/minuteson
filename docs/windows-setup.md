@@ -109,16 +109,19 @@ npm.cmd --prefix app run tauri:windows:qa:build
 
 QAの製品名は `MON QA`、識別子は `jp.mon.desktop.qa`。通常版と区別され、インストーラーはユーザー単位の構成になる。公開配布用署名はこの手順に含めない。
 
-出力先：
+配布用の出力先（ビルド成功後に最新版1つだけを配置）：
 
 ```text
-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+QA版: output/windows-qa/MON-QA-setup.exe
+公開版: output/windows-release/MON-setup.exe
 ```
 
+`app/build-windows.ps1` は、ビルド成功・公開版の署名確認後に `tools/publish-windows-installer.ps1` で配布先を更新する。配布先にはログ・画像・検証スクリプト・ハッシュファイルを置かない。既知の過去のMONインストーラーは削除し、それ以外のファイルは `output/windows-qa-work/` または `output/windows-release-work/` に移す。検証結果やビルドログは最初からこれらの作業用フォルダーに保存する。ビルド内部の生成物は引き続き `app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/` にある。
+
 ```powershell
-Get-ChildItem app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe |
+Get-ChildItem -LiteralPath output/windows-qa |
     Select-Object FullName, Length, LastWriteTime
-Get-FileHash app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe -Algorithm SHA256
+Get-FileHash -LiteralPath output/windows-qa/MON-QA-setup.exe -Algorithm SHA256
 git rev-parse HEAD
 git status --short
 ```
@@ -143,7 +146,7 @@ git status --short
 - 依存取得時のnpm監査はhigh 1件。自動修正はしていない。同梱通知の生成は成功し、既存の未承認ライセンス項目・不足通知4件は解消済みとは扱わない。
 - 追加実行した通知生成のPythonテスト18件には、Windowsの改行・パス区切り・POSIX権限・シンボリックリンク作成権限の前提による失敗が残った（8成功、3失敗、7エラー）。この追加テスト全体のWindows対応は今回実施していない。実依存391件の通知生成と原文ハッシュ照合は別途成功している。
 
-この端末のビルド用PATH設定・各工程のログは、Git管理対象外の `output/windows-qa/` に保存する。新規セットアップでは上記の公開手順を使い、このローカル出力への依存は不要。
+この端末のビルド用PATH設定・各工程のログは、Git管理対象外の `output/windows-qa-work/` に保存する。新規セットアップでは上記の公開手順を使い、このローカル出力への依存は不要。
 
 ## Windows録音・モデル解析の実装と検証（2026年10月24日）
 
@@ -178,11 +181,11 @@ cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
 $env:MON_WINDOWS_INTEGRATION_ROOT = Join-Path (Get-Location) '.cache/windows-native-smoke'
 cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_real_models_download_place_check_and_apply -- --ignored --nocapture
 # 別途用意した日本語・PCM16 WAVファイルを指定する。実録音は不要。
-$env:MON_WINDOWS_QA_SAMPLE = Join-Path (Get-Location) 'output/windows-qa/japanese-speech.wav'
+$env:MON_WINDOWS_QA_SAMPLE = Join-Path (Get-Location) 'output/windows-qa-work/japanese-speech.wav'
 cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved_speech_runs_transcription_diarization_and_minutes -- --ignored --nocapture
 ```
 
-主要ログは `output/windows-qa/` の `windows-native-tests-final.log`、`windows-five-second-final.log`、`windows-real-models-base.log`、`windows-japanese-analysis.log`、`frontend-tests-final.log`、`platform-tests-final.log` に保存。実マイク・PC音声・対象アプリの実録音、機器切替、長時間安定性の確認は利用者が行う。今回の自動検証では実録音・再生、新版アプリのインストール・起動は実施していない。
+主要ログは `output/windows-qa-work/` の `windows-native-tests-final.log`、`windows-five-second-final.log`、`windows-real-models-base.log`、`windows-japanese-analysis.log`、`frontend-tests-final.log`、`platform-tests-final.log` に保存。実マイク・PC音声・対象アプリの実録音、機器切替、長時間安定性の確認は利用者が行う。今回の自動検証では実録音・再生、新版アプリのインストール・起動は実施していない。
 
 ### 起動直後・5秒テスト・モデル一覧・状態更新の修正
 
@@ -195,7 +198,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 
 修正後の検証は、画面側773件・プラットフォーム設定5件、Windows統合3件、5秒テスト2件とRust書式検査が成功。ブラウザーでは起動の8条件、Windows実定義9候補の表示・選択、3エンジンの取得・配置・検査・適用の画面操作を確認した。画面操作の取得以降は合成IPCであり、実エンジン・重みの先行検証とは区別する。今回も実録音は行っていない。
 
-ログ・記録は `output/windows-qa/fix-five-second-tests.log`、`fix-windows-integration-tests.log`、`fix-frontend-tests.log`、`fix-platform-tests.log`、`fix-browser-results.json`、`fix-metadata-before-after.json`。ブラウザーは検証終了後に閉じる。利用者が使っている旧版を自動で終了・更新せず、再ビルドしたインストーラーから明示的に更新する。
+ログ・記録は `output/windows-qa-work/fix-five-second-tests.log`、`fix-windows-integration-tests.log`、`fix-frontend-tests.log`、`fix-platform-tests.log`、`fix-browser-results.json`、`fix-metadata-before-after.json`。ブラウザーは検証終了後に閉じる。利用者が使っている旧版を自動で終了・更新せず、再ビルドしたインストーラーから明示的に更新する。
 
 修正版の再ビルドは2026年10月24日01:08:00（日本時間）、終了コード0で成功。生成日時と、最新ヘルパーの同梱元SHA-256一致を確認した。
 
@@ -206,7 +209,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 | SHA-256 | `ff86452e06a5c1a0ef542f669464dc78e1ca107d2595e17b905b1f2b7d6841a4` |
 | ビルド対象 | `codex/windows-platform-foundation`、`36431bb6f109b040508d5150f840a8697f8ca621` と今回までの未コミット変更 |
 | 再ビルド所要時間 | 315.90秒（約5分16秒、01:02:44〜01:08:00。調査・修正・先行検証は含まない） |
-| ログと機械可読記録 | `output/windows-qa/fix-rebuild.log`、`fix-build-report.json` |
+| ログと機械可読記録 | `output/windows-qa-work/fix-rebuild.log`、`fix-build-report.json` |
 
 旧MON QAを終了してから同名の修正版インストーラーで更新する。今回も新版のインストール・起動・実録音は行っていない。
 
@@ -233,7 +236,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 
 ログには音声サンプル・会議名・機器名を含めない。5秒テストでは専用一時フォルダー内に同じ診断を作り、テスト音声の解放時に併せて削除する。恒久的な会議録音の診断は録音フォルダーに残る。
 
-検証は実マイク・PC音声を使わず、同値・逆行・ゼロとエラーフラグ・位置リセット・既知の20ms欠損を合成して行う。C++時計テスト、5秒録音の実監視・検証・解放3件、通常録音の停止・FLAC保存・欠損記録・解析用ミックス1件が成功した。5秒枠外以外にフレームが失われていないこと、ログの件数・サイズ上限、コンソール非表示、初期化失敗時のエラー維持も確認した。合成診断の実ファイルは `output/windows-qa/packet-synthetic-aiyu3zo8/`、その検証結果は `packet-diagnostic-check.json` にある。検証時の診断は30,154 bytesだった。
+検証は実マイク・PC音声を使わず、同値・逆行・ゼロとエラーフラグ・位置リセット・既知の20ms欠損を合成して行う。C++時計テスト、5秒録音の実監視・検証・解放3件、通常録音の停止・FLAC保存・欠損記録・解析用ミックス1件が成功した。5秒枠外以外にフレームが失われていないこと、ログの件数・サイズ上限、コンソール非表示、初期化失敗時のエラー維持も確認した。合成診断の実ファイルは `output/windows-qa-work/packet-synthetic-aiyu3zo8/`、その検証結果は `packet-diagnostic-check.json` にある。検証時の診断は30,154 bytesだった。
 
 最新化では `git pull --ff-only --autostash origin codex/windows-platform-foundation` が成功し、`84bb9f217aea533a7a1758054f65ced472fb6e4b` を取得した。既存変更は競合なく復元し、新規コミット・pushは行っていない。以下の旧版記録にある先頭時刻逆行の拒否は、この対応で置き換えた。
 
@@ -248,7 +251,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 | SHA-256 | `c2869a449575562c45fffa28027f60659bff8cd923d1bc4c6598d31b13840b85` |
 | ビルド対象 | `codex/windows-platform-foundation`、`84bb9f217aea533a7a1758054f65ced472fb6e4b` と今回までの未コミット変更 |
 | 再ビルド所要時間 | 393.00秒（6分33秒、01:50:33〜01:57:06。調査・修正・先行検証は含まない） |
-| ビルドログ・機械可読記録 | `output/windows-qa/packet-rebuild.log`、`packet-build-report.json` |
+| ビルドログ・機械可読記録 | `output/windows-qa-work/packet-rebuild.log`、`packet-build-report.json` |
 | 最終ヘルパーの検証ログ | `packet-final-native-tests.log`、`packet-final-five-second-tests.log`、`packet-final-recording-tests.log` |
 | その他の検証ログ | `packet-frontend-tests.log`、`packet-platform-tests.log`、`packet-startup-recovery-tests.log`（回復テストは対象0件） |
 
@@ -264,7 +267,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 
 追加検証はC++パケット時計テスト（境界の微小重なり、繰り返す不連続、正の欠損、実際の逆行拒否、連続音声）が成功。同じ時刻の重なりを合成した5秒テスト2件と通常録音の停止・FLAC保存・解析用ミックス1件が成功した。フロント773件、プラットフォーム設定5件、起動ブラウザー8条件、Rust書式検査が成功。実マイク・PC音声の取得は行っていない。
 
-ログは `output/windows-qa/clock-native-tests.log`、`clock-five-second-tests.log`、`clock-recording-tests.log`、`clock-frontend-tests.log`、`clock-platform-tests.log`、`clock-startup-browser.json`。起動表示の画像は `startup-center-1280.png` と `startup-center-960.png`。
+ログは `output/windows-qa-work/clock-native-tests.log`、`clock-five-second-tests.log`、`clock-recording-tests.log`、`clock-frontend-tests.log`、`clock-platform-tests.log`、`clock-startup-browser.json`。起動表示の画像は `startup-center-1280.png` と `startup-center-960.png`。
 
 追加修正版の再ビルドは2026年10月24日01:26:10（日本時間）、終了コード0で成功した。同梱元ヘルパーと検証したヘルパーのSHA-256一致を確認している。
 
@@ -275,7 +278,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 | SHA-256 | `4bca267e573c9869106ea79e96305e6553a1897875a86f156ce7aac6ff0318cb` |
 | ビルド対象 | `codex/windows-platform-foundation`、`36431bb6f109b040508d5150f840a8697f8ca621` と今回までの未コミット変更 |
 | 再ビルド所要時間 | 325.21秒（約5分25秒、01:20:45〜01:26:10。調査・修正・先行検証は含まない） |
-| ログと機械可読記録 | `output/windows-qa/clock-rebuild.log`、`clock-build-report.json` |
+| ログと機械可読記録 | `output/windows-qa-work/clock-rebuild.log`、`clock-build-report.json` |
 
 旧MON QAを終了してから、この生成時刻のインストーラーで更新する。新版のインストール・起動・実録音、コミット・pushは実施していない。
 
@@ -294,8 +297,8 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 | SHA-256 | `3a66f6763ec373e1d37fc65e779cd7c3a2d13e4818d57ec2ccfcd151919abffa` |
 | ビルド対象 | `codex/windows-platform-foundation`、基準コミット `36431bb6f109b040508d5150f840a8697f8ca621` と今回の未コミット変更 |
 | 再ビルド所要時間 | 395.46秒（約6分35秒、00:41:33〜00:48:09。環境準備・実装・先行検証は含まない） |
-| ログ | `output/windows-qa/rebuild-windows-functional.log` |
-| 機械可読記録 | `output/windows-qa/windows-functional-build-report.json` |
+| ログ | `output/windows-qa-work/rebuild-windows-functional.log` |
+| 機械可読記録 | `output/windows-qa-work/windows-functional-build-report.json` |
 
 生成したインストーラーの実行・新版アプリの起動・実録音は実施していない。利用者が旧MON QAを終了してこのインストーラーで更新し、録音と必要なモデルの導入を確認する。公開用署名、コミット・pushは行っていない。
 
@@ -311,7 +314,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_saved
 | 成功したビルドの経過 | 389.47秒（約6分29秒、Rust release工程は4分18秒） |
 | 先行した失敗試行 | 通知ハッシュ不一致19.61秒、C++マクロ衝突33.74秒 |
 | 環境確認開始から生成結果の記録まで | 約25分（23:11:50〜23:36:51。環境導入・取得・修正・検査・待機を含む） |
-| ログ | `output/windows-qa/build-attempt3.log` |
-| 機械可読記録 | `output/windows-qa/summary.json` |
+| ログ | `output/windows-qa-work/build-attempt3.log` |
+| 機械可読記録 | `output/windows-qa-work/summary.json` |
 
 ツール導入・取得には並行した工程があるため、工程時間の合計を総経過時間とは扱わない。細かな修正作業の個別時間は未計測。インストーラーの実行、アプリ起動、録音・AI処理、公開用署名、コミット・pushは行っていない。

@@ -230,6 +230,13 @@ mockIPC(async (command, args) => {
     if (f.finishLost) throw Error("模擬終了受付の応答喪失");
     return null;
   }
+  if(command === "get_residency_state") return clone(f.residency ?? { supported: true, canBackground: true, trayAvailable: true, dockAvailable: false, error: null });
+  if(command === "hide_main_to_background") {
+    if(f.hideDelay)await new Promise(resolve=>{f.pendingHide=resolve;});
+    if(f.hideFailure || f.residency?.canBackground===false)throw Error("合成の常駐入口消失");
+    if(f.hideLost)throw Error("合成の収納応答喪失");
+    f.hidden=true;return null;
+  }
   if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft", "get_minutes_markdown"].includes(command)) return null;
   if (["get_analysis_jobs", "get_ready_analysis_flows", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_publication_status") return null;

@@ -17,7 +17,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel } from "./model-selection-state";
+import { modelChoices, modelChoiceAction, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel } from "./model-selection-state";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -242,12 +242,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const choice = choices.find(item => item.value === selected || item.packageIds.includes(selected));
       const value = choice?.value ?? "";
       const entry = choice?.entry;
-      const available = !!entry;
-      const needsVad = engine === "whisper.cpp" && !entry && !!choice?.packageIds.some(id => entries.find(e => e.packageId === id)?.modelFiles?.some(f => f.role === "asr")) && !!choice?.option?.review.manifest.files.some(f => f.role === "vad");
+      const action = modelChoiceAction(choice, entries, used);
+      const actionLabel = { in_use: "使用中", add_vad: "VADを追加して使用", use: "使用", update_runtime: "実行環境を更新して使用", download: "ダウンロードして使用" }[action];
       return <div className="model-selection-row" key={engine}><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
-      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || !!entry && used?.packageId === entry.packageId && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{needsVad ? "VADを追加して使用" : available ? "使用" : "ダウンロードして使用"}</button></div>;
+      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={() => void useModel(engine, value)}>{actionLabel}</button></div>;
     })}</div>
     <ModelIssue label="モデルの準備" message={error} />
     {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}

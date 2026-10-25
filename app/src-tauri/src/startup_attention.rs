@@ -136,12 +136,21 @@ impl Startup {
     }
     pub(crate) fn admit_command(&self, label: &str, command: &str) -> Result<(), String> {
         let report = self.snapshot()?;
+        if matches!(command,"get_residency_state"|"hide_main_to_background"){
+            return if label=="main" {Ok(())}else{Err("常駐操作はメイン画面だけで利用できます".into())};
+        }
         if command == "get_startup_report" {
             return if label == "main" {
                 Ok(())
             } else {
                 Err("起動診断はメイン画面だけで確認できます".into())
             };
+        }
+        if matches!(command, "get_startup_instance" | "acknowledge_startup_activation") {
+            return if label == "main" { Ok(()) } else { Err("起動連携はメイン画面だけで確認できます".into()) };
+        }
+        if matches!(command, "open_existing_instance" | "recover_startup_instance" | "retry_startup") {
+            return if label == "main" && report.phase == Phase::Blocked { Ok(()) } else { Err("起動復旧の画面だけで操作できます".into()) };
         }
         if command == "quit_blocked_startup" {
             return if label == "main" && report.phase == Phase::Blocked {
@@ -265,6 +274,21 @@ pub(crate) fn quit_blocked_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_commands_are_main_only_and_never_unlock_normal_storage_commands() {
+        let startup = Startup::default();
+        for command in ["get_startup_instance", "acknowledge_startup_activation"] {
+            assert!(startup.admit_command("main", command).is_ok());
+            assert!(startup.admit_command("recorder", command).is_err());
+        }
+        for command in ["open_existing_instance", "recover_startup_instance", "retry_startup"] { assert!(startup.admit_command("main", command).is_err()); }
+        startup.block(Failure::new(Stage::StorageSelection, "busy".into(), None, None)).unwrap();
+        for command in ["open_existing_instance", "recover_startup_instance", "retry_startup"] {
+            assert!(startup.admit_command("main", command).is_ok());
+            for label in ["recorder", "recorder-info", "recording-confirmation", "unknown"] { assert!(startup.admit_command(label, command).is_err()); }
+        }
+        for command in ["start_recording", "list_meetings", "finish_main_close"] { assert!(startup.admit_command("main", command).is_err()); }
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn recovered_pending_startup_allows_reading_but_never_dispatches_mutations() {

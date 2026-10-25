@@ -34,7 +34,9 @@ test("mini close stays usable while non-modal stop popup keeps stop controls gua
 test("native main focus and recording phase own mini visibility without a manual show command",()=>{
   const lib=source("../src-tauri/src/lib.rs"),recorder=source("../src-tauri/src/recorder.rs"),panel=source("../src-tauri/src/recorder_panel.rs");
   assert.match(lib,/WindowEvent::Focused\(focused\).*recorder_panel::main_focus_changed/s);
-  assert.match(lib,/window.hide\(\).*recorder_panel::synchronize\(window.app_handle\(\), Some\(false\)\)/s);
+  const residency=source("../src-tauri/src/residency.rs");
+  assert.match(residency,/window\.hide\(\).*recorder_panel::synchronize\(window.app_handle\(\), Some\(false\)\)/s);
+  assert.match(lib,/window.emit\("main-close-requested", serde_json::json!\(\{"quit": false\}\)\)/);
   assert.doesNotMatch(lib,/show_recorder_preview/);
   assert.match(recorder,/let _ = crate::recorder_panel::synchronize\(&handle, None\);\s*crate::recording_confirmation_window::session_changed\(&handle, &snapshot\)/);
   assert.doesNotMatch(recorder,/panel\.show\(\)/);

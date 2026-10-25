@@ -13,7 +13,7 @@ async (page, capturePath = path => path) => {
   await boot(); await page.getByRole("heading", { name: "保存先の検証に失敗したため、通常の起動を中止しました", exact: true }).waitFor();
   check((await page.getByLabel("保持した起動診断", { exact: true }).innerText()).includes("<img src=x onerror=alert(1)>"), "raw cause was not retained as text");
   check(await page.locator(".startup-attention img").count() === 0, "diagnostic rendered as HTML"); await noWorkspace();
-  check((await page.locator("main").innerText()).includes("通常の起動検証が既に更新した状態") && (await page.locator("main").innerText()).includes("修復成功の保証ではありません"), "guidance promises unchanged storage/repair");
+  check((await page.locator("main").innerText()).includes("保存先を改めて検証") && (await page.locator("main").innerText()).includes("巻き戻す操作ではありません"), "guidance promises unchanged storage/repair");
   const before = await page.evaluate(() => JSON.stringify(window.startupFixture.report)); await reload().click();
   check(await page.evaluate(() => JSON.stringify(window.startupFixture.report)) === before, "diagnostic read changed native report"); await noWorkspace();
   results.push("normal main root gates all providers; cause is plain text; reread does not repair or mutate");

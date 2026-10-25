@@ -73,8 +73,8 @@
 | Windows話者分離DLL名の最終修正 | 話者分離6成功、1明示除外 | `.cache/windows-parity-sherpa-final.log` |
 | 取り込み・取消・復元往復 | 6種類の実音声fixtureの統合試験成功、44.28秒 | `.cache/windows-parity-final-windows_real_import_four_formats.log` |
 | 最終常駐CPU／Vulkan・特徴量 | 実モデルの3統合試験成功。完了ログ封印と次区間再利用を含む | `.cache/windows-parity-owner-real-worker.log`、`.cache/windows-parity-publish-windows_real_llama_vulkan.log`、`.cache/windows-parity-publish-windows_real_speaker_embedding.log` |
-| 保存音声の通し解析 | 文字起こし・話者分離・議事録生成の実統合試験成功 | `.cache/windows-parity-speech-large-context.log`、`output/windows-qa/parity-final-speech-evidence.json` |
-| 起動・モデル選択UI | Edgeのブラウザfixtureで起動診断8ケース、全14候補の選択、3エンジンの適用操作が成功。適用操作は模擬IPC | `output/windows-qa/parity-final-browser-results.json`、`output/windows-qa/parity-final-model-options-ui.png` |
+| 保存音声の通し解析 | 文字起こし・話者分離・議事録生成の実統合試験成功 | `.cache/windows-parity-speech-large-context.log`、`output/windows-qa-work/parity-final-speech-evidence.json` |
+| 起動・モデル選択UI | Edgeのブラウザfixtureで起動診断8ケース、全14候補の選択、3エンジンの適用操作が成功。適用操作は模擬IPC | `output/windows-qa-work/parity-final-browser-results.json`、`output/windows-qa-work/parity-final-model-options-ui.png` |
 | Rust整形・差分 | `cargo fmt --check` と `git diff --check` 成功 | `.cache/windows-parity-format-release.log` |
 
 32件のRust除外には、実モデルや独立fixture、手動機器操作を必要とする試験が含まれる。全14モデル・Vulkan・特徴量・取り込み・4時間相当PCMなど、本記録に個別の実行結果を記したものは別途明示実行した。Mac実機回帰、リモートCI、実デスクトップでのインストール・更新時保持、実音声録音、正式署名は未実施であり、上記の成功数には含めない。
@@ -85,6 +85,6 @@
 - 成果物: `app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/MON QA_0.1.0_x64-setup.exe`。
 - サイズ: 268,303,540 bytes（255.87MiB）。SHA-256: `bca4ff92144dc4e1c48fc75f3f512f26bc94557ddd04c3d12a916f57baf8a289`。
 - Authenticode: `NotSigned`。公開証明書による署名済み製品ではない。インストーラーの実行、既存インストールへの更新、実デスクトップでの描画確認は未実施。
-- 最終集計と実行部品・通知のSHA照合は `output/windows-qa/parity-final/summary.json`、個別の試験ログは同ディレクトリに保存する。
+- 最終集計と実行部品・通知のSHA照合は `output/windows-qa-work/parity-final/summary.json`、個別の試験ログは同ディレクトリに保存する。
 
 既存の未コミット変更を含めて実装し、コミット・push・公開署名は実行していない。

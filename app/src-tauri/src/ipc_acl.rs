@@ -32,6 +32,13 @@ mod tests {
             "save_minutes_markdown",
             "save_ui_preferences",
             "get_internal_logs",
+            "get_startup_instance",
+            "get_residency_state",
+            "hide_main_to_background",
+            "acknowledge_startup_activation",
+            "open_existing_instance",
+            "recover_startup_instance",
+            "retry_startup",
             "get_meeting_deletion_availability",
         ] {
             assert!(

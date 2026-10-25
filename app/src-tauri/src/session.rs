@@ -41,8 +41,35 @@ impl Default for RecordingSnapshot {
 }
 
 impl RecordingSnapshot {
+    pub fn can_hide_main_window(&self) -> bool {
+        matches!(self.phase, RecordingPhase::Preparing | RecordingPhase::Recording)
+    }
+
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, RecordingPhase::Idle | RecordingPhase::Error)
+    }
+}
+
+#[cfg(test)]
+mod close_visibility_tests {
+    use super::*;
+
+    #[test]
+    fn stopping_and_saving_require_close_review_instead_of_hiding() {
+        let mut snapshot = RecordingSnapshot::default();
+        for phase in [RecordingPhase::Stopping, RecordingPhase::Saving] {
+            snapshot.phase = phase;
+            assert!(snapshot.is_active());
+            assert!(!snapshot.can_hide_main_window());
+        }
+        for phase in [RecordingPhase::Preparing, RecordingPhase::Recording] {
+            snapshot.phase = phase;
+            assert!(snapshot.can_hide_main_window());
+        }
+        for phase in [RecordingPhase::Idle, RecordingPhase::Error] {
+            snapshot.phase = phase;
+            assert!(!snapshot.can_hide_main_window());
+        }
     }
 }
 

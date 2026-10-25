@@ -13,6 +13,7 @@ mod security;
 #[cfg(test)]
 mod tests;
 pub(crate) use security::set_private;
+pub(crate) use security::current_sid;
 pub(crate) fn security_metadata(file: &File) -> Result<(u32, bool), String> {
     security::metadata(file)
 }

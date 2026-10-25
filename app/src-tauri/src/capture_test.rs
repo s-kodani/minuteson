@@ -99,6 +99,7 @@ struct Run {
     levels: crate::input_levels::LevelReader,
     playback_tokens: Vec<String>,
 }
+impl Snapshot { pub(crate) fn is_busy(&self)->bool {self.busy} }
 #[derive(Default)]
 struct State {
     current: Option<Run>,

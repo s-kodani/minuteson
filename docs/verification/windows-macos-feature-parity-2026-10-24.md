@@ -153,7 +153,7 @@ macOSのCmd+Q・Dock・ネイティブメニュー・Core Audio・Metal・codesi
 - 9候補すべての重み取得・実解析と性能評価。既存記録の実モデル確認はtiny/base、標準話者分離、Qwen 2.5 1.5Bに限られる。
 - 更新後の実機操作、CI全体の成功、公開署名、正式品質評価。ローカルNSIS生成済み記録はあるが、それだけでインストール・更新・実録音成功を証明しない。
 
-根拠: `docs/windows-setup.md`、`docs/implementation-status.md` の2026-10-24追記と `output/windows-qa/fix-build-report.json`。後者はローカル出力でありGit追跡対象外。
+根拠: `docs/windows-setup.md`、`docs/implementation-status.md` の2026-10-24追記と `output/windows-qa-work/fix-build-report.json`。後者はローカル出力でありGit追跡対象外。
 
 ## 9. 対応の順序
 

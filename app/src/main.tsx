@@ -4,6 +4,8 @@ import { VoicePeopleSettings } from "./voice";
 import { MinutesPromptSettings } from "./minutes-prompt-settings";
 import { InternalLogs } from "./internal-logs";
 import appIconUrl from "../src-tauri/icons/icon.svg";
+import { usePlatform } from "./platform";
+import { checkedResidencyState } from "./residency-state";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { OptionsModal } from "./options-modal";
 import { SettingsModalScope } from "./settings-modal-scope";
@@ -36,7 +38,8 @@ import { flushPendingEdits } from "./draft-save";
 import { runAfterSaving, type SavedActionPhase } from "./saved-action";
 import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
-import { CommonOperationProgress } from "./operation-progress";
+import { CommonOperationProgress, usePublishProgress } from "./operation-progress";
+import { recordingSaveProgress } from "./operation-progress-state";
 import { JobCount, JobList } from "./job-list";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
@@ -159,6 +162,7 @@ function RecorderPanel() {
 }
 
 function MainWindow() {
+  const platform = usePlatform();
   const state = useRecordingSession();
   const recordingDecision = useRecordingConfirmation("main");
   const dataOperation = useDataOperation();
@@ -168,6 +172,8 @@ function MainWindow() {
   const [restoredFilter, setRestoredFilter] = useState<string[] | null>(null);
   const [originError, setOriginError] = useState("");
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const savingRecording = state.kind === "ready" ? state.snapshot : null;
+  usePublishProgress("recording-save", [recordingSaveProgress(savingRecording, meetings.find(meeting => meeting.id === savingRecording?.meetingId)?.title)]);
   const [meetingQuery, setMeetingQuery] = useState("");
   const [meetingError, setMeetingError] = useState("");
   const [meetingBusy, setMeetingBusy] = useState(false);
@@ -316,6 +322,25 @@ function MainWindow() {
     if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
     closing.current = true; setClosingBusy(true); setMeetingError("");
     try {
+      if (!quit && platform !== "other") {
+        const readBackground = async () => {
+          const context = await readCloseContext();
+          const test = await captureTest.client.refresh();
+          return { context, test, busy: recordingActive(context.recording) || context.importing.busy || context.data.busy || context.activity.analysisBusy || context.activity.modelPreparationBusy || !!test?.busy };
+        };
+        const initial = await readBackground();
+        const hide = () => withConfirmedEdits(withSavedEdits, async () => {
+          const current = await readBackground();
+          if (!initial.busy && current.busy) throw Error("新しい処理が始まりました。バックグラウンド継続を確認してください。");
+          await stopAllPlayback();
+          const residency = checkedResidencyState(await invoke("get_residency_state"));
+          if (!residency.canBackground) throw Error(residency.error ?? "MONの画面を開き直せることを確認できません。画面を表示したままにします。");
+          await invoke("hide_main_to_background");
+        });
+        if (initial.busy) await closeConfirm({ title: "バックグラウンドで継続しますか？", target: initial.context.recording.meetingId ? meetings.find(meeting => meeting.id === initial.context.recording.meetingId)?.title ?? "実行中の録音" : closeTarget(initial.context), confirmLabel: "継続して画面を閉じる", message: "録音・保存・実行中の処理を続けたままウィンドウを閉じます。常駐アイコンからメイン画面を開き直せます。アプリを終了する場合は「終了」を選んでください。", action: hide });
+        else await hide();
+        return;
+      }
       const test=await captureTest.client.refresh();
       if(test){
         const outcome=await closeConfirm({title:"録音前テストを閉じて終了しますか？",target:"録音前の5秒テスト",confirmLabel:"テストを閉じて終了へ進む",
@@ -330,7 +355,7 @@ function MainWindow() {
         if(outcome!=="completed")return;
       }
       const recording = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(recording);
-      if (!quit && recordingActive(recording)) {
+      if (!quit && ["preparing", "recording"].includes(recording.phase)) {
         await withConfirmedEdits(withSavedEdits, () => invoke("finish_main_close", { quit: false }));
         return;
       }
@@ -349,8 +374,8 @@ function MainWindow() {
         });
         return; // The native confirmation continues closing only after saved.
       }
-      if (quit && recordingActive(recording)) {
-        const outcome = await closeConfirm({ title: "録音の保存完了後の終了を確認", target: recording.meetingId ?? "保存中の録音", confirmLabel: "保存完了を待って終了へ進む", message: "録音の停止・保存が進行中です。保存成功を確認してから終了へ進みます。同じ録音は継続できません。停止は再送せず、保存失敗・結果未確認では終了しません。", action: () => waitForRecordingSave(recording, () => invoke("get_recording_snapshot")) });
+      if (recordingActive(recording)) {
+        const outcome = await closeConfirm({ title: "録音の保存完了後の終了を確認", target: meetings.find(meeting => meeting.id === recording.meetingId)?.title ?? "保存中の録音", confirmLabel: "保存完了を待って終了へ進む", message: "録音を停止・保存しています。保存が完了してからアプリを終了します。保存に失敗した場合や、完了を確認できない場合は終了せず、画面を残します。", action: () => waitForRecordingSave(recording, () => invoke("get_recording_snapshot")) });
         if (outcome !== "completed") return;
       }
       const expected = await readCloseContext();
@@ -371,7 +396,7 @@ function MainWindow() {
       if (importNeedsConsent(expected.importing) || dataNeedsConsent(expected.data) || !coveredAnalysis && (expected.activity.analysisBusy || expected.activity.modelPreparationBusy)) {
         await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });
       } else await finish();
-    } catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setMeetingError(`終了できませんでした。アプリと保存結果は保持しています: ${String(cause)}`); }
+    } catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setMeetingError(`${!quit && platform !== "other" ? "画面を閉じられませんでした" : "終了できませんでした"}。アプリと保存結果は保持しています: ${String(cause)}`); }
     finally { closing.current = false; setClosingBusy(false); }
   };
   useEffect(() => {
@@ -383,6 +408,12 @@ function MainWindow() {
       void closeHandler.current(event.payload);
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((cause: unknown) => setMeetingError(String(cause)));
     return () => { disposed = true; unlisten?.(); };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed=false, stop:(()=>void)|undefined;
+    void listen<string>("residency-error", event=>{if(!disposed)setMeetingError(event.payload);}).then(unlisten=>{if(disposed)unlisten();else stop=unlisten;});
+    return()=>{disposed=true;stop?.();};
   }, []);
   useEffect(() => {
     if (!isTauri()) return;

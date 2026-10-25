@@ -7,7 +7,9 @@ test("model selection exposes one row per purpose and separate installed model m
   const view = source("model-inspection.tsx");
   for (const label of ["文字起こし", "話者分離", "議事録生成"]) assert.ok(view.includes('label: "' + label + '"'));
   assert.match(view, /モデルを選択/);
-  assert.match(view, /available \? "使用" : "ダウンロードして使用"/);
+  assert.match(view, /modelChoiceAction\(choice, entries, used\)/);
+  assert.match(view, /in_use: "使用中"/);
+  assert.match(view, /download: "ダウンロードして使用"/);
   assert.match(view, /aria-label="導入済みモデル管理"/);
   assert.doesNotMatch(view, /<ModelDownloadPanel|<ModelInventory|<SettingsDisclosure|取得記録|取得定義からダウンロード|モデルの配置・構成記録/);
 });

@@ -1,8 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acceptTransferProgress, importProgress, jobProgress, modelProgress, operationElapsed, orderedProgress, progressPercent, ProgressRegistry } from "../src/operation-progress-state.ts";
+import { acceptTransferProgress, importProgress, jobProgress, modelProgress, operationElapsed, orderedProgress, progressPercent, ProgressRegistry, recordingSaveProgress } from "../src/operation-progress-state.ts";
 import { acceptImport, type ImportSnapshot } from "../src/import-state.ts";
 import { JobNotificationTracker, type NotificationJob } from "../src/job-notification-state.ts";
+import type { RecordingSnapshot } from "../src/session.ts";
+
+test("recording save is one indeterminate job until saving really finishes", () => {
+  const snapshot: RecordingSnapshot = { revision: 1, phase: "stopping", sessionId: "session", meetingId: "meeting", elapsedMs: 1000, microphoneConnected: false, systemAudioConnected: false, errorMessage: null };
+  const stopping = recordingSaveProgress(snapshot, "定例会議")!;
+  const saving = recordingSaveProgress({ ...snapshot, revision: 2, phase: "saving" }, "定例会議")!;
+  assert.equal(stopping.id, saving.id);
+  assert.equal(saving.kind, "recording_save");
+  assert.equal(saving.meetingId, "meeting");
+  assert.equal(saving.target, "定例会議");
+  assert.equal(saving.total, null);
+  assert.equal(saving.completed, null);
+  for (const phase of ["idle", "preparing", "recording", "error"] as const) assert.equal(recordingSaveProgress({ ...snapshot, phase }), null);
+  assert.equal(recordingSaveProgress(null), null);
+  assert.equal(recordingSaveProgress({ ...snapshot, sessionId: null }), null);
+});
 
 const importing: ImportSnapshot = { revision: 2, token: "audio", phase: "copying", busy: true, recordingBlocked: false, fileName: "会議.wav", completed: 50, sourceBytes: 200, requiredBytes: 1000, availableBytes: 2000, info: { schemaVersion: 1, detectedFormat: "wav", codec: "pcm", sampleRate: 16000, channels: 1, frames: 100, durationUs: 6250 }, saved: null, errorMessage: null };
 const job: NotificationJob = { id: "job-a", meetingId: "meeting-a", meetingTitle: "会議A", kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), operationId: "operation", retryOfJobId: null, attempt: 1, outputMinutesId: null, createdAt: 10, updatedAt: 20 };
