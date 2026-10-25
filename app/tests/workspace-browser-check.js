@@ -45,6 +45,8 @@ async page => {
   check(await page.locator(".recording-workspace-title").textContent() === "会議B", "recording link did not select its meeting");
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "録音状態");
   results.push("every screen shows the same canonical recording time; the link returns to the recording meeting and focuses its status without stopping");
+  // The recording screen omits its own return link; check shared header phases elsewhere.
+  await nav.getByRole("button", { name: "設定", exact: true }).click();
   for (const phase of ["preparing", "stopping", "saving"]) {
     await update({ ...session, revision: ++session.revision, phase }); await open().waitFor();
     await page.waitForFunction(p => document.querySelector('.header-status')?.textContent.includes(p), { preparing: "準備中", stopping: "停止中", saving: "保存中" }[phase]);

@@ -37,11 +37,50 @@ async page => {
   await nav.getByRole('button', { name: 'プロンプト', exact: true }).click();
   check(await term.inputValue() === '保存に失敗した用語', 'saved vocabulary did not persist across navigation');
   results.push('common vocabulary follows prompts, retains failed edits and persists across navigation');
-  for (const width of [1200, 390]) {
-    await nav.getByRole('button', { name: '設定', exact: true }).click(); await page.setViewportSize({ width, height: 1000 });
-    check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings overflowed viewport');
-    await page.screenshot({ path: `output/playwright/settings-layout-${width}.png`, fullPage: true });
+  const workspace = page.locator('main.content');
+  const bounds = () => page.evaluate(() => {
+    const main = document.querySelector('main.content'), header = document.querySelector('.topbar'), sidebar = document.querySelector('.sidebar');
+    return { height: innerHeight, width: innerWidth, pageHeight: document.documentElement.scrollHeight, pageWidth: document.documentElement.scrollWidth,
+      pageX: scrollX, pageY: scrollY, headerTop: header.getBoundingClientRect().top, sidebarTop: sidebar.getBoundingClientRect().top, mainScroll: main.scrollTop };
+  });
+  for (const modelState of ['unselected', 'selected']) {
+    if (modelState === 'selected') {
+      await nav.getByRole('button', { name: '会議一覧', exact: true }).click();
+      await page.evaluate(() => window.monBrowserFixture.seedSelectedWhisper());
+    }
+    await nav.getByRole('button', { name: '設定', exact: true }).click();
+    if (modelState === 'selected') {
+      const vad = page.getByRole('region', { name: '発話区間検知（VAD）', exact: true });
+      await vad.waitFor();
+      check(await vad.getByRole('spinbutton').count() === 6, 'selected Whisper did not expose all VAD fields');
+      check(await vad.getByRole('spinbutton').evaluateAll(inputs => inputs.every(input => {
+        const help = document.getElementById(input.getAttribute('aria-describedby'));
+        return help?.classList.contains('sr-only') && !!help.textContent.trim();
+      })), 'VAD inputs lost their screen-reader descriptions');
+    }
+    for (const size of [{ width: 1280, height: 790 }, { width: 960, height: 640 }, { width: 390, height: 600 }]) {
+      await page.setViewportSize(size);
+      await workspace.evaluate(main => { main.scrollTop = 0; });
+      const before = await bounds();
+      check(before.pageHeight <= before.height + 1 && before.pageWidth <= before.width, `settings overflowed viewport (${modelState}): ${JSON.stringify(before)}`);
+      await page.evaluate(() => window.scrollTo(10000, 10000));
+      const outer = await bounds();
+      check(outer.pageX === 0 && outer.pageY === 0 && outer.headerTop === 0 && outer.sidebarTop === 0, `outer settings scroll moved navigation: ${JSON.stringify(outer)}`);
+      await workspace.focus(); await workspace.press('PageDown');
+      await page.waitForFunction(() => document.querySelector('main.content').scrollTop > 0);
+      await workspace.evaluate(main => { main.scrollTop = main.scrollHeight; });
+      await page.mouse.move(size.width - 50, size.height - 50); await page.mouse.wheel(0, 1000);
+      await page.waitForTimeout(100);
+      const bottom = await bounds();
+      check(bottom.mainScroll > 0 && bottom.pageY === 0 && bottom.headerTop === 0 && bottom.sidebarTop === 0, `settings body scroll moved navigation: ${JSON.stringify(bottom)}`);
+      check(await page.getByRole('region', { name: 'データと保存', exact: true }).evaluate(section => {
+        const rect = section.getBoundingClientRect(), main = section.closest('main').getBoundingClientRect();
+        return rect.bottom <= main.bottom + 1 && rect.bottom > main.top;
+      }), 'last settings section is unreachable');
+      await page.screenshot({ path: `output/playwright/settings-layout-${modelState}-${size.width}.png`, fullPage: true });
+    }
   }
+  results.push('unselected and selected Whisper keep page/header/sidebar fixed while keyboard and wheel scroll reach the last section at three viewport sizes; VAD descriptions remain linked');
   await nav.getByRole('button', { name: 'ボイス一覧', exact: true }).click();
   await page.getByRole('heading', { name: 'ボイス一覧', exact: true }).waitFor();
   results.push('voice library stays accessible and settings fit desktop and narrow screens');

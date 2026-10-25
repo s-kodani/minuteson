@@ -58,6 +58,16 @@ fixture.setUtterances = utterances => { analysis.utterances = structuredClone(ut
 fixture.seedLongMeetingList = () => {
   meetings.push(...Array.from({length:30},(_,index)=>({...structuredClone(meetings[0]),id:`list-fixture-${index}`,title:`一覧スクロール確認 ${index+1}`})));
 };
+// Selected metadata exposes the real VAD fields without files or model execution.
+fixture.seedSelectedWhisper = () => {
+  const entry = { packageId: "44444444-4444-4444-8444-444444444444", modelName: "スクロール検証用Whisper", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null };
+  fixture.modelPlacements = [entry];
+  fixture.modelProfiles = [
+    { name: "standard", id: "33333333-3333-4333-8333-333333333333", profileVersion: 1, components: [{ roles: ["asr"], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: "55555555-5555-4555-8555-555555555555", settingsMatch: true, compatibilityCurrent: true }], configurationComplete: false },
+    { name: "high_accuracy", id: null, profileVersion: 0, components: [], configurationComplete: false },
+  ];
+  fixture.preferences.payload.standard.vadModelPath = "/synthetic/vad.bin";
+};
 fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
 fixture.seedRegeneration = () => {
   fixture.jobs = []; fixture.regenerationMissingModels=false; fixture.regenerationReadFail=false;
@@ -156,8 +166,8 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.uiPreferences);
     }
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
-    case "get_model_placements": return [];
-    case "get_model_profiles": return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+    case "get_model_placements": return structuredClone(fixture.modelPlacements ?? []);
+    case "get_model_profiles": return structuredClone(fixture.modelProfiles ?? ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false })));
     case "get_meeting_audio_summary":
       if(fixture.meetingSummaryFailure) throw Error("模擬の保存音声確認失敗");
       return {schemaVersion:1,durationUs:fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??(meetings.find(m=>m.id===args.meetingId)?.sourceType==="audio_import"?["imported"]:["mic","system","both"])};

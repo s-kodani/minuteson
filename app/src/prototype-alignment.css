@@ -695,5 +695,6 @@ button:disabled { opacity:.5; }
 .capture-test-panel > .heading-with-info h3 { font-size:14px; }
 .capture-test-audio > .heading-with-info h4 { font-size:13px; }
 .speaker-count-fields > .info-field { display:grid; gap:8px; min-width:140px; max-width:100%; margin:0; font-size:13px; line-height:20px; color:var(--secondary-text); }
-.vad-fields > .info-field { display:grid; align-content:start; gap:8px; margin:0; min-width:0; font-size:13px; }
+/* Keep absolutely positioned screen-reader help inside the field's scrollport. */
+.vad-fields > .info-field { position:relative; display:grid; align-content:start; gap:8px; margin:0; min-width:0; font-size:13px; }
 .vad-fields > .info-field > .heading-with-info { min-height:32px; }
