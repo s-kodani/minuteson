@@ -84,7 +84,7 @@ async page=>{
     for(const width of [1280,960,360])for(const theme of ["light","dark"]){
       await page.setViewportSize({width,height:640});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
       await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);
-      await waitStates("measured","measured");await panel().locator('.recording-track-status').scrollIntoViewIfNeeded();
+      await waitStates("measured","measured");await panel().locator('.recording-input-table').scrollIntoViewIfNeeded();
       check(await panel().getByRole("meter").count()===2,"independent level meters disappeared");
       check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth),"level display horizontally overflows");
       await page.screenshot({path:`input-levels-${theme}-${width}.png`});

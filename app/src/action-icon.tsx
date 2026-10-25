@@ -1,10 +1,12 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "copy" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "microphone" | "monitor" | "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "copy" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
   return <svg className="action-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {name === "microphone" && <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></>}
+    {name === "monitor" && <><rect x="2" y="3" width="20" height="14" rx="1.5"/><path d="M12 17v5M7 22h10"/></>}
     {name === "voice" && <><path d="M3 10v4M7 6v12M11 3v18M15 7v10M19 5v14M23 10v4" /></>}
     {name === "filter" && <path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z" />}
     {name === "logs" && <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>}

@@ -6,7 +6,6 @@ async page=>{
   const selected=async()=>JSON.parse(await page.locator('[aria-label="選択した取得条件"]').innerText());
   const ready=()=>page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.hasAttribute("disabled"));
   const key=pid=>page.evaluate(pid=>JSON.stringify([pid,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).bundleIdentifier,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).launchTimeUs]),pid);
-  await page.getByRole("button",{name:"録音の詳細設定",exact:true}).click();
   check((await selected()).mode==="system"&&await page.evaluate(()=>window.scopeFixture.calls.length===0),"default global scope unexpectedly enumerated or captured");
   results.push("global default requires no application enumeration or capture");
   await scope().selectOption("application");await ready();

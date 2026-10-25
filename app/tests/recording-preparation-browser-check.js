@@ -46,7 +46,7 @@ async (page,capturePath,detailUI)=>{
   const args=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_recording").args);
   check(args.newTitle==="二重送信しない会議"&&/^[0-9a-f-]{36}$/u.test(args.meetingId)&&args.microphoneUid===null&&args.captureScope.mode==="system"&&await count("start_recording")===1&&await count("create_meeting")===0,"new consent did not send one native start with fixed ID/title and automatic microphone");
   check(await page.evaluate(id=>window.dataFixture.meetings.filter(m=>m.id===id).length===1,args.meetingId),"new accepted recording lacks exactly one meeting");
-  check((await workspace().innerText()).includes("録音を準備しています")&&!await name().count()&&await start().isDisabled(),"canonical accepted phase was replaced with idle preparation");
+  check((await workspace().innerText()).includes("録音を準備しています")&&!await name().count()&&await start().count()===0,"canonical accepted phase was replaced with idle preparation");
   results.push("double consent sends one start request; native fixture creates the confirmed ID and the same central panel reports canonical preparation");
 
   await boot();await page.evaluate(()=>{window.closeFixture.failFlush=true;});await start().click();await accept().click();await dismissFailure();
@@ -54,7 +54,7 @@ async (page,capturePath,detailUI)=>{
   results.push("failed edit flushing retains local title and prevents both meeting creation and capture");
 
   await boot();await page.evaluate(()=>{window.closeFixture.startLost=true;});await start().click();await accept().click();await dismissFailure();
-  check(await count("start_recording")===1&&await name().isDisabled()&&await start().isDisabled(),"lost accepted reply replayed or enabled new start");
+  check(await count("start_recording")===1&&await name().isDisabled()&&await start().count()===0,"lost accepted reply replayed or enabled new start");
   await workspace().getByRole("button",{name:"録音の受付結果を確認",exact:true}).click();
   await name().waitFor({state:"detached"});
   check(await count("start_recording")===1&&(await workspace().innerText()).includes("録音を準備しています"),"result read replayed start or fabricated idle");
@@ -80,14 +80,14 @@ async (page,capturePath,detailUI)=>{
     await page.setViewportSize({width,height:640});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);
     const bounds=await workspace().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.parentElement.getBoundingClientRect();return {width:r.width,left:r.left,right:r.right,parentLeft:p.left,parentRight:p.right,overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth};});
-    check(bounds.width<=760.1&&bounds.left>=bounds.parentLeft&&bounds.right<=bounds.parentRight+1&&!bounds.overflow&&!bounds.pageOverflow,`central preparation overflow: ${JSON.stringify(bounds)}`);
+    check(bounds.width<=936.1&&bounds.left>=bounds.parentLeft&&bounds.right<=bounds.parentRight+1&&!bounds.overflow&&!bounds.pageOverflow,`central preparation overflow: ${JSON.stringify(bounds)}`);
     await start().scrollIntoViewIfNeeded();check(await start().isVisible(),"primary start hidden behind workspace tools");
     await page.screenshot({path:`recording-preparation-${theme}-${width}.png`});
     await workspace().getByRole("heading",{name:"新しい録音",exact:true}).scrollIntoViewIfNeeded();
     await page.screenshot({path:`recording-preparation-${theme}-${width}-top.png`});
   }
-  results.push("central max-760px preparation and primary start fit both themes at 1280/960/360px without nested tools clipping");
-  await workspace().getByRole("button",{name:"会議一覧へ戻る",exact:true}).click();
+  results.push("central max-936px preparation and primary start fit both themes at 1280/960/360px without nested tools clipping");
+  await page.locator(".screen-navigation").getByRole("button",{name:"会議一覧",exact:true}).click();
   check(await page.locator('.nav-item[aria-current="page"]').getAttribute("aria-label")==="会議一覧"&&await count("start_recording")===0,"back did not return to list or began capture");
   results.push("back returns to meeting list without creating an unused draft or capture");
   return {passed:results.length,results};

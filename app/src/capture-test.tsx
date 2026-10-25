@@ -1,7 +1,8 @@
 import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import { IconButton } from "./action-icon";
-import {useEffect,useState,useSyncExternalStore} from "react";
+import {useEffect,useRef,useState,useSyncExternalStore} from "react";
+import {CommonModal} from "./common-modal";
 import {CaptureTestClient} from "./capture-test-client";
 import {InputLevelMeter,useCaptureTestLevels} from "./input-levels";
 import {CaptureTestAudio} from "./capture-test-audio";
@@ -25,13 +26,24 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
   control:ReturnType<typeof useCaptureTest>;currentUid:string;currentScope:CaptureScope|null;
   canStart:boolean;locked:boolean;onStart:()=>void;onCancel:()=>void;onDiscard:()=>void;
 }){
+  const [open,setOpen]=useState(false),[startRequested,setStartRequested]=useState(false);
+  const trigger=useRef<HTMLButtonElement>(null);
   const run=control.snapshot;
+  // Open the native modal before requesting consent, so confirmation belongs
+  // to this dialog and returns to it without exposing an interactive background.
+  useEffect(()=>{if(open&&startRequested){setStartRequested(false);onStart();}},[open,startRequested,onStart]);
+  const hasResult=!!run||!!control.pending||!!control.error;
   const matches=!!run&&run.microphoneUid===currentUid&&JSON.stringify(run.captureScope)===JSON.stringify(currentScope);
   const levels=useCaptureTestLevels(run&&control.connected&&["preparing","recording"].includes(run.phase)?run.runId:null);
   const labels={preparing:"テストの入力を初期化しています",recording:"5秒のテスト音声を保存しています",checking:"停止後のテスト音声を検証しています",cancelling:"テストの停止完了を待っています",ready:"停止と音声の検証が完了しました",cancelled:"テストを取り消しました",error:"テストの状態を確認してください"};
   return <section className="capture-test-panel" aria-label="録音前の5秒テスト">
     <div className="heading-with-info"><h3>録音前の入力確認</h3><InfoPopover label="録音前の入力確認">5秒テスト中にマイクへ話してください。PC音声も確認する場合はPCで音声を再生してください。停止後に取得できた音声を別々に聴けます。会議や解析結果は作りません。毎回のテストは必須ではありません。初期化が終わってから5秒の音声を保存します。取消は取得プロセスの終了確認まで待ちます。</InfoPopover></div>
-    <button type="button" className="secondary" disabled={!canStart||locked} onClick={onStart}>5秒録音して確認</button>
+    <button ref={trigger} type="button" className="secondary" disabled={locked||(!hasResult&&!canStart)} onClick={()=>{setOpen(true);if(!hasResult)setStartRequested(true);}}>{run?.busy?"テスト中…":control.pending?"テストの受付を確認":hasResult?"テスト結果を確認":"5秒録音して確認"}</button>
+    {!open&&(run?.cleanupPending||control.pending||control.error)&&<p role="status" className="capture-input-hint">テストの状態を確認してください。</p>}
+    <CommonModal open={open} onDismiss={()=>setOpen(false)} restoreTarget={()=>trigger.current} aria-label="録音前の入力確認" className="capture-test-dialog" dismissLabel="閉じる" portal>
+    <h2>録音前の入力確認</h2>
+    <p className="capture-test-intro">マイクに話しかけ、PCの音声を再生してください。</p>
+    <button type="button" className="secondary" disabled={!canStart||locked||control.commandBusy||!!control.pending||!!run?.busy} onClick={onStart}>{run?"もう一度5秒録音して確認":"5秒録音して確認"}</button>
     {run&&<>
       <p role="status">{run.phase==="ready"&&!run.microphone?"PC音声の検証が完了しました（マイク音声は未受信）":run.phase==="ready"&&!run.system?"マイク音声の検証が完了しました（PC音声は未受信）":labels[run.phase]}</p>
       <p>テスト時のマイク: {run.microphoneName??"選択したマイク（確認中）"} ／PC音声: {run.captureScope.mode==="system"?"PCの再生音全体":run.applicationName??"選択したアプリ（確認中）"}</p>
@@ -40,13 +52,14 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
         <dl className="recording-track-status"><div><dt>マイク</dt><dd><InputLevelMeter label="テストのマイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd><InputLevelMeter label="テストのPC音声" level={levels.system}/></dd></div></dl>
         <button type="button" className="stop-button" disabled={control.commandBusy||locked||run.phase==="cancelling"} onClick={onCancel}>テストを取り消す</button>
       </>}
-      {run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||!control.connected||control.commandBusy||!matches}/>}
-      {!run.busy&&<IconButton label="テスト音声を閉じる" icon="close" type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard} />}
-      {run.cleanupPending&&<p role="alert">一時音声の回収が未完了です。閉じる操作を再確認するまで録音・終了はできません。</p>}
+      {open&&run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||!control.connected||control.commandBusy||!matches}/>}
+      {!run.busy&&<IconButton label="テスト音声を破棄" icon="trash" type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard} />}
+      {run.cleanupPending&&<p role="alert">一時音声の回収が未完了です。破棄を再確認するまで録音・終了はできません。</p>}
       {run.errorMessage&&<p role="alert" className="action-error">{run.errorMessage}</p>}
     </>}
     {control.pending&&<p role="alert">開始要求の受付結果が未確認です。開始は再送しません。</p>}
     {!control.connected&&<p role="status">テストの状態を確認できていません。</p>}
     {control.error&&<p role="alert" className="action-error">{control.error}</p>}
+    </CommonModal>
   </section>;
 }

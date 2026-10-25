@@ -9,10 +9,8 @@ async (page, capturePath, detailUI) => {
   const app=()=>page.getByRole("combobox",{name:"録音するアプリ",exact:true,includeHidden:true});
   const start=()=>page.getByRole("button",{name:"録音を開始",exact:true});
   const refresh=()=>page.getByRole("button",{name:"アプリ一覧を再確認",exact:true,includeHidden:true});
-  const details=()=>page.getByRole("dialog",{name:"録音の詳細設定",exact:true});
-  const closeDetails=async()=>{if(await details().count())await details().getByRole("button",{name:"確認を閉じる",exact:true}).click();};
-  const openDetails=async()=>{if(!await details().count())await page.getByRole("button",{name:"録音の詳細設定",exact:true}).click();};
-  const begin=async()=>{await closeDetails();await start().click();};
+  const details=()=>page.getByRole("region",{name:"PC音声の取得設定",exact:true});
+  const begin=async()=>{await start().click();};
   const section=()=>page.getByRole("region",{name:"録音の入力準備",exact:true});
   const modal=()=>page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});
   const accept=()=>modal().getByRole("button",{name:"録音を開始する",exact:true});
@@ -22,17 +20,17 @@ async (page, capturePath, detailUI) => {
     await page.waitForFunction(()=>!!window.closeFixture&&!!document.querySelector(".meeting-table tbody tr"));
     await page.locator('.sidebar').getByRole("button",{name:"新しい録音",exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
-    await openDetails();
+
   };
   const choose=async(index=0)=>{
-    await openDetails();
+
     await mode().selectOption("application");
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
     const key=await page.evaluate(i=>{const a=window.closeFixture.captureApplications.applications[i];return JSON.stringify([a.pid,a.bundleIdentifier,a.launchTimeUs]);},index);
     await app().selectOption(key);
     return key;
   };
-  const dismissFailure=async()=>{await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{await modal().locator(".action-error[role=alert]").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
   let stage="setup";
   try{
     stage="global";await boot();await begin();await accept().click();await modal().waitFor({state:"hidden"});
@@ -42,7 +40,7 @@ async (page, capturePath, detailUI) => {
     stage="explicit-choice";await boot();await mode().selectOption("application");
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
     check(await start().isDisabled()&&await app().inputValue()===""&&await count("start_recording")===0,"application automatically chosen or capture started");
-    check((await details().innerText()).includes("状態不明")&&!(await details().innerText()).includes("PC音声の権限は許可済み"),"catalog fabricated authorization");
+    check((await details().innerText()).includes("権限未確認")&&!(await details().innerText()).includes("PC音声の権限は許可済み"),"catalog fabricated authorization");
     results.push("application scope stays unset until explicit choice; metadata does not claim input or permission verification");
 
     stage="cancel";const key=await choose(1);await begin();await modal().waitFor();
@@ -90,16 +88,16 @@ async (page, capturePath, detailUI) => {
     results.push("fresh catalog rejects missing target before consent without global fallback");
 
     stage="late-navigation";await boot();await choose();await page.evaluate(()=>{window.closeFixture.holdCaptureApplications=true;});await refresh().click();
-    await page.waitForFunction(()=>window.closeFixture.pendingApplications.length===1);await closeDetails();await page.locator('.sidebar').getByRole("button",{name:"会議一覧",exact:true}).click();
+    await page.waitForFunction(()=>window.closeFixture.pendingApplications.length===1);await page.locator('.sidebar').getByRole("button",{name:"会議一覧",exact:true}).click();
     await page.evaluate(()=>{const f=window.closeFixture;f.holdCaptureApplications=false;f.captureApplications.applications=[];f.pendingApplications.splice(0).forEach(resolve=>resolve());});
     await page.locator('.sidebar').getByRole("button",{name:"新しい録音",exact:true}).click();
-    await openDetails();
+
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
     check(await app().locator("option").count()===1&&await start().isDisabled()&&await mode().inputValue()==="application","late old catalog replaced new meeting catalog");
     results.push("late catalog after navigation is discarded; missing target remains explicit and cannot start");
 
     stage="lost-ack";await boot();await choose();await page.evaluate(()=>{window.closeFixture.startLost=true;});await begin();await accept().click();await dismissFailure();
-    check(await count("start_recording")===1&&await start().isDisabled()&&await page.evaluate(()=>window.closeFixture.recording.phase==="preparing"),"lost acknowledgement replayed start or ignored canonical state");
+    check(await count("start_recording")===1&&await start().count()===0&&await page.evaluate(()=>window.closeFixture.recording.phase==="preparing"),"lost acknowledgement replayed start or ignored canonical state");
     results.push("lost start acknowledgement retains canonical preparing state and never replays the request");
 
     stage="native-last-hop";await boot();await choose();await page.evaluate(()=>{window.closeFixture.mutateApplicationAtStart=true;});await begin();await accept().click();await dismissFailure();

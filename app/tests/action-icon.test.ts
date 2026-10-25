@@ -71,5 +71,5 @@ test("ordinary refresh, pause and page navigation labels do not remain as text-o
     visit(parsed);
   }
   assert.deepEqual(remaining,[]);
-  for (const entry of ["recording-workspace.tsx:会議一覧へ戻る"]) assert.ok(icons.has(entry),entry);
+  for (const entry of ["main.tsx:前の画面へ戻る"]) assert.ok(icons.has(entry),entry);
 });

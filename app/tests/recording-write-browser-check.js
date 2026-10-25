@@ -35,7 +35,9 @@ async page=>{
       check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth+1),`write display overflow ${width}`);
       await page.screenshot({path:`recording-writes-${width}-${theme}.png`,fullPage:true});results.push(`write evidence fits ${width}px ${theme}`);
     }
-    check((await panel().innerText()).includes("停止後に確認")&&(await panel().innerText()).includes("電源断"),"write evidence claimed finalization or power-loss durability");results.push("current file writing is distinct from recording finalization and power-loss durability");
+    await panel().getByRole("button",{name:"録音の書込みの説明を開く",exact:true}).click();
+    const help=page.getByRole("dialog",{name:"録音の書込み",exact:true});
+    check((await help.innerText()).includes("停止後に確認")&&(await help.innerText()).includes("電源断"),"write evidence claimed finalization or power-loss durability");results.push("current file writing is distinct from recording finalization and power-loss durability");
     return {passed:results.length,results};
   }catch(cause){throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator("body").innerText()}`);}finally{await page.context().unrouteAll();}
 }
