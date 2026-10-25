@@ -1479,6 +1479,26 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 let _ = storage.mark_recording_started(&session_id);
             }
             publish(&app, |snapshot| snapshot.phase = RecordingPhase::Saving);
+            let progress_app = app.clone();
+            let progress_id = session_id.clone();
+            let _observations =
+                crate::operation_observation::Scope::enter("recording_save", move |value| {
+                    if progress_app
+                        .state::<SessionStore>()
+                        .update_if(|s| {
+                            if s.session_id.as_deref() != Some(&progress_id)
+                                || s.phase != RecordingPhase::Saving
+                            {
+                                return false;
+                            }
+                            s.progress = Some(value);
+                            true
+                        })
+                        .is_some()
+                    {
+                        notify_session(&progress_app);
+                    }
+                });
             (storage.finalize_recording(&session_id).map(|_| ()), true)
         }
         Ok(false) => (
@@ -1520,6 +1540,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
             let completed_meeting = app.state::<SessionStore>().snapshot().meeting_id;
             publish(&app, |snapshot| {
                 snapshot.phase = RecordingPhase::Idle;
+                snapshot.progress = None;
                 snapshot.elapsed_ms = 0;
                 snapshot.microphone_connected = false;
                 snapshot.system_audio_connected = false;
@@ -1534,6 +1555,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
         Err(error) => {
             publish(&app, |snapshot| {
                 snapshot.phase = RecordingPhase::Error;
+                snapshot.progress = None;
                 snapshot.microphone_connected = false;
                 snapshot.system_audio_connected = false;
                 snapshot.error_message = Some(if recoverable {

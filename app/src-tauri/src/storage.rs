@@ -35,12 +35,12 @@ mod jobs;
 pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 pub(crate) mod markdown_generation_tests;
-pub(crate) mod meeting_mix;
-mod meeting_mix_reset;
-mod meeting_playback;
 pub(crate) mod meeting_access;
 #[cfg(test)]
 mod meeting_access_tests;
+pub(crate) mod meeting_mix;
+mod meeting_mix_reset;
+mod meeting_playback;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
@@ -192,6 +192,11 @@ pub(crate) fn with_test_database<T>(storage: &Storage, action: impl FnOnce(&Conn
 impl Storage {
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(crate) fn native_models_root(&self) -> &Path {
+        &self.native_models_root
     }
 
     #[cfg(any(target_os = "macos", windows))]

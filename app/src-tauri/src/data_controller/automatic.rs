@@ -59,11 +59,7 @@ fn reserve(state: &DataController) -> Result<Option<(Snapshot, Arc<AtomicBool>)>
 
 fn run_items(app: &AppHandle, check: &impl Fn() -> bool) -> Result<(), String> {
     let storage = app.state::<Storage>();
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
+    let root = storage.native_models_root().to_owned();
     let mut errors = Vec::new();
     for item in deletion::listing(&storage)?.items {
         if check() {

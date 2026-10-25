@@ -98,6 +98,7 @@ pub(crate) struct Snapshot {
     pub kind: Option<Kind>,
     pub phase: String,
     pub busy: bool,
+    pub progress: Option<crate::operation_observation::Progress>,
     pub backup_preview: Option<BackupPreview>,
     pub restore_preview: Option<RestorePreview>,
     pub backup_receipt: Option<BackupReceipt>,
@@ -130,6 +131,7 @@ impl Default for Snapshot {
             kind: None,
             phase: "idle".into(),
             busy: false,
+            progress: None,
             backup_preview: None,
             restore_preview: None,
             backup_receipt: None,
@@ -551,6 +553,7 @@ impl DataController {
         }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
+        s.snapshot.progress = None;
         s.snapshot.revision += 1;
         self.idle.notify_all();
         Some(s.snapshot.clone())
@@ -628,7 +631,8 @@ impl DataController {
             #[cfg(any(unix, windows))]
             if let Some(Selection::Deletion(p)) = &s.selection {
                 let v = p.preview();
-                deletion_admission = Some((v.meeting_id,
+                deletion_admission = Some((
+                    v.meeting_id,
                     if v.pending || app.state::<Storage>().data_write_blocked() {
                         Some(v.operation_id)
                     } else {
@@ -656,9 +660,11 @@ impl DataController {
         let lease = if let Some(operation) = model_admission {
             work::Admission::acquire_model_deletion(app, operation.as_deref())?
         } else if let Some(operation) = audio_admission {
-            work::Admission::acquire_audio_deletion(app, operation.as_deref()).map_err(|e|format!("audio_deletion_not_started:{e}"))?
+            work::Admission::acquire_audio_deletion(app, operation.as_deref())
+                .map_err(|e| format!("audio_deletion_not_started:{e}"))?
         } else if let Some((meeting, operation)) = deletion_admission {
-            work::Admission::acquire_meeting_deletion(app, &meeting, operation.as_deref()).map_err(|e|format!("meeting_deletion_not_started:{e}"))?
+            work::Admission::acquire_meeting_deletion(app, &meeting, operation.as_deref())
+                .map_err(|e| format!("meeting_deletion_not_started:{e}"))?
         } else {
             work::Admission::acquire(app)?
         };
@@ -682,8 +688,15 @@ impl DataController {
     ) -> Result<Snapshot, String> {
         let meeting = if pending {
             app.state::<Storage>().deletion_operation_meeting(&id)?
-        } else { id.clone() };
-        let lease = work::Admission::acquire_meeting_deletion(app, &meeting, pending.then_some(id.as_str())).map_err(|e|format!("meeting_deletion_not_started:{e}"))?;
+        } else {
+            id.clone()
+        };
+        let lease = work::Admission::acquire_meeting_deletion(
+            app,
+            &meeting,
+            pending.then_some(id.as_str()),
+        )
+        .map_err(|e| format!("meeting_deletion_not_started:{e}"))?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Deletion)?;
         let token = snapshot
             .token
@@ -727,7 +740,8 @@ impl DataController {
             work::AudioTarget::Pending(id) => Some(id.as_str()),
             _ => None,
         };
-        let lease = work::Admission::acquire_audio_deletion(app, operation).map_err(|e|format!("audio_deletion_not_started:{e}"))?;
+        let lease = work::Admission::acquire_audio_deletion(app, operation)
+            .map_err(|e| format!("audio_deletion_not_started:{e}"))?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::AudioDeletion)?;
         let token = snapshot
             .token
@@ -767,27 +781,28 @@ impl DataController {
         app: &AppHandle,
         target: work::ModelTarget,
     ) -> Result<Snapshot, String> {
-        let operation = match &target {
-            work::ModelTarget::Pending(id) => Some(id.as_str()),
-            _ => None,
-        };
-        let lease = work::Admission::acquire_model_deletion(app, operation)?;
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("models");
-        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::ModelDeletion)?;
+        let root = app.state::<Storage>().native_models_root().to_owned();
+        let (snapshot, cancel, previous) = app
+            .state::<Self>()
+            .begin(Kind::ModelDeletion)
+            .map_err(|e| format!("model_deletion_not_started:{e}"))?;
         let token = snapshot
             .token
             .clone()
             .ok_or("モデル削除の操作IDがありません")?;
         Self::emit(app, snapshot.clone());
-        Self::launch(
+        let acquisition_target = target.clone();
+        Self::launch_with_admission(
             app,
             token,
             cancel,
-            lease,
+            move |app, cancelled| {
+                let operation = match &acquisition_target {
+                    work::ModelTarget::Pending(id) => Some(id.as_str()),
+                    _ => None,
+                };
+                work::Admission::acquire_model_deletion_cancelled(app, operation, cancelled)
+            },
             Work::ModelDeletion(target, root, previous),
         );
         Ok(snapshot)
@@ -818,13 +833,60 @@ impl DataController {
         lease: work::Admission,
         work: Work,
     ) {
+        Self::launch_with_admission(app, token, cancel, move |_, _| Ok(lease), work);
+    }
+
+    fn launch_with_admission(
+        app: &AppHandle,
+        token: String,
+        cancel: Arc<AtomicBool>,
+        acquire: impl FnOnce(&AppHandle, &dyn Fn() -> bool) -> Result<work::Admission, String>
+            + Send
+            + 'static,
+        work: Work,
+    ) {
         let worker = app.clone();
         let worker_token = token.clone();
         let spawned = std::thread::Builder::new()
             .name("mon-data-operation".into())
             .spawn(move || {
+                let progress_app = worker.clone();
+                let progress_token = worker_token.clone();
+                let _observations =
+                    crate::operation_observation::Scope::enter("data", move |value| {
+                        let controller = progress_app.state::<Self>();
+                        let snapshot = {
+                            let mut s = controller.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if s.snapshot.token.as_deref() != Some(&progress_token)
+                                || !s.snapshot.busy
+                                || s.cancel.load(Ordering::Acquire)
+                            {
+                                return;
+                            }
+                            s.snapshot.progress = Some(value);
+                            s.snapshot.revision += 1;
+                            s.snapshot.clone()
+                        };
+                        Self::emit(&progress_app, snapshot);
+                    });
+                #[cfg(any(unix, windows))]
+                let _verification = crate::storage::deletion::verification::Scope::enter();
+                crate::operation_observation::stage("waiting", None, "bytes");
+                let lease = match acquire(&worker, &|| cancel.load(Ordering::Acquire)) {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        if let Some(snapshot) = worker
+                            .state::<Self>()
+                            .finish(&worker_token, Completion::failed(error))
+                        {
+                            Self::emit(&worker, snapshot);
+                        }
+                        return;
+                    }
+                };
                 let cancelled = || cancel.load(Ordering::Acquire) || lease.cancelled();
                 let progress = |phase: &str| {
+                    crate::operation_observation::stage(phase, None, "bytes");
                     if let Some(snapshot) = worker.state::<Self>().progress(&worker_token, phase) {
                         Self::emit(&worker, snapshot);
                     }

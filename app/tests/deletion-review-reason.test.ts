@@ -21,3 +21,13 @@ test("unverified state, restart, and pending recovery each retain an actionable 
   operation.deletionListing = { writeBlocked: true } as NonNullable<DataOperation["deletionListing"]>;
   assert.match(deletionReviewReason(operation, state), /未完了.*設定画面/);
 });
+
+test("a pending model receipt and a failed read are explained without claiming Windows lacks deletion", () => {
+  const state = {native:true,supported:true,locked:false,protectedNow:false,sharedAvailable:true};
+  const operation = {connected:true,snapshot:{modelDeletionPreview:{pending:true}}} as DataOperation;
+  assert.match(deletionReviewReason(operation,state), /未完了/);
+  operation.connected = false; operation.error = "権限の状態を取得できません";
+  assert.match(deletionReviewReason(operation,state), /権限/);
+  operation.connected = true; operation.snapshot = null; operation.error = "";
+  assert.doesNotMatch(deletionReviewReason(operation,state), /このアプリでは削除機能/);
+});

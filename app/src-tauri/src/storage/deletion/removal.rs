@@ -62,10 +62,7 @@ impl Reviewed {
         include_unregistered: bool,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         prepared.verify_saved(&db, check)?;
         prepared.verify_locked(storage, &db, check)?;
         let census = Census::capture_locked(
@@ -316,10 +313,7 @@ impl Receipt {
         storage: &Storage,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         preflight(storage, &db, self, check)
     }
     pub(super) fn processed_paths(&self) -> usize {
@@ -547,10 +541,7 @@ pub(super) fn verify_reservation_names(
     Ok(())
 }
 pub(super) fn is_database_files(storage: &Storage, operation: &str) -> Result<bool, String> {
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     db.query_row("SELECT json_extract(progress_json,'$.version')=4 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
 }
 pub(super) fn read(
@@ -558,10 +549,7 @@ pub(super) fn read(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     storage.managed_anchor.verify()?;
     Receipt::load(&db, operation, check)
 }
@@ -575,10 +563,7 @@ pub(super) fn start(
     if confirmed.manifest() != &reviewed.manifest || confirmed.scope() != &reviewed.scope {
         return Err("削除可能範囲の確認対象が一致しません".into());
     }
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     confirmed.verify_saved(&db, check)?;
     confirmed.verify_locked(storage, &db, check)?;
     let progress = Progress {
@@ -674,32 +659,8 @@ fn inspect(
         }
         Ok(proof)
     } else {
-        let mut file = dir.regular(leaf)?;
-        let before = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
-        if before != *expected {
-            return Err("削除対象の実体・内容条件が変更されています".into());
-        }
-        let mut digest = Sha256::new();
-        let mut length = 0u64;
-        let mut buffer = vec![0u8; 128 * 1024];
-        loop {
-            cancel(check)?;
-            let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            length = length.checked_add(n as u64).ok_or("容量が範囲外です")?;
-            if length > before.size {
-                return Err("削除検査中にファイルが拡張されました".into());
-            }
-            digest.update(&buffer[..n]);
-        }
-        dir.verify_file(leaf, &file)?;
-        if length != before.size
-            || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?
-                != before
-            || target.sha256.as_deref() != Some(format!("{:x}", digest.finalize()).as_str())
-        {
+        let (before, sha256) = super::verification::hash(dir, leaf, check)?;
+        if before != *expected || target.sha256.as_deref() != Some(sha256.as_str()) {
             return Err("削除対象の内容SHA・実体が一致しません".into());
         }
         Ok(before)
@@ -771,6 +732,20 @@ fn verify_remaining(
             &roots,
         )?
     };
+    compare_census(storage, receipt, current)
+}
+fn compare_census(storage: &Storage, receipt: &Receipt, current: Census) -> Result<(), String> {
+    let p = &receipt.confirmed;
+    let reserved = receipt
+        .target()
+        .filter(|_| receipt.progress.pending.is_some())
+        .map(|e| {
+            format!(
+                "{}/{}",
+                e.path.rsplit_once('/').unwrap().0,
+                receipt.reserved()
+            )
+        });
     if current.scope() != p.scope()
         || current.manifest().root != receipt.manifest.root
         || current.manifest().database != receipt.manifest.database
@@ -875,6 +850,60 @@ fn verify_remaining(
     }
     Ok(())
 }
+fn verify_unlocked(
+    storage: &Storage,
+    receipt: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let p = &receipt.confirmed;
+    let roots = {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        receipt.verify_saved(&db, check)?;
+        if super::fence::other_pending(&db, Some(p.operation()))? {
+            return Err("別の保守操作があります".into());
+        }
+        super::renewal::reconfirmation_roots(&db, p, &receipt.progress, check)?
+    };
+    let reserved = receipt
+        .target()
+        .filter(|_| receipt.progress.pending.is_some())
+        .map(|e| {
+            format!(
+                "{}/{}",
+                e.path.rsplit_once('/').unwrap().0,
+                receipt.reserved()
+            )
+        });
+    let current = if receipt
+        .progress
+        .database_phase
+        .is_some_and(|phase| phase.rows_committed())
+    {
+        Census::capture_deleted_unlocked(storage, p, check, reserved.as_deref(), &roots)?
+    } else {
+        Census::capture_removal_unlocked(
+            storage,
+            &receipt.manifest.meeting_id,
+            p.operation(),
+            check,
+            reserved.as_deref(),
+            &roots,
+        )?
+    };
+    compare_census(storage, receipt, current)?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    receipt.verify_saved(&db, check)
+}
+fn save_unlocked(
+    storage: &Storage,
+    receipt: &mut Receipt,
+    next: Progress,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    let _writer = super::fence::write_removal(storage, &db, receipt, check)?;
+    receipt.save(storage, &db, next, check)
+}
 pub(super) fn run(
     storage: &Storage,
     receipt: &mut Receipt,
@@ -889,16 +918,20 @@ fn run_inner(
     event: &impl Fn(&str),
 ) -> Result<(), String> {
     cancel(check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let _writer = super::fence::write_removal(storage, &db, receipt, check)?;
-    preflight(storage, &db, receipt, check)?;
+    verify_unlocked(storage, receipt, check)?;
     if receipt.removed() {
         return Ok(());
     }
+    crate::operation_observation::stage(
+        "deleting_files",
+        Some(receipt.manifest.entries.len() as u64),
+        "paths",
+    );
+    crate::operation_observation::advance(receipt.progress.next as u64);
     while let Some(target) = receipt.target().cloned() {
+        if target.directory {
+            crate::storage::deletion::verification::release_pins();
+        }
         cancel(check)?;
         storage.managed_anchor.verify()?;
         let leaf = target.path.rsplit_once('/').ok_or("対象パスが不正です")?.1;
@@ -934,7 +967,7 @@ fn run_inner(
                     before,
                     staged: None,
                 });
-                receipt.save(storage, &db, next, check)?;
+                save_unlocked(storage, receipt, next, check)?;
                 event("armed");
             }
             let pending = receipt.progress.pending.clone().unwrap();
@@ -949,6 +982,7 @@ fn run_inner(
                     cancel(check)?;
                     event("beforeRename");
                     storage.managed_anchor.verify()?;
+                    verify_unlocked(storage, receipt, check)?;
                     dir.rename_exclusive(leaf, &reserved)?;
                     event("renamed");
                 } else if !staged_exists {
@@ -964,7 +998,7 @@ fn run_inner(
                 inspect(&dir, &reserved, &target, &staged, check)?;
                 let mut next = receipt.progress.clone();
                 next.pending.as_mut().unwrap().staged = Some(staged);
-                receipt.save(storage, &db, next, check)?;
+                save_unlocked(storage, receipt, next, check)?;
                 event("staged");
             } else if original_exists {
                 return Err("移動済み対象の元パスが再出現しました".into());
@@ -982,6 +1016,7 @@ fn run_inner(
             storage.managed_anchor.verify()?;
             if physical(&dir, &reserved)? {
                 inspect(&dir, &reserved, &target, staged, check)?;
+                verify_unlocked(storage, receipt, check)?;
                 dir.unlink_staged(&reserved, target.directory, staged)?;
             } else {
                 dir.sync()?;
@@ -991,14 +1026,15 @@ fn run_inner(
         let mut next = receipt.progress.clone();
         next.next += 1;
         next.pending = None;
-        receipt.save(storage, &db, next, check)?;
+        save_unlocked(storage, receipt, next, check)?;
+        crate::operation_observation::advance(1);
         event("advanced");
     }
-    preflight(storage, &db, receipt, check)?;
+    verify_unlocked(storage, receipt, check)?;
     cancel(check)?;
     let mut next = receipt.progress.clone();
     next.file_phase = Phase::Removed;
-    receipt.save(storage, &db, next, check)?;
+    save_unlocked(storage, receipt, next, check)?;
     event("filesRemoved");
     Ok(())
 }

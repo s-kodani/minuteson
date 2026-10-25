@@ -39,6 +39,8 @@ mod removal;
 mod renewal;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod startup;
+#[cfg(any(unix, windows))]
+pub(crate) mod verification;
 
 #[cfg(all(test, unix))]
 mod fence_tests;

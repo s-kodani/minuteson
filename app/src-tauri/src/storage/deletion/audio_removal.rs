@@ -346,10 +346,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
         active(lease, check)
     }
@@ -529,6 +526,16 @@ fn verify_tree(
         .map(|_| r.reserved_path(r.progress.next));
     let current =
         MeetingCensus::capture_audio_remaining_locked(storage, db, r, check, reserved.as_deref())?;
+    verify_observation(storage, r, scope, unavailable, &current, check)
+}
+fn verify_observation(
+    storage: &Storage,
+    r: &Receipt,
+    scope: &crate::storage::deletion::database::Scope,
+    unavailable: bool,
+    current: &MeetingCensus,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
     if current.scope() != scope {
         return Err("音声削除の保持範囲が変更されています".into());
     }
@@ -626,6 +633,43 @@ fn verify_tree(
     }
     r.verify_anchor(storage)
 }
+fn check_unlocked(storage: &Storage, r: &Receipt, check: &impl Fn() -> bool) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    r.verify_saved(&db, check)?;
+    r.metadata(storage, &db, check)
+}
+fn verify_unlocked(
+    storage: &Storage,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    if r.completed() {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        return verify_remaining(storage, &db, r, check);
+    }
+    check_unlocked(storage, r, check)?;
+    let reserved = r
+        .progress
+        .pending
+        .as_ref()
+        .map(|_| r.reserved_path(r.progress.next));
+    let current =
+        MeetingCensus::capture_audio_remaining_unlocked(storage, r, check, reserved.as_deref())?;
+    verify_observation(storage, r, &r.saved.snapshot.scope, false, &current, check)?;
+    check_unlocked(storage, r, check)
+}
+fn save_unlocked(
+    storage: &Storage,
+    r: &mut Receipt,
+    next: Progress,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    let _writer =
+        crate::storage::deletion::fence::write_audio_removal(storage, &db, r, lease, check)?;
+    r.save(storage, &db, next, lease, check)
+}
 fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, String> {
     let root = storage.managed_anchor.directory_ref()?;
     let meetings = root.child("meetings")?.ok_or("会議領域がありません")?;
@@ -674,30 +718,8 @@ fn inspect(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     super::super::cancel(check)?;
-    let mut file = dir.regular(name)?;
-    if Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != *proof {
-        return Err("音声の実体が変更されています".into());
-    }
-    let mut digest = Sha256::new();
-    let mut bytes = 0u64;
-    let mut buffer = vec![0u8; 128 * 1024];
-    loop {
-        super::super::cancel(check)?;
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        bytes = bytes.checked_add(n as u64).ok_or("音声容量が範囲外です")?;
-        if bytes > proof.size {
-            return Err("音声が検査中に拡張されました".into());
-        }
-        digest.update(&buffer[..n]);
-    }
-    dir.verify_file(name, &file)?;
-    if bytes != proof.size
-        || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != *proof
-        || target.sha256.as_deref() != Some(format!("{:x}", digest.finalize()).as_str())
-    {
+    let (actual, sha256) = crate::storage::deletion::verification::hash(dir, name, check)?;
+    if actual != *proof || target.sha256.as_deref() != Some(sha256.as_str()) {
         return Err("音声内容・容量・実体が確認と一致しません".into());
     }
     Ok(())
@@ -710,10 +732,7 @@ pub(crate) fn start(
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     let saved = super::read(&db, operation, &|| check() || lease.cancelled())?;
     saved.verify_locked(storage, &db, lease, check)?;
     let targets = targets(&saved.snapshot)?;
@@ -790,21 +809,23 @@ fn run_inner(
     event: &impl Fn(&str),
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let mut r = Receipt::load(&db, operation, &|| check() || lease.cancelled())?;
+    let mut r = {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        Receipt::load(&db, operation, &|| check() || lease.cancelled())?
+    };
     let cancelled = || check() || lease.cancelled();
-    let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &db, &r, lease, &cancelled)?;
     if r.files_removed() {
-        verify_remaining(storage, &db, &r, &cancelled)?;
+        verify_unlocked(storage, &r, &cancelled)?;
         return Ok(r);
     }
+    crate::operation_observation::stage("deleting_files", Some(r.targets.len() as u64), "paths");
+    crate::operation_observation::advance(r.progress.next as u64);
     while let Some(target) = r.targets.get(r.progress.next).cloned() {
+        if target.directory {
+            crate::storage::deletion::verification::release_pins();
+        }
         active(lease, check)?;
-        verify_remaining(storage, &db, &r, &cancelled)?;
+        verify_unlocked(storage, &r, &cancelled)?;
         if let Some(before) = &target.proof {
             let dir = parent(storage, &r, &target.path)?;
             let name = target.path.rsplit('/').next().unwrap();
@@ -816,7 +837,7 @@ fn run_inner(
                     before: before.clone(),
                     staged: None,
                 });
-                r.save(storage, &db, next, lease, check)?;
+                save_unlocked(storage, &mut r, next, lease, check)?;
                 event("audioArmed");
             }
             let pending = r.progress.pending.clone().unwrap();
@@ -824,9 +845,9 @@ fn run_inner(
                 if dir.optional_kind(name)?.is_some() {
                     event("beforeAudioRename");
                     active(lease, check)?;
-                    verify_remaining(storage, &db, &r, &cancelled)?;
+                    verify_unlocked(storage, &r, &cancelled)?;
                     inspect(&dir, name, &target, &pending.before, &cancelled)?;
-                    r.metadata(storage, &db, &cancelled)?;
+                    check_unlocked(storage, &r, &cancelled)?;
                     active(lease, check)?;
                     dir.rename_exclusive(name, &reserved)?;
                     event("audioRenamed");
@@ -843,12 +864,12 @@ fn run_inner(
                 inspect(&dir, &reserved, &target, &staged, &cancelled)?;
                 let mut next = r.progress.clone();
                 next.pending.as_mut().unwrap().staged = Some(staged);
-                r.save(storage, &db, next, lease, check)?;
+                save_unlocked(storage, &mut r, next, lease, check)?;
                 event("audioStaged");
             }
             event("beforeAudioUnlink");
             active(lease, check)?;
-            verify_remaining(storage, &db, &r, &cancelled)?;
+            verify_unlocked(storage, &r, &cancelled)?;
             let staged = r
                 .progress
                 .pending
@@ -859,7 +880,7 @@ fn run_inner(
                 .unwrap();
             if dir.optional_kind(&reserved)?.is_some() {
                 inspect(&dir, &reserved, &target, staged, &cancelled)?;
-                r.metadata(storage, &db, &cancelled)?;
+                check_unlocked(storage, &r, &cancelled)?;
                 active(lease, check)?;
                 dir.unlink_staged(&reserved, false, staged)?;
             } else {
@@ -868,21 +889,22 @@ fn run_inner(
             event("audioUnlinked");
         }
         // Detect callback/external changes before accepting advancement.
-        verify_remaining(storage, &db, &r, &cancelled)?;
+        verify_unlocked(storage, &r, &cancelled)?;
         let mut next = r.progress.clone();
         next.next += 1;
         next.pending = None;
-        r.save(storage, &db, next, lease, check)?;
+        save_unlocked(storage, &mut r, next, lease, check)?;
+        crate::operation_observation::advance(1);
         event("audioAdvanced");
     }
     event("beforeAudioFilesRemoved");
     active(lease, check)?;
-    verify_remaining(storage, &db, &r, &cancelled)?;
+    verify_unlocked(storage, &r, &cancelled)?;
     let mut next = r.progress.clone();
     next.phase = Phase::AudioFilesRemoved;
-    r.save(storage, &db, next, lease, check)?;
+    save_unlocked(storage, &mut r, next, lease, check)?;
     event("audioFilesRemoved");
-    verify_remaining(storage, &db, &r, &cancelled)?;
+    verify_unlocked(storage, &r, &cancelled)?;
     Ok(r)
 }
 

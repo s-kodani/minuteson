@@ -1,7 +1,7 @@
 //! Durable model consent, not a deletion executor. Proof slots below contain
 //! canonical snapshot bytes; their logical names MUST NEVER be used as paths
 //! for filesystem deletion. A saved ID/hash is not shared admission authority.
-use super::{capture_locked, Snapshot};
+use super::{capture_unlocked, Snapshot};
 use crate::{analysis_worker::data_maintenance::DataMaintenanceLease, storage::Storage};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -199,26 +199,25 @@ impl Prepared {
     ) -> Result<(), String> {
         active(lease, check)?;
         self.verify_anchor(storage)?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let current = capture_unlocked(
+            storage,
+            Path::new(&self.header.models_root),
+            &self.header.package_id,
+            &self.header.review_hash,
+            &|| check() || lease.cancelled(),
+        )?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_current_schema(&db)?;
         self.verify_saved(&db)?;
         super::super::database::stopped_for_model_consent(&db)?;
         if self.kept
             || super::super::fence::other_pending(&db, Some(&self.header.operation_id))?
-            || capture_locked(
-                storage,
-                &db,
-                Path::new(&self.header.models_root),
-                &self.header.package_id,
-                &self.header.review_hash,
-                &|| check() || lease.cancelled(),
-            )? != self.snapshot
+            || current != self.snapshot
         {
             return Err("モデル削除の確認後に対象が変更されました。再確認が必要です".into());
         }
+        self.snapshot
+            .verify_metadata(storage, &db, Path::new(&self.header.models_root), check)?;
         active(lease, check)
     }
 }
@@ -357,10 +356,7 @@ pub(in crate::storage) fn mismatched_schema_header_fixture(db: &Connection, oper
 }
 
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     let state: String = db
         .query_row(
             "SELECT state FROM maintenance_operations WHERE id=?1",
@@ -395,10 +391,10 @@ pub(crate) fn prepare(
     if !uuid_valid(operation) || !hash_valid(census) {
         return Err("モデル削除の操作ID・確認ハッシュが不正です".into());
     }
-    let mut db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let snapshot = capture_unlocked(storage, root, package, review, &|| {
+        check() || lease.cancelled()
+    })?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     if db
         .query_row(
             "SELECT id FROM maintenance_operations WHERE id=?1",
@@ -419,12 +415,11 @@ pub(crate) fn prepare(
             || saved.header.include_unregistered != include_unregistered
             || Path::new(&saved.header.models_root) != root
             || super::super::fence::other_pending(&db, Some(operation))?
-            || capture_locked(storage, &db, root, package, review, &|| {
-                check() || lease.cancelled()
-            })? != saved.snapshot
+            || snapshot != saved.snapshot
         {
             return Err("モデル削除の再送が保存した確認と一致しません".into());
         }
+        snapshot.verify_metadata(storage, &db, root, check)?;
         active(lease, check)?;
         storage.deletion_fence.arm(&db)?;
         return Ok(saved);
@@ -439,9 +434,7 @@ pub(crate) fn prepare(
         .map_err(|e| e.to_string())?;
     let schema_hash = super::super::database::trusted_schema(&tx)?;
     super::super::database::stopped_for_model_consent(&tx)?;
-    let snapshot = capture_locked(storage, &tx, root, package, review, &|| {
-        check() || lease.cancelled()
-    })?;
+    snapshot.verify_metadata(storage, &tx, root, check)?;
     let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
     let header = Header {
         version: 1,
@@ -478,12 +471,7 @@ pub(crate) fn prepare(
         tx.execute("INSERT INTO maintenance_paths(operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) VALUES(?1,?2,'file',?3,?4,?5,?6)",params![operation,slot(index),part.len() as i64,digest(part),json,digest(json.as_bytes())]).map_err(|e|e.to_string())?;
     }
     saved.verify_saved(&tx)?;
-    if capture_locked(storage, &tx, root, package, review, &|| {
-        check() || lease.cancelled()
-    })? != saved.snapshot
-    {
-        return Err("モデル削除の確認保存中に対象が変更されました".into());
-    }
+    saved.snapshot.verify_metadata(storage, &tx, root, check)?;
     active(lease, check)?;
     saved.verify_anchor(storage)?;
     tx.commit().map_err(|e| e.to_string())?;
@@ -501,10 +489,7 @@ pub(crate) fn keep_unstarted(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     active(lease, check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     let saved = read(&db, operation)?;
     saved.verify_anchor(storage)?;
     if super::super::fence::other_pending(&db, Some(operation))? {

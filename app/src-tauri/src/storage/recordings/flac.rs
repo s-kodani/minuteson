@@ -1,8 +1,7 @@
 //! Normal native-stop FLAC publication. Durable plans bind original evidence,
 //! output UUIDs and staging inodes; a DB rollback never removes raw audio.
 use super::*;
-use crate::audio::flac::{encode_segment_file, PcmSource, SavedFlac};
-use crate::audio::VerifiedAudio;
+use crate::audio::flac::{encode_segment_file_pending, PcmSource, SavedFlac};
 use crate::audio_clock::ClockSegment;
 #[cfg(windows)]
 use crate::bootstrap::windows_io as libc;
@@ -17,6 +16,8 @@ use std::os::windows::fs::OpenOptionsExt;
 
 mod files;
 mod inventory;
+#[cfg(test)]
+mod parallel_tests;
 #[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
@@ -417,26 +418,100 @@ impl Publication {
                 return Err("FLAC保存先の実体が変更されています".into());
             }
             let mut chunks = Vec::new();
-            for (id, group) in track_plan.chunks.into_iter().zip(&all_groups[lane]) {
-                if !uuid(&id) || !ids.insert(id.clone()) {
+            let jobs: Vec<_> = track_plan
+                .chunks
+                .into_iter()
+                .zip(&all_groups[lane])
+                .collect();
+            for (id, _) in &jobs {
+                if !uuid(id) || !ids.insert(id.clone()) {
                     return Err("FLAC区間の識別子が不正です".into());
                 }
-                storage.require_data_writable()?;
-                storage.managed_anchor.verify()?;
-                root.verify()?;
-                lock_stamp.require(&root.required(LOCK, false)?)?;
-                plan_stamp.require(&root.required(plan_name, false)?)?;
-                prefixes[lane].verify_at(&root.path, cancelled)?;
-                chunks.push(convert(
-                    storage,
-                    &directory,
-                    &prefixes[lane],
-                    group,
-                    &input_hash,
-                    id,
-                    cancelled,
-                )?);
             }
+            prefixes[lane].verify_at(&root.path, cancelled)?;
+            crate::operation_observation::stage(
+                "converting_audio",
+                Some(jobs.len() as u64),
+                "files",
+            );
+            if plan_name == PLAN {
+                let failed = std::sync::atomic::AtomicBool::new(false);
+                for batch in jobs.chunks(2) {
+                    partial::check_cancel(cancelled)?;
+                    let results = std::thread::scope(|scope| {
+                        let workers: Vec<_> = batch
+                            .iter()
+                            .map(|(id, group)| {
+                                let directory = &directory;
+                                let input_hash = &input_hash;
+                                let failed = &failed;
+                                let prefix = prefixes[lane];
+                                scope.spawn(move || {
+                                    let _measure = crate::operation_observation::Scope::enter(
+                                        "recording_chunk",
+                                        |_| {},
+                                    );
+                                    let stop = || {
+                                        failed.load(std::sync::atomic::Ordering::Acquire)
+                                            || storage.data_write_blocked()
+                                    };
+                                    let result = convert(
+                                        storage,
+                                        directory,
+                                        prefix,
+                                        group,
+                                        input_hash,
+                                        id.clone(),
+                                        &stop,
+                                    );
+                                    if result.is_err() {
+                                        failed.store(true, std::sync::atomic::Ordering::Release);
+                                    }
+                                    (result, crate::operation_observation::measurements())
+                                })
+                            })
+                            .collect();
+                        // Cancellation belongs to the parent callback, which
+                        // need not be Sync. Relay it to both scoped children.
+                        while workers.iter().any(|w| !w.is_finished()) {
+                            if cancelled() {
+                                failed.store(true, std::sync::atomic::Ordering::Release);
+                            }
+                            std::thread::park_timeout(std::time::Duration::from_millis(25));
+                        }
+                        workers
+                            .into_iter()
+                            .map(|w| {
+                                w.join().unwrap_or_else(|_| {
+                                    (Err("FLAC区間の保存処理が停止しました".into()), (0, 0))
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    // All children are joined before returning any failure.
+                    for (result, (bytes, scans)) in results {
+                        crate::operation_observation::absorb(bytes, scans);
+                        chunks.push(result?);
+                        crate::operation_observation::advance(1);
+                    }
+                    lock_stamp.require(&root.required(LOCK, false)?)?;
+                    plan_stamp.require(&root.required(plan_name, false)?)?;
+                }
+            } else {
+                for (id, group) in jobs {
+                    partial::check_cancel(cancelled)?;
+                    chunks.push(convert(
+                        storage,
+                        &directory,
+                        prefixes[lane],
+                        group,
+                        &input_hash,
+                        id,
+                        cancelled,
+                    )?);
+                }
+            }
+            prefixes[lane].verify_at(&root.path, cancelled)?;
             tracks.push(Track {
                 id: track_plan.id,
                 kind: match prefixes[lane].lane() {
@@ -614,6 +689,7 @@ fn convert(
     requested_cancel: &impl Fn() -> bool,
 ) -> Result<Chunk, String> {
     let cancelled = || requested_cancel() || storage.data_write_blocked();
+    let _permit = crate::audio::flac::ConversionPermit::acquire(&cancelled)?;
     partial::check_cancel(&cancelled)?;
     let final_name = format!("{id}.flac");
     let receipt_name = format!(".{id}.json");
@@ -725,9 +801,16 @@ fn convert(
         storage.require_data_writable()?;
         file.set_len(0).map_err(|e| e.to_string())?;
         file.rewind().map_err(|e| e.to_string())?;
-        let mut source = prefix.source(group.first_entry, group.entries, &cancelled)?;
-        let saved =
-            encode_segment_file(&mut source, 0, group.frames, &mut file, &cancelled, &|_| {})?;
+        let mut source = prefix.source_group(group, &cancelled)?;
+        crate::operation_observation::stage("converting_audio", Some(group.frames), "frames");
+        let saved = encode_segment_file_pending(
+            &mut source,
+            0,
+            group.frames,
+            &mut file,
+            &cancelled,
+            &|_| {},
+        )?;
         staging_identity.require(&directory.required(partial, false)?)?;
         receipt.audio = Some(saved.into());
         directory.json(&receipt_name, &receipt, Some(&receipt_stamp))?;
@@ -745,7 +828,6 @@ fn convert(
     if directory.optional(&final_name, false)?.is_none() {
         let file = directory.required(&partial, false)?;
         staging_identity.require(&file)?;
-        verify_audio(&file, &audio, &cancelled)?;
         receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
         directory.rename(&partial, &final_name, true)?;
     } else if directory.optional(&partial, false)?.is_some() {
@@ -782,27 +864,6 @@ fn convert(
         receipt: receipt_stamp,
     })
 }
-fn verify_audio(
-    file: &File,
-    proof: &AudioProof,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
-    let verified = VerifiedAudio::open_cancellable(
-        file.try_clone().map_err(|e| e.to_string())?,
-        proof.size,
-        &proof.sha256,
-        cancelled,
-    )?;
-    if !verified.is_flac()
-        || verified.format.frames != proof.frames
-        || verified.format.sample_rate != proof.sample_rate
-        || verified.format.channels != proof.channels
-    {
-        return Err("FLACの実音声とチェックポイントが一致しません".into());
-    }
-    Ok(())
-}
-
 /// JSON is not authentication that arbitrary valid FLAC came from this input.
 /// Reconcile all decoded samples with pinned raw PCM and its defined 24-bit
 /// quantization, including when resuming a previously published checkpoint.
@@ -815,46 +876,20 @@ fn verify_derived_audio(
     requested_cancel: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let cancelled = || requested_cancel() || storage.data_write_blocked();
-    let mut verified = VerifiedAudio::open_cancellable(
-        file.try_clone().map_err(|e| e.to_string())?,
+    if proof.frames != group.frames {
+        return Err("最終FLACのフレーム数が一致しません".into());
+    }
+    let mut source = prefix.source_group(group, &cancelled)?;
+    crate::operation_observation::stage("verifying_audio", Some(proof.size), "bytes");
+    crate::audio::flac::verify_source(
+        &mut file.try_clone().map_err(|e| e.to_string())?,
         proof.size,
         &proof.sha256,
+        &mut source,
+        0,
+        group.frames,
         &cancelled,
-    )?;
-    if !verified.is_flac()
-        || verified.format.frames != group.frames
-        || verified.format.sample_rate != proof.sample_rate
-        || verified.format.channels != proof.channels
-    {
-        return Err("最終FLACの形式が原音声と一致しません".into());
-    }
-    let mut source = prefix.source(group.first_entry, group.entries, &cancelled)?;
-    let mut first = 0;
-    while first < group.frames {
-        partial::check_cancel(&cancelled)?;
-        storage.require_data_writable()?;
-        let count = (group.frames - first).min(4096);
-        let raw = source.read_frames(first, count)?;
-        let decoded = verified.read_frames(first, count)?;
-        if decoded.len() != raw.len() {
-            return Err("最終FLACのPCM長が原音声と一致しません".into());
-        }
-        for (raw, decoded) in raw.chunks_exact(4).zip(decoded.chunks_exact(4)) {
-            let value = f32::from_le_bytes(raw.try_into().unwrap());
-            if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
-                return Err("原音声PCMの値が不正です".into());
-            }
-            let quantized = (f64::from(value) * 8_388_608.0)
-                .round()
-                .clamp(-8_388_608.0, 8_388_607.0) as i32;
-            if (quantized as f32 / 8_388_608.0).to_le_bytes() != decoded {
-                return Err("最終FLACの実PCMが原音声と一致しません".into());
-            }
-        }
-        first += count;
-    }
-    source.verify_unchanged()?;
-    PcmSource::verify_unchanged(&verified)
+    )
 }
 
 #[cfg(test)]

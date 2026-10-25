@@ -1,4 +1,5 @@
 import { nativeAbsolutePath } from "./native-path.ts";
+import { checkedStageProgress, type StageProgress } from "./stage-progress.ts";
 import { assertModelDeletionPreview, assertModelDeletionReceipt, type ModelDeletionPreview, type ModelDeletionReceipt } from "./model-deletion-operation-state.ts";
 import { assertDeletionPreview, assertDeletionReceipt, type DeletionPreview, type DeletionReceipt } from "./deletion-state.ts";
 import { assertAudioDeletionPreview, assertAudioDeletionReceipt, type AudioDeletionPreview, type AudioDeletionReceipt } from "./audio-deletion-operation-state.ts";
@@ -21,7 +22,7 @@ export interface RestoreReceipt {
   deletedAudioMeetingCount: number; deletedAudioAssetCount: number;
   vocabularyAdded: number | null; vocabularyDeduplicated: number | null; vocabularyConflicts: string[] | null;
 }
-export interface DataSnapshot { modelDeletionPreview?: ModelDeletionPreview | null; modelDeletionReceipt?: ModelDeletionReceipt | null;
+export interface DataSnapshot { progress?: StageProgress | null; modelDeletionPreview?: ModelDeletionPreview | null; modelDeletionReceipt?: ModelDeletionReceipt | null;
   revision: number; token: string | null; kind: DataKind | null; phase: string; busy: boolean;
   backupPreview: BackupPreview | null; restorePreview: RestorePreview | null;
   backupReceipt: BackupReceipt | null; restoreReceipt: RestoreReceipt | null;
@@ -37,6 +38,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
 const texts = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 65536 && values.every(v => typeof v === "string" && !v.includes("\0"));
 export function assertDataSnapshot(s: DataSnapshot): void {
+  checkedStageProgress(s?.progress);
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
   if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database", "verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed", "verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"

@@ -79,6 +79,8 @@ impl LegacyPublication {
         mic: Option<&CapturedFile>,
         system: Option<&CapturedFile>,
     ) -> Result<Self, String> {
+        let _permit =
+            crate::audio::flac::ConversionPermit::acquire(&|| storage.data_write_blocked())?;
         let mut result = Self {
             tracks: Vec::new(),
             proofs: Vec::new(),

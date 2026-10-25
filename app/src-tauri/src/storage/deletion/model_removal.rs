@@ -1,6 +1,6 @@
 //! Fixed model body removal. Immutable history and proof slots are retained.
 //! Normal names are never unlinked; only exact, journaled reserved names are.
-use super::super::{capture_locked, hash_file, usages, Entry, Observation};
+use super::super::{capture_unlocked, hash_file, usages, Entry, Observation};
 use super::{active, read_with_progress, Prepared};
 use crate::storage::deletion::fs::{Directory, Proof};
 use crate::{
@@ -122,10 +122,7 @@ impl Receipt {
         &self,
         storage: &Storage,
     ) -> Result<bool, String> {
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_saved(&db)?;
         renewal::recorded_policy(&db, &self.saved, &self.progress)
     }
@@ -155,10 +152,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
         active(lease, check)
     }
@@ -413,6 +407,13 @@ fn verify_remaining(
 ) -> Result<Directory, String> {
     r.verify_saved(db)?;
     r.metadata(storage, db)?;
+    verify_tree(storage, r, check)
+}
+fn verify_tree(
+    storage: &Storage,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<Directory, String> {
     let models = Directory::root(Path::new(&r.saved.header.models_root))?;
     models.verify_identity(&r.saved.snapshot.models_root)?;
     let roots = renewal::review_roots(&r.plan, &r.progress, &r.saved.header.operation_id)?;
@@ -492,6 +493,43 @@ fn verify_remaining(
     Ok(models)
 }
 
+fn verify_unlocked(
+    storage: &Storage,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<Directory, String> {
+    check_metadata(storage, r)?;
+    let models = verify_tree(storage, r, check)?;
+    check_metadata(storage, r)?;
+    Ok(models)
+}
+fn check_metadata(storage: &Storage, r: &Receipt) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    r.verify_saved(&db)?;
+    r.metadata(storage, &db)
+}
+fn save_unlocked(
+    storage: &Storage,
+    r: &mut Receipt,
+    next: Progress,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
+    r.save(storage, &db, next, lease, check)
+}
+fn resolve_unlocked(
+    storage: &Storage,
+    r: &Receipt,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
+    super::super::startup::resolve(storage, &db, r, check)
+}
+
 pub(crate) fn start(
     storage: &Storage,
     operation: &str,
@@ -499,23 +537,27 @@ pub(crate) fn start(
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let saved = super::read(&db, operation)?;
+    let saved = {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        super::read(&db, operation)?
+    };
+    let current = capture_unlocked(
+        storage,
+        Path::new(&saved.header.models_root),
+        &saved.header.package_id,
+        &saved.header.review_hash,
+        &|| check() || lease.cancelled(),
+    )?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    saved.verify_saved(&db)?;
+    saved
+        .snapshot
+        .verify_metadata(storage, &db, Path::new(&saved.header.models_root), check)?;
     saved.verify_anchor(storage)?;
     crate::storage::deletion::database::stopped_for_model_consent(&db)?;
     if saved.kept
         || crate::storage::deletion::fence::other_pending(&db, Some(operation))?
-        || capture_locked(
-            storage,
-            &db,
-            Path::new(&saved.header.models_root),
-            &saved.header.package_id,
-            &saved.header.review_hash,
-            &|| check() || lease.cancelled(),
-        )? != saved.snapshot
+        || current != saved.snapshot
     {
         return Err("モデル削除の開始対象が保存した同意と一致しません".into());
     }
@@ -579,21 +621,28 @@ fn run_inner(
     event: &impl Fn(&str),
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let mut r = Receipt::load(&db, operation)?;
+    let mut r = {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        Receipt::load(&db, operation)?
+    };
     let cancelled = || check() || lease.cancelled();
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, &r, lease)?;
     if r.completed() {
-        verify_remaining(storage, &db, &r, &cancelled)?;
-        super::super::startup::resolve(storage, &db, &r, &cancelled)?;
+        verify_unlocked(storage, &r, &cancelled)?;
+        resolve_unlocked(storage, &r, lease, &cancelled)?;
         return Ok(r);
     }
+    crate::operation_observation::stage(
+        "deleting_files",
+        Some(r.plan.observations.len() as u64),
+        "paths",
+    );
+    crate::operation_observation::advance(r.progress.next as u64);
     while let Some(target) = r.target().cloned() {
+        if target.entry.directory {
+            crate::storage::deletion::verification::release_pins();
+        }
         active(lease, check)?;
-        let models = verify_remaining(storage, &db, &r, &cancelled)?;
+        let models = verify_unlocked(storage, &r, &cancelled)?;
         if target.proof.is_some() {
             let parent = parent(&models, &r.plan, &target.entry.relative_path)?;
             let dir = parent.as_ref().unwrap_or(&models);
@@ -614,7 +663,7 @@ fn run_inner(
                     before,
                     staged: None,
                 });
-                r.save(storage, &db, next, lease, check)?;
+                save_unlocked(storage, &mut r, next, lease, check)?;
                 event("armed");
             }
             let pending = r.progress.pending.clone().unwrap();
@@ -624,6 +673,7 @@ fn run_inner(
                     event("beforeRename");
                     active(lease, check)?;
                     r.verify_anchor(storage)?;
+                    check_metadata(storage, &r)?;
                     dir.rename_exclusive(&name, &reserved)?;
                     event("renamed");
                 } else if dir.optional_kind(&reserved)?.is_none() {
@@ -637,7 +687,7 @@ fn run_inner(
                 inspect(dir, &reserved, &target.entry, &staged, &cancelled)?;
                 let mut next = r.progress.clone();
                 next.pending.as_mut().unwrap().staged = Some(staged);
-                r.save(storage, &db, next, lease, check)?;
+                save_unlocked(storage, &mut r, next, lease, check)?;
                 event("staged");
             } else if dir.optional_kind(&name)?.is_some() {
                 return Err("移動済みモデルの元パスが再出現しました".into());
@@ -657,7 +707,8 @@ fn run_inner(
                 inspect(dir, &reserved, &target.entry, staged, &cancelled)?;
                 // Verify the entire remaining tree again at the irreversible
                 // boundary; callbacks/racing external edits cannot expand it.
-                verify_remaining(storage, &db, &r, &cancelled)?;
+                verify_unlocked(storage, &r, &cancelled)?;
+                check_metadata(storage, &r)?;
                 dir.unlink_staged(&reserved, target.entry.directory, staged)?;
             } else {
                 dir.sync()?;
@@ -667,19 +718,20 @@ fn run_inner(
         let mut next = r.progress.clone();
         next.next += 1;
         next.pending = None;
-        r.save(storage, &db, next, lease, check)?;
+        save_unlocked(storage, &mut r, next, lease, check)?;
+        crate::operation_observation::advance(1);
         event("advanced");
     }
-    verify_remaining(storage, &db, &r, &cancelled)?;
+    verify_unlocked(storage, &r, &cancelled)?;
     event("beforeComplete");
     active(lease, check)?;
-    verify_remaining(storage, &db, &r, &cancelled)?;
+    verify_unlocked(storage, &r, &cancelled)?;
     let mut next = r.progress.clone();
     next.phase = Phase::Completed;
-    r.save(storage, &db, next, lease, check)?;
+    save_unlocked(storage, &mut r, next, lease, check)?;
     event("completed");
-    verify_remaining(storage, &db, &r, &cancelled)?;
-    super::super::startup::resolve(storage, &db, &r, &cancelled)?;
+    verify_unlocked(storage, &r, &cancelled)?;
+    resolve_unlocked(storage, &r, lease, &cancelled)?;
     Ok(r)
 }
 

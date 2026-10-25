@@ -334,14 +334,30 @@ impl Storage {
         inventory: &impl Fn(Vec<crate::recording_recovery::Item>),
         progress: &impl Fn(crate::recording_recovery::Item),
     ) -> Result<Vec<String>, String> {
-        if self.data_write_blocked() { return Ok(vec![]); }
+        if self.data_write_blocked() {
+            return Ok(vec![]);
+        }
         let interrupted = {
-            let db = self.connection.lock().map_err(|_| "DBロックを取得できません")?;
+            let db = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
             let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state='interrupted' AND r.audio_manifest_hash IS NULL ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
-            let rows = query.query_map([], |r| Ok(crate::recording_recovery::Item {
-                session_id:r.get(0)?, meeting_id:r.get(1)?, meeting_title:r.get(2)?,
-                phase:"queued".into(),started_at_ms:None,error:None,
-            })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+            let rows = query
+                .query_map([], |r| {
+                    Ok(crate::recording_recovery::Item {
+                        session_id: r.get(0)?,
+                        meeting_id: r.get(1)?,
+                        meeting_title: r.get(2)?,
+                        phase: "queued".into(),
+                        started_at_ms: None,
+                        error: None,
+                        progress: None,
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
             rows
         };
         inventory(interrupted.clone());
@@ -349,15 +365,26 @@ impl Storage {
         for mut item in interrupted {
             let exists: bool = self.connection.lock().map_err(|_| "DBロックを取得できません")?
                 .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state='interrupted' AND audio_manifest_hash IS NULL)",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
-            if !exists { item.phase="skipped".into(); progress(item); continue; }
-            item.phase="running".into(); item.started_at_ms=Some(now_ms()?); progress(item.clone());
+            if !exists {
+                item.phase = "skipped".into();
+                progress(item);
+                continue;
+            }
+            item.phase = "running".into();
+            item.started_at_ms = Some(now_ms()?);
+            progress(item.clone());
             match self.finalize_recording(&item.session_id) {
-                Ok(_) => { recovered.push(item.session_id.clone()); item.phase="succeeded".into(); }
+                Ok(_) => {
+                    recovered.push(item.session_id.clone());
+                    item.phase = "succeeded".into();
+                }
                 Err(error) => {
                     let pending: bool = self.connection.lock().map_err(|_| "DBロックを取得できません")?
                         .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state='interrupted' AND audio_manifest_hash IS NULL)",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
-                    item.phase=if pending { "failed" } else { "skipped" }.into();
-                    if pending { item.error=Some(error); }
+                    item.phase = if pending { "failed" } else { "skipped" }.into();
+                    if pending {
+                        item.error = Some(error);
+                    }
                 }
             }
             progress(item);
@@ -604,11 +631,9 @@ impl Storage {
 
     #[allow(dead_code)]
     pub fn finalize_recording(&self, session_id: &str) -> Result<RecordingSession, String> {
+        crate::operation_observation::stage("checking_audio", None, "bytes");
         let session = {
-            let connection = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません".to_string())?;
+            let connection = crate::operation_observation::lock(&self.connection)?;
             load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません")?
         };
         let _meeting_owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
@@ -618,10 +643,7 @@ impl Storage {
         ) {
             return Err("録音が確定可能な状態ではありません".into());
         }
-        let already_registered: bool = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?
+        let already_registered: bool = crate::operation_observation::lock(&self.connection)?
             .query_row(
                 "SELECT audio_manifest_hash IS NOT NULL FROM recording_sessions WHERE id=?1",
                 [session_id],
@@ -643,16 +665,15 @@ impl Storage {
         {
             return Err("録音manifestは保存完了を示していません".into());
         }
-        let (stored_mode, stored_config): (String, String) = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?
-            .query_row(
-                "SELECT capture_mode, capture_config_json FROM recording_sessions WHERE id = ?1",
-                params![session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|error| error.to_string())?;
+        let (stored_mode, stored_config): (String, String) = crate::operation_observation::lock(
+            &self.connection,
+        )?
+        .query_row(
+            "SELECT capture_mode, capture_config_json FROM recording_sessions WHERE id = ?1",
+            params![session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
         let config: RecordingConfig =
             serde_json::from_str(&stored_config).map_err(|error| error.to_string())?;
         config.validate()?;
@@ -804,6 +825,7 @@ impl Storage {
         )?);
         // Conversion can take time. Revalidate the manifest before the DB
         // transition, and keep the conversion lease alive through commit.
+        crate::operation_observation::stage("committing_audio", None, "files");
         let current_manifest = self.checked_capture_file(&manifest_file.relative, None)?;
         if current_manifest.size_bytes != manifest_file.size_bytes
             || current_manifest.hash != manifest_file.hash
@@ -811,10 +833,7 @@ impl Storage {
             return Err("録音manifestがFLAC変換中に変更されました".into());
         }
         self.require_data_writable()?;
-        let mut connection = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let mut connection = crate::operation_observation::lock(&self.connection)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
@@ -827,6 +846,12 @@ impl Storage {
         #[cfg(unix)]
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
+        }
+        #[cfg(windows)]
+        if let Some(prefixes) = &raw_prefixes {
+            for prefix in prefixes {
+                prefix.verify_at(&self.root.join(&base), &|| false)?;
+            }
         }
         #[cfg(any(unix, windows))]
         if let Some(publication) = &publication {
@@ -913,6 +938,12 @@ impl Storage {
         #[cfg(unix)]
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
+        }
+        #[cfg(windows)]
+        if let Some(prefixes) = &raw_prefixes {
+            for prefix in prefixes {
+                prefix.verify_at(&self.root.join(&base), &|| false)?;
+            }
         }
         #[cfg(any(unix, windows))]
         if let Some(publication) = &publication {
@@ -1304,26 +1335,55 @@ pub(in crate::storage) mod tests {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().into()).unwrap();
         let (good_meeting, good, _, _) = saved_probe_fixture(&storage);
-        storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET state='interrupted'", []).unwrap();
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE recording_sessions SET state='interrupted'", [])
+            .unwrap();
         let (bad_meeting, bad, output, _) = saved_probe_fixture(&storage);
         std::fs::write(output.join("manifest.json"), b"{}").unwrap();
-        storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET state='interrupted'", []).unwrap();
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE recording_sessions SET state='interrupted'", [])
+            .unwrap();
         let events = std::cell::RefCell::new(Vec::new());
-        let result = storage.recover_recordings_observed(&|items| {
-            assert_eq!(items.len(), 2);
-            assert!(items.iter().all(|i| i.phase == "queued" && i.started_at_ms.is_none()));
-            assert!(storage.connection.try_lock().is_ok());
-        }, &|item| {
-            assert!(storage.connection.try_lock().is_ok());
-            assert!(storage.meeting_deletion_availability(&[good_meeting.clone(), bad_meeting.clone()]).is_ok());
-            events.borrow_mut().push(item);
-        }).unwrap();
+        let result = storage
+            .recover_recordings_observed(
+                &|items| {
+                    assert_eq!(items.len(), 2);
+                    assert!(items
+                        .iter()
+                        .all(|i| i.phase == "queued" && i.started_at_ms.is_none()));
+                    assert!(storage.connection.try_lock().is_ok());
+                },
+                &|item| {
+                    assert!(storage.connection.try_lock().is_ok());
+                    assert!(storage
+                        .meeting_deletion_availability(&[good_meeting.clone(), bad_meeting.clone()])
+                        .is_ok());
+                    events.borrow_mut().push(item);
+                },
+            )
+            .unwrap();
         assert_eq!(result, vec![good.clone()]);
         let events = events.borrow();
-        assert!(events.iter().any(|i| i.session_id == good && i.phase == "succeeded" && i.meeting_id == good_meeting));
-        assert!(events.iter().any(|i| i.session_id == bad && i.phase == "failed" && i.error.is_some()));
+        assert!(events.iter().any(|i| i.session_id == good
+            && i.phase == "succeeded"
+            && i.meeting_id == good_meeting));
+        assert!(events
+            .iter()
+            .any(|i| i.session_id == bad && i.phase == "failed" && i.error.is_some()));
         assert!(output.join("microphone.caf").exists());
-        assert_eq!(events.iter().filter(|i| i.phase == "running" && i.started_at_ms.is_some()).count(), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|i| i.phase == "running" && i.started_at_ms.is_some())
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -1331,18 +1391,40 @@ pub(in crate::storage) mod tests {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().into()).unwrap();
         let (meeting, session, _, _) = saved_probe_fixture(&storage);
-        storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET state='interrupted'", []).unwrap();
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE recording_sessions SET state='interrupted'", [])
+            .unwrap();
         let events = std::cell::RefCell::new(Vec::new());
-        assert!(storage.recover_recordings_observed(&|_| {
-            let db = storage.connection.lock().unwrap();
-            db.execute("DELETE FROM recording_sessions WHERE id=?1", [&session]).unwrap();
-            db.execute("DELETE FROM meetings WHERE id=?1", [&meeting]).unwrap();
-        }, &|item| events.borrow_mut().push(item)).unwrap().is_empty());
+        assert!(storage
+            .recover_recordings_observed(
+                &|_| {
+                    let db = storage.connection.lock().unwrap();
+                    db.execute("DELETE FROM recording_sessions WHERE id=?1", [&session])
+                        .unwrap();
+                    db.execute("DELETE FROM meetings WHERE id=?1", [&meeting])
+                        .unwrap();
+                },
+                &|item| events.borrow_mut().push(item)
+            )
+            .unwrap()
+            .is_empty());
         assert_eq!(events.borrow().len(), 1);
         assert_eq!(events.borrow()[0].phase, "skipped");
         assert!(storage.get_meeting(&meeting).unwrap().is_none());
         let called = std::cell::Cell::new(false);
-        assert!(storage.recover_recordings_observed(&|items| {assert!(items.is_empty());called.set(true);}, &|_| panic!("empty inventory")).unwrap().is_empty());
+        assert!(storage
+            .recover_recordings_observed(
+                &|items| {
+                    assert!(items.is_empty());
+                    called.set(true);
+                },
+                &|_| panic!("empty inventory")
+            )
+            .unwrap()
+            .is_empty());
         assert!(called.get());
     }
 

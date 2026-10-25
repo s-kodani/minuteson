@@ -5,7 +5,10 @@ use crate::model_placement;
 use std::{cell::Cell, path::PathBuf};
 
 #[path = "model_intent_tests.rs"]
+#[cfg(unix)]
 mod durable;
+#[path = "model_performance_tests.rs"]
+mod performance;
 
 pub(crate) struct Fixture {
     _source: tempfile::TempDir,
@@ -203,6 +206,7 @@ fn model_deletion_census_classifies_missing_changed_and_unknown_without_adopting
     assert_eq!(f.evidence(), before);
 }
 #[test]
+#[cfg(unix)]
 fn model_deletion_census_does_not_enumerate_or_read_other_packages_or_external_sources() {
     let f = Fixture::new();
     let neighbor = f.root.join(uuid::Uuid::new_v4().to_string());
@@ -219,6 +223,7 @@ fn model_deletion_census_does_not_enumerate_or_read_other_packages_or_external_s
         .is_symlink());
 }
 #[test]
+#[cfg(unix)]
 fn model_deletion_census_rejects_leaf_parent_package_links_and_hardlinks() {
     for kind in ["leaf", "parent", "package", "hardlink"] {
         let f = Fixture::new();
@@ -397,6 +402,7 @@ fn model_deletion_census_counts_rebound_runtime_reference_once_per_job() {
 }
 
 #[test]
+#[cfg(unix)]
 fn model_deletion_census_rejects_mid_scan_change_and_root_replacement() {
     for replace_root in [false, true] {
         let f = Fixture::new();

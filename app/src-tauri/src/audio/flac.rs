@@ -16,6 +16,51 @@ use symphonia::core::formats::{FormatReader, Packet, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
 use symphonia::core::probe::Hint;
 
+// One budget for ordinary saves, recovery and legacy/import encoders.
+static CONVERSIONS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+thread_local! { static CONVERSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+pub(crate) struct ConversionPermit {
+    owns: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl ConversionPermit {
+    pub(crate) fn acquire(cancelled: &impl Fn() -> bool) -> Result<Self, String> {
+        if CONVERSION_DEPTH.with(|v| v.get() > 0) {
+            CONVERSION_DEPTH.with(|v| v.set(v.get() + 1));
+            return Ok(Self {
+                owns: false,
+                _thread: std::marker::PhantomData,
+            });
+        }
+        let mut active = CONVERSIONS.0.lock().unwrap_or_else(|e| e.into_inner());
+        while *active >= 2 {
+            check_cancelled(cancelled)?;
+            active = CONVERSIONS
+                .1
+                .wait_timeout(active, std::time::Duration::from_millis(50))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        check_cancelled(cancelled)?;
+        *active += 1;
+        CONVERSION_DEPTH.with(|v| v.set(1));
+        Ok(Self {
+            owns: true,
+            _thread: std::marker::PhantomData,
+        })
+    }
+}
+impl Drop for ConversionPermit {
+    fn drop(&mut self) {
+        CONVERSION_DEPTH.with(|v| v.set(v.get() - 1));
+        if self.owns {
+            *CONVERSIONS.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+            CONVERSIONS.1.notify_one();
+        }
+    }
+}
+
 const BLOCK: usize = 4096;
 const MAX_SECONDS: u64 = 14_400;
 const MAX_METADATA: u64 = 16 * 1024 * 1024;
@@ -190,6 +235,14 @@ impl FlacAudio {
         size: u64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(PcmFormat, Self), String> {
+        Self::open_compared(file, size, cancelled, None).map(|(format, audio, _)| (format, audio))
+    }
+    fn open_compared(
+        file: &mut File,
+        size: u64,
+        cancelled: &impl Fn() -> bool,
+        mut source: Option<(&mut dyn PcmSource, u64)>,
+    ) -> Result<(PcmFormat, Self, String), String> {
         let (mut reader, parameters, mut byte_offset) = open_reader(file, size, cancelled)?;
         let rate = parameters.sample_rate.ok_or("FLACの周波数がありません")?;
         let channels = parameters
@@ -199,6 +252,11 @@ impl FlacAudio {
         let mut decoder = symphonia::default::get_codecs()
             .make(&parameters, &DecoderOptions { verify: true })
             .map_err(|e| e.to_string())?;
+        let mut sha = Sha256::new();
+        let header = read_at(file, 0, byte_offset as usize)?;
+        sha.update(&header);
+        crate::operation_observation::file_check();
+        crate::operation_observation::read(header.len());
         let mut frames = 0_u64;
         let mut index = Vec::new();
         loop {
@@ -220,6 +278,8 @@ impl FlacAudio {
             if bytes.as_slice() != packet.data.as_ref() || !valid_crc(&bytes) {
                 return Err("FLACの音声バイト列またはCRCが一致しません".into());
             }
+            sha.update(&bytes);
+            crate::operation_observation::read(bytes.len());
             index.push(FrameIndex {
                 offset: byte_offset,
                 bytes: bytes.len(),
@@ -239,8 +299,38 @@ impl FlacAudio {
             {
                 return Err("FLACの区間と形式が一致しません".into());
             }
+            if let Some((source, first)) = source.as_mut() {
+                let count = audio.frames() as u64;
+                let mut samples = SampleBuffer::<f32>::new(audio.capacity() as u64, *audio.spec());
+                samples.copy_interleaved_ref(audio);
+                let mut compared = 0u64;
+                while compared < count {
+                    let n = (count - compared).min(super::PREVIEW_FRAMES);
+                    let raw = source.read_frames(*first + frames + compared, n)?;
+                    let start = compared as usize * channels as usize;
+                    let expected =
+                        &samples.samples()[start..start + n as usize * channels as usize];
+                    if raw.len() != expected.len() * 4 {
+                        return Err("最終FLACのPCM長が原音声と一致しません".into());
+                    }
+                    for (raw, decoded) in raw.chunks_exact(4).zip(expected) {
+                        let value = f32::from_le_bytes(raw.try_into().unwrap());
+                        if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                            return Err("原音声PCMの値が不正です".into());
+                        }
+                        let quantized = (f64::from(value) * 8_388_608.0)
+                            .round()
+                            .clamp(-8_388_608.0, 8_388_607.0)
+                            as i32;
+                        if (quantized as f32 / 8_388_608.0).to_le_bytes() != decoded.to_le_bytes() {
+                            return Err("最終FLACの実PCMが原音声と一致しません".into());
+                        }
+                    }
+                    compared += n;
+                }
+            }
             frames = frames
-                .checked_add(audio.frames() as u64)
+                .checked_add(packet.dur())
                 .ok_or("FLAC時間が範囲外です")?;
             if frames > u64::from(rate) * MAX_SECONDS {
                 return Err("FLACは4時間以内にしてください".into());
@@ -281,6 +371,7 @@ impl FlacAudio {
                 stream: None,
                 next_frame: 0,
             },
+            format!("{:x}", sha.finalize()),
         ))
     }
 
@@ -633,6 +724,59 @@ pub(crate) fn encode_segment_file(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64),
 ) -> Result<SavedFlac, String> {
+    encode_segment_inner(source, first, frames, temporary, cancelled, progress, true)
+}
+/// Validate every encoded byte, CRC/MD5, sample format and source sample in
+/// one decoder pass. The proof is transient and binds this exact open object.
+pub(crate) fn verify_source(
+    file: &mut File,
+    size: u64,
+    expected_hash: &str,
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    if file.metadata().map_err(|e| e.to_string())?.len() != size {
+        return Err("FLACの容量が保存記録と一致しません".into());
+    }
+    let before =
+        super::reuse::stamp(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?);
+    let (format, _, hash) = FlacAudio::open_compared(file, size, cancelled, Some((source, first)))?;
+    if hash != expected_hash
+        || format.frames != frames
+        || format.sample_rate != source.format().sample_rate
+        || format.channels != source.format().channels
+    {
+        return Err("最終FLACの内容・形式が原音声と一致しません".into());
+    }
+    source.verify_unchanged()?;
+    if super::reuse::stamp(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?) != before
+    {
+        return Err("検証中にFLACの実体が変更されました".into());
+    }
+    Ok(())
+}
+pub(crate) fn encode_segment_file_pending(
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    temporary: &mut File,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u64),
+) -> Result<SavedFlac, String> {
+    encode_segment_inner(source, first, frames, temporary, cancelled, progress, false)
+}
+fn encode_segment_inner(
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    temporary: &mut File,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u64),
+    verify: bool,
+) -> Result<SavedFlac, String> {
+    let _permit = ConversionPermit::acquire(cancelled)?;
     if frames == 0
         || frames > u64::from(source.format().sample_rate) * MAX_SECONDS
         || first
@@ -687,6 +831,7 @@ pub(crate) fn encode_segment_file(
         offset += count;
         frame_number += 1;
         progress(offset);
+        crate::operation_observation::advance(count);
     }
     // Fixed-block STREAMINFO must report the nominal size, excluding the
     // short last block, as required by RFC 9639 section 8.2.
@@ -712,20 +857,9 @@ pub(crate) fn encode_segment_file(
     }
     let sha256 = format!("{:x}", hash.finalize());
     let size = temporary.metadata().map_err(|e| e.to_string())?.len();
-    // Validate complete decoding, sample count, CRC and MD5 before publishing.
-    let validated = VerifiedAudio::open_cancellable(
-        temporary.try_clone().map_err(|e| e.to_string())?,
-        size,
-        &sha256,
-        cancelled,
-    )?;
-    if validated.format.frames != frames
-        || validated.format.sample_rate != rate
-        || validated.format.channels != channels
-    {
-        return Err("FLAC保存結果が入力区間と一致しません".into());
+    if verify {
+        verify_source(temporary, size, &sha256, source, first, frames, cancelled)?;
     }
-    drop(validated);
     check_cancelled(cancelled)?;
     source.verify_unchanged()?;
     Ok(SavedFlac {

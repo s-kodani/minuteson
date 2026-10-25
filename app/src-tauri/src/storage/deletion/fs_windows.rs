@@ -137,18 +137,26 @@ pub(in crate::storage) struct Directory {
 }
 impl Directory {
     pub(super) fn root(path: &Path) -> Result<Self, String> {
-        if !path.is_absolute() || path.canonicalize().map_err(|e| e.to_string())? != path {
+        if !path.is_absolute() {
             return Err("管理領域の絶対パスまたは親が不正です".into());
         }
+        // Native AppData paths omit the extended-length prefix on Windows.
+        // Pin/check every parent and reject reparse points before normalizing
+        // the opened directory's spelling. No alternate object is adopted.
         let parents = win::parents(path.parent().ok_or("管理領域の親がありません")?)?;
         let file = win::open_metadata(path)?;
+        let opened_path = win::path(&file)?;
+        if path.canonicalize().map_err(|e| e.to_string())? != opened_path {
+            return Err("管理領域の実体・親フォルダーが変更されています".into());
+        }
+        let path = opened_path;
         let m = native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !m.is_dir() {
             return Err("通常の管理フォルダーが必要です".into());
         }
         let result = Self {
             file,
-            path: path.into(),
+            path,
             identity: Identity::read(&m)?,
             _parents: parents,
         };
@@ -219,6 +227,18 @@ impl Directory {
                 self.path.join(leaf).display()
             )
         })
+    }
+    pub(super) fn protected_regular(&self, leaf: &str) -> Result<File, String> {
+        name(leaf)?;
+        self.verify()?;
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(5)
+            .custom_flags(0x00200000)
+            .open(self.path.join(leaf))
+            .map_err(|e| e.to_string())?;
+        self.verify_file(leaf, &file)?;
+        Ok(file)
     }
     pub(super) fn verify_file(&self, leaf: &str, file: &File) -> Result<(), String> {
         name(leaf)?;

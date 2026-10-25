@@ -3,7 +3,7 @@ use super::intent::{
     self,
     removal::{self, renewal},
 };
-use super::{capture, capture_locked, Entry, Snapshot};
+use super::{capture, Entry, Snapshot};
 use crate::{analysis_worker::data_maintenance::DataMaintenanceLease, storage::Storage};
 use rusqlite::params;
 use serde::Serialize;
@@ -130,22 +130,19 @@ impl Target {
         match self {
             Self::Fresh(s) => {
                 storage.require_data_writable()?;
-                let db = storage
-                    .connection
-                    .lock()
-                    .map_err(|_| "DBロックを取得できません")?;
-                super::super::database::stopped_for_model_consent(&db)?;
-                if capture_locked(
+                let current = capture(
                     storage,
-                    &db,
                     root,
                     &s.record.package_id,
                     &s.record.review_hash,
                     &|| check() || lease.cancelled(),
-                )? != *s
-                {
+                )?;
+                let db = crate::operation_observation::lock(&storage.connection)?;
+                super::super::database::stopped_for_model_consent(&db)?;
+                if current != *s {
                     return Err("モデル削除の確認後に対象が変わりました。再確認してください".into());
                 }
+                s.verify_metadata(storage, &db, root, check)?;
                 active(lease, check)
             }
             Self::Unstarted(p) => p.verify_current(storage, lease, check),
@@ -173,10 +170,7 @@ pub(crate) fn authorize_review(storage: &Storage, operation: Option<&str>) -> Re
         intent::authorize_review(storage, id)
     } else {
         storage.require_data_writable()?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         storage.managed_anchor.verify()?;
         if super::super::fence::other_pending(&db, None)? {
             Err("別の未完了保守操作を先に確認してください".into())
@@ -189,10 +183,7 @@ fn load(storage: &Storage, root: &Path, operation: &str) -> Result<Target, Strin
     if !Uuid::parse_str(operation).is_ok_and(|id| id.to_string() == operation) {
         return Err("モデル削除の操作IDが不正です".into());
     }
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
+    let db = crate::operation_observation::lock(&storage.connection)?;
     storage.managed_anchor.verify()?;
     let state: String = db
         .query_row(
@@ -233,10 +224,7 @@ fn load(storage: &Storage, root: &Path, operation: &str) -> Result<Target, Strin
 }
 pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String> {
     let rows = {
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
+        let db = crate::operation_observation::lock(&storage.connection)?;
         storage.managed_anchor.verify()?;
         // Routing only: audio rows remain visible in the audio list, including
         // invalid/restored receipts. No hint exempts them from the global fence.
@@ -255,10 +243,7 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
         .into_iter()
         .map(|(operation_id, state)| -> Result<Item, String> {
             let startup_reason = {
-                let db = storage
-                    .connection
-                    .lock()
-                    .map_err(|_| "DBロックを取得できません")?;
+                let db = crate::operation_observation::lock(&storage.connection)?;
                 super::super::startup::reason(&db, &operation_id)?.filter(|reason| {
                     matches!(
                         reason.as_str(),
@@ -414,14 +399,23 @@ impl Prepared {
         let s = capture(storage, root, package, review, &|| {
             check() || lease.cancelled()
         })?;
-        Self::build(
-            storage,
-            root.into(),
-            Uuid::new_v4().to_string(),
-            Target::Fresh(s),
-            lease,
-            check,
-        )
+        // capture already compares two complete inventories and DB metadata.
+        // Do not repeat that work just to project the same preview. Consent
+        // and execution still capture and compare the exact reviewed bytes.
+        let operation = Uuid::new_v4().to_string();
+        let target = Target::Fresh(s);
+        active(lease, check)?;
+        {
+            let db = crate::operation_observation::lock(&storage.connection)?;
+            super::super::database::stopped_for_model_consent(&db)?;
+        }
+        let mut preview = Self::static_preview(storage, root, &operation, &target)?;
+        preview.execute_allowed = true;
+        Ok(Self {
+            preview,
+            root: root.into(),
+            target,
+        })
     }
     pub(crate) fn pending(
         storage: &Storage,

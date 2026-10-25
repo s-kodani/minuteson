@@ -422,13 +422,26 @@ impl Census {
     ) -> Result<Self, String> {
         storage.require_data_writable()?;
         cancel(check)?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
-        let result = Self::capture_locked(storage, &db, meeting, "", check)?;
+        let metadata = || -> Result<Records, String> {
+            let db = crate::operation_observation::lock(&storage.connection)?;
+            if super::fence::other_pending(&db, None)? {
+                return Err(
+                    "未完了の保存領域操作があります。音声の対象確認を開始できません".into(),
+                );
+            }
+            records(&db, meeting, check)
+        };
+        let records = metadata()?;
+        let census = MeetingCensus::capture_audio_unlocked(storage, meeting, check)?;
+        let current = MeetingCensus::capture_audio_unlocked(storage, meeting, check)?;
+        if current.hash()? != census.hash()?
+            || current.scope() != census.scope()
+            || metadata()? != records
+        {
+            return Err("音声だけの削除の検査中に対象・保持履歴が変更されました".into());
+        }
         storage.require_data_writable()?;
-        Ok(result)
+        Self::from_census(census, records, check)
     }
     fn capture_locked(
         storage: &Storage,
@@ -449,6 +462,21 @@ impl Census {
         let census =
             MeetingCensus::capture_audio_locked(storage, db, meeting, omitted_operation, check)?;
         let records = records(db, meeting, check)?;
+        let current =
+            MeetingCensus::capture_audio_locked(storage, db, meeting, omitted_operation, check)?;
+        if current.hash()? != census.hash()?
+            || current.scope() != census.scope()
+            || self::records(db, meeting, check)? != records
+        {
+            return Err("音声だけの削除の検査中に対象・保持履歴が変更されました".into());
+        }
+        Self::from_census(census, records, check)
+    }
+    fn from_census(
+        census: MeetingCensus,
+        records: Records,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         let mut entries = Vec::new();
         for entry in &census.manifest().entries {
             cancel(check)?;
@@ -506,14 +534,6 @@ impl Census {
             jobs: rows("processing_jobs")?,
             external_export_records: rows("export_records")?,
         };
-        let current =
-            MeetingCensus::capture_audio_locked(storage, db, meeting, omitted_operation, check)?;
-        if current.hash()? != census.hash()?
-            || current.scope() != census.scope()
-            || self::records(db, meeting, check)? != records
-        {
-            return Err("音声だけの削除の検査中に対象・保持履歴が変更されました".into());
-        }
         cancel(check)?;
         Ok(Self {
             meeting: census,

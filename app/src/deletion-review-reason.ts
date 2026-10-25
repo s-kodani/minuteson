@@ -9,7 +9,7 @@ export function deletionReviewReason(operation: DataOperation, state: {
   if (!state.supported) return "このアプリでは削除機能を利用できません。更新後にお試しください。";
   if (operation.snapshot?.restartRequired) return "保存先を切り替えたため、アプリの再起動後に削除できます。";
   if (operation.deletionListing?.writeBlocked || operation.audioDeletionListing?.writeBlocked || operation.modelDeletionListing?.writeBlocked
-    || operation.snapshot?.deletionPreview?.pending || operation.snapshot?.audioDeletionPreview?.pending) return "未完了の削除があります。設定画面で確認してください。";
+    || operation.snapshot?.deletionPreview?.pending || operation.snapshot?.audioDeletionPreview?.pending || operation.snapshot?.modelDeletionPreview?.pending) return "未完了の削除があります。設定画面で確認してください。";
   if (state.protectedNow) return "前の削除操作の完了・結果確認をお待ちください。";
   if (operation.snapshot?.busy) return "データ操作が完了すると削除できます。";
   if (!state.sharedAvailable) return operation.availability?.reason ? `${operation.availability.reason}のため削除できません。` : "削除できる状態か確認しています。";

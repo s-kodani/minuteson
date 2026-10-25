@@ -4,6 +4,89 @@ use std::cell::Cell;
 
 mod saved_playback;
 
+#[test]
+fn canonical_verifier_rejects_valid_flac_from_another_source_and_trailing_data() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut input, _) = source(root.path(), 8000, 2, 12001);
+    let path = root.path().join("owned.part");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    let saved =
+        encode_segment_file_pending(&mut input, 0, 12001, &mut file, &|| false, &|_| {}).unwrap();
+    verify_source(
+        &mut file,
+        saved.size,
+        &saved.sha256,
+        &mut input,
+        0,
+        saved.frames,
+        &|| false,
+    )
+    .unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (other_audio, _) = source(other.path(), 8000, 2, 12001);
+    drop(other_audio);
+    let raw = other.path().join("source.caf");
+    let mut bytes = std::fs::read(&raw).unwrap();
+    bytes[83..87].copy_from_slice(&0.75_f32.to_le_bytes());
+    std::fs::write(&raw, &bytes).unwrap();
+    let mut forged = VerifiedAudio::open(
+        File::open(&raw).unwrap(),
+        bytes.len() as u64,
+        &format!("{:x}", Sha256::digest(&bytes)),
+    )
+    .unwrap();
+    assert!(verify_source(
+        &mut file,
+        saved.size,
+        &saved.sha256,
+        &mut forged,
+        0,
+        saved.frames,
+        &|| false
+    )
+    .is_err());
+    file.seek(SeekFrom::End(0)).unwrap();
+    file.write_all(b"unexpected tail").unwrap();
+    assert!(verify_source(
+        &mut file,
+        saved.size,
+        &saved.sha256,
+        &mut input,
+        0,
+        saved.frames,
+        &|| false
+    )
+    .is_err());
+}
+
+#[test]
+fn conversion_budget_limits_parallel_work_and_cancels_waiters() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let running = AtomicUsize::new(0);
+    let peak = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..6 {
+            let running = &running;
+            let peak = &peak;
+            scope.spawn(move || {
+                let _permit = ConversionPermit::acquire(&|| false).unwrap();
+                let _nested = ConversionPermit::acquire(&|| false).unwrap();
+                let n = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                running.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    assert!(peak.load(Ordering::SeqCst) <= 2);
+    assert!(ConversionPermit::acquire(&|| true).is_err());
+}
+
 fn source(root: &Path, rate: u32, channels: u32, frames: usize) -> (VerifiedAudio, Vec<f32>) {
     // Exactly representable signed 24-bit values, including opposite channels.
     let samples: Vec<f32> = (0..frames)

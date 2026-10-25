@@ -1,5 +1,7 @@
 import type { AnalysisJob } from "./analysis-state.ts";
 import type { RecordingSnapshot } from "./session.ts";
+import { stageLabel, stageDetail } from "./stage-progress.ts";
+import type { DataSnapshot } from "./data-operation-state.ts";
 import { bytesLabel, importLabel, type ImportSnapshot } from "./import-state.ts";
 
 export interface OperationProgress {
@@ -10,13 +12,22 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
+  kind: "deletion" | "audio_deletion" | "model_deletion" | "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ deletion:"会議の削除", audio_deletion:"音声の削除", model_deletion:"モデルの削除", recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+
+export function deletionProgress(s: DataSnapshot | null): OperationProgress | null {
+  if (!s?.busy || !s.token || !["deletion", "audio_deletion", "model_deletion"].includes(s.kind ?? "")) return null;
+  const kind = s.kind as "deletion" | "audio_deletion" | "model_deletion";
+  return {id:`data:${s.token}`,kind,state:s.phase === "cancelling" ? "pausing" : "running",
+    target:s.modelDeletionPreview?.modelName ?? s.deletionPreview?.title ?? s.audioDeletionPreview?.meetingId ?? operationName(kind),
+    label:s.phase === "cancelling" ? "安全な停止を待機中" : stageLabel(s.progress) ?? "削除対象を確認中",
+    completed:null,total:null,detail:stageDetail(s.progress)};
+}
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
@@ -54,9 +65,9 @@ export function recordingSaveProgress(snapshot: RecordingSnapshot | null, title?
   return {
     id: `recording-save:${snapshot.sessionId}`, target: title || "録音した会議",
     kind: "recording_save", state: "running", meetingId: snapshot.meetingId,
-    label: snapshot.phase === "stopping" ? "録音を停止中" : "録音を保存中",
+    label: snapshot.phase === "stopping" ? "録音を停止中" : stageLabel(snapshot.progress) ?? "録音を保存中",
     completed: null, total: null,
-    detail: "アプリの終了時は、保存完了を待ちます。",
+    detail: stageDetail(snapshot.progress) ?? "アプリの終了時は、保存完了を待ちます。",
   };
 }
 

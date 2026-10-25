@@ -414,41 +414,15 @@ fn walk(
                 long_audio,
             )?;
         } else {
-            let mut file = dir.regular(name)?;
-            let before =
-                Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
-            let mut digest = Sha256::new();
-            let mut length = 0u64;
-            // Keep the buffer off recursive directory-walk stack frames.
-            let mut buffer = vec![0u8; 128 * 1024];
-            loop {
-                cancel(check)?;
-                let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                length = length
-                    .checked_add(n as u64)
-                    .ok_or("ファイル容量が範囲外です")?;
-                if length > before.size {
-                    return Err("検査中にファイルが拡張されました".into());
-                }
-                digest.update(&buffer[..n]);
-            }
-            dir.verify_file(name, &file)?;
-            if length != before.size
-                || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?
-                    != before
-            {
-                return Err("検査中にファイルが変更されました".into());
-            }
+            let (before, sha256) = super::verification::hash(dir, name, check)?;
+            let file = dir.regular(name)?;
             entries.insert(
                 child_path.clone(),
                 Entry {
                     path: child_path.clone(),
                     directory: false,
                     proof: Some(before),
-                    sha256: Some(format!("{:x}", digest.finalize())),
+                    sha256: Some(sha256),
                     registered: records.assets.get(&child_path).cloned(),
                     stage_hint: {
                         #[cfg(unix)]
@@ -625,12 +599,7 @@ impl Census {
         meeting: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        cancel(check)?;
-        let db = storage
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
-        Self::capture_locked(storage, &db, meeting, "", check)
+        Self::capture_removal_unlocked(storage, meeting, "", check, None, &[])
     }
     // The durable-intent transaction already holds the connection mutex.
     pub(super) fn capture_locked(
@@ -743,6 +712,203 @@ impl Census {
                     check,
                 ),
                 None => Scope::capture(db, saved.meeting(), saved.operation(), check),
+            },
+        )
+    }
+    // Load DB evidence on either side of the I/O; no shared connection is
+    // borrowed while reading audio. The durable deletion fence remains armed.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_scoped_unlocked(
+        storage: &Storage,
+        meeting: &str,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+        roots: &[String],
+        long: Option<&LongAudioPaths>,
+        inspect_flac: bool,
+        allow_restart: bool,
+        capture_scope: &impl Fn(&Connection) -> Result<Scope, String>,
+    ) -> Result<Self, String> {
+        cancel(check)?;
+        if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0']))
+            || (!allow_restart && storage.restart_required())
+            || storage
+                .maintenance
+                .load(std::sync::atomic::Ordering::Acquire)
+            || storage.retired.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("削除対象の保存領域・予約状態が一致しません".into());
+        }
+        let metadata = || -> Result<_, String> {
+            let db = crate::operation_observation::lock(&storage.connection)?;
+            Ok((capture_scope(&db)?, Records::read(&db, meeting)?))
+        };
+        let (scope, mut records) = metadata()?;
+        let (root, database) = storage.managed_anchor.identity()?;
+        #[cfg(unix)]
+        if inspect_flac {
+            records.flac_files = crate::storage::recordings::flac::inspect_workspaces(
+                storage,
+                meeting,
+                &records.sessions,
+                check,
+            )?;
+        }
+        let directory = storage.managed_anchor.directory_ref()?;
+        let entries = inventory(directory, meeting, &records, check, reserved, roots, long)?;
+        if inventory(directory, meeting, &records, check, reserved, roots, long)? != entries {
+            return Err("検査中に削除対象が変更されました".into());
+        }
+        #[cfg(unix)]
+        if inspect_flac
+            && crate::storage::recordings::flac::inspect_workspaces(
+                storage,
+                meeting,
+                &records.sessions,
+                check,
+            )? != records.flac_files
+        {
+            return Err("検査中にFLACの所有状態が変更されました".into());
+        }
+        let (after, rows) = metadata()?;
+        if after != scope
+            || rows.assets != records.assets
+            || rows.sessions != records.sessions
+            || rows.imports != records.imports
+            || rows.jobs != records.jobs
+            || storage.managed_anchor.identity()? != (root.clone(), database.clone())
+        {
+            return Err("検査中に削除のDB範囲・保存領域が変更されました".into());
+        }
+        let result = Self {
+            manifest: Manifest {
+                version: if roots.is_empty() { 1 } else { 2 },
+                database_scope_hash: scope.hash()?,
+                meeting_id: meeting.into(),
+                root,
+                database,
+                entries,
+                reservation_roots: roots.to_vec(),
+            },
+            scope,
+        };
+        result.encode()?;
+        Ok(result)
+    }
+    pub(super) fn capture_audio_unlocked(
+        storage: &Storage,
+        meeting: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::capture_scoped_unlocked(
+            storage,
+            meeting,
+            check,
+            None,
+            &[],
+            None,
+            true,
+            false,
+            &|db| Scope::capture(db, meeting, "", check),
+        )
+    }
+    pub(super) fn capture_removal_unlocked(
+        storage: &Storage,
+        meeting: &str,
+        operation: &str,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+        roots: &[String],
+    ) -> Result<Self, String> {
+        storage.managed_anchor.verify_current_history()?;
+        Self::capture_scoped_unlocked(
+            storage,
+            meeting,
+            check,
+            reserved,
+            roots,
+            None,
+            false,
+            false,
+            &|db| Scope::capture(db, meeting, operation, check),
+        )
+    }
+    pub(super) fn capture_deleted_unlocked(
+        storage: &Storage,
+        prepared: &super::intent::Prepared,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+        roots: &[String],
+    ) -> Result<Self, String> {
+        Self::capture_scoped_unlocked(
+            storage,
+            &prepared.scope().meeting_id,
+            check,
+            reserved,
+            roots,
+            None,
+            false,
+            true,
+            &|db| {
+                super::intent::read_database(db, prepared.operation(), check)?
+                    .matches_saved(prepared)?;
+                super::startup::verify_completed_rows(storage, db, prepared, check)?;
+                let actual = storage.managed_anchor.identity()?;
+                if actual
+                    != (
+                        prepared.manifest().root.clone(),
+                        prepared.manifest().database.clone(),
+                    )
+                {
+                    let (active, finished) = super::startup::review_manifest(db, prepared, check)?;
+                    super::renewal::verify_review_identity(
+                        storage, db, prepared, &active, finished,
+                    )?;
+                }
+                Ok(prepared.scope().clone())
+            },
+        )
+    }
+    pub(super) fn capture_audio_remaining_unlocked(
+        storage: &Storage,
+        receipt: &super::audio::intent::removal::Receipt,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+    ) -> Result<Self, String> {
+        let source = {
+            let db = crate::operation_observation::lock(&storage.connection)?;
+            receipt.reconfirmation_source(&db, check)?
+        };
+        let saved = receipt.source_saved();
+        let mut paths = receipt.source_paths();
+        if let Some(source) = &source {
+            paths.extend(source.paths());
+        }
+        let long = LongAudioPaths::from_history(&paths, saved.meeting())?;
+        Self::capture_scoped_unlocked(
+            storage,
+            saved.meeting(),
+            check,
+            reserved,
+            &[],
+            Some(&long),
+            true,
+            false,
+            &|db| {
+                receipt.verify_saved(db, check)?;
+                match &source {
+                    Some(source) => {
+                        source.verify_review_anchor(storage, db, check)?;
+                        Scope::capture_audio_reconfirmation(
+                            db,
+                            saved.meeting(),
+                            saved.operation(),
+                            source,
+                            check,
+                        )
+                    }
+                    None => Scope::capture(db, saved.meeting(), saved.operation(), check),
+                }
             },
         )
     }

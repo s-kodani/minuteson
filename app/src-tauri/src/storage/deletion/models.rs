@@ -4,7 +4,7 @@ use crate::{model_inspection::MANIFEST, model_placement::PlacementRecord, storag
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, io::Read, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 const MAX_ENTRIES: usize = 256;
 const MAX_DEPTH: usize = 32;
@@ -181,31 +181,7 @@ fn hash_file(
     leaf: &str,
     check: &impl Fn() -> bool,
 ) -> Result<(Proof, String), String> {
-    let mut file = dir.regular(leaf)?;
-    let before = Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
-    before.validate(false)?;
-    let mut hash = Sha256::new();
-    let mut size = 0_u64;
-    let mut buffer = [0; 65_536];
-    loop {
-        cancel(check)?;
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        size = size.checked_add(n as u64).ok_or("モデル容量が範囲外です")?;
-        if size > before.size {
-            return Err("モデル検査中にファイルが増大しました".into());
-        }
-        hash.update(&buffer[..n]);
-    }
-    dir.verify_file(leaf, &file)?;
-    if size != before.size
-        || Proof::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)? != before
-    {
-        return Err("モデル検査中にファイルが変更されました".into());
-    }
-    Ok((before, format!("{:x}", hash.finalize())))
+    super::verification::hash(dir, leaf, check)
 }
 fn walk(
     dir: &Directory,
@@ -372,54 +348,41 @@ fn capture(
     check: &impl Fn() -> bool,
 ) -> Result<Snapshot, String> {
     storage.require_data_writable()?;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let snapshot = capture_locked(storage, &db, root, package, review, check)?;
+    let result = capture_unlocked(storage, root, package, review, check)?;
     storage.require_data_writable()?;
-    Ok(snapshot)
+    Ok(result)
 }
-// Pending-intent callers must first validate their typed receipt and hold the
-// real shared lease. This helper itself grants no writer or deletion authority.
-fn capture_locked(
+fn capture_unlocked(
     storage: &Storage,
-    db: &Connection,
     root: &Path,
     package: &str,
     review: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Snapshot, String> {
-    cancel(check)?;
-    if !uuid::Uuid::parse_str(package).is_ok_and(|id| id.to_string() == package)
-        || root.file_name() != Some(std::ffi::OsStr::new("models"))
-        // Pre-bootstrap installs keep their meeting DB in app-data beside
-        // models. Only that exact native child is compatible; nested meeting
-        // paths are not model roots. The IPC chooses app-data/models itself.
-        || (root.starts_with(storage.root()) && root != storage.root().join("models"))
-        || storage.root().starts_with(root)
-    {
-        return Err("モデル削除の管理領域・対象IDが不正です".into());
-    }
-    let models = Directory::root(root)?;
-    let models_root = models.proof()?.identity;
-    let (record, placed) = storage::model_placements::load_history(db, package)?
-        .ok_or("管理モデルの配置記録がありません")?;
+    validate_root(storage, root, package)?;
+    let metadata = || -> Result<_, String> {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        Ok((
+            storage::model_placements::load_history(&db, package)?
+                .ok_or("管理モデルの配置記録がありません")?,
+            usages(&db, package)?,
+        ))
+    };
+    let ((record, placed), counts) = metadata()?;
     if record.review_hash != review {
         return Err("モデル削除の確認対象が配置記録と一致しません".into());
     }
+    let models = Directory::root(root)?;
+    let models_root = models.proof()?.identity;
     let (storage_root, database) = storage.managed_anchor.identity()?;
     let observations = inventory(&models, &record, check)?;
-    let (profile_references, job_references, active_jobs) = usages(db, package)?;
     if inventory(&models, &record, check)? != observations
+        || metadata()? != ((record.clone(), placed), counts)
         || models.proof()?.identity != models_root
         || storage.managed_anchor.identity()? != (storage_root.clone(), database.clone())
-        || storage::model_placements::load_history(db, package)? != Some((record.clone(), placed))
-        || usages(db, package)? != (profile_references, job_references, active_jobs)
     {
         return Err("モデル削除の対象・記録が検査中に変更されました".into());
     }
-    cancel(check)?;
     let snapshot = Snapshot {
         record,
         placed,
@@ -427,13 +390,123 @@ fn capture_locked(
         database,
         models_root,
         observations,
-        profile_references,
-        job_references,
-        active_jobs,
+        profile_references: counts.0,
+        job_references: counts.1,
+        active_jobs: counts.2,
     };
     snapshot.validate()?;
     Ok(snapshot)
 }
+impl Snapshot {
+    // This is a freshness check for already hashed consent, never permission
+    // to remove a file. Execution still rehashes at irreversible boundaries.
+    fn verify_metadata(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        root: &Path,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        cancel(check)?;
+        if storage::model_placements::load_history(db, &self.record.package_id)?
+            != Some((self.record.clone(), self.placed))
+            || usages(db, &self.record.package_id)?
+                != (
+                    self.profile_references,
+                    self.job_references,
+                    self.active_jobs,
+                )
+            || storage.managed_anchor.identity()?
+                != (self.storage_root.clone(), self.database.clone())
+        {
+            return Err("モデル削除の参照・配置・保存領域が変更されています".into());
+        }
+        let models = Directory::root(root)?;
+        models.verify_identity(&self.models_root)?;
+        let package = models.child(&self.record.package_id)?;
+        let expected: BTreeMap<_, _> = self
+            .observations
+            .iter()
+            .map(|o| (o.entry.relative_path.as_str(), o))
+            .collect();
+        match package {
+            Some(directory) => verify_metadata_tree(&directory, "", &expected, check)?,
+            None if self.observations.iter().all(|o| o.proof.is_none()) => {}
+            None => return Err("確認したモデルが消失しました".into()),
+        }
+        models.verify()
+    }
+}
+fn verify_metadata_tree(
+    dir: &Directory,
+    path: &str,
+    expected: &BTreeMap<&str, &Observation>,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    cancel(check)?;
+    let before = dir.proof()?;
+    if expected.get(path).and_then(|o| o.proof.as_ref()) != Some(&before) {
+        return Err("モデルフォルダーの実体が変更されています".into());
+    }
+    let names = dir.names(MAX_ENTRIES)?;
+    let mut wanted = std::collections::BTreeSet::new();
+    for (name, o) in expected {
+        if o.proof.is_some() && !name.is_empty() {
+            let (parent, leaf) = name.rsplit_once('/').unwrap_or(("", name));
+            if parent == path {
+                wanted.insert(leaf.to_string());
+            }
+        }
+    }
+    if names
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        != wanted
+    {
+        return Err("モデルに追加・欠落したファイルがあります".into());
+    }
+    for leaf in names {
+        cancel(check)?;
+        let relative = if path.is_empty() {
+            leaf.clone()
+        } else {
+            format!("{path}/{leaf}")
+        };
+        let o = expected
+            .get(relative.as_str())
+            .ok_or("未知のモデルファイルがあります")?;
+        if o.entry.directory {
+            let child = dir.child(&leaf)?.ok_or("モデルフォルダーが消失しました")?;
+            verify_metadata_tree(&child, &relative, expected, check)?;
+        } else {
+            let file = dir.regular(&leaf)?;
+            if o.proof.as_ref()
+                != Some(&Proof::read(
+                    &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,
+                )?)
+            {
+                return Err("モデルの内容条件が変更されています".into());
+            }
+            dir.verify_file(&leaf, &file)?;
+        }
+    }
+    if dir.proof()? != before {
+        return Err("検査中にモデルフォルダーが変更されました".into());
+    }
+    Ok(())
+}
+fn validate_root(storage: &Storage, root: &Path, package: &str) -> Result<(), String> {
+    if !uuid::Uuid::parse_str(package).is_ok_and(|id| id.to_string() == package)
+        || root.file_name() != Some(std::ffi::OsStr::new("models"))
+        || (root.starts_with(storage.root()) && root != storage.root().join("models"))
+        || storage.root().starts_with(root)
+    {
+        return Err("モデル削除の管理領域・対象IDが不正です".into());
+    }
+    Ok(())
+}
+
 use crate::storage;
 pub(crate) fn preview(
     storage: &Storage,
@@ -489,7 +562,7 @@ pub(crate) fn preview(
     })
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "model_tests.rs"]
 pub(crate) mod tests;
 

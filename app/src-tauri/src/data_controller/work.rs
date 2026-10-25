@@ -11,17 +11,36 @@ enum DeletionLane {
     Audio,
 }
 
-struct NoticeWait { app: AppHandle, id: String }
+struct NoticeWait {
+    app: AppHandle,
+    id: String,
+}
 impl NoticeWait {
     fn new(app: &AppHandle, meeting: Option<&str>) -> Option<Self> {
-        if !app.state::<AnalysisController>().notice_storage_busy(meeting) { return None; }
-        let id=Uuid::new_v4().to_string();
-        let _ = app.emit("deletion-notice-wait", serde_json::json!({"id":id,"waiting":true}));
-        Some(Self {app:app.clone(),id})
+        if !app
+            .state::<AnalysisController>()
+            .notice_storage_busy(meeting)
+        {
+            return None;
+        }
+        let id = Uuid::new_v4().to_string();
+        let _ = app.emit(
+            "deletion-notice-wait",
+            serde_json::json!({"id":id,"waiting":true}),
+        );
+        Some(Self {
+            app: app.clone(),
+            id,
+        })
     }
 }
 impl Drop for NoticeWait {
-    fn drop(&mut self) { let _ = self.app.emit("deletion-notice-wait", serde_json::json!({"id":self.id,"waiting":false})); }
+    fn drop(&mut self) {
+        let _ = self.app.emit(
+            "deletion-notice-wait",
+            serde_json::json!({"id":self.id,"waiting":false}),
+        );
+    }
 }
 
 impl Admission {
@@ -59,8 +78,10 @@ impl Admission {
             app: app.clone(),
             lease: Some(lease),
         };
-        app.state::<crate::input_status::archived::ArchivedInputs>().evict(Some(meeting))?;
-        app.state::<Storage>().evict_restored_input_cache(Some(meeting))?;
+        app.state::<crate::input_status::archived::ArchivedInputs>()
+            .evict(Some(meeting))?;
+        app.state::<Storage>()
+            .evict_restored_input_cache(Some(meeting))?;
         Ok(admission)
     }
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
@@ -84,6 +105,18 @@ impl Admission {
         Self::acquire_worker(app, operation, DeletionLane::Model)
     }
     #[cfg(any(unix, windows))]
+    pub(super) fn acquire_model_deletion_cancelled(
+        app: &AppHandle,
+        operation: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, String> {
+        if cancelled() {
+            return Err("モデル削除の確認を中止しました".into());
+        }
+        model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
+        Self::acquire_worker_cancelled(app, operation, DeletionLane::Model, &cancelled)
+    }
+    #[cfg(any(unix, windows))]
     pub(super) fn acquire_audio_deletion(
         app: &AppHandle,
         operation: Option<&str>,
@@ -96,6 +129,14 @@ impl Admission {
         deletion_operation: Option<&str>,
         lane: DeletionLane,
     ) -> Result<Self, String> {
+        Self::acquire_worker_cancelled(app, deletion_operation, lane, &|| false)
+    }
+    fn acquire_worker_cancelled(
+        app: &AppHandle,
+        deletion_operation: Option<&str>,
+        lane: DeletionLane,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         let importing = app
             .state::<crate::import_controller::ImportController>()
             .snapshot()?;
@@ -105,7 +146,11 @@ impl Admission {
             .is_active();
         let import_blocked = importing.busy || importing.recording_blocked;
         let analysis = app.state::<AnalysisController>();
-        let _waiting = if matches!(lane, DeletionLane::Audio) { NoticeWait::new(app, None) } else { None };
+        let _waiting = if matches!(lane, DeletionLane::Audio) {
+            NoticeWait::new(app, None)
+        } else {
+            None
+        };
         #[cfg(any(unix, windows))]
         let lease = if let Some(operation) = deletion_operation {
             if matches!(lane, DeletionLane::Audio) {
@@ -114,7 +159,7 @@ impl Admission {
                     operation,
                     recording,
                     import_blocked,
-                    &|| false,
+                    cancelled,
                 )?
             } else if matches!(lane, DeletionLane::Model) {
                 analysis.begin_model_deletion_maintenance(
@@ -122,7 +167,7 @@ impl Admission {
                     operation,
                     recording,
                     import_blocked,
-                    &|| false,
+                    cancelled,
                 )?
             } else {
                 analysis.begin_deletion_maintenance(
@@ -130,13 +175,15 @@ impl Admission {
                     operation,
                     recording,
                     import_blocked,
-                    &|| false,
+                    cancelled,
                 )?
             }
         } else {
             if matches!(lane, DeletionLane::Audio) {
-                analysis.begin_deletion_wait(recording, import_blocked, &|| false)?
-            } else { analysis.begin_data_maintenance(recording, import_blocked, &|| false)? }
+                analysis.begin_deletion_wait(recording, import_blocked, cancelled)?
+            } else {
+                analysis.begin_data_maintenance(recording, import_blocked, cancelled)?
+            }
         };
         #[cfg(not(any(unix, windows)))]
         let lease = {
@@ -152,7 +199,8 @@ impl Admission {
             app: app.clone(),
             lease: Some(lease),
         };
-        app.state::<crate::input_status::archived::ArchivedInputs>().evict(None)?;
+        app.state::<crate::input_status::archived::ArchivedInputs>()
+            .evict(None)?;
         app.state::<Storage>().evict_restored_input_cache(None)?;
         Ok(admission)
     }
@@ -204,6 +252,7 @@ pub(crate) enum AudioTarget {
 }
 
 #[cfg(any(unix, windows))]
+#[derive(Clone)]
 pub(crate) enum ModelTarget {
     Fresh { package: String, review: String },
     Pending(String),

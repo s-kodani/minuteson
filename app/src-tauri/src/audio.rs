@@ -390,6 +390,7 @@ pub(crate) fn inspect_recorded_caf(
     let data_end = format.data_offset + format.frames * u64::from(format.bytes_per_frame);
     let sample_bytes = (format.bytes_per_frame / format.channels) as usize;
     file.rewind().map_err(|error| error.to_string())?;
+    crate::operation_observation::file_check();
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 65_536];
     let mut pending = Vec::with_capacity(buffer.len() + 8);
@@ -407,6 +408,7 @@ pub(crate) fn inspect_recorded_caf(
             .filter(|end| *end <= size)
             .ok_or("録音音声が検証中に変更されました")?;
         hasher.update(&buffer[..count]);
+        crate::operation_observation::read(count);
         // Every supported integer bit pattern is finite. Floating-point samples
         // need a full check, including samples split by a hash block boundary.
         if format.float {

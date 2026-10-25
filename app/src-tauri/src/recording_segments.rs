@@ -166,7 +166,12 @@ impl Stamp {
         }
     }
     fn require(&self, file: &File) -> Result<(), String> {
-        if *self != Self::of(file)? {
+        let actual = Self::of(file)?;
+        if *self != actual {
+            crate::internal_logs::detail(crate::internal_logs::current_context("recording"), "source_changed", "error", std::time::Duration::ZERO,
+                &serde_json::json!({"identityChanged":self.dev!=actual.dev||self.ino!=actual.ino||self.created!=actual.created,
+                    "sizeBefore":self.size,"sizeAfter":actual.size,"modifiedBefore":self.modified,"modifiedAfter":actual.modified,
+                    "changedBefore":self.changed,"changedAfter":actual.changed}).to_string());
             return Err("原音声セグメントが検証後に変更されました".into());
         }
         Ok(())
@@ -252,7 +257,11 @@ impl<C: Fn() -> bool> crate::audio::flac::PcmSource for Source<'_, C> {
         Ok(output)
     }
     fn verify_unchanged(&self) -> Result<(), String> {
-        self.prefix.verify_unchanged(self.check)
+        cancelled(self.check)?;
+        for index in self.first_index..self.end_index {
+            self.prefix.verify_entry(index)?;
+        }
+        Ok(())
     }
 }
 
@@ -546,11 +555,34 @@ impl Prefix {
         count: usize,
         check: &'a C,
     ) -> Result<Source<'a, C>, String> {
+        self.verify_unchanged(check)?;
+        self.source_range(first, count, check)
+    }
+    // The publication coordinator verifies the whole prefix before/after a
+    // track and again at DB publication. Constructing each group's view must
+    // not scan every other group (quadratic work for long recordings).
+    pub(crate) fn source_group<'a, C: Fn() -> bool>(
+        &'a self,
+        group: &FlacGroup,
+        check: &'a C,
+    ) -> Result<Source<'a, C>, String> {
+        self.source_range(group.first_entry, group.entries, check)
+    }
+    fn source_range<'a, C: Fn() -> bool>(
+        &'a self,
+        first: usize,
+        count: usize,
+        check: &'a C,
+    ) -> Result<Source<'a, C>, String> {
         let end = first
             .checked_add(count)
             .filter(|end| count > 0 && *end <= self.entries.len())
             .ok_or("原音声セグメントの連結範囲が不正です")?;
-        self.verify_unchanged(check)?;
+        cancelled(check)?;
+        for index in first..end {
+            cancelled(check)?;
+            self.verify_entry(index)?;
+        }
         let audio = self.open_audio(first, check)?;
         let mut format = audio.format.clone();
         let first_frame = self.entries[first].entry.source_frame_start;

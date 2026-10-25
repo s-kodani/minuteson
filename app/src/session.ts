@@ -1,10 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
+import type { StageProgress } from "./stage-progress";
 
 export type RecordingPhase = "idle" | "preparing" | "recording" | "stopping" | "saving" | "error";
 
 export interface RecordingSnapshot {
+  progress?: StageProgress | null;
   revision: number;
   phase: RecordingPhase;
   elapsedMs: number;

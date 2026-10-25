@@ -41,7 +41,7 @@ import { ModelInspectionPanel } from "./model-inspection";
 import { CommonOperationProgress, usePublishProgress } from "./operation-progress";
 import { useRecordingRecovery } from "./recording-recovery";
 import { recoveryMeetingState } from "./recording-recovery-state";
-import { recordingSaveProgress } from "./operation-progress-state";
+import { recordingSaveProgress, deletionProgress } from "./operation-progress-state";
 import { JobCount, JobList } from "./job-list";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
@@ -168,6 +168,7 @@ function MainWindow() {
   const state = useRecordingSession();
   const recordingDecision = useRecordingConfirmation("main");
   const dataOperation = useDataOperation();
+  usePublishProgress("data-deletion", [deletionProgress(dataOperation.snapshot)]);
   const recovery = useRecordingRecovery();
   const [dataPending, setDataPending] = useState(false);
   const [audioDeletionPending, setAudioDeletionPending] = useState(false);

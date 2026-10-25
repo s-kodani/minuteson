@@ -9,6 +9,8 @@ import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operati
 import { assertModelDeletionPage, modelDeletionPhaseLabel, type ModelDeletionPage, type ModelDeletionReceipt } from "./model-deletion-operation-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
+import { deletionReviewReason } from "./deletion-review-reason";
+import { stageLabel, stageDetail } from "./stage-progress";
 
 export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted }: {
   operation: DataOperation; locked: boolean;
@@ -43,6 +45,13 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
   const canReviewPending = canInspect && sharedAvailable;
   const canReviewModel = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !s?.deletionPreview?.pending && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
+  const reviewUnavailableReason = canReviewModel ? null : deletionReviewReason(operation, {
+    native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable,
+  });
+  const retryAvailability = async () => {
+    try { await latest.current.operation.refresh(); setError(""); }
+    catch (cause) { setError(String(cause)); }
+  };
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const run = async (action: () => Promise<void>) => {
     if (running.current) return;
@@ -77,7 +86,12 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
       try {
         latest.current.operation.accept(await invoke<DataSnapshot>(pendingReview ? "review_pending_model_deletion" : "review_model_body_deletion", pendingReview ? { operationId: id } : { packageId: id, expectedReviewHash: reviewHash }));
         choice.current = null; setUnknown(false);
-      } catch (cause) { setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`); }
+      } catch (cause) {
+        if (typeof cause === "string" && cause.startsWith("model_deletion_not_started:")) {
+          choice.current = null; setUnknown(false); throw Error(cause.slice("model_deletion_not_started:".length));
+        }
+        setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`);
+      }
     });
   };
   const send = async (request: DataRequest, revision: number) => {
@@ -140,7 +154,7 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     }
   }, [s, rpcBusy, locked, unknown]);
   const canDelete = canResolve && open && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
-  return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve,
+  return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve, reviewUnavailableReason, retryAvailability,
     rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
     understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
@@ -160,7 +174,8 @@ export function ModelDeletionDialog({ operation, control: c }: { operation: Data
       className="import-dialog data-dialog deletion-dialog" aria-labelledby="model-deletion-title">
       <h2 id="model-deletion-title" ref={c.heading} tabIndex={-1}>{busy && s.phase === "cancelling" ? "モデル操作の停止を待機中" : checking ? "モデルの削除対象を確認中" : busy ? "モデル削除の処理中" : p?.phase === "reconfirmation" ? "残りのモデルファイルを確認" : "モデルのローカル削除を確認"}</h2>
       {busy && <div className="model-deletion-progress"><p role="status">{s.phase === "cancelling" ? "安全な停止を待っています。" : checking ? "モデルファイルの内容と削除範囲を検査しています。この確認処理ではファイルを削除しません。" : "確認したモデルファイルの削除を処理しています。"}</p>
-        {checking && <p>容量の大きいモデルは確認に時間がかかります。</p>}
+        {s.progress && <p role="status">{stageLabel(s.progress)}{stageDetail(s.progress) ? ` · ${stageDetail(s.progress)}` : ""}</p>}
+        {checking && !s.progress && <p>容量の大きいモデルは確認に時間がかかります。</p>}
         <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>{checking ? "確認を中止する" : "安全な停止を要求"}</button>
       </div>}
       {p && !busy && <><h3>{p.modelName}</h3><p className="data-path">パッケージID: {p.packageId}</p>

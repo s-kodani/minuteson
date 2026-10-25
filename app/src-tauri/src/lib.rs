@@ -2,7 +2,6 @@ mod analysis_flow;
 mod analysis_preparation;
 mod analysis_worker;
 mod application_close;
-mod recording_recovery;
 mod audio;
 mod audio_clock;
 mod audio_import;
@@ -38,6 +37,7 @@ mod model_inspection;
 mod model_official_catalog;
 mod model_placement;
 mod native_fs;
+mod operation_observation;
 #[cfg(target_os = "windows")]
 mod platform_dialog;
 mod playback;
@@ -48,10 +48,12 @@ mod recorder_operation_notices;
 mod recorder_panel;
 mod recording_confirmation;
 mod recording_confirmation_window;
+mod recording_recovery;
 #[cfg(any(unix, windows))]
 mod recording_segments;
 mod recording_writes;
 mod resampling;
+mod residency;
 mod restored_processing;
 #[cfg(target_os = "macos")]
 mod rounded_windows;
@@ -61,7 +63,6 @@ mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
 mod startup_instance;
-mod residency;
 mod storage;
 mod transcription;
 mod voice;
@@ -336,8 +337,11 @@ async fn review_meeting_deletion(
     meeting_id: String,
 ) -> Result<data_controller::Snapshot, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || DataController::review_deletion(&app, meeting_id, false)).await.map_err(|e| e.to_string())?
-
+    tauri::async_runtime::spawn_blocking(move || {
+        DataController::review_deletion(&app, meeting_id, false)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(any(unix, windows))]
 #[tauri::command]
@@ -346,8 +350,11 @@ async fn review_pending_deletion(
     operation_id: String,
 ) -> Result<data_controller::Snapshot, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || DataController::review_deletion(&app, operation_id, true)).await.map_err(|e| e.to_string())?
-
+    tauri::async_runtime::spawn_blocking(move || {
+        DataController::review_deletion(&app, operation_id, true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(any(unix, windows))]
 #[tauri::command]
@@ -419,11 +426,7 @@ async fn get_model_deletion_items(
     window: WebviewWindow,
 ) -> Result<storage::deletion::models::operations::Listing, String> {
     let app = data_app(&window)?;
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
+    let root = app.state::<Storage>().native_models_root().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         storage::deletion::models::operations::listing(&app.state::<Storage>(), &root)
     })
@@ -450,8 +453,11 @@ async fn review_meeting_audio_deletion(
     meeting_id: String,
 ) -> Result<data_controller::Snapshot, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || DataController::review_audio_deletion(&app, data_controller::AudioTarget::Fresh(meeting_id))).await.map_err(|e| e.to_string())?
-
+    tauri::async_runtime::spawn_blocking(move || {
+        DataController::review_audio_deletion(&app, data_controller::AudioTarget::Fresh(meeting_id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(any(unix, windows))]
 #[tauri::command]
@@ -460,8 +466,14 @@ async fn review_pending_audio_deletion(
     operation_id: String,
 ) -> Result<data_controller::Snapshot, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || DataController::review_audio_deletion(&app, data_controller::AudioTarget::Pending(operation_id))).await.map_err(|e| e.to_string())?
-
+    tauri::async_runtime::spawn_blocking(move || {
+        DataController::review_audio_deletion(
+            &app,
+            data_controller::AudioTarget::Pending(operation_id),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(any(unix, windows))]
 #[tauri::command]
@@ -491,18 +503,31 @@ struct DataAvailability {
 }
 
 #[tauri::command]
-async fn get_meeting_deletion_availability(window: WebviewWindow, meeting_ids: Vec<String>) -> Result<Vec<storage::meeting_access::Availability>, String> {
+async fn get_meeting_deletion_availability(
+    window: WebviewWindow,
+    meeting_ids: Vec<String>,
+) -> Result<Vec<storage::meeting_access::Availability>, String> {
     let app = data_app(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let reason = app.state::<AnalysisController>().meeting_deletion_blocker()?;
-        let mut result = app.state::<Storage>().meeting_deletion_availability(&meeting_ids)?;
-        let recording=app.state::<SessionStore>().snapshot();
+        let reason = app
+            .state::<AnalysisController>()
+            .meeting_deletion_blocker()?;
+        let mut result = app
+            .state::<Storage>()
+            .meeting_deletion_availability(&meeting_ids)?;
+        let recording = app.state::<SessionStore>().snapshot();
         if recording.is_active() {
             for item in &mut result {
-                if recording.meeting_id.is_none() || recording.meeting_id.as_deref()==Some(item.meeting_id.as_str()) {
-                    item.available=false;
-                    if !item.blockers.iter().any(|b|b.kind=="recording") {
-                        item.blockers.push(storage::meeting_access::Blocker {kind:"recording".into(),reason:"この会議の録音・音声保存が完了していません".into(),job_id:None});
+                if recording.meeting_id.is_none()
+                    || recording.meeting_id.as_deref() == Some(item.meeting_id.as_str())
+                {
+                    item.available = false;
+                    if !item.blockers.iter().any(|b| b.kind == "recording") {
+                        item.blockers.push(storage::meeting_access::Blocker {
+                            kind: "recording".into(),
+                            reason: "この会議の録音・音声保存が完了していません".into(),
+                            job_id: None,
+                        });
                     }
                 }
             }
@@ -510,11 +535,17 @@ async fn get_meeting_deletion_availability(window: WebviewWindow, meeting_ids: V
         if let Some(reason) = reason {
             for item in &mut result {
                 item.available = false;
-                item.blockers.push(storage::meeting_access::Blocker {kind:"storage".into(),reason:reason.clone(),job_id:None});
+                item.blockers.push(storage::meeting_access::Blocker {
+                    kind: "storage".into(),
+                    reason: reason.clone(),
+                    job_id: None,
+                });
             }
         }
         Ok(result)
-    }).await.map_err(|e|e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -530,11 +561,20 @@ fn get_data_operation_availability(window: WebviewWindow) -> Result<DataAvailabi
     };
     let reason = if reason.is_none() && app.state::<Storage>().has_scoped_meeting_deletion()? {
         Some("未完了の会議削除があります。削除の確認画面から解決してください".into())
-    } else { reason };
-    let deletion_reason = if reason.as_deref() == Some("録音通知履歴の確認・更新中") { app.state::<AnalysisController>().deletion_operation_blocker()? } else { reason.clone() };
+    } else {
+        reason
+    };
+    let deletion_reason = if reason.as_deref() == Some("録音通知履歴の確認・更新中") {
+        app.state::<AnalysisController>()
+            .deletion_operation_blocker()?
+    } else {
+        reason.clone()
+    };
     Ok(DataAvailability {
-        available: reason.is_none(), reason,
-        deletion_available: deletion_reason.is_none(), deletion_reason,
+        available: reason.is_none(),
+        reason,
+        deletion_available: deletion_reason.is_none(),
+        deletion_reason,
     })
 }
 
@@ -561,8 +601,9 @@ async fn start_data_operation(
     request: data_controller::Request,
 ) -> Result<data_controller::Snapshot, String> {
     let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || DataController::start(&app, request)).await.map_err(|e| e.to_string())?
-
+    tauri::async_runtime::spawn_blocking(move || DataController::start(&app, request))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -713,7 +754,9 @@ async fn export_plain_minutes_markdown(
 ) -> Result<Option<storage::ExportRecord>, String> {
     let app = minutes_app(&window)?;
     app.state::<Storage>().require_data_writable()?;
-    let meeting_owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "export", None)?;
+    let meeting_owner =
+        app.state::<Storage>()
+            .begin_meeting_work(&request.meeting_id, "export", None)?;
     let admission = app.state::<AnalysisController>().begin_export()?;
     let lease = app.state::<exports::ExportController>().begin()?;
     // A lost receiver does not release admission while the native dialog or
@@ -1328,12 +1371,19 @@ async fn prepare_meeting_playback(
             },
             || {
                 guard.check()?;
-                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
+                let owner = app.state::<Storage>().begin_meeting_work(
+                    &request.meeting_id,
+                    "playback",
+                    None,
+                )?;
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
                 audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
-                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert_meeting(audio)?,owner) })
+                guard.publish(|| {
+                    let store = app.state::<PlaybackStore>();
+                    store.own_meeting(store.insert_meeting(audio)?, owner)
+                })
             },
         )
     })
@@ -1380,12 +1430,19 @@ async fn prepare_markdown_interval_playback(
             },
             || {
                 guard.check()?;
-                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
+                let owner = app.state::<Storage>().begin_meeting_work(
+                    &request.meeting_id,
+                    "playback",
+                    None,
+                )?;
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
                 audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
-                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert_interval(audio)?,owner) })
+                guard.publish(|| {
+                    let store = app.state::<PlaybackStore>();
+                    store.own_meeting(store.insert_interval(audio)?, owner)
+                })
             },
         )
     })
@@ -1416,14 +1473,19 @@ async fn prepare_utterance_playback(
             },
             || {
                 guard.check()?;
-                let owner = app.state::<Storage>().begin_meeting_work(&meeting_id, "playback", None)?;
+                let owner =
+                    app.state::<Storage>()
+                        .begin_meeting_work(&meeting_id, "playback", None)?;
                 let audio = app.state::<Storage>().prepare_utterance_audio_cancellable(
                     &meeting_id,
                     &analysis_id,
                     &utterance_id,
                     &|| guard.cancelled(),
                 )?;
-                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert(audio)?,owner) })
+                guard.publish(|| {
+                    let store = app.state::<PlaybackStore>();
+                    store.own_meeting(store.insert(audio)?, owner)
+                })
             },
         )
     })
@@ -1452,11 +1514,18 @@ async fn prepare_draft_utterance_playback(
             },
             || {
                 guard.check()?;
-                let owner = app.state::<Storage>().begin_meeting_work(&request.meeting_id, "playback", None)?;
+                let owner = app.state::<Storage>().begin_meeting_work(
+                    &request.meeting_id,
+                    "playback",
+                    None,
+                )?;
                 let audio = app
                     .state::<Storage>()
                     .prepare_draft_utterance_audio_cancellable(&request, &|| guard.cancelled())?;
-                guard.publish(|| { let store=app.state::<PlaybackStore>(); store.own_meeting(store.insert(audio)?,owner) })
+                guard.publish(|| {
+                    let store = app.state::<PlaybackStore>();
+                    store.own_meeting(store.insert(audio)?, owner)
+                })
             },
         )
     })
@@ -1503,7 +1572,9 @@ async fn finish_main_close(
     quit: bool,
     expected: Option<application_close::CloseExpectations>,
 ) -> Result<(), String> {
-    if cfg!(any(windows,target_os="macos"))&&!quit{return Err("画面の収納とアプリの終了は別の操作です".into());}
+    if cfg!(any(windows, target_os = "macos")) && !quit {
+        return Err("画面の収納とアプリの終了は別の操作です".into());
+    }
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
@@ -1614,7 +1685,8 @@ async fn reconcile_capture_test_start(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         RecorderController::with_transition(&app, || {
-            app.state::<capture_test::CaptureTests>().reconcile_start(&run_id)
+            app.state::<capture_test::CaptureTests>()
+                .reconcile_start(&run_id)
         })
     })
     .await
@@ -1744,10 +1816,23 @@ async fn get_recording_input_history_status(
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct NoticeReply<T> { paused: bool, value: Option<T> }
+struct NoticeReply<T> {
+    paused: bool,
+    value: Option<T>,
+}
 impl<T> NoticeReply<T> {
-    fn ready(value: T) -> Self { Self { paused: false, value: Some(value) } }
-    fn paused() -> Self { Self { paused: true, value: None } }
+    fn ready(value: T) -> Self {
+        Self {
+            paused: false,
+            value: Some(value),
+        }
+    }
+    fn paused() -> Self {
+        Self {
+            paused: true,
+            value: None,
+        }
+    }
 }
 
 #[tauri::command]
@@ -1763,21 +1848,30 @@ async fn get_archived_recording_input_notices(
     // WebView/awaiting caller disappears. Do not hold any recorder/child lock.
     tauri::async_runtime::spawn_blocking(move || {
         let analysis = app.state::<AnalysisController>();
-        if analysis.notice_storage_paused(None) { return Ok(NoticeReply::paused()); }
+        if analysis.notice_storage_paused(None) {
+            return Ok(NoticeReply::paused());
+        }
         let visible = || {
             input_status::notice_window_visible(
                 window.is_visible().ok(),
                 window.is_minimized().ok(),
             )
         };
-        app.state::<input_status::archived::ArchivedInputs>().page_scoped(
-            &app.state::<Storage>(),
-            &analysis,
-            after_session_id.as_deref(),
-            &visible,
-        ).map(NoticeReply::ready).or_else(|error| {
-            if error == input_status::archived::PAUSED { Ok(NoticeReply::paused()) } else { Err(error) }
-        })
+        app.state::<input_status::archived::ArchivedInputs>()
+            .page_scoped(
+                &app.state::<Storage>(),
+                &analysis,
+                after_session_id.as_deref(),
+                &visible,
+            )
+            .map(NoticeReply::ready)
+            .or_else(|error| {
+                if error == input_status::archived::PAUSED {
+                    Ok(NoticeReply::paused())
+                } else {
+                    Err(error)
+                }
+            })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1805,7 +1899,8 @@ async fn acknowledge_archived_recording_input_notice(
             )
         };
         app.state::<input_status::archived::ArchivedInputs>()
-            .acknowledge(&app.state::<Storage>(), &lease, request, &visible).map(NoticeReply::ready)
+            .acknowledge(&app.state::<Storage>(), &lease, request, &visible)
+            .map(NoticeReply::ready)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2203,12 +2298,21 @@ fn save_transcript_draft(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
-    if let Some(code) = local_engine::guard_entry() {std::process::exit(code);}
-    #[cfg(target_os="macos")]
-    {if let Some(code)=residency::supervisor_entry(){std::process::exit(code);}residency::prepare_supervisor();}
+    if let Some(code) = local_engine::guard_entry() {
+        std::process::exit(code);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(code) = residency::supervisor_entry() {
+            std::process::exit(code);
+        }
+        residency::prepare_supervisor();
+    }
     #[cfg(windows)]
     {
-        if let Some(code) = startup_instance::supervisor_entry() { std::process::exit(code); }
+        if let Some(code) = startup_instance::supervisor_entry() {
+            std::process::exit(code);
+        }
         // Start the narrow restart relay before assigning the application job.
         // It owns no storage and exits with its parent unless restart is approved.
         startup_instance::prepare_supervisor();
@@ -2294,12 +2398,25 @@ pub fn run() {
             {
                 #[cfg(windows)]
                 {
-                    let connected = app.path().app_config_dir().map_err(|e| e.to_string()).and_then(|config| startup_instance::initialize(app.handle(), &config));
+                    let connected = app
+                        .path()
+                        .app_config_dir()
+                        .map_err(|e| e.to_string())
+                        .and_then(|config| startup_instance::initialize(app.handle(), &config));
                     match connected {
                         Ok(true) => {}
                         result => {
-                            let message = result.err().unwrap_or_else(|| "既存のMONを開き直すか、確認して再起動できます。".into());
-                            app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageSelection, message, None, app.path().app_config_dir().ok().as_deref()))?;
+                            let message = result.err().unwrap_or_else(|| {
+                                "既存のMONを開き直すか、確認して再起動できます。".into()
+                            });
+                            app.state::<startup_attention::Startup>().block(
+                                startup_attention::Failure::new(
+                                    startup_attention::Stage::StorageSelection,
+                                    message,
+                                    None,
+                                    app.path().app_config_dir().ok().as_deref(),
+                                ),
+                            )?;
                             startup_attention::show(app.handle());
                             return Ok(());
                         }
@@ -2322,7 +2439,14 @@ pub fn run() {
                         let recovery = match selection.startup_recovery_view(&storage) {
                             Ok(recovery) => recovery,
                             Err(error) => {
-                                app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageAdmission, error, Some(selection.root()), app.path().app_config_dir().ok().as_deref()))?;
+                                app.state::<startup_attention::Startup>().block(
+                                    startup_attention::Failure::new(
+                                        startup_attention::Stage::StorageAdmission,
+                                        error,
+                                        Some(selection.root()),
+                                        app.path().app_config_dir().ok().as_deref(),
+                                    ),
+                                )?;
                                 startup_attention::show(app.handle());
                                 return Ok(());
                             }
@@ -2367,7 +2491,14 @@ pub fn run() {
                 Ok(())
             });
             if let Err(error) = prepared {
-                app.state::<startup_attention::Startup>().block(startup_attention::Failure::new(startup_attention::Stage::StorageAdmission, error, Some(&root), None))?;
+                app.state::<startup_attention::Startup>().block(
+                    startup_attention::Failure::new(
+                        startup_attention::Stage::StorageAdmission,
+                        error,
+                        Some(&root),
+                        None,
+                    ),
+                )?;
                 startup_attention::show(app.handle());
                 return Ok(());
             }
@@ -2569,7 +2700,16 @@ pub fn run() {
             if window.state::<startup_attention::Startup>().blocked() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    if cfg!(any(windows,target_os="macos")){if window.label()=="main" {let _=window.app_handle().get_webview_window("main").map(residency::hide_main_to_background);}}else{window.app_handle().exit(0);}
+                    if cfg!(any(windows, target_os = "macos")) {
+                        if window.label() == "main" {
+                            let _ = window
+                                .app_handle()
+                                .get_webview_window("main")
+                                .map(residency::hide_main_to_background);
+                        }
+                    } else {
+                        window.app_handle().exit(0);
+                    }
                 }
                 return;
             }
@@ -2611,8 +2751,10 @@ pub fn run() {
         .build(context)
         .expect("failed to start mon desktop")
         .run(|app, event| {
-            #[cfg(target_os="macos")]
-            if let RunEvent::Reopen{..}=&event {let _=residency::restore(app);}
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = &event {
+                let _ = residency::restore(app);
+            }
             if let RunEvent::Exit = event {
                 residency::stopping(app);
                 internal_logs::phase("application", None, None, "stopped", None);

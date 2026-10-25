@@ -23,6 +23,7 @@ pub struct RecordingSnapshot {
     pub meeting_id: Option<String>,
     pub session_id: Option<String>,
     pub error_message: Option<String>,
+    pub progress: Option<crate::operation_observation::Progress>,
 }
 
 impl Default for RecordingSnapshot {
@@ -36,13 +37,17 @@ impl Default for RecordingSnapshot {
             meeting_id: None,
             session_id: None,
             error_message: None,
+            progress: None,
         }
     }
 }
 
 impl RecordingSnapshot {
     pub fn can_hide_main_window(&self) -> bool {
-        matches!(self.phase, RecordingPhase::Preparing | RecordingPhase::Recording)
+        matches!(
+            self.phase,
+            RecordingPhase::Preparing | RecordingPhase::Recording
+        )
     }
 
     pub fn is_active(&self) -> bool {

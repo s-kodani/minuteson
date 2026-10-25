@@ -12,6 +12,7 @@ pub(crate) struct Item {
     pub phase: String,
     pub started_at_ms: Option<i64>,
     pub error: Option<String>,
+    pub progress: Option<crate::operation_observation::Progress>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +55,15 @@ fn publish(app: &tauri::AppHandle, change: impl FnOnce(&mut Snapshot)) {
     let _ = app.emit_to("main", "recording-recovery-changed", s);
 }
 pub(crate) fn run(app: &tauri::AppHandle) {
+    let progress_app = app.clone();
+    let _observations =
+        crate::operation_observation::Scope::enter("recording_recovery", move |value| {
+            publish(&progress_app, |s| {
+                if let Some(item) = s.items.iter_mut().find(|i| i.phase == "running") {
+                    item.progress = Some(value);
+                }
+            });
+        });
     publish(app, |s| s.phase = "scanning".into());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         app.state::<crate::storage::Storage>()

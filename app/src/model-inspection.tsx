@@ -309,9 +309,10 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
             <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
             <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
             <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>
-        </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
+        </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-describedby={(!deletion?.canReviewModel || disabled) ? "model-deletion-unavailable" : undefined} aria-label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
       </li>;
     })}</ul>
+    {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{deletion?.reviewUnavailableReason ?? (recordingActive ? "録音・音声保存が完了すると削除できます。" : busy || pending ? "モデル準備の完了・受付結果の確認後に削除できます。" : "ほかの操作が完了すると削除できます。")}</p>{deletion && <button type="button" className="small-secondary" disabled={deletion.rpcBusy} onClick={() => void deletion.retryAvailability()}>削除できる状態か再確認</button>}</div>}
     {deletion?.listing?.items.map(item => <div key={item.operationId} className="model-deletion-pending"><p>{item.modelName ?? "モデル"}：削除の確認が必要です。{item.errorMessage}</p>
       {item.reviewAllowed && <button type="button" className="small-secondary" disabled={!deletion.canReviewPending} onClick={() => void deletion.reviewPending(item.operationId)}>残りの削除を確認</button>}</div>)}
     {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}
