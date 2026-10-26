@@ -50,10 +50,6 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const reviewUnavailableReason = canReviewModel ? null : deletionReviewReason(operation, {
     native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable, availabilityReason: admission.reason,
   });
-  const retryAvailability = async () => {
-    try { await latest.current.operation.refresh(); setError(""); }
-    catch (cause) { setError(String(cause)); }
-  };
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const run = async (action: () => Promise<void>) => {
     if (running.current) return;
@@ -156,7 +152,7 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     }
   }, [s, rpcBusy, locked, unknown]);
   const canDelete = canResolve && open && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
-  return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve, reviewUnavailableReason, retryAvailability,
+  return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve, reviewUnavailableReason,
     rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
     understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }

@@ -2,6 +2,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   if(typeof baseUrl!=="string")baseUrl="http://127.0.0.1:1420";
   const results=[];
   const button=()=>page.getByRole("button",{name:/削除確認用の合成モデル.*をローカルから削除/});
+  const assertNoAvailabilityRetry=async()=>{if(await page.getByRole("button",{name:"削除できる状態か再確認",exact:true}).count())throw Error("removed availability retry button is still present");};
   const boot=async(query="")=>{await page.goto(`${baseUrl}/tests/model-deletion-enabled-browser.html?resident=windows${query}`);await button().waitFor();await page.waitForFunction(()=>!document.querySelector(".deletion-trigger")?.disabled);};
   await boot();
   await button().click();
@@ -16,10 +17,10 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await page.evaluate(()=>window.modelAdmissionFixture.failListing=true);
   await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
   await page.getByText(/削除の状態を確認できません.*合成モデル削除状態の取得失敗/).waitFor();
+  await assertNoAvailabilityRetry();
   await page.evaluate(()=>window.modelAdmissionFixture.failListing=false);
-  await page.getByRole("button",{name:"削除できる状態か再確認"}).click();
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
-  results.push("a failed listing is explained and a verified retry restores admission");
+  results.push("a failed listing is explained without a retry button and verified polling restores admission automatically");
   await page.evaluate(()=>window.modelAdmissionFixture.modelOnly=true);
   await page.waitForFunction(()=>window.modelAdmissionFixture.calls.filter(c=>c.command==="get_model_deletion_items").length>2);
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
@@ -50,9 +51,9 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
     await page.evaluate(reason=>{window.modelAdmissionFixture.availability={available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:false,deletionReason:reason};},reason);
     await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
     await page.getByText(`${reason}のため削除できません。`,{exact:true}).waitFor();
+    await assertNoAvailabilityRetry();
   }
   await page.evaluate(()=>{window.modelAdmissionFixture.availability={available:true,reason:null,deletionAvailable:true,deletionReason:null};});
-  await page.getByRole("button",{name:"削除できる状態か再確認"}).click();
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
   await page.evaluate(()=>{window.modelAdmissionFixture.recordingActive=true;window.modelAdmissionFixture.render();});
   await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);

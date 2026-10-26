@@ -24,6 +24,9 @@ pub(super) fn create(app: &tauri::AppHandle) -> Result<(), String> {
     let quit = MenuItem::with_id("mon-resident-quit", "終了", true, None);
     menu.append_items(&[&status, &PredefinedMenuItem::separator(), &open, &quit])
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let image = tauri::include_image!("icons/tray-template.png");
+    #[cfg(windows)]
     let image = app
         .default_window_icon()
         .ok_or("常駐アイコンがありません")?;
@@ -43,6 +46,8 @@ pub(super) fn create(app: &tauri::AppHandle) -> Result<(), String> {
         .with_menu(Box::new(menu))
         .with_tooltip(format!("{name} — 待機中"))
         .with_menu_on_left_click(false);
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_as_template(true);
     #[cfg(windows)]
     let builder = builder.with_guid(
         uuid::Uuid::parse_str(&guid)
