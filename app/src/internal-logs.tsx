@@ -1,3 +1,4 @@
+import { ErrorNotice, ToastNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -19,7 +20,7 @@ export function InternalLogs() {
   const [from, setFrom] = useState(""), [to, setTo] = useState("");
   const [entries, setEntries] = useState<InternalLogEntry[]>([]), [detail, setDetail] = useState<InternalLogEntry | null>(null);
   const [paused, setPaused] = useState(false), [following, setFollowing] = useState(true);
-  const [loading, setLoading] = useState(true), [error, setError] = useState(""), [copyStatus, setCopyStatus] = useState("");
+  const [loading, setLoading] = useState(true), [error, setError] = useState(""), [copyStatus, setCopyStatus] = useState<{message:string;level:"success"|"error";eventId:string}|null>(null);
   const [pageStatus, setPageStatus] = useState<InternalLogPage["status"] | null>(null);
   const [hasOlder, setHasOlder] = useState(false), [gap, setGap] = useState(false), [trimmed, setTrimmed] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -44,7 +45,7 @@ export function InternalLogs() {
     let buffer: InternalLogEntry[] = [];
     const queryFilter = JSON.parse(activeFilter) as InternalLogFilter;
     scrollUpdate.current = null; failedMode.current = null; topArmed.current = true;
-    setEntries([]); setDetail(null); setPageStatus(null); setGap(false); setTrimmed(false); setHasOlder(false); setError(""); setCopyStatus(""); setLoadingOlder(false);
+    setEntries([]); setDetail(null); setPageStatus(null); setGap(false); setTrimmed(false); setHasOlder(false); setError(""); setCopyStatus(null); setLoadingOlder(false);
     followingRef.current = true; setFollowing(true);
     const invalid = queryFilter.from !== undefined && queryFilter.to !== undefined && queryFilter.from > queryFilter.to;
     const current = () => alive && currentFilter.current === activeFilter;
@@ -132,8 +133,8 @@ export function InternalLogs() {
   };
   const unavailable = loading || invalidDate || filterKey !== activeFilter;
   const copy = async () => {
-    try { await navigator.clipboard.writeText(copyLogText(entries)); setCopyStatus(`${entries.length}件のログをコピーしました。`); }
-    catch { setCopyStatus("コピーできませんでした。もう一度お試しください。"); }
+    try { await navigator.clipboard.writeText(copyLogText(entries)); setCopyStatus({message:`${entries.length}件のログをコピーしました。`,level:"success",eventId:crypto.randomUUID()}); }
+    catch { setCopyStatus({message:"コピーできませんでした。もう一度お試しください。",level:"error",eventId:crypto.randomUUID()}); }
   };
   return <section className="internal-logs" aria-label="内部ログ">
     <div className="page-heading heading-with-info"><h1>内部ログ</h1><InfoPopover label="内部ログ"><p>処理の経過とエンジンの出力を確認できます。</p><p>最大30日・合計200 MiBまで保存し、上限を超えると古いログから削除します。会議の削除後もログは保持期限まで残ります。</p></InfoPopover></div>
@@ -165,9 +166,9 @@ export function InternalLogs() {
       <button type="button" className="small-secondary" disabled={unavailable} onClick={latest}>最新ログを表示</button>
       <span className="internal-logs-count" role="status">{loading ? "取得中…" : `${entries.length} 件表示中`}{paused ? " · 自動更新停止中（収集は継続）" : " · 自動更新中"}{!following && " · 自動スクロール停止中"}</span>
     </div>
-    {copyStatus && <p role="status">{copyStatus}</p>}
-    {error && <p role="alert" className="internal-logs-notice">{error}{entries.length > 0 && " 前回取得したログを表示しています。"}</p>}
-    {pageStatus?.storageError && <p role="alert" className="internal-logs-notice">ログの保存・収集で問題が発生しました：{pageStatus.storageError}</p>}
+    <ToastNotice scope="internal-logs" type="clipboard" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
+    <ErrorNotice scope="internal-logs" type="InternalLogs-operation" active={!!(error)}>{error}{entries.length > 0 && " 前回取得したログを表示しています。"}</ErrorNotice>
+        <ErrorNotice scope="internal-logs" type="InternalLogs-storage" active={!!(pageStatus?.storageError)}>ログの保存・収集で問題が発生しました：{pageStatus?.storageError}</ErrorNotice>
     {!!pageStatus?.droppedEntries && <p role="status" className="internal-logs-notice">この起動中に保存失敗・過負荷により{pageStatus.droppedEntries}件のログを記録できませんでした。</p>}
     {(gap || pageStatus?.historyTruncated) && <p role="status" className="internal-logs-notice">保持期間または容量上限により、古いログの一部は残っていません。</p>}
     {trimmed && <p role="status" className="internal-logs-notice">画面の上限1,000件を超えたため、一部のログを表示から外しました。「最新ログを表示」で読み直せます。</p>}

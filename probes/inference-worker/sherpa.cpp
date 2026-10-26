@@ -1,5 +1,6 @@
 #include "worker.hpp"
 #include "c-api.h"
+#include "pcm-input.hpp"
 #ifndef _WIN32
 #include <dlfcn.h>
 #endif
@@ -63,7 +64,7 @@ static int diarize(std::map<std::string,std::string> &o) {
     c.embedding.model=o.at("--embedding.model").c_str(); c.embedding.num_threads=std::stoi(o.at("--embedding.num-threads")); c.embedding.provider="cpu";
     c.clustering.num_clusters=std::stoi(o.at("--clustering.num-clusters")); c.clustering.threshold=std::stof(o.at("--clustering.cluster-threshold"));
     c.min_duration_on=std::stof(o.at("--min-duration-on")); c.min_duration_off=std::stof(o.at("--min-duration-off"));
-    auto stable=o; stable.erase("wave"); stable.erase("--clustering.num-clusters");
+    auto stable=o; stable.erase("wave"); stable.erase("--mon-first-frame"); stable.erase("--mon-end-frame"); stable.erase("--clustering.num-clusters");
     std::string key=mon_json(stable).dump();
     if (!diarizer) {
         diarizer=API(SherpaOnnxCreateOfflineSpeakerDiarization)(&c); if (!diarizer) return 3;
@@ -76,9 +77,11 @@ static int diarize(std::map<std::string,std::string> &o) {
         c.embedding.model,o.at("--embedding.num-threads").c_str(),o.at("--clustering.num-clusters").c_str(),o.at("--clustering.cluster-threshold").c_str(),
         o.at("--min-duration-on").c_str(),o.at("--min-duration-off").c_str());
 
-    auto wave=std::unique_ptr<const SherpaOnnxWave,decltype(API(SherpaOnnxFreeWave))>(API(SherpaOnnxReadWave)(o.at("wave").c_str()),API(SherpaOnnxFreeWave));
-    if (!wave || wave->sample_rate!=16000) return 3;
-    auto result=std::unique_ptr<const SherpaOnnxOfflineSpeakerDiarizationResult,decltype(API(SherpaOnnxOfflineSpeakerDiarizationDestroyResult))>(API(SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback)(diarizer,wave->samples,wave->num_samples,progress,nullptr),API(SherpaOnnxOfflineSpeakerDiarizationDestroyResult));
+    MonWave wave(o.at("wave"));
+    const uint64_t first=o.count("--mon-first-frame")?std::stoull(o.at("--mon-first-frame")):0;
+    const uint64_t end=o.count("--mon-end-frame")?std::stoull(o.at("--mon-end-frame")):wave.frames;
+    auto pcm=wave.read(first,end);
+    auto result=std::unique_ptr<const SherpaOnnxOfflineSpeakerDiarizationResult,decltype(API(SherpaOnnxOfflineSpeakerDiarizationDestroyResult))>(API(SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback)(diarizer,pcm.data(),int32_t(pcm.size()),progress,nullptr),API(SherpaOnnxOfflineSpeakerDiarizationDestroyResult));
     if (!result) return 3;
     auto segments=std::unique_ptr<const SherpaOnnxOfflineSpeakerDiarizationSegment,decltype(API(SherpaOnnxOfflineSpeakerDiarizationDestroySegment))>(API(SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime)(result.get()),API(SherpaOnnxOfflineSpeakerDiarizationDestroySegment));
     auto count=API(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments)(result.get());
@@ -97,10 +100,8 @@ static int embedding(std::map<std::string,std::string> &o) {
     if (end<=first || end-first>480000) return 3;
     // Only read the selected PCM window, rather than loading an entire long
     // recording again for every feature request. Parent validates this WAV.
-    std::ifstream wave(o.at("--wave"),std::ios::binary); char header[44]; wave.read(header,44);
-    if (!wave || std::memcmp(header,"RIFF",4) || std::memcmp(header+8,"WAVEfmt ",8) || std::memcmp(header+36,"data",4)) return 3;
-    wave.seekg(44+first*2); std::vector<int16_t> pcm(end-first); wave.read(reinterpret_cast<char *>(pcm.data()),pcm.size()*2); if (!wave) return 3;
-    std::vector<float> samples; samples.reserve(pcm.size()); for (auto s:pcm) samples.push_back(float(s)/32768.0f);
+    MonWave wave(o.at("--wave"));
+    auto samples=wave.read(first,end);
     auto stream=std::unique_ptr<const SherpaOnnxOnlineStream,decltype(API(SherpaOnnxDestroyOnlineStream))>(API(SherpaOnnxSpeakerEmbeddingExtractorCreateStream)(extractor),API(SherpaOnnxDestroyOnlineStream));
     if (!stream) return 3;
     API(SherpaOnnxOnlineStreamAcceptWaveform)(stream.get(),16000,samples.data(),samples.size()); API(SherpaOnnxOnlineStreamInputFinished)(stream.get());

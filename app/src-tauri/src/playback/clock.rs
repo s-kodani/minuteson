@@ -126,7 +126,8 @@ impl ClockAudio {
             .is_none_or(|spans| {
                 spans
                     .windows(2)
-                    .any(|pair| pair[0].end_us != pair[1].start_us)
+                    .any(|pair| pair[0].end_us != pair[1].start_us
+                        && frame_at(pair[0].end_us,rate).ok()!=frame_at(pair[1].start_us,rate).ok())
             })
         {
             return Err("時刻補正の読出し区間に欠損があります".into());

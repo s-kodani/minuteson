@@ -163,6 +163,11 @@ pub(crate) fn set_private(path: &Path) -> Result<(), String> {
         .open(path)
         .map_err(|e| e.to_string())?;
     super::identity(&file)?;
+    // Reapplying an identical inheritable DACL changes NTFS change times on
+    // descendants. Cold recovery must retain their saved identity proofs.
+    if metadata(&file)? == (current_owner()?, true) {
+        return Ok(());
+    }
     let result = unsafe {
         SetSecurityInfo(
             file.as_raw_handle(),

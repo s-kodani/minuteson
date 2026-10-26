@@ -36,7 +36,7 @@ export function SpeakerStructureDialog({edit,speakers,disabled,issue,saveFailed,
         <label>後半の話者<select value={split.second} onChange={e=>onChange({...split,second:e.target.value})}><option value="keep">現在の割り当てを維持</option><option value="">話者不明</option>{options}</select></label>
       </fieldset>
     </>}
-    {(validation||issue)&&<p role="alert">{issue||validation}</p>}
+    {validation&&!issue&&<p role="alert">{validation}</p>}
     <div className="transcript-actions"><button type="button" disabled={disabled||saveFailed||!!validation} onClick={()=>onSave()}>{split?"分割して保存":"統合して保存"}</button>{saveFailed&&<button type="button" disabled={disabled} onClick={()=>onSave(true)}>保存を再試行</button>}</div>
   </CommonModal>;
 }

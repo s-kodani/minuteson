@@ -79,14 +79,14 @@ async (page,capturePath,detailUI)=>{
   for(const width of [1280,960,360])for(const theme of ["light","dark"]){
     await page.setViewportSize({width,height:640});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);
-    const bounds=await workspace().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.parentElement.getBoundingClientRect();return {width:r.width,left:r.left,right:r.right,parentLeft:p.left,parentRight:p.right,overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth};});
-    check(bounds.width<=936.1&&bounds.left>=bounds.parentLeft&&bounds.right<=bounds.parentRight+1&&!bounds.overflow&&!bounds.pageOverflow,`central preparation overflow: ${JSON.stringify(bounds)}`);
+    const bounds=await workspace().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.parentElement.getBoundingClientRect(),css=getComputedStyle(e.parentElement);return {width:r.width,left:r.left,right:r.right,parentLeft:p.left+parseFloat(css.paddingLeft),parentRight:p.left+e.parentElement.clientWidth-parseFloat(css.paddingRight),overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth};});
+    check(Math.abs(bounds.left-bounds.parentLeft)<1&&Math.abs(bounds.right-bounds.parentRight)<1&&!bounds.overflow&&!bounds.pageOverflow,`preparation does not fill shared content width: ${JSON.stringify(bounds)}`);
     await start().scrollIntoViewIfNeeded();check(await start().isVisible(),"primary start hidden behind workspace tools");
     await page.screenshot({path:`recording-preparation-${theme}-${width}.png`});
     await workspace().getByRole("heading",{name:"新しい録音",exact:true}).scrollIntoViewIfNeeded();
     await page.screenshot({path:`recording-preparation-${theme}-${width}-top.png`});
   }
-  results.push("central max-936px preparation and primary start fit both themes at 1280/960/360px without nested tools clipping");
+  results.push("preparation fills shared content width and primary start fits both themes at 1280/960/360px without nested tools clipping");
   await page.locator(".screen-navigation").getByRole("button",{name:"会議一覧",exact:true}).click();
   check(await page.locator('.nav-item[aria-current="page"]').getAttribute("aria-label")==="会議一覧"&&await count("start_recording")===0,"back did not return to list or began capture");
   results.push("back returns to meeting list without creating an unused draft or capture");

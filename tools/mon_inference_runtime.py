@@ -90,7 +90,8 @@ def patch_whisper(root):
     struct whisper_context * ctx = cached;
     if (ctx) whisper_reset_timings(ctx);''')
     text = replace(text, "    whisper_free(ctx);", "    // The worker owns the model until shutdown; whisper_full resets unit state.")
-    text = text.replace('#include "whisper.h"', '#include "whisper.h"\n#include <chrono>')
+    text = text.replace('#include "whisper.h"', '#include "whisper.h"\n#include <chrono>\n#include "pcm-input.hpp"')
+    text = replace(text, "::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)", "mon_read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)")
     source.write_text(text,encoding="utf8")
     with (root / "CMakeLists.txt").open("a") as output:
         output.write('''\nadd_executable(mon-whisper-worker examples/cli/cli.cpp mon/whisper-main.cpp)

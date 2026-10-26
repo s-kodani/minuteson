@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
@@ -104,7 +105,7 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
         {["paused","interrupted"].includes(job.state)&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(async()=>{await invoke("resume_analysis_job",{jobId:job.id});await refresh();})}>再開</button>}
         {["failed","cancelled"].includes(job.state)&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(async()=>{await beforeOperation();await invoke("retry_voice_job",{jobId:job.id,operationId:crypto.randomUUID()});await refresh();})}>同じ条件で再試行</button>}
       </div>)}
-      {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
+      {notice&&<p role="status">{notice}</p>}<ErrorNotice scope="voice" type="VoicePanel-operation" active={!!(error)}>{error}</ErrorNotice>
       {pending.current&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(()=>start(pending.current!.speakerId))}>同じ操作を再送して確認</button>}
       <CommonModal className="voice-dialog" nested open={!!enrolling} blocked={disabled} onDismiss={()=>setEnrolling(null)} restoreTarget={()=>opener.current} aria-label="声を人物として登録">
         <div className="heading-with-info"><h2>声を人物として登録</h2><InfoPopover label="声を人物として登録"><p>現在の話者に割り当てた発言から、登録する音声を1〜2区間選んでください。</p><p>1秒以上の単独音声を候補にしています。30秒を超える区間は中央の30秒を使います。</p></InfoPopover></div>
@@ -125,7 +126,7 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
         {pageCount>1&&<nav className="voice-candidate-pages" aria-label="登録候補のページ"><IconButton label="前の20件" icon="previous" className="small-secondary" disabled={disabled||currentPage===0} onClick={()=>setPage(currentPage-1)} /><span>{currentPage+1} / {pageCount}</span><IconButton label="次の20件" icon="next" className="small-secondary" disabled={disabled||currentPage===pageCount-1} onClick={()=>setPage(currentPage+1)} /></nav>}
         {running&&!pending.current&&<p role="status">声の処理中です。完了後に登録できます。</p>}
         <button disabled={disabled||(!pending.current&&(running||!selected.length||needsReview||(!person&&!name.trim())))} onClick={()=>void run(()=>start(enrolling))}>{pending.current?"同じ登録を再送して確認":"声を登録"}</button>
-        {error&&<p role="alert">{error}</p>}
+        <ErrorNotice scope="voice" type="VoicePanel-operation" active={!!(error)}>{error}</ErrorNotice>
       </CommonModal>
     </>}
   </details>;
@@ -164,11 +165,11 @@ export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boo
         {audio.selected===s.id&&<div className="voice-sample-player">{audio.controls}</div>}
       </div>)}
     </section>)}
-    {error&&<p role="alert">{error}</p>}
+    <ErrorNotice scope="voice" type="VoicePeopleSettings-operation" active={!!(error)}>{error}</ErrorNotice>
   </>;
   return <section className={standalone?"voice-library":"voice-settings"} aria-label={standalone?"ボイス一覧":undefined}>
     {standalone?<><div className="page-heading heading-with-info"><h1>ボイス一覧</h1>{help}</div>{content}</>:<details onToggle={e=>{setOpen(e.currentTarget.open);if(!e.currentTarget.open)audio.clear();}}><summary>登録した話者</summary>{open&&<><div className="heading-with-info"><h3>登録した話者</h3>{help}</div>{content}</>}</details>}
-    <CommonModal className="voice-dialog" open={!!editing} blocked={locked||busy} onDismiss={()=>setEditing(null)} restoreTarget={()=>opener.current} aria-label="登録した人物名を変更"><h2>人物名を変更</h2><label>人物名<input maxLength={200} value={name} onChange={e=>setName(e.target.value)} /></label><p>過去の会議に保存した名前は変わりません。</p><button disabled={locked||busy||!name.trim()} onClick={()=>void run(async()=>{await manage(editing!,name,null);setEditing(null);})}>保存</button>{error&&<p role="alert">{error}</p>}</CommonModal>
-    <CommonModal className="voice-dialog" open={!!deleting} blocked={locked||busy} onDismiss={()=>setDeleting(null)} restoreTarget={()=>opener.current} aria-label="人物と声を削除"><h2>「{deleting?.name}」の登録を削除</h2><p>登録した声をすべて削除します。今後の照合には使われません。</p><button disabled={locked||busy} onClick={()=>void run(async()=>{await manage(deleting!,null,null);setDeleting(null);})}>人物と声を削除</button>{error&&<p role="alert">{error}</p>}</CommonModal>
+    <CommonModal className="voice-dialog" open={!!editing} blocked={locked||busy} onDismiss={()=>setEditing(null)} restoreTarget={()=>opener.current} aria-label="登録した人物名を変更"><h2>人物名を変更</h2><label>人物名<input maxLength={200} value={name} onChange={e=>setName(e.target.value)} /></label><p>過去の会議に保存した名前は変わりません。</p><button disabled={locked||busy||!name.trim()} onClick={()=>void run(async()=>{await manage(editing!,name,null);setEditing(null);})}>保存</button><ErrorNotice scope="voice" type="VoicePeopleSettings-operation" active={!!(error)}>{error}</ErrorNotice></CommonModal>
+    <CommonModal className="voice-dialog" open={!!deleting} blocked={locked||busy} onDismiss={()=>setDeleting(null)} restoreTarget={()=>opener.current} aria-label="人物と声を削除"><h2>「{deleting?.name}」の登録を削除</h2><p>登録した声をすべて削除します。今後の照合には使われません。</p><button disabled={locked||busy} onClick={()=>void run(async()=>{await manage(deleting!,null,null);setDeleting(null);})}>人物と声を削除</button><ErrorNotice scope="voice" type="VoicePeopleSettings-operation" active={!!(error)}>{error}</ErrorNotice></CommonModal>
   </section>;
 }

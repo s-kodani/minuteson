@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { acceptRecordingDecision, recordingDecisionVisible, type RecordingDecision } from "./recording-confirmation-state";
+import { useRecorderOperationPublisher } from "./recorder-operation-notices";
 
 export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
   const [snapshot, setSnapshot] = useState<RecordingDecision | null>(null), [connected,setConnected]=useState(false), [error,setError]=useState("");
@@ -58,6 +59,7 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
 
 export function RecordingConfirmationWindow() {
   const decision=useRecordingConfirmation(null), value=decision.snapshot;
+  useRecorderOperationPublisher("confirmation", decision.error, !decision.requestBusy, decision.connected && !decision.error);
   const stopping=value?.phase==="stopping", failed=value?.phase==="failed";
   const quit=value?.quitAfterSave;
   const cancel=()=>decision.decide(false);
@@ -79,13 +81,13 @@ export function RecordingConfirmationWindow() {
   },[decision.visible,stopping,decision.decisionBusy,decision.connected]);
   return <main className="recording-confirmation-shell" aria-label="録音終了の確認ウィンドウ">
     {!decision.visible&&<p role="status" className="recording-confirmation-loading">録音確認を読み込んでいます。</p>}
-    {!decision.visible&&decision.error&&<p role="alert" className="recording-confirmation-loading">{decision.error}</p>}
+
     {decision.visible&&<section role="dialog" aria-modal="false" aria-labelledby="recording-decision-title" className="recording-confirmation-popover">
       <h2 id="recording-decision-title">{failed?"録音の保存状態を確認":quit?"録音を終了してアプリを閉じますか？":value?.preparing?"録音準備を中止しますか？":"録音を終了しますか？"}</h2>
       <p className="recording-confirmation-meeting" title={value?.meetingTitle??undefined}>{value?.meetingTitle}</p>
       <p>{value?.preparing?"録音準備を中止します。音声が保存されない場合があります。":quit?"ここまでの音声と未保存の編集を保存してからアプリを閉じます。保存後、この録音は再開できません。":"ここまでの音声を保存して解析を開始します。保存後、この録音は再開できません。"}</p>
       {stopping&&<p role="status">録音を停止・保存しています。保存完了を確認するまでお待ちください。</p>}
-      {(value?.errorMessage||decision.error)&&<p role="alert" className="action-error">{value?.errorMessage||decision.error}</p>}
+
       <div className="analysis-actions"><button ref={cancelButton} type="button" className="small-secondary" disabled={stopping||decision.decisionBusy||!decision.connected} onClick={cancel}>{failed?"確認を閉じる":"録音を続ける"}</button><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{quit?value?.preparing?"録音準備を中止して閉じる":"録音を終了して閉じる":value?.preparing?"録音準備を中止する":"録音を終了する"}</button></div>
     </section>}
   </main>;

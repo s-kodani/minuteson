@@ -166,7 +166,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         token.current = null;
         throw new Error(voiceSample ? "確認した登録区間と再生する音声区間が一致しません" : "確認した発言と再生する音声区間が一致しません");
       }
-      if (voiceSample && !["mic","system","imported"].includes(info.trackKind)) throw new Error("登録元の音声トラックを確認できません");
+      if (voiceSample && info.trackKind!=="processed") throw new Error("登録元の音声トラックを確認できません");
       if (interval) validateMarkdownPlayback(info, interval);
       else if (meeting && restore) validateMeetingPlayback(info, meeting.mode, restore);
       const startFrame=absoluteStartUs===undefined?null:playbackStartFrame(info,absoluteStartUs);
@@ -254,7 +254,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         <span>{info ? `${durationLabel(snapshot.frame / info.sampleRate)} / ${durationLabel(info.totalFrames / info.sampleRate)}` : "0:00 / --:--"}</span>
         {info && <IconButton className="playback-close" label="再生を閉じる" icon="close" onClick={clear} disabled={locked} />}
       </div>
-      <div className="heading-with-info"><span>{voiceScope ? "登録した声の音声区間" : intervalScope ? "議事録の区間" : meetingScope ? meetingPlaybackLabel((info?.trackKind ?? options.idleMeetingMode) as MeetingPlaybackMode) : info?.trackKind === "mic" ? "マイク音声" : info?.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={playbackLabel}>{voiceScope ? "声の特徴量を抽出した登録元トラックの区間だけを再生します。" : intervalScope ? "Markdownに記述された開始・終了時刻の保存音声だけを再生します。マイクとPC音声がある会議では両方を混ぜ、マイクだけの会議ではマイクを再生します。同期精度は未検証です。" : meetingScope ? "選択した種類の保存音声を会議全体の時間軸で再生します。発言や議事録からは開始時刻へ移動し、区間の終了時刻を過ぎても停止操作または音声末尾まで再生を続けます。両方では各音声を半分の音量で混ぜます。実録音の同期やエコー除去の正確さは未検証です。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}{(error || snapshot.error) && <p role="alert">音声を再生できません: {error || snapshot.error}</p>}</InfoPopover>
+      <div className="heading-with-info"><span>{voiceScope ? "登録した声の音声区間" : intervalScope ? "議事録の区間" : meetingScope ? meetingPlaybackLabel((info?.trackKind ?? options.idleMeetingMode) as MeetingPlaybackMode) : info?.trackKind === "mic" ? "マイク音声" : info?.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={playbackLabel}>{voiceScope ? "声の特徴量を抽出した登録元トラックの区間だけを再生します。" : intervalScope ? "Markdownに記述された開始・終了時刻の会議音声を再生します。" : meetingScope ? "保存した会議音声を再生します。取得できなかった区間も時間を維持し、両入力が欠損した部分は無音になります。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}</InfoPopover>
       </div>
       {snapshot.buffering && <span className="sr-only" role="status">音声を読み込んでいます。</span>}
     </>

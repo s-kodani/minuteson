@@ -95,6 +95,23 @@ pub(super) fn read_analysis_content(
     id: &str,
     content_hash: &str,
 ) -> Result<AnalysisView, String> {
+    let mut view = read_stored_analysis_content(connection, meeting_id, id, content_hash)?;
+    // Playback uses the current source; immutable snapshots retain their original
+    // track IDs so retiring audio cannot change a saved working-content hash.
+    if let Some(audio) = super::meeting_audio::read(connection, meeting_id)? {
+        for utterance in &mut view.utterances {
+            utterance.track_id = audio.tracks[0].id.clone();
+        }
+    }
+    Ok(view)
+}
+
+pub(super) fn read_stored_analysis_content(
+    connection: &Connection,
+    meeting_id: &str,
+    id: &str,
+    content_hash: &str,
+) -> Result<AnalysisView, String> {
     let speakers = {
         let mut statement = connection.prepare(
                 "SELECT id, label, display_name FROM speakers WHERE analysis_revision_id = ?1 ORDER BY label, id",
@@ -758,20 +775,22 @@ pub(crate) mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES ('track', ?1, 'session', 'mic', 'caf', 48000, 1, 'ready', 0, 0)",
+            "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES ('track', ?1, 'session', 'processed', 'wav', 16000, 1, 'ready', 0, 0)",
             params![meeting.id],
         )
         .unwrap();
         db.execute(
-            "INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES ('asset', ?1, 'meeting', 'meetings/test/audio.caf', 'audio/x-caf', 16, 'sha256', ?2, 'ready', 0, 0)",
+            "INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES ('asset', ?1, 'meeting', 'meetings/test/audio.caf', 'audio/wav', 32044, 'sha256', ?2, 'ready', 0, 0)",
             params![meeting.id, "b".repeat(64)],
         )
         .unwrap();
         db.execute(
-            "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES ('chunk', ?1, 'track', 'asset', 0, 0, 1000000, 48000, 48000, 1, 'ready', 0)",
+            "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES ('chunk', ?1, 'track', 'asset', 0, 0, 1000000, 16000, 16000, 1, 'ready', 0)",
             params![meeting.id],
         )
         .unwrap();
+        db.execute("INSERT INTO file_assets (id,meeting_id,storage_scope,relative_path,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at) VALUES ('manifest',?1,'meeting','meetings/test/manifest.json','application/json',16,'sha256',?2,'ready',0,0)",params![meeting.id,"a".repeat(64)]).unwrap();
+        db.execute("INSERT INTO meeting_audio_commits VALUES(?1,'track','manifest',?2,16000,'{}','[]','cleaned',0)",params![meeting.id,"a".repeat(64)]).unwrap();
         meeting
     }
 

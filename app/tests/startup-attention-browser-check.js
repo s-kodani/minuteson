@@ -8,7 +8,7 @@ async (page, capturePath = path => path) => {
   const reload = () => page.getByRole("button", { name: "保持した診断だけを再読込", exact: true });
   const quit = () => page.getByRole("button", { name: "このアプリを終了", exact: true });
   const commands = () => page.evaluate(() => window.startupFixture.calls.map(c => c.command));
-  const noWorkspace = async () => { check(await page.locator(".app-layout,.mini-shell,.toast-host").count() === 0, "workspace/provider UI mounted while denied"); check((await commands()).every(c => ["get_startup_report", "quit_blocked_startup"].includes(c)), "attention invoked a normal desktop command"); };
+  const noWorkspace = async () => { check(await page.locator(".app-layout,.mini-shell").count() === 0, "workspace/provider UI mounted while denied"); check((await commands()).every(c => ["get_startup_report", "quit_blocked_startup"].includes(c)), "attention invoked a normal desktop command"); };
 
   await boot(); await page.getByRole("heading", { name: "保存先の検証に失敗したため、通常の起動を中止しました", exact: true }).waitFor();
   check((await page.getByLabel("保持した起動診断", { exact: true }).innerText()).includes("<img src=x onerror=alert(1)>"), "raw cause was not retained as text");

@@ -1,51 +1,5 @@
-//! Validate intentionally excluded caches without changing historical assets.
-use crate::local_engine::Fingerprint;
-use crate::saved_artifact::Role;
-use crate::storage::Storage;
+//! Bounded reading of owned native result files.
 use std::path::Path;
-
-pub(crate) fn verify_pcm(
-    storage: &Storage,
-    meeting: &str,
-    id: &str,
-    hash: &str,
-    cancelled: &impl Fn() -> bool,
-    write: impl FnOnce(&Path) -> Result<(), String>,
-) -> Result<(), String> {
-    if cancelled() {
-        return Err("完了音声の照合を中断しました".into());
-    }
-    let omitted = crate::storage::backup::omitted_processing_asset(
-        storage,
-        meeting,
-        id,
-        hash,
-        Role::TemporaryPcm,
-    )?;
-    let Some(asset) = omitted else {
-        return storage.verify_meeting_asset_cancellable(meeting, id, hash, cancelled);
-    };
-    let temporary = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let required = u64::try_from(asset.size_bytes)
-        .map_err(|_| "一時PCMの容量が不正です")?
-        .checked_add(16 * 1024 * 1024)
-        .ok_or("一時PCMの容量が範囲外です")?;
-    if crate::audio_import::available_bytes(temporary.path())? < required {
-        return Err("除外PCMの再照合用の一時領域の容量が不足しています".into());
-    }
-    let path = temporary.path().join("input.wav");
-    write(&path)?;
-    let actual = Fingerprint::capture(&path, cancelled)?;
-    if actual.size != asset.size_bytes as u64 || actual.sha256 != asset.content_hash {
-        return Err("元音声から再作成したPCMが保存済みの容量・SHAと一致しません".into());
-    }
-    if cancelled() {
-        return Err("完了音声の照合を中断しました".into());
-    }
-    // Owned temporary bytes are dropped. The original missing asset and its
-    // omission ledger stay unavailable; no checkpoint or result is rewritten.
-    Ok(())
-}
 
 pub(crate) fn read_local(
     path: &Path,

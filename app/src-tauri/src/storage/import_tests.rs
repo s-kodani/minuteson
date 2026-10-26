@@ -287,7 +287,7 @@ fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff(
 fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
-    let (snapshot, base, manifest) = pending(&s, "import");
+    let (snapshot, base, _manifest) = pending(&s, "import");
     assert!(s.recorded_audio_plan(&snapshot.meeting_id).is_err());
     let saved = s.finalize_audio_import(&snapshot.id).unwrap();
     assert_eq!(saved.state, "ready");
@@ -295,12 +295,12 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
         s.get_meeting(&saved.meeting_id).unwrap().unwrap().lifecycle,
         "imported"
     );
-    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 3);
+    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 4);
     assert_eq!(count(&s, "recording_sessions", &saved.meeting_id), 0);
     let plan = s.recorded_audio_plan(&saved.meeting_id).unwrap();
     assert_eq!(plan.tracks.len(), 1);
-    assert_eq!(plan.tracks[0].kind, "imported");
-    assert_eq!(plan.tracks[0].channels, 2);
+    assert_eq!(plan.tracks[0].kind, "processed");
+    assert_eq!(plan.tracks[0].channels, 1);
     assert_eq!(
         s.analysis_flow(&saved.meeting_id).unwrap().unwrap().stage,
         "pending"
@@ -308,25 +308,15 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
     let mut audio = s
         .prepare_track_audio(&saved.meeting_id, &plan.tracks[0].id, 0, 4_000_000)
         .unwrap();
-    assert_eq!(
-        audio.read_pcm(63999, 1).unwrap(),
-        [0.25_f32, -0.5_f32]
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .collect::<Vec<_>>()
-    );
+    let pcm=audio.read_pcm(63999,1).unwrap();
+    assert!((f32::from_le_bytes(pcm[..4].try_into().unwrap())+0.125).abs()<0.001);
     assert_eq!(s.finalize_audio_import(&snapshot.id).unwrap(), saved);
-    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 3);
+    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 4);
     assert!(s.cleanup_audio_import(&snapshot.id).is_err());
     assert!(s.fail_audio_import(&snapshot.id, "failed", "bad").is_err());
-    assert_eq!(std::fs::read(base.join("original.wav")).unwrap(), wav());
-    assert_eq!(
-        format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(base.join("audio.flac")).unwrap())
-        ),
-        manifest.audio.sha256
-    );
+    assert!(!base.join("original.wav").exists());
+    assert!(!base.join("audio.flac").exists());
+    s.verify_canonical_audio(&saved.meeting_id,&||false).unwrap();
     assert!(s
         .load_current_analysis(&saved.meeting_id)
         .unwrap()
@@ -409,8 +399,8 @@ fn import_db_failure_rolls_back_assets_track_lifecycle_and_handoff_then_recovers
     assert_eq!(s.recover_audio_imports().unwrap().len(), 1);
     assert!(s.recover_audio_imports().unwrap().is_empty());
     assert_eq!(s.audio_import(&snapshot.id).unwrap().state, "ready");
-    assert_eq!(count(&s, "audio_tracks", &snapshot.meeting_id), 1);
-    assert_eq!(count(&s, "file_assets", &snapshot.meeting_id), 3);
+    assert_eq!(count(&s, "audio_tracks", &snapshot.meeting_id), 2);
+    assert_eq!(count(&s, "file_assets", &snapshot.meeting_id), 4);
 }
 
 #[test]

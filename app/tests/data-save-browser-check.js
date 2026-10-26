@@ -157,7 +157,7 @@ async (page) => {
   results.push("lost reply + missing events: polling recovers without new admission");
 
   await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
-  await page.getByRole("dialog").locator("p.action-error").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
   check(await region().getByRole("button", { name: "バックアップから追加復元", exact: true }).isDisabled(), "unknown request allowed a new operation");
   await set({ mode: "success" });
   await page.getByRole("dialog").getByRole("button", { name: "同じ操作の結果を確認", exact: true }).click(); await done();
@@ -173,7 +173,7 @@ async (page) => {
   results.push("unknown unaccepted request: explicit native cancellation releases review without publication");
 
   await boot(); await choose("restore"); await ready(); await set({ mode: "forged" }); await confirm();
-  await page.getByRole("dialog").locator("p.action-error").filter({ hasText: "状態が不正" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
   check(await region().getByRole("button", { name: "復元した会議一覧を開く", exact: true }).count() === 0, "forged completion displayed success");
   results.push("forged completion: no receipt, no success");
 

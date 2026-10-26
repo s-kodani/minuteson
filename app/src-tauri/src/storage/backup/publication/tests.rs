@@ -189,6 +189,10 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
             "published"
         );
         for asset in super::super::read_assets(&db).unwrap() {
+            if asset.state == "missing" {
+                assert!(!f.target.root.join(&asset.relative_path).exists());
+                continue;
+            }
             assert_eq!(
                 digest_file(
                     &f.target.root.join(asset.relative_path),

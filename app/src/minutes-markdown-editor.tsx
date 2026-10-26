@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { IconButton } from "./action-icon";
@@ -40,7 +41,7 @@ export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPla
     </div>;
   return <div className="plain-minutes-editor">
     {actionsHost ? createPortal(actions, actionsHost) : actions}
-    {state.error&&<p className="plain-minutes-save-error" role="alert">保存できませんでした。入力は保持しています。{state.error}</p>}
+    <ErrorNotice scope="minutes-markdown-editor" type="MinutesMarkdownEditor-operation" active={!!(state.error)}>保存できませんでした。入力は保持しています。{state.error}</ErrorNotice>
     <div className="plain-minutes-body">
       {/* Keep one textarea mounted: native IME, undo/redo and selection are not
           replaced with a rich editor or reconstructed from rendered HTML. */}

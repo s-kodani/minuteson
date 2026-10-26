@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import {useDeletionNoticeWait} from "./deletion-notice-wait";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -177,8 +178,8 @@ export function MeetingDeletionPanel({ operation, control }: { operation: DataOp
       {p.reconfirmationAllowed && <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>変更後の残り範囲を確認する（まだ削除しない）</button>}
       {p.rowPhaseCommitted && <p>会議のDB行は削除済みです。再作成せず、確認した残りのファイルと後処理・完了応答を扱います。</p>}
       {!!p.reservationRoots?.length && <p>元の削除計画から導いた会議ツリー外の予約ルートも照合しています。実在する予約対象は下の一覧に表示します。新しい会議フォルダーと併存する場合は両方を確認し、未登録ファイルには別の同意が必要です。隣の会議フォルダーは対象にしません。</p>}
-      {p.resumeReason && <p role="alert">削除を進められません: {p.resumeReason}</p>}
-      <h3>確認時の対象パス</h3>{c.pageBusy && <p role="status">一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
+      <ErrorNotice scope="meeting-deletion" type="MeetingDeletionPanel-resume" active={!!(p.resumeReason)}>削除を進められません: {p.resumeReason}</ErrorNotice>
+      <h3>確認時の対象パス</h3>{c.pageBusy && <p role="status">一覧を読み込み中です。</p>}<ErrorNotice scope="meeting-deletion" type="MeetingDeletionPanel-paths" active={!!(c.pageError)}>一覧を確認できません: {c.pageError}</ErrorNotice>
       {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {e.directory ? "フォルダー" : e.missing ? "欠落" : `${bytesLabel(e.bytes!)} · ${e.registered ? "登録済み" : "未登録"}${e.changed ? "・登録時と変更" : ""}`}{e.stageHint && ` · 由来候補 ${e.stageHint}（所有証明ではありません）`}</li>)}</ul></>}
       <div className="analysis-actions"><IconButton label="前の50件" icon="previous" type="button" className="small-secondary" disabled={c.pageBusy || !c.page || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))} /><IconButton label="次の50件" icon="next" type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)} />{c.pageError && <IconButton label="一覧を再読込" icon="refresh" type="button" className="small-secondary" onClick={() => void c.loadPage()} />}</div>
       {p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={event => c.setIncludeUnknown(event.target.checked)} />確認時の一覧にある未登録ファイルも削除対象に含める。由来候補は所有証明ではないことを確認しました。</label>}
@@ -186,7 +187,7 @@ export function MeetingDeletionPanel({ operation, control }: { operation: DataOp
       </>}
       <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit(c.includeUnknown && p && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{isDeletionReconfirmation(p?.phase) ? "新しい範囲へ再同意して削除を続行" : p?.pending ? "照合して残りの削除を続行" : "会議を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.rpcBusy || !!s?.busy || c.unknown} data-dialog-cancel onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（未完了削除は残る）" : "削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ操作の安全な停止を要求</button></div>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
+
     </CommonModal>
   </>;
 }

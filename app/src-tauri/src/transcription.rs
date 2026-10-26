@@ -5,7 +5,9 @@ mod recovery;
 pub(crate) use recovery::ReviewRange;
 mod restore;
 pub(crate) mod vad;
+#[cfg(test)]
 pub(crate) mod wave;
+pub(crate) mod input;
 pub(crate) mod whisper;
 mod windows_acceleration;
 pub(crate) use restore::restore_saved_results;
@@ -62,32 +64,6 @@ fn verify_sources(
         }
     }
     check_source(storage, spec, p)
-}
-
-fn unit_audio(
-    storage: &Storage,
-    spec: &JobSpec,
-    p: &Parameters,
-    unit: &Unit,
-    cancelled: &impl Fn() -> bool,
-) -> Result<crate::playback::PreparedAudio, String> {
-    let track = &p.source.tracks[unit.track_index];
-    if let Some(index) = unit.run_index {
-        let run = p
-            .known_input
-            .as_ref()
-            .and_then(|known| known.runs.get(index))
-            .ok_or("固定保存区間がありません")?;
-        storage.prepare_analysis_run(&spec.meeting_id, track, run, cancelled)
-    } else {
-        storage.prepare_track_audio_cancellable(
-            &spec.meeting_id,
-            &track.id,
-            track.start_us,
-            track.end_us,
-            cancelled,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -231,32 +207,14 @@ pub(crate) fn retry_preflight(
 fn verify_saved_pcm(
     storage: &Storage,
     spec: &JobSpec,
-    parameters: &Parameters,
+    _parameters: &Parameters,
     output: &UnitOutput,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    crate::restored_processing::verify_pcm(
-        storage,
-        &spec.meeting_id,
-        &output.wav_asset_id,
-        &output.wav_hash,
-        cancelled,
-        |path| {
-            let unit = parameters
-                .units
-                .get(output.index)
-                .ok_or("完了PCMの区間が範囲外です")?;
-            let mut audio = unit_audio(storage, spec, parameters, unit, cancelled)?;
-            wave::write_window(
-                &mut audio,
-                unit.window_first,
-                unit.window_end - unit.window_first,
-                path,
-                cancelled,
-            )
-            .map(|_| ())
-        },
-    )
+    let plan=storage.verify_canonical_audio(&spec.meeting_id,cancelled)?;
+    let chunk=&plan.tracks[0].chunks[0];
+    if chunk.asset_id!=output.wav_asset_id||chunk.hash!=output.wav_hash {return Err("完了解析の音声参照が一致しません".into());}
+    Ok(())
 }
 
 // Frozen per job so old checkpoints keep their original decoding settings.
@@ -800,8 +758,6 @@ pub(crate) fn process(
             saved_output(storage, &spec, &parameters, output, duration)?;
         }
         verify_sources(storage, &spec, &parameters, &cancelled)?;
-        // At most one prepared run, not all gap-separated runs in memory.
-        let mut prepared: Option<(usize, Option<usize>, crate::playback::PreparedAudio)> = None;
         for index in checkpoint.outputs.len()..parameters.units.len() {
             storage.clear_completion_progress(job_id);
             if cancelled() {
@@ -809,26 +765,10 @@ pub(crate) fn process(
             }
             let unit = &parameters.units[index];
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-            if prepared
-                .as_ref()
-                .is_none_or(|(track, run, _)| *track != unit.track_index || *run != unit.run_index)
-            {
-                prepared = Some((
-                    unit.track_index,
-                    unit.run_index,
-                    unit_audio(storage, &spec, &parameters, unit, &cancelled)?,
-                ));
-                check_source(storage, &spec, &parameters)?;
-            }
-            let audio = &mut prepared.as_mut().unwrap().2;
-            let frames = wave::write_window(
-                audio,
-                unit.window_first,
-                unit.window_end - unit.window_first,
-                &directory.join("input.wav"),
-                &cancelled,
-            )?;
-            let duration = (frames * 1_000_000 / u64::from(wave::WHISPER_RATE)) as i64;
+            let track=&parameters.source.tracks[unit.track_index];
+            let path=storage.meeting_mix_path(&spec.meeting_id,track)?;
+            input::Input::new(&path,unit.window_first,unit.window_end,&cancelled)?.write(&directory)?;
+            let duration=((unit.window_end-unit.window_first)*1_000_000/16000) as i64;
             managed::verify(
                 &spec.profile_snapshot,
                 Execution::Whisper(&parameters.engine),
@@ -963,11 +903,7 @@ pub(crate) fn process(
                 Execution::Whisper(&parameters.engine),
                 &cancelled,
             )?;
-            let wav = storage.register_analysis_artifact(
-                &spec.meeting_id,
-                &directory.join("input.wav"),
-                "audio/wav",
-            )?;
+            let wav=&parameters.source.tracks[unit.track_index].chunks[0];
             let register_result = |path: &std::path::Path| -> Result<_, String> {
                 let mut result_path = path.to_owned();
                 if !recovered && runtime.model.path != parameters.engine.model.path {
@@ -1017,8 +953,8 @@ pub(crate) fn process(
             checkpoint.pending_recovery = None;
             checkpoint.outputs.push(UnitOutput {
                 index,
-                wav_asset_id: wav.id,
-                wav_hash: wav.content_hash,
+                wav_asset_id: wav.asset_id.clone(),
+                wav_hash: wav.hash.clone(),
                 json_asset_id: json.id,
                 json_hash: json.content_hash,
                 recognition,

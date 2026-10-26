@@ -489,8 +489,11 @@ fn get_audio_deletion_paths(
 
 #[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
-fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
-    DataController::review_move(&data_app(&window)?)
+async fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || DataController::review_move(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Serialize)]
@@ -564,12 +567,7 @@ fn get_data_operation_availability(window: WebviewWindow) -> Result<DataAvailabi
     } else {
         reason
     };
-    let deletion_reason = if reason.as_deref() == Some("録音通知履歴の確認・更新中") {
-        app.state::<AnalysisController>()
-            .deletion_operation_blocker()?
-    } else {
-        reason.clone()
-    };
+    let deletion_reason = reason.clone();
     Ok(DataAvailability {
         available: reason.is_none(),
         reason,
@@ -1379,7 +1377,7 @@ async fn prepare_meeting_playback(
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
-                audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
+
                 guard.publish(|| {
                     let store = app.state::<PlaybackStore>();
                     store.own_meeting(store.insert_meeting(audio)?, owner)
@@ -1399,13 +1397,6 @@ async fn get_meeting_audio_summary(
     let app = minutes_app(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
         let summary = app.state::<Storage>().meeting_audio_summary(&meeting_id)?;
-        if summary
-            .modes
-            .iter()
-            .any(|mode| matches!(mode, storage::MeetingPlaybackMode::Both))
-        {
-            playback::mix_cache::warm(&app, &meeting_id);
-        }
         Ok(summary)
     })
     .await
@@ -1438,7 +1429,7 @@ async fn prepare_markdown_interval_playback(
                 let mut audio = app
                     .state::<Storage>()
                     .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
-                audio.use_cache(&app.state::<playback::mix_cache::MixCache>());
+
                 guard.publish(|| {
                     let store = app.state::<PlaybackStore>();
                     store.own_meeting(store.insert_interval(audio)?, owner)
@@ -2342,7 +2333,7 @@ pub fn run() {
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(PlaybackPreparations::default())
-        .manage(playback::mix_cache::MixCache::default())
+
         .manage(AnalysisController::default())
         .manage(ImportController::default())
         .manage(DataController::default())
@@ -2502,24 +2493,44 @@ pub fn run() {
                 startup_attention::show(app.handle());
                 return Ok(());
             }
-            app.state::<startup_attention::Startup>().ready()?;
-            internal_logs::phase("application", None, None, "ready", None);
-            let handle = app.handle().clone();
+            let handle=app.handle().clone();
             std::thread::spawn(move || {
-                if handle.state::<Storage>().data_write_blocked() {
+                let migrated=(||->Result<(),String>{
+                    let storage=handle.state::<Storage>();
+                    #[cfg(any(unix, windows))]
+                    if !storage.data_write_blocked() {
+                        data_controller::finish_interrupted_deletions(&handle)?;
+                    }
+                    if storage.data_write_blocked() {
+                        // Recovery controls must remain reachable even when an
+                        // audio migration is pending. Storage fences still deny
+                        // normal writes and AnalysisController cannot run. The
+                        // recovery receipt requires a clean restart before any
+                        // deferred startup work, including migration, resumes.
+                        return handle.state::<startup_attention::Startup>().ready();
+                    }
+                    let errors=std::sync::Mutex::new(Vec::new());
+                    storage.recover_recordings_observed(&|_|{},&|item| {
+                        if item.phase=="failed" {if let Some(error)=item.error {errors.lock().unwrap().push(error);}}
+                    })?;
+                    let errors=errors.into_inner().map_err(|_|"録音復旧結果を取得できません")?;
+                    if !errors.is_empty() {return Err(errors.join("\n"));}
+                    storage.finish_pending_meeting_audio()?;
+                    storage.migrate_single_wav(&|done,total,meeting| {
+                        let _=handle.state::<startup_attention::Startup>().migration_progress(done,total,meeting);
+                    })?;
+                    handle.state::<startup_attention::Startup>().ready()?;
+                    internal_logs::phase("application",None,None,"ready",None);
+                    Ok(())
+                })();
+                if let Err(error)=migrated {
+                    let _=handle.state::<startup_attention::Startup>().block(startup_attention::Failure::new(
+                        startup_attention::Stage::AudioMigration,error,Some(&root),handle.path().app_config_dir().ok().as_deref()));
+                    startup_attention::show(&handle);
                     return;
                 }
-                #[cfg(any(unix, windows))]
-                if let Err(error) = data_controller::finish_interrupted_deletions(&handle) {
-                    internal_logs::report_error("recovery", &error);
-                    eprintln!("中断処理の自動整理に失敗しました: {error}");
-                }
-                // Recovery can hash hours of audio, so never hold up window startup.
-                recording_recovery::run(&handle);
+                if let Err(error)=AnalysisController::kick(&handle) {internal_logs::report_error("analysis",&error);}
             });
-            if let Err(error) = AnalysisController::kick(app.handle()) {
-                internal_logs::report_error("analysis", &error);
-            }
             Ok(())
         })
         .invoke_handler(|invoke| {

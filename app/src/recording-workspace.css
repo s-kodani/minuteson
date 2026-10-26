@@ -1,6 +1,6 @@
 /* One recording surface; input and test sections deliberately have no frames. */
-.content:has(>.recording-workspace){padding:16px 32px;}
-.recording-workspace{width:min(100%,936px);margin:0 auto;padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-sizing:border-box;display:grid;gap:16px;font-size:14px;line-height:1.5;}
+.content:has(>.recording-workspace){padding-block:16px;}
+.recording-workspace{width:100%;margin:0;padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-sizing:border-box;display:grid;gap:16px;font-size:14px;line-height:1.5;}
 .recording-workspace-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0;}
 .recording-workspace .recording-workspace-heading h1{font-size:24px;margin:0;line-height:1.4;}
 .recording-workspace label{font-weight:600;}
@@ -87,7 +87,6 @@
 .capture-test-audio .card-actions{flex-wrap:wrap;}
 .capture-test-audio .card-actions>div{flex:1 1 180px;min-width:0;}
 @media(max-width:760px){
-  .content:has(>.recording-workspace){padding:16px;}
   .recording-workspace{padding:16px;gap:16px;}
   .recording-workspace .capture-input-selection,.recording-preparation-options{grid-template-columns:minmax(0,1fr);gap:20px;}
   .recording-workspace-heading{flex-wrap:wrap;}

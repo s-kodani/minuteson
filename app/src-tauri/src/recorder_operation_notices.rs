@@ -125,10 +125,15 @@ impl Notices {
     }
 }
 fn can_read(label: &str) -> bool {
-    matches!(label, "main" | "recorder" | crate::recorder_info::LABEL)
+    matches!(
+        label,
+        "main" | "recorder" | "recording-confirmation" | crate::recorder_info::LABEL
+    )
 }
-fn can_publish(label: &str) -> bool {
+fn can_publish(label: &str, source: Source) -> bool {
     label == "recorder"
+        || (label == "recording-confirmation" && source == Source::Confirmation)
+        || (label == crate::recorder_info::LABEL && source == Source::InfoRead)
 }
 fn can_dismiss(label: &str) -> bool {
     label == "main"
@@ -147,8 +152,8 @@ pub fn publish_recorder_operation_notice(
     expected_revision: u64,
     message: Option<String>,
 ) -> Result<Snapshot, String> {
-    if !can_publish(window.label()) {
-        return Err("録音パネルだけが操作エラーを報告できます".into());
+    if !can_publish(window.label(), source) {
+        return Err("この録音画面からは対象の操作エラーを報告できません".into());
     }
     let value = window
         .state::<Notices>()
@@ -233,10 +238,15 @@ mod tests {
             n.update(s, 0, Some(s.key().into())).unwrap();
         }
         assert_eq!(n.snapshot().entries.len(), 5);
-        for label in ["main", "recorder", crate::recorder_info::LABEL] {
+        for label in [
+            "main",
+            "recorder",
+            "recording-confirmation",
+            crate::recorder_info::LABEL,
+        ] {
             assert!(can_read(label));
         }
-        for label in ["recording-confirmation", "unknown", ""] {
+        for label in ["unknown", ""] {
             assert!(!can_read(label));
         }
         for label in [
@@ -246,7 +256,14 @@ mod tests {
             "recording-confirmation",
             "unknown",
         ] {
-            assert_eq!(can_publish(label), label == "recorder");
+            for source in SOURCES {
+                assert_eq!(
+                    can_publish(label, source),
+                    label == "recorder"
+                        || (label == "recording-confirmation" && source == Source::Confirmation)
+                        || (label == crate::recorder_info::LABEL && source == Source::InfoRead)
+                );
+            }
             assert_eq!(can_dismiss(label), label == "main");
         }
     }

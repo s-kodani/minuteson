@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
 mod deleted_audio;
+mod retired_audio;
 pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) use deleted_audio::Verified as DeletedAudioHistory;
 mod exclusions;
@@ -672,6 +673,7 @@ fn read_assets_with_deleted(
         if asset.state != "ready"
             && !(asset.state == "missing"
                 && (deleted.contains_asset(asset)
+                    || super::meeting_audio::superseded_asset(db,&asset.id)?
                     || portable::temporary_pcm(db, asset)?
                     || portable::native_log(db, asset)?))
         {

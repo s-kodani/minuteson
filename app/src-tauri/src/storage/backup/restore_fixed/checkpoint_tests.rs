@@ -32,7 +32,10 @@ fn retry(storage: &Storage, meeting: &str, kind: &str) -> JobSnapshot {
 }
 
 #[test]
-fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_explicit() {
+fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_explicit() {native_history(false);}
+#[test]
+fn retired_audio_jobs_keep_native_results_and_checkpoint_provenance_in_new_backups() {native_history(true);}
+fn native_history(retired:bool) {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -55,7 +58,13 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
     );
     let recognized = "自然文に含まれる元IDは置換しない";
     let json=artifact(&storage,&meeting,&transcription.id,"result.json","application/json",&serde_json::to_vec(&json!({"model":{"multilingual":true},"params":{"model":"/Users/source-machine/models/model.bin","language":"ja","translate":false},"transcription":[{"offsets":{"from":0,"to":1000},"text":recognized}]})).unwrap());
-    storage.save_job_checkpoint(&transcription.id,0,1,json!({"outputs":[{"index":0,"wavAssetId":wav.id,"wavHash":wav.content_hash,"jsonAssetId":json.id,"jsonHash":json.content_hash}]})).unwrap();
+    let (transcription_spec, _) = storage.fixed_job_input(&transcription.id).unwrap();
+    let recognition = (!transcription_spec.parameters["recognitionPolicy"].is_null()).then(|| {
+        let hinted = !transcription_spec.parameters["engine"]["prompt"]
+            .as_str().unwrap_or("").is_empty();
+        json!({"mode":if hinted {"hinted"} else {"unhinted"},"reasons":[]})
+    });
+    storage.save_job_checkpoint(&transcription.id,0,1,json!({"outputs":[{"index":0,"wavAssetId":wav.id,"wavHash":wav.content_hash,"jsonAssetId":json.id,"jsonHash":json.content_hash,"recognition":recognition}]})).unwrap();
     storage
         .finish_job(&transcription.id, 1, "failed", Some("synthetic"))
         .unwrap();
@@ -96,8 +105,38 @@ fn native_checkpoints_remap_historical_results_and_keep_omitted_pcm_and_logs_exp
     storage
         .finish_job(&diarization.id, 1, "failed", Some("synthetic"))
         .unwrap();
+    if retired {
+        let old=storage.canonical_audio_plan(&meeting).unwrap();
+        let old_track=&old.tracks[0];
+        let path=storage.meeting_mix_path(&meeting,old_track).unwrap();
+        let relative=PathBuf::from("meetings").join(&meeting).join("replacement.wav");
+        std::fs::copy(&path,storage.managed_path(&relative).unwrap()).unwrap();
+        let replacement=storage.register_ready_meeting_asset(&meeting,&relative,"audio/wav").unwrap();
+        let track=Uuid::new_v4().to_string();
+        {
+            let db=storage.connection.lock().unwrap();
+            db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) SELECT ?1,meeting_id,session_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at FROM audio_tracks WHERE id=?2",params![track,old_track.id]).unwrap();
+            db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT ?1,meeting_id,?2,?3,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE track_id=?4",params![Uuid::new_v4().to_string(),track,replacement.id,old_track.id]).unwrap();
+            db.execute("UPDATE meeting_audio_commits SET track_id=?2 WHERE meeting_id=?1",params![meeting,track]).unwrap();
+        }
+        for asset in [&old_track.chunks[0].asset_id,&wav.id,&dwav.id] {
+            let (relative,size,hash):(String,i64,String)=storage.connection.lock().unwrap().query_row("SELECT relative_path,size_bytes,content_hash FROM file_assets WHERE id=?1",[asset],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            let path=storage.managed_path(Path::new(&relative)).unwrap();
+            crate::audio::reuse::release_all();crate::local_engine::verification::release(&path).unwrap();std::fs::remove_file(path).unwrap();
+            let db=storage.connection.lock().unwrap();
+            db.execute("UPDATE meeting_audio_commits SET cleanup_json=json_insert(cleanup_json,'$[#]',json(?2)) WHERE meeting_id=?1",params![meeting,json!({"relative":relative,"bytes":size,"hash":hash}).to_string()]).unwrap();
+            db.execute("UPDATE file_assets SET state='missing' WHERE id=?1",[asset]).unwrap();
+        }
+        storage.verify_canonical_audio(&meeting,&||false).unwrap();
+        let destination=tempfile::tempdir().unwrap();
+        let (restored,new_id,_)=super::super::super::published_restore_for_rebinding_test(&storage,destination.path(),&meeting,&[]);
+        restored.verify_canonical_audio(&new_id,&||false).unwrap();
+        let original_count:i64=storage.connection.lock().unwrap().query_row("SELECT count(*) FROM job_checkpoints",[],|r|r.get(0)).unwrap();
+        let restored_count:i64=restored.connection.lock().unwrap().query_row("SELECT count(*) FROM job_checkpoints",[],|r|r.get(0)).unwrap();
+        assert_eq!(restored_count,original_count);
+    }
     let source = read(&storage, output.path());
-    assert_eq!(source.manifest.omitted_assets.len(), 3);
+    assert_eq!(source.manifest.omitted_assets.len(), if retired {6}else{5});
     let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
         false
     })

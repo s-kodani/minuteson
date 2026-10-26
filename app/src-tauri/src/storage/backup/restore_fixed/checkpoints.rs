@@ -162,6 +162,7 @@ impl FixedData<'_, '_> {
                     }
                     archive::OmittedReason::SourceAudioDeleted
                 }
+                Role::TemporaryPcm if super::super::super::meeting_audio::superseded_asset(&source.database,id)? => archive::OmittedReason::SupersededAudio,
                 Role::TemporaryPcm => archive::OmittedReason::RecreatablePcm,
                 Role::DiarizationLog => archive::OmittedReason::NativeLog,
                 _ => return Err("永続的な途中成果物が欠損しています".into()),

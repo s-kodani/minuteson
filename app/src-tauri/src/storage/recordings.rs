@@ -8,8 +8,6 @@ mod clock;
 pub(in crate::storage) mod flac;
 #[cfg(any(unix, windows))]
 pub(crate) mod partial;
-#[cfg(windows)]
-mod windows;
 use clock::{CaptureClock, CaptureEnd};
 #[cfg(all(test, unix))]
 pub(crate) use flac::tests::{
@@ -42,6 +40,8 @@ struct CaptureManifest {
     capture_end: Option<CaptureEnd>,
     #[serde(default)]
     recording_owner_id: Option<String>,
+    #[serde(default)]
+    clock_mapping_source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -637,6 +637,10 @@ impl Storage {
             load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません")?
         };
         let _meeting_owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
+        if session.state=="saved" {
+            self.publish_single_wav(&session.meeting_id,&||false,&|_,_|{})?;
+            return Ok(session);
+        }
         if !matches!(
             session.state.as_str(),
             "recording" | "stopping" | "interrupted"
@@ -658,7 +662,7 @@ impl Storage {
             .join("audio")
             .join(session_id);
         let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
-        let manifest = self.read_capture_manifest(&manifest_file)?;
+        let mut manifest = self.read_capture_manifest(&manifest_file)?;
         if manifest.schema_version != crate::current_formats::CAPTURE
             || manifest.state != "saved"
             || !manifest.errors.is_empty()
@@ -706,10 +710,22 @@ impl Storage {
         } else {
             Some(manifest.system.validated_format()?)
         };
-        let capture_clock = manifest.validated_capture_clock()?;
+        manifest.validated_capture_clock()?;
         if mic_unreceived && unreceived {
             return Err("両方の入力が未取得の録音は完了できません".into());
         }
+        #[cfg(any(unix,windows))]
+        let raw_prefixes = if manifest.microphone.raw_segments.is_some() || manifest.system.raw_segments.is_some() {
+            Some(self.verify_completed_raw_prefixes(&base,&manifest,session_id)?)
+        } else {None};
+        #[cfg(any(unix,windows))]
+        let clock_originals = if let Some(prefixes)=&raw_prefixes {
+            let (mic,system,originals)=flac::canonical_maps(self,&base,&manifest,prefixes)?;
+            if !mic_unreceived {manifest.microphone.clock_segments=Some(mic);}
+            if !unreceived {manifest.system.clock_segments=Some(system);}
+            originals
+        } else {Vec::new()};
+        let capture_clock = manifest.validated_capture_clock()?;
         let mic_timeline = if mic_unreceived {
             clock::CaptureTimeline {
                 start_us: 0,
@@ -782,16 +798,6 @@ impl Storage {
                 )?,
             )
         };
-        // Existing Windows protocol-2 jobs/recordings retain their old evidence.
-        // Once a producer advertises raw v2, both lanes must verify completely.
-        #[cfg(windows)]
-        let raw_prefixes = if manifest.microphone.raw_segments.is_some()
-            || manifest.system.raw_segments.is_some()
-        {
-            Some(self.verify_completed_raw_prefixes(&base, &manifest, session_id)?)
-        } else {
-            None
-        };
         let system_file = if unreceived {
             let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
             if crate::input_levels::open_capture_file_at_optional(&directory, "system.caf")?
@@ -803,26 +809,6 @@ impl Storage {
         } else {
             Some(self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?)
         };
-        #[cfg(windows)]
-        let publication = Some(windows::Publication::prepare(
-            self,
-            &base,
-            &manifest_file.hash,
-            &manifest,
-            mic_file.as_ref(),
-            system_file.as_ref(),
-            raw_prefixes.as_deref(),
-        )?);
-        #[cfg(unix)]
-        let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
-        #[cfg(unix)]
-        let publication = Some(flac::Publication::prepare(
-            self,
-            &base,
-            &manifest_file.hash,
-            &manifest,
-            &raw_prefixes,
-        )?);
         // Conversion can take time. Revalidate the manifest before the DB
         // transition, and keep the conversion lease alive through commit.
         crate::operation_observation::stage("committing_audio", None, "files");
@@ -830,7 +816,7 @@ impl Storage {
         if current_manifest.size_bytes != manifest_file.size_bytes
             || current_manifest.hash != manifest_file.hash
         {
-            return Err("録音manifestがFLAC変換中に変更されました".into());
+            return Err("原音声の検証中に録音manifestが変更されました".into());
         }
         self.require_data_writable()?;
         let mut connection = crate::operation_observation::lock(&self.connection)?;
@@ -844,7 +830,7 @@ impl Storage {
         }
         let now = now_ms()?;
         #[cfg(unix)]
-        for prefix in &raw_prefixes {
+        for prefix in raw_prefixes.iter().flatten() {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
         #[cfg(windows)]
@@ -853,10 +839,6 @@ impl Storage {
                 prefix.verify_at(&self.root.join(&base), &|| false)?;
             }
         }
-        #[cfg(any(unix, windows))]
-        if let Some(publication) = &publication {
-            publication.verify(self)?;
-        }
         insert_capture_asset(
             &transaction,
             &session.meeting_id,
@@ -864,23 +846,7 @@ impl Storage {
             "application/json",
             now,
         )?;
-        #[cfg(any(unix, windows))]
-        let converted = publication.is_some();
-        #[cfg(not(any(unix, windows)))]
-        let converted = false;
-        #[cfg(any(unix, windows))]
-        if let Some(publication) = &publication {
-            publication.insert(
-                &transaction,
-                &session.meeting_id,
-                session_id,
-                &processing_config,
-                duration_us,
-                ending.is_some(),
-                now,
-            )?;
-        }
-        if !converted {
+        {
             let mut tracks = Vec::new();
             if let (Some(mic_file), Some(mic_format)) = (&mic_file, mic_format) {
                 tracks.push((
@@ -936,7 +902,7 @@ impl Storage {
             load_session(&transaction, session_id)?.ok_or("録音セッションを読み込めません")?;
         super::analysis_flows::ensure_flow(&transaction, &session.meeting_id)?;
         #[cfg(unix)]
-        for prefix in &raw_prefixes {
+        for prefix in raw_prefixes.iter().flatten() {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
         #[cfg(windows)]
@@ -945,17 +911,15 @@ impl Storage {
                 prefix.verify_at(&self.root.join(&base), &|| false)?;
             }
         }
-        #[cfg(any(unix, windows))]
-        if let Some(publication) = &publication {
-            publication.verify(self)?;
-        }
         self.require_data_writable()?;
-        #[cfg(all(test, unix))]
-        if publication.is_some() {
-            flac::crash_point("before-db-commit");
-        }
         self.read_capture_manifest(&manifest_file)?;
         transaction.commit().map_err(|error| error.to_string())?;
+        drop(connection);
+        #[cfg(any(unix,windows))]
+        drop(clock_originals);
+        self.publish_single_wav(&session.meeting_id,&||false,&|_,total| {
+            crate::operation_observation::stage("mixing_audio",Some(total),"frames");
+        })?;
         Ok(saved)
     }
 
@@ -1831,7 +1795,7 @@ pub(in crate::storage) mod tests {
         }
         assert_eq!(storage.finalize_recording(&session).unwrap().state, "saved");
         let db = storage.connection.lock().unwrap();
-        let mut query = db.prepare("SELECT relative_path, size_bytes, content_hash FROM file_assets WHERE meeting_id=?1").unwrap();
+        let mut query = db.prepare("SELECT relative_path, size_bytes, content_hash FROM file_assets WHERE meeting_id=?1 AND state='ready'").unwrap();
         let proofs = query
             .query_map(params![meeting], |row| {
                 Ok((
@@ -1843,7 +1807,7 @@ pub(in crate::storage) mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(proofs.len(), 3);
+        assert_eq!(proofs.len(), 2);
         for (relative, size, hash) in proofs {
             let bytes = std::fs::read(storage.root.join(relative)).unwrap();
             assert_eq!(size, bytes.len() as i64);
@@ -2381,12 +2345,12 @@ pub(in crate::storage) mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!((assets, tracks, chunks), (3, 2, 2));
+        assert_eq!((assets, tracks, chunks), (4, 3, 3));
         drop(db);
         assert_eq!(
             storage.get_meeting(&meeting.id).unwrap().unwrap().lifecycle,
             "recorded"
         );
-        assert!(storage.finalize_recording(&session.id).is_err());
+        assert!(storage.finalize_recording(&session.id).is_ok());
     }
 }

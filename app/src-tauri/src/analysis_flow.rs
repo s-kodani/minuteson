@@ -226,6 +226,7 @@ fn step(
         })?;
         crate::analysis_preparation::update(&flow.meeting_id, &flow.id, "verifying", None, None);
         let mut plan = prepare(storage, &flow.profile, cancelled)?;
+        plan.replacement = storage.pending_analysis_target(&flow.id)?;
         let input = storage.recorded_analysis_input(&flow.meeting_id)?.0;
         plan.speaker_counts = storage.initial_speaker_counts(&flow.meeting_id, &input.tracks)?;
         if !plan.speaker_counts.is_empty() {

@@ -188,10 +188,10 @@ class Lane {
   Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
   void close(){cancel_preparation();if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}started=false;}if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
   bool acquisition_closed() const{return !preparation||preparation->finished();}
-  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});return Json{{"frames",frames},{"sampleRate",frames?Json(48000):Json(nullptr)},{"channels",frames?Json(channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
+  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);return Json{{"frames",frames},{"sampleRate",frames?Json(48000):Json(nullptr)},{"channels",frames?Json(channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}
 };
-struct Settings {fs::path output;std::string owner,mode="system",uid,scenario,identity;DWORD pid=0,parent=0,synthetic_startup_delay_ms=0;bool test=false,synthetic=false,synthetic_clock_overlap=false,synthetic_clock_cases=false,synthetic_clock_resampling=false,lease_stdin=false;};
+struct Settings {fs::path output;std::string owner,mode="system",uid,scenario,identity;DWORD pid=0,parent=0,synthetic_startup_delay_ms=0;bool test=false,synthetic=false,synthetic_clock_overlap=false,synthetic_clock_cases=false,synthetic_clock_resampling=false,synthetic_clock_drift=false,lease_stdin=false;};
 Settings parse(int argc,wchar_t** argv) {
   Settings s;
   for(int i=1;i<argc;++i) {
@@ -201,6 +201,7 @@ Settings parse(int argc,wchar_t** argv) {
     if(flag==L"--synthetic-clock-overlap"){s.synthetic_clock_overlap=true;continue;}
     if(flag==L"--synthetic-clock-cases"){s.synthetic_clock_cases=true;continue;}
     if(flag==L"--synthetic-clock-resampling"){s.synthetic_clock_resampling=true;continue;}
+    if(flag==L"--synthetic-clock-drift"){s.synthetic_clock_drift=true;continue;}
     if(i+1>=argc)throw std::runtime_error("missing product capture argument");
     auto value=std::wstring(argv[++i]);
     if(flag==L"--output")s.output=value;
@@ -218,7 +219,7 @@ Settings parse(int argc,wchar_t** argv) {
     else throw std::runtime_error("unknown product capture argument");
   }
   if(!s.output.is_absolute()||s.owner.size()!=36||s.owner.find_first_not_of("0123456789abcdef-")!=std::string::npos||!s.parent||(s.mode!="system"&&s.mode!="application")||(s.mode=="application")!=bool(s.pid)
-    ||s.synthetic_startup_delay_ms>5000||(!s.synthetic&&(s.synthetic_startup_delay_ms||s.synthetic_clock_overlap||s.synthetic_clock_cases||s.synthetic_clock_resampling)))
+    ||s.synthetic_startup_delay_ms>5000||(!s.synthetic&&(s.synthetic_startup_delay_ms||s.synthetic_clock_overlap||s.synthetic_clock_cases||s.synthetic_clock_resampling||s.synthetic_clock_drift)))
     throw std::runtime_error("invalid product capture ownership or scope");
   return s;
 }
@@ -344,6 +345,7 @@ int run(int argc,wchar_t** argv){
         }
         // Deterministic driver-shaped timestamps for hardware-free regressions.
         auto time=start+synthetic_packet*100000-(s.synthetic_clock_overlap&&synthetic_packet?10:0);
+        if(s.synthetic_clock_drift)time+=std::min(synthetic_packet,399ULL)*10;
         auto position=synthetic_packet*480;UINT32 count=480;DWORD flags=s.synthetic_clock_overlap&&synthetic_packet==1?1:0;
         if(s.synthetic_clock_resampling){time=start+synthetic_packet*75000;position=synthetic_packet*160;count=479;}
         if(s.synthetic_clock_cases){
@@ -429,7 +431,7 @@ int run(int argc,wchar_t** argv){
     auto origin=mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
     manifest["microphone"]=mic.track(origin);manifest["system"]=system.track(origin);manifest["systemAudioUnreceived"]=system.frames==0;
     manifest["microphoneAudioUnreceived"]=mic.frames==0;
-    if(mic.raw){manifest["microphone"]["rawSegments"]=mic.raw->status();manifest["system"]["rawSegments"]=system.raw->status();}
+    if(mic.raw){manifest["microphone"]["rawSegments"]=mic.raw->status();manifest["system"]["rawSegments"]=system.raw->status();manifest["clockMappingSource"]="sealed_raw_v1";}
     auto uncertainty=std::max(1000000ULL,std::max(mic.clock.max_boundary_adjustment_ticks,system.clock.max_boundary_adjustment_ticks)*100);
     manifest["timingEstimated"]=(mic.clock.estimated_packets+system.clock.estimated_packets)!=0;
     // Estimated clocks cannot claim the normal 1 ms precision. Retain a

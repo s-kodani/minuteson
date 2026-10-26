@@ -139,7 +139,7 @@ impl<'a> Session<'a> {
         self.verify()?;
         // This always rechecks DB ownership, source coverage and the open file's
         // identity; a feature-cache hit cannot bypass deleted/changed audio.
-        let mut audio = self.storage.prepare_track_audio_cancellable(
+        let audio = self.storage.prepare_track_audio_cancellable(
             self.meeting,
             &window.track_id,
             window.start_us,
@@ -166,18 +166,9 @@ impl<'a> Session<'a> {
             .iter()
             .find(|t| t.id == window.track_id)
             .ok_or("声の参照先が共通音声にありません")?;
-        let direct = track.kind == "processed";
-        let (path, first, end) = if direct {
-            (
-                self.storage.meeting_mix_path(self.meeting, track)?,
-                crate::audio_clock::frame_at(window.start_us, 16000)?,
-                crate::audio_clock::frame_at(window.end_us, 16000)?,
-            )
-        } else {
-            let path = directory.join("input.wav");
-            let frames = crate::transcription::wave::write_track(&mut audio, &path, cancelled)?;
-            (path, 0, frames)
-        };
+        let path = self.storage.meeting_mix_path(self.meeting, track)?;
+        let first = crate::audio_clock::frame_at(window.start_us, 16000)?;
+        let end = crate::audio_clock::frame_at(window.end_us, 16000)?;
         let wave = Fingerprint::capture_retained(&path, cancelled)?;
         let output = embedding::run(
             self.extractor,
@@ -200,9 +191,6 @@ impl<'a> Session<'a> {
         }
         // The resident worker still checks its first startup log on later requests.
         // Retain that bounded log until the job-owned temp directory is dropped.
-        if !direct {
-            crate::local_engine::verification::release(&path)?;
-        }
         for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if entry.file_name() != "worker-startup.log" {

@@ -108,7 +108,7 @@ async page => {
   await page.mouse.click(bounds.x-8,bounds.y+20); await details.waitFor({state:"hidden"});
   results.push("details use a modal with raw text, focus containment, Escape, close and backdrop dismissal");
   await logs.getByRole("button", { name: "表示中ログをコピー", exact: true }).click();
-  await logs.getByText("1件のログをコピーしました。", { exact: true }).waitFor();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("status").filter({hasText:"1件のログをコピーしました。"}).waitFor();
   check((await page.evaluate(() => navigator.clipboard.readText())).includes("会議本文🦀"), "copy lost raw output");
   await logs.getByRole("searchbox", { name: "文字列", exact: true }).fill("does-not-exist");
   await logs.getByText(/条件に一致するログはありません/).waitFor();
@@ -153,11 +153,11 @@ async page => {
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 110);
   await page.evaluate(() => { window.internalLogsFixture.fail = true; });
   await logs.getByRole("button", { name: "更新", exact: true }).click();
-  await logs.getByRole("alert").filter({ hasText: "合成ログ取得エラー" }).waitFor();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({ hasText: "合成ログ取得エラー" }).waitFor();
   check(await rows().count() === 110, "fetch failure cleared displayed logs");
   await page.evaluate(() => { window.internalLogsFixture.fail = false; window.internalLogsFixture.status = { storageError: "合成の保存失敗", droppedEntries: 7, historyTruncated: true }; });
   await logs.getByRole("button", { name: "更新", exact: true }).click();
-  await logs.getByRole("alert").filter({ hasText: "合成の保存失敗" }).waitFor();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({ hasText: "合成の保存失敗" }).waitFor();
   await logs.getByText(/7件のログを記録できませんでした/).waitFor();
   await logs.getByText(/保持期間または容量上限/).waitFor();
   await page.getByRole("button", { name: "前の画面へ戻る", exact: true }).click();
@@ -194,7 +194,7 @@ async page => {
   await reset(); await open();
   await page.evaluate(() => { window.internalLogsFixture.failOlder = true; });
   await top();
-  await logs.getByRole("alert").filter({hasText:"合成の履歴取得エラー"}).waitFor();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"合成の履歴取得エラー"}).waitFor();
   const failedCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
   await top(); await page.waitForTimeout(1200);
   check(await page.evaluate(() => window.internalLogsFixture.calls.length) === failedCalls && await rows().count() === 200, "failed history retried itself or cleared rows");
@@ -203,7 +203,7 @@ async page => {
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 400);
   results.push("history errors retain rows, stop automatic retries and retry the same cursor with refresh");
   await page.evaluate(() => { window.internalLogsFixture.stallOlder = true; });
-  await top(); await logs.getByRole("alert").filter({hasText:"読み込み位置が進みません"}).waitFor();
+  await top(); await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"読み込み位置が進みません"}).waitFor();
   const stalledCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
   await page.waitForTimeout(1200);
   check(await page.evaluate(() => window.internalLogsFixture.calls.length) === stalledCalls, "nonadvancing cursor looped");

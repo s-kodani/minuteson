@@ -415,7 +415,7 @@ impl FixedData<'_, '_> {
                     self.resolve("working_drafts", meeting, &draft.id, &draft.content_hash)?;
                 draft.id = self.ids.get("working_drafts", meeting, &draft.id)?;
             }
-            let view = super::super::super::analysis::read_analysis_content(
+            let view = super::super::super::analysis::read_stored_analysis_content(
                 target,
                 &self.ids.get("meetings", "", meeting)?,
                 &self.ids.get("analysis_revisions", meeting, id)?,

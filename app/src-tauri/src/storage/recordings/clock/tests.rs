@@ -308,71 +308,20 @@ fn swift_system_rebinding_retains_pcm_gap_and_continuous_microphone() {
 
 #[test]
 fn corrected_capture_finalization_binds_physical_frames_clock_maps_utc_and_pcm_readers() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, session, output, value) = corrected(&storage);
-    let original =
-        ["microphone.caf", "system.caf"].map(|name| std::fs::read(output.join(name)).unwrap());
-    let saved = storage.finalize_recording(&session).unwrap();
-    assert_eq!(saved.state, "saved");
-    assert_eq!(saved.duration_us, 1005100);
-    assert_eq!(saved.started_at_utc_ms, Some(1234567890000));
-    let plan = storage.recorded_audio_plan(&meeting).unwrap();
-    assert_eq!(plan.tracks.len(), 2);
-    for track in &plan.tracks {
-        let key = if track.kind == "mic" {
-            "microphone"
-        } else {
-            "system"
-        };
-        assert_eq!(
-            serde_json::to_value(&track.chunks[0].clock_segments).unwrap(),
-            value[key]["clockSegments"]
-        );
-        assert_eq!(track.chunks[0].frames, 48000);
-        assert_eq!(
-            track.total_frames().unwrap(),
-            if track.kind == "mic" { 48001 } else { 48005 }
-        );
-        let mut audio = storage
-            .prepare_track_audio(&meeting, &track.id, track.start_us, track.end_us)
-            .unwrap();
-        assert_eq!(audio.alignment, "unverified");
-        assert_eq!(audio.total_frames(), track.total_frames().unwrap());
-        assert_eq!(
-            audio.read_pcm(0, 32).unwrap().len(),
-            32 * track.channels as usize * 4
-        );
-        assert!(storage.verify_asset(&track.chunks[0].asset_id).unwrap());
-        let config: String = storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT processing_config_json FROM audio_tracks WHERE id=?1",
-                params![track.id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let config: Value = serde_json::from_str(&config).unwrap();
-        assert_eq!(config["timeline_alignment"], "unverified");
-        assert_eq!(config["capture_clock"], value["captureClock"]);
+    let root=tempfile::tempdir().unwrap();let storage=Storage::open(root.path().into()).unwrap();
+    let (meeting,session,output,value)=corrected(&storage);
+    let saved=storage.finalize_recording(&session).unwrap();
+    assert_eq!(saved.state,"saved");assert_eq!(saved.duration_us,1005100);assert_eq!(saved.started_at_utc_ms,Some(1234567890000));
+    let json:String=storage.connection.lock().unwrap().query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&meeting],|r|r.get(0)).unwrap();
+    let original:crate::storage::RecordedAudioPlan=serde_json::from_str(&json).unwrap();
+    for track in original.tracks {
+        let lane=if track.kind=="mic" {"microphone"}else{"system"};
+        assert_eq!(serde_json::to_value(&track.chunks[0].clock_segments).unwrap(),value[lane]["clockSegments"]);
+        assert_eq!(track.chunks[0].frames,48000);
     }
-    assert_eq!(
-        ["microphone.caf", "system.caf"].map(|name| std::fs::read(output.join(name)).unwrap()),
-        original
-    );
-    let started: i64 = storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT started_at_utc_ms FROM meetings WHERE id=?1",
-            params![meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(started, 1234567890000);
+    let plan=storage.verify_canonical_audio(&meeting,&||false).unwrap();assert_eq!(plan.tracks.len(),1);assert_eq!(plan.tracks[0].chunks[0].frames,16082);
+    assert!(!output.join("microphone.caf").exists());assert!(!output.join("system.caf").exists());
+    let started:i64=storage.connection.lock().unwrap().query_row("SELECT started_at_utc_ms FROM meetings WHERE id=?1",[meeting],|r|r.get(0)).unwrap();assert_eq!(started,1234567890000);
 }
 
 #[test]
@@ -486,63 +435,13 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
         (500000, 3500000, "capture_timestamp_gap", 0)
     );
     drop(db);
-    assert!(storage.recorded_audio_plan(&meeting).is_err());
-    assert!(storage
-        .prepare_track_audio(&meeting, &track, 0, 4000000)
-        .is_err());
-    assert!(storage
-        .prepare_track_audio(&meeting, &track, 499999, 3500001)
-        .is_err());
-    for (start, end) in [(0, 500000), (3500000, 4000000)] {
-        let mut audio = storage
-            .prepare_track_audio(&meeting, &track, start, end)
-            .unwrap();
-        assert_eq!(audio.total_frames(), 24000);
-        assert_eq!(audio.read_pcm(0, 32).unwrap().len(), 128);
-    }
-    let both = storage
-        .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
-            start_reference: None,
-            meeting_id: meeting.clone(),
-            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both,
-        })
-        .unwrap();
-    // The current closure also proves the system lane's leading/trailing loss.
-    assert_eq!(both.missing_ranges.len(), 3);
-    assert_eq!(
-        both.missing_ranges
-            .iter()
-            .filter(|gap| gap.track_kind == "system")
-            .count(),
-        2
-    );
-    let store = crate::playback::PlaybackStore::default();
-    let audio = storage
-        .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
-            start_reference: None,
-            meeting_id: meeting.clone(),
-            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Mic,
-        })
-        .unwrap();
-    let info = store.insert_meeting(audio).unwrap();
-    assert_eq!(
-        (info.start_us, info.end_us, info.total_frames),
-        (0, 4000000, 192000)
-    );
-    assert_eq!(info.missing_ranges.len(), 1);
-    let gap = &info.missing_ranges[0];
-    assert_eq!(
-        (gap.track_kind.as_str(), gap.start_frame, gap.end_frame),
-        ("mic", 24000, 168000)
-    );
-    let known = store.read(&info.token, 0).unwrap();
-    assert_eq!(u32::from_le_bytes(known[8..12].try_into().unwrap()), 24000);
-    for offset in [24000, 100000, 167999] {
-        assert!(store.read(&info.token, offset).is_err());
-    }
-    let after = store.read(&info.token, 168000).unwrap();
-    assert_eq!(u32::from_le_bytes(after[8..12].try_into().unwrap()), 24000);
-    assert!(storage.recorded_audio_plan(&meeting).is_err());
+    let plan=storage.verify_canonical_audio(&meeting,&||false).unwrap();
+    assert_eq!(plan.tracks.len(),1);
+    let mut full=storage.prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {meeting_id:meeting,mode:crate::storage::meeting_playback::MeetingPlaybackMode::Mixed,start_reference:None}).unwrap();
+    assert!(full.missing_ranges.is_empty());
+    assert_eq!(full.total_frames,64000);
+    assert_eq!(full.read_analysis_pcm(16000,16000).unwrap(),vec![0;16000*4]);
+
 }
 
 #[test]
@@ -594,12 +493,10 @@ fn corrected_capture_restart_uses_the_saved_shared_origin_and_retains_bad_clock_
         .unwrap();
     assert_eq!(saved.started_at_utc_ms, Some(1234567890000));
     assert_eq!(saved.duration_us, 1005100);
-    assert_eq!(
-        reopened.recorded_audio_plan(&meeting).unwrap().tracks[0].chunks[0]
-            .clock_segments
-            .len(),
-        2
-    );
+    reopened.verify_canonical_audio(&meeting,&||false).unwrap();
+    let json:String=reopened.connection.lock().unwrap().query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&meeting],|r|r.get(0)).unwrap();
+    let source:crate::storage::RecordedAudioPlan=serde_json::from_str(&json).unwrap();assert_eq!(source.tracks[0].chunks[0].clock_segments.len(),2);
+
 }
 
 #[test]

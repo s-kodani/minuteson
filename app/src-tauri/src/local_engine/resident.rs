@@ -81,6 +81,7 @@ struct Worker {
     active: Option<u64>,
     failed: bool,
     initialized: bool,
+    requires_pcm_ranges: bool,
     startup_path: PathBuf,
 }
 impl Worker {
@@ -139,6 +140,7 @@ impl Worker {
             active: None,
             failed: false,
             initialized: false,
+            requires_pcm_ranges: false,
             startup_path: directory.join("worker-startup.log"),
         })
     }
@@ -162,6 +164,7 @@ impl Worker {
         }
         bytes.push(b'\n');
         if !self.initialized {
+            self.requires_pcm_ranges=matches!(kind,"whisper"|"sherpa"|"embedding");
             writeln!(self.input, "{}", json!({"protocol":1,"id":id,"op":"init"}))
                 .map_err(|e| e.to_string())?;
             self.initialized = true;
@@ -236,7 +239,13 @@ impl Worker {
                 return Err("推論プロトコル・応答IDが一致しません".into());
             }
             match value["op"].as_str() {
-                Some("ready" | "progress") => {}
+                Some("ready") => {
+                    if self.requires_pcm_ranges && value["message"]!="canonical_pcm_range_v1" {
+                        self.failed=true;
+                        return Err("推論ランタイムが共通WAVの範囲読出しに未対応です。更新版のランタイムを選択してください".into());
+                    }
+                }
+                Some("progress") => {}
                 Some("done") => {
                     self.watched.verify()?;
                     self.active = None;

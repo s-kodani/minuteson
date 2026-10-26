@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -68,7 +69,7 @@ function WindowTitlebar() {
     }}>
       <img src={appIconUrl} alt="" draggable={false} /><span>{title}</span>
     </div>
-    {error && <span className="windows-titlebar-error" role="alert" title={error}>操作エラー<span className="windows-titlebar-error-detail">: {error}</span></span>}
+    <ErrorNotice scope="window-titlebar" type="WindowTitlebar-operation" active={!!(error)}>操作エラー<span className="windows-titlebar-error-detail">: {error}</span></ErrorNotice>
     <div className="windows-titlebar-controls">
       <button type="button" aria-label="最小化" title="最小化" disabled={busy} onClick={() => void run("最小化", () => nativeWindow.minimize())}><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.5h10" /></svg></button>
       <button type="button" aria-label={maximized ? "元のサイズに戻す" : "最大化"} title={maximized ? "元のサイズに戻す" : "最大化"} disabled={busy} onClick={() => void toggleMaximized()}><svg viewBox="0 0 12 12" aria-hidden="true">{maximized ? <path d="M3.5 3.5v-2h7v7h-2m-7-5h7v7h-7z" /> : <path d="M1.5 1.5h9v9h-9z" />}</svg></button>

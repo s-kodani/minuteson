@@ -1,5 +1,14 @@
 use super::*;
 #[test]
+fn private_root_reopen_keeps_descendant_change_proofs() {
+    let temp=tempfile::tempdir().unwrap();let root=temp.path().canonicalize().unwrap();
+    set_private(&root).unwrap();
+    let path=root.join("retained-proof.json");std::fs::write(&path,b"retained").unwrap();
+    let before=crate::audio::reuse::stamp(&crate::native_fs::symlink_metadata(&path).unwrap());
+    set_private(&root).unwrap();set_private(&root).unwrap();
+    assert_eq!(crate::audio::reuse::stamp(&crate::native_fs::symlink_metadata(&path).unwrap()),before);
+}
+#[test]
 fn windows_parity_private_files_retain_sqlite_writes_and_reject_public_acl() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();

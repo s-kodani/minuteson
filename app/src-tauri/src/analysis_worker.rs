@@ -69,6 +69,9 @@ pub struct AnalysisController {
 
 impl AnalysisController {
     pub fn kick(app: &AppHandle) -> Result<(), String> {
+        if app.try_state::<crate::startup_attention::Startup>().is_some_and(|s|!s.ready_for_work()) {
+            return Ok(());
+        }
         if app.state::<Storage>().data_write_blocked()
             || app
                 .state::<crate::capture_test::CaptureTests>()

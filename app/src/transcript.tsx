@@ -299,8 +299,8 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
         })}</div>
         <VoicePanel meetingId={meetingId} speakers={speakers} revision={`${analysis.id}:${analysis.contentHash}:${snapshot.draft?.contentHash??""}`} locked={disabled||!!snapshot.error||!visible} beforeOperation={()=>barrier.current()} onChanged={reloadVoice} onPlay={async window=>{
           if(!audio?.canPlay||audio.locked||audio.durationUs===null||!analysis)throw Error("登録元の音声を再生できません。");
-          const mode=tracks.kinds?.get(window.trackId);
-          if((mode!=="mic"&&mode!=="system"&&mode!=="imported")||!audio.modes.includes(mode))throw Error("登録元の音声トラックを確認できません。");
+          const mode="mixed" as const;
+          if(!audio.modes.includes("mixed"))throw Error("登録元の音声トラックを確認できません。");
           await audio.start(analysis.id,`voice-preview:${window.trackId}:${window.startUs}`,{meetingId,mode,startUs:window.startUs,endUs:window.endUs,expectedDurationUs:audio.durationUs});
         }} />
       </>, speakerMount)}
@@ -353,7 +353,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
           setAssignmentEditor(current => current && ({ ...current, speakerIds:checked ? [...current.speakerIds, speaker.id] : current.speakerIds.filter(id => id !== speaker.id) }));
         }} />{speaker.displayName || speaker.label}</label>)}
       </fieldset>
-      {(snapshot.error || error) && <p className="action-error" role="alert">選択内容を保持しています。{snapshot.error || error}</p>}
+
       <div className="transcript-actions"><button type="button" className="small-secondary" disabled={disabled||!!snapshot.error||!assignmentEditor||!view?.utterances.some(u=>u.id===assignmentEditor.utteranceId&&textPieces(textRef.current[u.id]??u.effectiveText).length>=2&&u.endUs-u.startUs>=2)} onClick={event=>{
         const selected=view?.utterances.find(u=>u.id===assignmentEditor?.utteranceId);if(!selected||!assignmentEditor||!analysis)return;
         structureOpener.current=event.currentTarget;setError("");setStructureEditor({kind:"split",analysisId:analysis.id,utterance:{...selected,effectiveText:textRef.current[selected.id]??selected.effectiveText,speakerIds:[...assignmentEditor.speakerIds]},seconds:((selected.endUs-selected.startUs)/2_000_000).toFixed(6),offset:Math.floor(textPieces(textRef.current[selected.id]??selected.effectiveText).length/2),first:"keep",second:"keep"});
@@ -361,12 +361,12 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
     </CommonModal>
     <CommonModal open={visible && !!nameEditor} blocked={disabled || !!snapshot.error} onDismiss={() => setNameEditor(null)} restoreTarget={() => nameOpener.current} className="speaker-name-editor speaker-name-dialog" aria-label="話者名を変更">
       <h2>話者名を変更</h2><label>表示名<input autoFocus value={nameEditor?.value ?? ""} maxLength={200} disabled={disabled} onChange={event => setNameEditor(current => current && { ...current, value: event.target.value })} /></label>
-      {snapshot.error && <p className="action-error" role="alert">入力を保持しています。{snapshot.error}</p>}
+
       <div className="transcript-actions"><button type="button" disabled={disabled || !!snapshot.error} onClick={() => { if (nameRef.current) void run(() => saveInputs({}, { ...nameRef.current! })); }}>保存</button>{snapshot.error && <button type="button" disabled={disabled} onClick={() => void retry()}>保存を再試行</button>}</div>
     </CommonModal>
     <CommonModal open={visible && adding} blocked={disabled || !!snapshot.error} onDismiss={() => setAdding(false)} restoreTarget={() => addOpener.current} className="speaker-add-dialog" aria-label="新しい話者">
       <h3>新しい話者</h3><label>表示名<input autoFocus value={newName} maxLength={200} disabled={disabled} onChange={event => setNewName(event.target.value)} /></label>
-      {snapshot.error && <p className="action-error" role="alert">入力を保持しています。{snapshot.error}</p>}
+
       <div className="transcript-actions"><button type="button" disabled={disabled || !!snapshot.error} onClick={() => void run(async () => {
         await ensureDraft(); queue.edit(payload => addSpeaker(analysis!, payload, "manual:" + crypto.randomUUID(), newName)); await queue.flush(); if (mounted.current) setAdding(false);
       })}>作成して保存</button>{snapshot.error && <button type="button" disabled={disabled} onClick={() => void run(async () => { await queue.retry(); if (mounted.current) setAdding(false); })}>保存を再試行</button>}</div>

@@ -165,7 +165,7 @@ impl FixedWorkspace {
             let new_hash = rebuilt_plan
                 .as_ref()
                 .map(|text| format!("{:x}", Sha256::digest(text.as_bytes())));
-            if self.database.execute("UPDATE analysis_flows SET stage=?1,plan_hash=?2,error_message=?3,plan_json=?6 WHERE id=?4 AND meeting_id=?5",params![stage,new_hash,message,new,meeting,rebuilt_plan]).map_err(|e|e.to_string())? != 1 {
+            if self.database.execute("UPDATE analysis_flows SET stage=?1,plan_hash=?2,error_message=?3,plan_json=?6,initial_replacement_json=NULL WHERE id=?4 AND meeting_id=?5",params![stage,new_hash,message,new,meeting,rebuilt_plan]).map_err(|e|e.to_string())? != 1 {
                 return Err("解析工程の構築先がありません".into());
             }
             if let (Some(hash), Some(rebuilt)) = (&old.hash, &new_hash) {

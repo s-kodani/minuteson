@@ -13,13 +13,14 @@ std::string sha256_bytes(const BYTE* bytes,std::size_t size){
 struct RawSegments {
   fs::path directory;std::string owner,lane;UINT32 channels;
   std::uint64_t frames=0,total=0;std::uint32_t sequence=0;Json previous=nullptr;bool closed=false;
-  PacketClock clock;std::vector<BYTE> pcm;
+  PacketClock clock;std::vector<BYTE> pcm;std::vector<ClockPart> committed_clock;
   RawSegments(fs::path path,std::string id,std::string input,UINT32 count):directory(std::move(path)),owner(std::move(id)),lane(std::move(input)),channels(count){pcm.reserve(192000*channels*4);tip();}
   std::string name(std::uint32_t number,const char* extension)const{std::ostringstream result;result<<"raw-"<<lane<<"-"<<std::setw(8)<<std::setfill('0')<<number<<'.'<<extension;return result.str();}
   Json status()const{return Json{{"schemaVersion",2},{"ownerId",owner},{"lane",lane},{"sealedSegments",sequence},{"sealedFrames",total},{"lastEntrySHA256",previous},{"producerClosed",closed},{"failure",nullptr}};}
   void tip(){auto value=status();value.erase("failure");atomic_json(directory/wide("raw-"+lane+".json"),value);}
   void seal(){
     if(!frames)return;
+    if(committed_clock.size()+clock.parts.size()>PacketClock::recording_capacity)throw std::runtime_error("too many committed recording clock segments");
     auto audio=name(sequence+1,"caf");std::vector<BYTE> body={'c','a','f','f',0,1,0,0,'d','e','s','c'};
     auto be=[&](std::uint64_t value,int width){for(int i=width-1;i>=0;--i)body.push_back(BYTE(value>>(8*i)));};
     be(32,8);double rate=48000;std::uint64_t bits;std::memcpy(&bits,&rate,8);be(bits,8);body.insert(body.end(),{'l','p','c','m'});for(auto value:{3u,channels*4,1u,channels,32u})be(value,4);body.insert(body.end(),{'d','a','t','a'});be(pcm.size()+4,8);be(0,4);body.insert(body.end(),pcm.begin(),pcm.end());
@@ -28,6 +29,9 @@ struct RawSegments {
     for(auto& part:clock.parts){maps.push_back(Json{{"sourceFrameStart",part.first},{"sourceFrameEnd",part.first+part.frames},{"timelineStartUs",(part.start-origin)/10},{"timelineEndUs",(part.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});endpoints.push_back(Json{{"startNanoseconds",part.start*100},{"endNanoseconds",part.last_end*100}});}
     Json entry={{"schemaVersion",2},{"ownerId",owner},{"lane",lane},{"sequence",sequence+1},{"audioName",audio},{"sourceFrameStart",total},{"frames",frames},{"sampleRate",48000},{"channels",channels},{"captureOriginNanoseconds",origin*100},{"clockSegments",maps},{"clockNanoseconds",endpoints},{"audioBytes",body.size()},{"audioSHA256",sha256_bytes(body.data(),body.size())},{"previousEntrySHA256",previous}};
     const auto encoded=entry.dump();atomic_json(directory/wide(name(sequence+1,"json")),entry);
+    // Export exactly the maps durably bound to these samples. A separate
+    // whole-recording affine fit can disagree with four-second raw fits.
+    for(auto part:clock.parts){part.first+=total;committed_clock.push_back(part);}
     previous=sha256_bytes(reinterpret_cast<const BYTE*>(encoded.data()),encoded.size());++sequence;total+=frames;frames=0;pcm.clear();clock=PacketClock();tip();
   }
   void append(const float* samples,UINT32 count,std::uint64_t time,bool boundary){
@@ -36,4 +40,9 @@ struct RawSegments {
     }
   }
   void finish(){seal();closed=true;tip();}
+  Json timeline(std::uint64_t origin)const{
+    Json result=Json::array();
+    for(const auto& part:committed_clock)result.push_back(Json{{"sourceFrameStart",part.first},{"sourceFrameEnd",part.first+part.frames},{"timelineStartUs",(part.start-origin)/10},{"timelineEndUs",(part.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});
+    return result;
+  }
 };

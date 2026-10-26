@@ -14,7 +14,7 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
         )
         .unwrap();
         db.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,audio_manifest_hash,created_at,updated_at) VALUES('session',?1,'saved','system','{}','start',?2,0,0)",params![meeting,"a".repeat(64)]).unwrap();
-        db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES('track',?1,'session','mic','caf',48000,1,'ready',0,0)",[&meeting]).unwrap();
+        db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES('track',?1,'session','processed','wav',16000,1,'ready',0,0)",[&meeting]).unwrap();
     }
     let dir = PathBuf::from("meetings").join(&meeting).join("audio");
     std::fs::create_dir_all(s.managed_path(&dir).unwrap()).unwrap();
@@ -27,11 +27,11 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
     let manifest = s
         .register_ready_meeting_asset(&meeting, &manifest_path, "application/json")
         .unwrap();
-    let audio = dir.join("long.caf");
-    let bytes = crate::audio::tests::caf_fixture(48000, 1, 3, 32, 4, &vec![0; 48000 * 20 * 4]);
+    let audio = dir.join("meeting.wav");
+    let mut bytes=crate::audio::wave::header(320000).unwrap(); bytes.extend(vec![0;640000]);
     std::fs::write(s.managed_path(&audio).unwrap(), bytes).unwrap();
     let asset = s
-        .register_ready_meeting_asset(&meeting, &audio, "audio/x-caf")
+        .register_ready_meeting_asset(&meeting, &audio, "audio/wav")
         .unwrap();
     {
         let db = s.connection.lock().unwrap();
@@ -47,7 +47,8 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
         .unwrap();
         db.execute("DELETE FROM audio_chunks WHERE meeting_id=?1", [&meeting])
             .unwrap();
-        db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES('long',?1,'track',?2,0,0,20000000,960000,48000,1,'ready',0)",params![meeting,asset.id]).unwrap();
+        db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES('long',?1,'track',?2,0,0,20000000,320000,16000,1,'ready',0)",params![meeting,asset.id]).unwrap();
+        db.execute("INSERT INTO meeting_audio_commits VALUES(?1,'track',?2,?3,320000,'{}','[]','cleaned',0)",params![meeting,manifest.id,manifest.content_hash]).unwrap();
     }
     let id = s
         .create_analysis_candidate(

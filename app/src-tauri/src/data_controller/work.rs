@@ -61,16 +61,12 @@ impl Admission {
         }
         deletion::authorize_review(&app.state::<Storage>(), operation)?;
         let _waiting = NoticeWait::new(app, Some(meeting));
-        app.state::<crate::playback::mix_cache::MixCache>()
-            .suspend_meeting(meeting);
         let lease = match app
             .state::<AnalysisController>()
             .begin_meeting_deletion(&app.state::<Storage>(), meeting)
         {
             Ok(lease) => lease,
             Err(error) => {
-                app.state::<crate::playback::mix_cache::MixCache>()
-                    .resume_meeting(meeting);
                 return Err(error);
             }
         };
@@ -184,21 +180,18 @@ impl Admission {
             } else if matches!(lane, DeletionLane::Model) {
                 analysis.begin_model_deletion(recording, import_blocked, cancelled)?
             } else {
-                analysis.begin_data_maintenance(recording, import_blocked, cancelled)?
+                analysis.begin_data_maintenance_wait(recording, import_blocked, cancelled)?
             }
         };
         #[cfg(not(any(unix, windows)))]
         let lease = {
             let _ = (deletion_operation, lane);
-            analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
+            analysis.begin_data_maintenance_wait(recording, import_blocked, &|| false)?
         };
         if deletion_operation.is_none() {
             app.state::<Storage>().require_global_data_writable()?;
         }
-        if !lease.is_model_deletion() {
-            app.state::<crate::playback::mix_cache::MixCache>()
-                .suspend();
-        }
+
         let admission = Self {
             app: app.clone(),
             lease: Some(lease),
@@ -243,16 +236,9 @@ impl Drop for Admission {
             {
                 crate::internal_logs::report_error("meeting_deletion", &error);
             }
-            self.app
-                .state::<crate::playback::mix_cache::MixCache>()
-                .resume_meeting(meeting);
         }
         drop(self.lease.take());
-        if meeting.is_none() && !model_deletion {
-            self.app
-                .state::<crate::playback::mix_cache::MixCache>()
-                .resume();
-        }
+
         if !self.app.state::<Storage>().restart_required() {
             let _ = AnalysisController::kick(&self.app);
         }

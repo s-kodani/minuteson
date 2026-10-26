@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import {useDeletionNoticeWait} from "./deletion-notice-wait";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -160,9 +161,9 @@ export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { op
         {p.includeUnregisteredRecorded !== null && <p>保存済みの方針: 未登録音声を{p.includeUnregisteredRecorded ? "含める" : "含めない"}。続行で方針を変更できません。分類できないファイルは保持します。</p>}
         {p.phase === "reconfirmation" && <p role="alert">{p.reconfirmationSourceKind === "native_audio_pending" ? <>操作 {p.operationId} の音声削除は未完了です。既に消した音声は復元しません。元の同意・対象証拠・中断位置を履歴として保持し、同じ操作の現在の残り範囲への新しい同意を別記録に保存して続行します。確認だけでは同意を保存せず、音声も削除しません。</> : <>{p.reconfirmationSourceKind === "restored_audio_unavailable" ? <>元の操作 {p.sourceOperationId} は復元時の音声利用不可記録で、削除同意はありません。元の記録と復元履歴を変更せず、</> : <>元の操作 {p.sourceOperationId} は音声削除完了済みです。元の同意と履歴を変更せず、</>}新しい操作 {p.operationId} で現在の範囲へ別同意します。この新しい操作ではまだ音声削除を開始していません。</>}確認IDが変わると同意をやり直します。</p>}
         {p.sourceOperationId && p.phase !== "reconfirmation" && <p className="data-path">参照元の記録ID: {p.sourceOperationId}（元の記録は変更しません）</p>}
-        {p.resumeReason && <p role="alert">削除を進められません: {p.resumeReason}。対象と未完了記録は保持します。</p>}
+        <ErrorNotice scope="audio-deletion" type="AudioDeletionPanel-resume" active={!!(p.resumeReason)}>削除を進められません: {p.resumeReason}。対象と未完了記録は保持します。</ErrorNotice>
         {p.reconfirmationAllowed && <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>{["files", "availability"].includes(p.phase) ? "残り音声を確認（まだ削除しない）" : "再出現した音声を確認（まだ削除しない）"}</button>}
-        <h3>確認時のファイル一覧（現在の実在一覧ではありません）</h3>{c.pageBusy && <p role="status">音声対象一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
+        <h3>確認時のファイル一覧（現在の実在一覧ではありません）</h3>{c.pageBusy && <p role="status">音声対象一覧を読み込み中です。</p>}<ErrorNotice scope="audio-deletion" type="AudioDeletionPanel-paths" active={!!(c.pageError)}>一覧を確認できません: {c.pageError}</ErrorNotice>
         {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {audioDeletionDispositionLabel(e.disposition)} · {!e.present ? "確認時に欠落" : bytesLabel(e.bytes!)}{e.changed && "・登録時と変更"}</li>)}</ul></>}
         <div className="analysis-actions"><IconButton label="音声対象の前の50件" icon="previous" type="button" className="small-secondary" disabled={c.pageBusy || !c.page || !c.page.offset} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))} /><IconButton label="音声対象の次の50件" icon="next" type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)} />{c.pageError && <IconButton label="音声対象一覧を再読込" icon="refresh" type="button" className="small-secondary" onClick={() => void c.loadPage()} />}</div>
         {audioDeletionNewScope(p) && p.unregisteredAudioFiles > 0 && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={e => c.setIncludeUnknown(e.target.checked)} />一覧にある未登録音声も削除対象に含めます。分類できないファイルは保持します。</label>}
@@ -170,7 +171,7 @@ export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { op
       </>}
       <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit("publish")}>{p?.phase === "restored_unavailable" ? "元の利用不可記録からは削除できません" : p?.phase === "reconfirmation" ? "新しい音声範囲へ別同意して削除" : p?.pending ? "照合して音声削除を続行" : "音声だけを削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>音声の残りを再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>音声を未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.protectedNow || !!s?.busy} data-dialog-cancel onClick={() => void c.dismiss()}>{p?.phase === "restored_unavailable" ? "閉じる（元の利用不可記録は残る）" : p?.pending ? "閉じる（音声削除の未完了記録は残る）" : "音声を削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
+
     </CommonModal>
   </>;
 }

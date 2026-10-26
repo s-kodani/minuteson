@@ -1548,9 +1548,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.session_id = None;
                 snapshot.error_message = None;
             });
-            if let Some(meeting) = completed_meeting {
-                crate::playback::mix_cache::warm(&app, &meeting);
-            }
+
         }
         Err(error) => {
             publish(&app, |snapshot| {

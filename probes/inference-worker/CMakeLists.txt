@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.20)
+project(mon_pcm_tests LANGUAGES CXX)
+enable_testing()
+add_executable(mon_pcm_input_test pcm-input-test.cpp)
+target_compile_features(mon_pcm_input_test PRIVATE cxx_std_17)
+# Assertions are the test oracle, including when using a Release generator.
+if(MSVC)
+  target_compile_options(mon_pcm_input_test PRIVATE /UNDEBUG)
+else()
+  target_compile_options(mon_pcm_input_test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME canonical_pcm_range COMMAND mon_pcm_input_test)

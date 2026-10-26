@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
@@ -38,13 +39,13 @@ export function StartupInstanceRecovery() {
       <button type="button" disabled={busy || uncertain} onClick={() => void run("retry_startup")}>起動をやり直す</button>
     </div>
     {uncertain && <p role="status">終了・再起動の要求は再送していません。「もう一度開く」で現在のMONを確認してください。</p>}
-    {error && <p role="alert" className="action-error">{error}</p>}
+    <ErrorNotice scope="startup-instance" type="StartupInstanceRecovery-operation" active={!!(error)}>{error}</ErrorNotice>
     <CommonModal open={review !== null} blocked={busy} onDismiss={() => { setReview(null); setUncertain(false); }} restoreTarget={() => opener.current} aria-labelledby="startup-restart-title">
       <h2 id="startup-restart-title">既存のMONを終了して復旧しますか？</h2>
       <p>応答しないMONを終了し、保存されたデータから起動し直します。録音中・保存中だった場合は、未確定の録音や未保存の編集が残る可能性があります。</p>
       <p>元の音声は削除せず、次の起動時に回収を試みます。回収できない録音はその状態を表示します。</p>
       {busy && <p role="status">既存MONの状態と終了を確認しています。</p>}
-      {error && <p role="alert" className="action-error">{error}</p>}
+      <ErrorNotice scope="startup-instance" type="StartupInstanceRecovery-operation" active={!!(error)}>{error}</ErrorNotice>
       <button type="button" disabled={busy || uncertain || !review} onClick={() => { if (review) void run("recover_startup_instance", { targetId: review }); }}>確認して再起動する</button>
     </CommonModal>
   </section>;

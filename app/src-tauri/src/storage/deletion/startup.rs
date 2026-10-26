@@ -348,3 +348,7 @@ pub(super) fn resolve(
 #[cfg(all(test, unix))]
 #[path = "startup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "startup_migration_tests.rs"]
+mod migration_tests;

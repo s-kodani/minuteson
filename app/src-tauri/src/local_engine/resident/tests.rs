@@ -44,7 +44,7 @@ for line in sys.stdin:
  if r['op']=='shutdown': break
  if r['op']=='infer':
   with open(r['directory']+'/pid','w') as f: f.write(str(os.getpid()))
- print(json.dumps({'protocol':1,'id':r['id'],'op':'ready' if r['op']=='init' else 'done'}),flush=True)
+ print(json.dumps({'protocol':1,'id':r['id'],'op':'ready' if r['op']=='init' else 'done','message':'canonical_pcm_range_v1'}),flush=True)
 "#;
 #[test]
 fn resident_reuses_one_process_and_releases_it_at_job_end() {

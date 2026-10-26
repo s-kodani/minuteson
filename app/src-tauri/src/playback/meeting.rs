@@ -1,11 +1,9 @@
 use super::{PlaybackMissingRange, PreparedAudio};
 use crate::audio::PREVIEW_FRAMES;
 use crate::resampling::Filter;
-use std::sync::Arc;
 
 pub(crate) const MEETING_RATE: u32 = 48_000;
 const MICROS: u128 = 1_000_000;
-const DENOMINATOR: u128 = MICROS * MEETING_RATE as u128;
 const MAX_SAFE_FRAMES: u128 = (1_u128 << 53) - 1;
 
 struct Source {
@@ -20,18 +18,18 @@ struct Source {
 // passed storage membership/format/gap checks. Padding is only outside their
 // known extents; holes within a source must never be represented as silence.
 pub(crate) struct MeetingAudio {
+    pub(crate) sample_rate:u32,
     sources: Vec<Source>,
     pub(crate) end_us: i64,
     pub(crate) total_frames: u64,
     pub(crate) track_kind: String,
     pub(crate) missing_ranges: Vec<PlaybackMissingRange>,
-    pub(crate) cache_key: String,
-    cached: Option<Arc<super::mix_cache::CachedMix>>,
 }
 
 // A view over validated whole-meeting sources. Keep absolute resampling phase
 // and filter halos, but never return PCM outside the requested time interval.
 pub(crate) struct MeetingIntervalAudio {
+    pub(crate) sample_rate: u32,
     audio: MeetingAudio,
     first_frame: u64,
     pub(crate) start_us: i64,
@@ -41,9 +39,6 @@ pub(crate) struct MeetingIntervalAudio {
     pub(crate) missing_ranges: Vec<PlaybackMissingRange>,
 }
 impl MeetingIntervalAudio {
-    pub(crate) fn use_cache(&mut self, cache: &super::mix_cache::MixCache) {
-        self.audio.use_cache(cache);
-    }
     pub(crate) fn new(audio: MeetingAudio, start_us: i64, end_us: i64) -> Result<Self, String> {
         if start_us < 0
             || end_us <= start_us
@@ -52,8 +47,8 @@ impl MeetingIntervalAudio {
         {
             return Err("Markdownの再生区間が会議音声の範囲外です".into());
         }
-        let first_frame = output_frame(start_us)?;
-        let last_frame = output_frame(end_us)?;
+        let first_frame = output_frame_at(start_us,audio.sample_rate)?;
+        let last_frame = output_frame_at(end_us,audio.sample_rate)?;
         let total_frames = last_frame
             .checked_sub(first_frame)
             .filter(|v| *v > 0)
@@ -84,6 +79,7 @@ impl MeetingIntervalAudio {
             ))
         });
         Ok(Self {
+            sample_rate: audio.sample_rate,
             track_kind: audio.track_kind.clone(),
             audio,
             first_frame,
@@ -113,25 +109,10 @@ impl MeetingIntervalAudio {
 }
 
 impl MeetingAudio {
-    pub(crate) fn set_cache_key(&mut self, census: &str) -> Result<(), String> {
-        use sha2::{Digest, Sha256};
-        let mut hash = Sha256::new();
-        hash.update(b"MON-mix-f32-48000-v1");
-        hash.update(census.as_bytes());
-        for source in &self.sources {
-            for span in &source.audio.spans {
-                hash.update(span.audio.cache_stamp()?.as_bytes());
-            }
-        }
-        self.cache_key = format!("{:x}", hash.finalize());
+    pub(crate) fn verify_sources(&self)->Result<(),String> {
+        for source in &self.sources {for span in &source.audio.spans {span.audio.check_unchanged()?;}}
         Ok(())
     }
-
-    pub(crate) fn use_cache(&mut self, cache: &super::mix_cache::MixCache) {
-        self.cached = cache.get(&self.cache_key);
-    }
-
-    #[cfg(test)]
     pub(crate) fn new(sources: Vec<PreparedAudio>, end_us: i64) -> Result<Self, String> {
         Self::with_missing_ranges(sources, end_us, vec![])
     }
@@ -139,8 +120,12 @@ impl MeetingAudio {
     pub(crate) fn with_missing_ranges(
         sources: Vec<PreparedAudio>,
         end_us: i64,
-        mut missing_ranges: Vec<PlaybackMissingRange>,
+        missing_ranges: Vec<PlaybackMissingRange>,
     ) -> Result<Self, String> {
+        Self::with_rate(sources,end_us,missing_ranges,MEETING_RATE)
+    }
+    pub(crate) fn with_rate(sources:Vec<PreparedAudio>,end_us:i64,mut missing_ranges:Vec<PlaybackMissingRange>,sample_rate:u32)->Result<Self,String> {
+        if !matches!(sample_rate,16000|48000) {return Err("ミックス出力のサンプルレートが不正です".into());}
         if sources.is_empty() || sources.len() > 2 || end_us <= 0 {
             return Err("会議音声の構成が不正です".into());
         }
@@ -150,7 +135,8 @@ impl MeetingAudio {
         {
             return Err("両方の再生にはマイクとPC音声が一つずつ必要です".into());
         }
-        let total_frames = output_frame(end_us)?;
+        let total_frames = output_frame_at(end_us,sample_rate)?;
+        let input_frames=output_frame(end_us)?;
         if missing_ranges.len() > 2 * crate::audio_clock::MAX_CLOCK_GAPS
             || sources.iter().any(|source| {
                 missing_ranges
@@ -160,7 +146,7 @@ impl MeetingAudio {
                     > crate::audio_clock::MAX_CLOCK_GAPS
             })
             || missing_ranges.iter().any(|gap| {
-                gap.end_frame > total_frames
+                gap.end_frame > input_frames
                     || gap.end_frame <= gap.start_frame
                     || PlaybackMissingRange::new(
                         &gap.track_kind,
@@ -179,6 +165,12 @@ impl MeetingAudio {
             })
         {
             return Err("会議音声の欠損構成が不正です".into());
+        }
+        if sample_rate!=MEETING_RATE {
+            missing_ranges.retain(|gap|output_frame_at(gap.start_us,sample_rate).ok()!=output_frame_at(gap.end_us,sample_rate).ok());
+            for gap in &mut missing_ranges {
+                *gap=PlaybackMissingRange::at_rate(&gap.track_kind,gap.start_us,gap.end_us,&gap.reason_code,end_us,sample_rate)?;
+            }
         }
         missing_ranges.sort_by(|left, right| {
             (left.start_frame, left.end_frame, &left.track_kind).cmp(&(
@@ -236,11 +228,11 @@ impl MeetingAudio {
             {
                 return Err("会議音声の時間とフレーム数が一致しません".into());
             }
-            let first_output = output_frame(audio.start_us)?;
-            let last_output = output_frame(audio.end_us)?;
-            let aligned = audio.sample_rate == MEETING_RATE
-                && (audio.start_us as u128 * u128::from(MEETING_RATE)).is_multiple_of(MICROS);
-            let filter = (!aligned).then(|| Filter::new(audio.sample_rate, MEETING_RATE));
+            let first_output = output_frame_at(audio.start_us,sample_rate)?;
+            let last_output = output_frame_at(audio.end_us,sample_rate)?;
+            let aligned = audio.sample_rate == sample_rate
+                && (audio.start_us as u128 * u128::from(sample_rate)).is_multiple_of(MICROS);
+            let filter = (!aligned).then(|| Filter::new(audio.sample_rate, sample_rate));
             prepared.push(Source {
                 audio,
                 filter,
@@ -251,12 +243,11 @@ impl MeetingAudio {
         }
         Ok(Self {
             sources: prepared,
+            sample_rate,
             end_us,
             total_frames,
             track_kind,
             missing_ranges,
-            cache_key: String::new(),
-            cached: None,
         })
     }
 
@@ -304,14 +295,7 @@ impl MeetingAudio {
         if !pad && self.readable_frames(offset, frames)? != frames {
             return Err("会議音声の読出しが欠損区間を横断しています".into());
         }
-        if let Some(cache) = &self.cached {
-            for source in &self.sources {
-                for span in &source.audio.spans {
-                    span.audio.check_unchanged()?;
-                }
-            }
-            return cache.read(offset, frames);
-        }
+        let denominator=MICROS*u128::from(self.sample_rate);
         let mut mixed = vec![0_f64; frames as usize];
         // Constant headroom for both: no gain jump when one track starts/ends.
         let gain = 1.0 / self.sources.len() as f64;
@@ -352,7 +336,7 @@ impl MeetingAudio {
                 let pcm = clock.read_known(
                     &mut source.audio.spans,
                     source.audio.channels,
-                    MEETING_RATE,
+                    self.sample_rate,
                     first,
                     last - first,
                     has_gaps.then_some((known_start, known_end)),
@@ -373,7 +357,7 @@ impl MeetingAudio {
             let start_us = source.audio.start_us as u128;
             let sample_rate = u128::from(source.audio.sample_rate);
             let position = |output: u64| {
-                (u128::from(output) * MICROS - start_us * u128::from(MEETING_RATE)) * sample_rate
+                (u128::from(output) * MICROS - start_us * u128::from(self.sample_rate)) * sample_rate
             };
             let first_position = position(first);
             let last_position = position(last - 1);
@@ -382,12 +366,12 @@ impl MeetingAudio {
                 .as_ref()
                 .map_or(0, |filter| filter.half as u64);
             let known_first = if has_gaps {
-                position(known_start.max(source.first_output)).div_ceil(DENOMINATOR) as u64
+                position(known_start.max(source.first_output)).div_ceil(denominator) as u64
             } else {
                 0
             };
             let known_last = if has_gaps {
-                (position(known_end.min(source.last_output)) / DENOMINATOR) as u64
+                (position(known_end.min(source.last_output)) / denominator) as u64
             } else {
                 source.frames
             };
@@ -395,11 +379,11 @@ impl MeetingAudio {
             if known_first >= known_last {
                 return Err("欠損の外側に補間可能な保存音声がありません".into());
             }
-            let from = ((first_position / DENOMINATOR) as u64)
+            let from = ((first_position / denominator) as u64)
                 .saturating_sub(half)
                 .max(known_first)
                 .min(source.frames - 1);
-            let to = ((last_position / DENOMINATOR) as u64 + half + 1).min(known_last);
+            let to = ((last_position / denominator) as u64 + half + 1).min(known_last);
             if from >= to {
                 return Err("欠損の外側に補間可能な保存音声がありません".into());
             }
@@ -420,9 +404,9 @@ impl MeetingAudio {
             for output in first..last {
                 let numerator = position(output);
                 let value = match &source.filter {
-                    Some(filter) => filter.sample_at(&mono, numerator, DENOMINATOR, from),
+                    Some(filter) => filter.sample_at(&mono, numerator, denominator, from),
                     None => {
-                        mono[((numerator / DENOMINATOR) as u64)
+                        mono[((numerator / denominator) as u64)
                             .min(source.frames - 1)
                             .saturating_sub(from) as usize]
                     }
@@ -453,10 +437,13 @@ impl MeetingAudio {
 }
 
 fn output_frame(micros: i64) -> Result<u64, String> {
+    output_frame_at(micros,MEETING_RATE)
+}
+fn output_frame_at(micros:i64,rate:u32)->Result<u64,String> {
     if micros < 0 {
         return Err("会議音声の時刻が不正です".into());
     }
-    let frame = (micros as u128 * u128::from(MEETING_RATE)).div_ceil(MICROS);
+    let frame = (micros as u128 * u128::from(rate)).div_ceil(MICROS);
     if frame > MAX_SAFE_FRAMES {
         return Err("会議音声の時間が再生可能範囲外です".into());
     }

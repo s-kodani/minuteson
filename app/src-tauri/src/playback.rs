@@ -5,7 +5,6 @@ use uuid::Uuid;
 
 mod clock;
 mod meeting;
-pub(crate) mod mix_cache;
 mod preparation;
 pub(crate) use clock::ClockAudio;
 pub(crate) use meeting::{MeetingAudio, MeetingIntervalAudio};
@@ -77,7 +76,10 @@ impl PlaybackMissingRange {
         reason: &str,
         total_us: i64,
     ) -> Result<Self, String> {
-        if !matches!(kind, "mic" | "system" | "imported" | "processed")
+        Self::at_rate(kind,start,end,reason,total_us,meeting::MEETING_RATE)
+    }
+    pub(crate) fn at_rate(kind:&str,start:i64,end:i64,reason:&str,total_us:i64,rate:u32)->Result<Self,String> {
+        if !matches!(rate,16000|48000) || !matches!(kind, "mic" | "system" | "imported" | "processed")
             || start < 0
             || end <= start
             || end > total_us
@@ -88,8 +90,8 @@ impl PlaybackMissingRange {
             return Err("会議音声の欠損記録が不正です".into());
         }
         let start_frame =
-            u64::try_from(start as u128 * 48000 / 1000000).map_err(|_| "欠損位置が範囲外です")?;
-        let end_frame = crate::audio_clock::frame_at(end, meeting::MEETING_RATE)?;
+            u64::try_from(start as u128 * u128::from(rate) / 1000000).map_err(|_| "欠損位置が範囲外です")?;
+        let end_frame = crate::audio_clock::frame_at(end, rate)?;
         Ok(Self {
             track_kind: kind.into(),
             start_us: start,
@@ -160,12 +162,12 @@ impl PlaybackStore {
     pub(crate) fn insert_meeting(&self, audio: MeetingAudio) -> Result<PlaybackInfo, String> {
         let info = PlaybackInfo {
             token: Uuid::new_v4().to_string(),
-            sample_rate: meeting::MEETING_RATE,
+            sample_rate: audio.sample_rate,
             channels: 1,
             total_frames: audio.total_frames,
             start_us: 0,
             end_us: audio.end_us,
-            track_kind: audio.track_kind.clone(),
+            track_kind: "mixed".into(),
             // Mixing/resampling is not evidence of physically synchronized capture.
             alignment: "unverified".into(),
             missing_ranges: audio.missing_ranges.clone(),
@@ -179,12 +181,12 @@ impl PlaybackStore {
     ) -> Result<PlaybackInfo, String> {
         let info = PlaybackInfo {
             token: Uuid::new_v4().to_string(),
-            sample_rate: meeting::MEETING_RATE,
+            sample_rate: audio.sample_rate,
             channels: 1,
             total_frames: audio.total_frames,
             start_us: audio.start_us,
             end_us: audio.end_us,
-            track_kind: audio.track_kind.clone(),
+            track_kind: "mixed".into(),
             alignment: "unverified".into(),
             missing_ranges: audio.missing_ranges.clone(),
         };

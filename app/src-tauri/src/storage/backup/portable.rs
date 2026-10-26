@@ -19,6 +19,7 @@ pub(super) const TABLES: &[&str] = &[
     "track_clock_segments",
     "audio_gaps",
     "track_inputs",
+    "meeting_audio_commits",
     "analysis_revisions",
     "speakers",
     "speaker_segments",
@@ -128,6 +129,7 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         .chain(
             [
                 "app_settings",
+                "audio_upgrade_progress",
                 "schema_migrations",
                 "restore_batches",
                 "restore_identity_maps",
@@ -435,6 +437,9 @@ pub(super) fn portable_completion(
 }
 
 pub(super) fn temporary_pcm(db: &Connection, asset: &FileAsset) -> Result<bool, String> {
+    let canonical:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id WHERE c.file_asset_id=?1)",[&asset.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if canonical {return Ok(false);}
+
     if asset.media_type == "audio/wav" && super::exclusions::matches(db, asset, "recreatable_pcm")?
     {
         return Ok(true);

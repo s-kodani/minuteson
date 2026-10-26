@@ -369,7 +369,10 @@ fn registered_recreatable_pcm_is_omitted_but_durable_source_wav_is_kept() {
             r.get(0)
         })
         .unwrap();
-    assert!(archive.assets.contains_key(&imported_original));
+    assert!(!archive.assets.contains_key(&imported_original));
+    assert!(super::super::meeting_audio::superseded_asset(&archive.database, &imported_original).unwrap());
+    let canonical: String = archive.database.query_row("SELECT c.file_asset_id FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id", [], |r| r.get(0)).unwrap();
+    assert!(archive.assets.contains_key(&canonical));
     let result: Value =
         serde_json::from_slice(&std::fs::read(&archive.assets[&result.id]).unwrap()).unwrap();
     assert_eq!(result["params"]["model"], "model.bin");
@@ -523,6 +526,11 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
     let asset = storage
         .register_ready_meeting_asset(&meeting.id, Path::new(&relative), "application/json")
         .unwrap();
+    {
+        let db=storage.connection.lock().unwrap();
+        db.execute("UPDATE meeting_audio_commits SET manifest_asset_id=?1,manifest_hash=?2",params![asset.id,asset.content_hash]).unwrap();
+        db.execute("DELETE FROM file_assets WHERE id='manifest'",[]).unwrap();
+    }
     storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET audio_manifest_hash=?1,capture_config_json=?2,capture_mode='application'",params![asset.content_hash,json!({"mode":"application","backend":"screencapturekit","target_pids":[777],"target_application_identity":application_identity,"microphone_device_uid":"private-device-123"}).to_string()]).unwrap();
     let tx_connection = storage.connection.lock().unwrap();
     let tx = tx_connection.unchecked_transaction().unwrap();

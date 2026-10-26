@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Identity {
+pub(in crate::storage) struct Identity {
     device: u64,
     inode: u64,
     uid: u32,
@@ -27,7 +27,7 @@ pub(super) struct Identity {
     birth: (u64, u32),
 }
 impl Identity {
-    pub(super) fn read(metadata: &Metadata) -> Result<Self, String> {
+    pub(in crate::storage) fn read(metadata: &Metadata) -> Result<Self, String> {
         let birth = metadata
             .created()
             .map_err(|e| e.to_string())?
@@ -42,7 +42,7 @@ impl Identity {
         })
     }
     #[cfg(any(target_os = "macos", windows))]
-    pub(super) fn registered(&self) -> Result<(u64, u64, u64), String> {
+    pub(in crate::storage) fn registered(&self) -> Result<(u64, u64, u64), String> {
         self.validate(self.mode & libc::S_IFMT as u32 == libc::S_IFDIR as u32)?;
         Ok((
             self.device,
@@ -51,11 +51,11 @@ impl Identity {
                 .0
                 .checked_mul(1_000_000_000)
                 .and_then(|n| n.checked_add(self.birth.1.into()))
-                .ok_or("FLAC実体の時刻が範囲外です")?,
+                .ok_or("音声保存実体の時刻が範囲外です")?,
         ))
     }
     #[cfg(any(target_os = "macos", windows))]
-    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
+    pub(in crate::storage) fn validate(&self, directory: bool) -> Result<(), String> {
         let kind = if directory {
             libc::S_IFDIR
         } else {
@@ -65,38 +65,38 @@ impl Identity {
             || self.mode & libc::S_IFMT as u32 != kind as u32
             || self.uid != crate::native_fs::current_owner()?
         {
-            return Err("FLAC実体の所有記録が不正です".into());
+            return Err("音声保存実体の所有記録が不正です".into());
         }
         Ok(())
     }
-    pub(super) fn file(file: &File) -> Result<Self, String> {
+    pub(in crate::storage) fn file(file: &File) -> Result<Self, String> {
         let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         if !m.is_file()
             || m.nlink() != 1
             || m.uid() != crate::native_fs::current_owner()?
             || m.mode() & 0o077 != 0
         {
-            return Err("FLAC作業ファイルの実体・所有・権限が不正です".into());
+            return Err("音声保存作業ファイルの実体・所有・権限が不正です".into());
         }
         Self::read(&m)
     }
-    pub(super) fn require(&self, file: &File) -> Result<(), String> {
+    pub(in crate::storage) fn require(&self, file: &File) -> Result<(), String> {
         if *self != Self::file(file)? {
-            return Err("FLAC作業ファイルが差し替えられています".into());
+            return Err("音声保存作業ファイルが差し替えられています".into());
         }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Stamp {
+pub(in crate::storage) struct Stamp {
     identity: Identity,
     size: u64,
     modified: (i64, i64),
     changed: (i64, i64),
 }
 impl Stamp {
-    pub(super) fn read(file: &File) -> Result<Self, String> {
+    pub(in crate::storage) fn read(file: &File) -> Result<Self, String> {
         let m = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         Ok(Self {
             identity: Identity::file(file)?,
@@ -105,15 +105,15 @@ impl Stamp {
             changed: (m.ctime(), m.ctime_nsec()),
         })
     }
-    pub(super) fn require(&self, file: &File) -> Result<(), String> {
+    pub(in crate::storage) fn require(&self, file: &File) -> Result<(), String> {
         if *self != Self::read(file)? {
-            return Err("FLAC確定証拠が検証後に変更されています".into());
+            return Err("音声保存確定証拠が検証後に変更されています".into());
         }
         Ok(())
     }
 }
 
-pub(super) struct Directory {
+pub(in crate::storage) struct Directory {
     pub file: File,
     pub path: PathBuf,
     pub identity: Identity,
@@ -124,7 +124,7 @@ fn name(value: &str) -> Result<CString, String> {
         || matches!(value, "." | "..")
         || value.contains(['/', '\\'])
     {
-        return Err("FLAC作業名が不正です".into());
+        return Err("音声保存作業名が不正です".into());
     }
     CString::new(value).map_err(|e| e.to_string())
 }
@@ -139,12 +139,12 @@ fn descriptor(fd: NativeDescriptor) -> Result<File, String> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 impl Directory {
-    pub(super) fn open(path: &Path) -> Result<Self, String> {
+    pub(in crate::storage) fn open(path: &Path) -> Result<Self, String> {
         let file = crate::input_levels::open_capture_directory(path)?;
         let identity =
             Identity::read(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)?;
         if identity.uid != crate::native_fs::current_owner()? {
-            return Err("FLAC管理先の所有者が不正です".into());
+            return Err("音声保存管理先の所有者が不正です".into());
         }
         Ok(Self {
             file,
@@ -152,14 +152,14 @@ impl Directory {
             identity,
         })
     }
-    pub(super) fn verify(&self) -> Result<(), String> {
+    pub(in crate::storage) fn verify(&self) -> Result<(), String> {
         let current = Self::open(&self.path)?;
         if self.identity != current.identity {
-            return Err("FLAC管理先が差し替えられています".into());
+            return Err("音声保存管理先が差し替えられています".into());
         }
         Ok(())
     }
-    pub(super) fn create_child(&self, leaf: &str) -> Result<Self, String> {
+    pub(in crate::storage) fn create_child(&self, leaf: &str) -> Result<Self, String> {
         self.verify()?;
         if unsafe { libc::mkdirat(self.file.as_raw_fd(), name(leaf)?.as_ptr(), 0o700) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
@@ -169,7 +169,7 @@ impl Directory {
         self.verify()?;
         Ok(child)
     }
-    pub(super) fn optional(&self, leaf: &str, writable: bool) -> Result<Option<File>, String> {
+    pub(in crate::storage) fn optional(&self, leaf: &str, writable: bool) -> Result<Option<File>, String> {
         self.verify()?;
         let fd = unsafe {
             libc::openat(
@@ -192,11 +192,11 @@ impl Directory {
         Identity::file(&file)?;
         Ok(Some(file))
     }
-    pub(super) fn required(&self, leaf: &str, writable: bool) -> Result<File, String> {
+    pub(in crate::storage) fn required(&self, leaf: &str, writable: bool) -> Result<File, String> {
         self.optional(leaf, writable)?
-            .ok_or("FLAC作業の確定証拠が不足しています".into())
+            .ok_or("音声保存作業の確定証拠が不足しています".into())
     }
-    pub(super) fn create(&self, leaf: &str) -> Result<File, String> {
+    pub(in crate::storage) fn create(&self, leaf: &str) -> Result<File, String> {
         self.verify()?;
         let file = descriptor(unsafe {
             libc::openat(
@@ -209,13 +209,13 @@ impl Directory {
         Identity::file(&file)?;
         Ok(file)
     }
-    pub(super) fn read_json(&self, leaf: &str) -> Result<Option<(Vec<u8>, Stamp)>, String> {
+    pub(in crate::storage) fn read_json(&self, leaf: &str) -> Result<Option<(Vec<u8>, Stamp)>, String> {
         let Some(mut file) = self.optional(leaf, false)? else {
             return Ok(None);
         };
         let stamp = Stamp::read(&file)?;
         if stamp.size == 0 || stamp.size > 512 * 1024 {
-            return Err("FLAC確定記録が容量上限外です".into());
+            return Err("音声保存確定記録が容量上限外です".into());
         }
         let mut bytes = Vec::new();
         (&mut file)
@@ -223,13 +223,13 @@ impl Directory {
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
         if bytes.len() as u64 != stamp.size {
-            return Err("FLAC確定記録が読込み中に変わりました".into());
+            return Err("音声保存確定記録が読込み中に変わりました".into());
         }
         stamp.require(&file)?;
         stamp.require(&self.required(leaf, false)?)?;
         Ok(Some((bytes, stamp)))
     }
-    pub(super) fn rename(&self, from: &str, to: &str, exclusive: bool) -> Result<(), String> {
+    pub(in crate::storage) fn rename(&self, from: &str, to: &str, exclusive: bool) -> Result<(), String> {
         self.verify()?;
         let from = name(from)?;
         let to = name(to)?;
@@ -262,7 +262,7 @@ impl Directory {
         crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         self.verify()
     }
-    pub(super) fn json(
+    pub(in crate::storage) fn json(
         &self,
         leaf: &str,
         value: &impl Serialize,
@@ -270,7 +270,7 @@ impl Directory {
     ) -> Result<(), String> {
         let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
         if bytes.len() > 512 * 1024 {
-            return Err("FLAC確定記録が大きすぎます".into());
+            return Err("音声保存確定記録が大きすぎます".into());
         }
         let temporary = format!(".{}.json.part", uuid::Uuid::new_v4());
         let mut file = self.create(&temporary)?;

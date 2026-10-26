@@ -270,6 +270,14 @@ impl FixedWorkspace {
                 .map_err(|e| e.to_string())?;
             let import_manifest: bool = row.get(5).map_err(|e| e.to_string())?;
             let foundation: bool = row.get(6).map_err(|e| e.to_string())?;
+            if super::super::super::meeting_audio::superseded_asset(&source.database, &id)? {
+                fixed.absent_superseded_asset(&meeting,&id)?;
+                // Historical input hashes remain in the database. Their bytes
+                // were retired only after the canonical WAV was committed.
+                let destination = crate::native_fs::join(self.stage.path(), &relative);
+                scratch::directories(destination.parent().ok_or("復元先フォルダーがありません")?)?;
+                continue;
+            }
             if source.deleted_audio.asset(&meeting, &id).is_some() {
                 fixed.absent_source_asset(&meeting, &id)?;
                 // Seal walks all minted parents, including missing assets. Make
@@ -347,6 +355,8 @@ impl FixedWorkspace {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        self.database.execute_batch("UPDATE meeting_audio_commits SET manifest_hash=(SELECT content_hash FROM file_assets WHERE id=manifest_asset_id);")
+            .map_err(|e|e.to_string())?;
         let mut query = source
             .database
             .prepare("SELECT meeting_id,manifest_asset_id,manifest_hash FROM audio_import_commits WHERE manifest_asset_id IS NOT NULL AND manifest_hash IS NOT NULL")

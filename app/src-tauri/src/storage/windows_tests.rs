@@ -110,7 +110,7 @@ fn windows_parity_audio_deletion_and_deleted_audio_backup_roundtrip_keep_meeting
             &|_| {}
         )
         .is_err());
-    assert!(base.join("audio.flac").is_file());
+    storage.verify_canonical_audio(&import.meeting_id,&||false).unwrap();
     let result = deletion
         .execute(
             &storage,

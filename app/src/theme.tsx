@@ -76,6 +76,6 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
   </>;
 }
 export function ThemeReadNotice() {
-  const { state } = useTheme();
-  return state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null;
+  // ThemeNotifications (main) and the recorder relay own error presentation.
+  return null;
 }

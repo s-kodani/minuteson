@@ -6,19 +6,16 @@ export interface MeetingAudioSummary { schemaVersion: 1; durationUs: number; mod
 export interface MarkdownIntervalRequest extends MarkdownAudioInterval {
   meetingId: string; mode: MeetingPlaybackMode; expectedDurationUs: number;
 }
-const modes: MeetingPlaybackMode[] = ["mic", "system", "both", "imported"];
+const modes: MeetingPlaybackMode[] = ["mixed"];
 export function validateAudioSummary(value: MeetingAudioSummary): MeetingAudioSummary {
   if (!value || value.schemaVersion !== 1 || !Number.isSafeInteger(value.durationUs) || value.durationUs <= 0
     || !Array.isArray(value.modes) || value.modes.length > modes.length
-    || value.modes.some(mode => !modes.includes(mode)) || new Set(value.modes).size !== value.modes.length
-    || value.modes.includes("both") && (!value.modes.includes("mic") || !value.modes.includes("system"))
-    || value.modes.includes("imported") && value.modes.length !== 1) throw Error("会議音声の時間・種類を確認できません。");
+    || value.modes.some(mode => !modes.includes(mode)) || new Set(value.modes).size !== value.modes.length) throw Error("会議音声の時間・種類を確認できません。");
   return { ...value, modes: [...value.modes] };
 }
 export function markdownIntervalRequest(meetingId: string, summary: MeetingAudioSummary, interval: MarkdownAudioInterval): MarkdownIntervalRequest {
   validateAudioSummary(summary);
-  const mode = summary.modes.includes("imported") ? "imported" : summary.modes.includes("both") ? "both"
-    : summary.modes.includes("mic") ? "mic" : summary.modes.includes("system") ? "system" : null;
+  const mode = summary.modes.includes("mixed") ? "mixed" : null;
   if (!meetingId || !mode || !Number.isSafeInteger(interval.startUs) || !Number.isSafeInteger(interval.endUs)
     || interval.startUs < 0 || interval.endUs <= interval.startUs || interval.endUs > summary.durationUs)
     throw Error("Markdownの再生区間に保存音声がありません。");

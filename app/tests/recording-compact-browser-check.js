@@ -15,8 +15,10 @@ async page=>{
   const fits=async(desktop=true)=>{
     const bounds=await workspace().evaluate(e=>{
       const rect=e.getBoundingClientRect(),port=e.closest('.content');
-      return {width:rect.width,bottom:rect.bottom,viewport:innerHeight,overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,scrolls:port.scrollHeight>port.clientHeight+1};
+      const parent=port.getBoundingClientRect(),css=getComputedStyle(port);
+      return {width:rect.width,left:rect.left,right:rect.right,contentLeft:parent.left+parseFloat(css.paddingLeft),contentRight:parent.left+port.clientWidth-parseFloat(css.paddingRight),bottom:rect.bottom,viewport:innerHeight,overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,scrolls:port.scrollHeight>port.clientHeight+1};
     });
+    check(Math.abs(bounds.left-bounds.contentLeft)<1&&Math.abs(bounds.right-bounds.contentRight)<1,`recording card does not fill shared content width ${JSON.stringify(bounds)}`);
     check(!bounds.overflow&&!bounds.pageOverflow,`horizontal overflow ${JSON.stringify(bounds)}`);
     if(desktop)check(!bounds.scrolls&&bounds.bottom<=bounds.viewport,`desktop scroll ${JSON.stringify(bounds)}`);
     const selects=await workspace().getByRole('combobox').evaluateAll(fields=>fields.map(field=>{

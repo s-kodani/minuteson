@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import { IconButton } from "./action-icon";
@@ -55,12 +56,12 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
       </>}
       {open&&run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||!control.connected||control.commandBusy||!matches}/>}
       {!run.busy&&<IconButton label="テスト音声を破棄" icon="trash" type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard} />}
-      {run.cleanupPending&&<p role="alert">一時音声の回収が未完了です。破棄を再確認するまで録音・終了はできません。</p>}
-      {run.errorMessage&&<p role="alert" className="action-error">{run.errorMessage}</p>}
+      <ErrorNotice scope="capture-test" type="cleanup" active={run.cleanupPending}>一時音声の回収が未完了です。破棄を再確認するまで録音・終了はできません。</ErrorNotice>
+      <ErrorNotice scope="capture-test" type="test-run" active={!!(run.errorMessage)}>{run.errorMessage}</ErrorNotice>
     </>}
-    {control.pending&&<p role="alert">開始要求の受付結果が未確認です。開始は再送しません。</p>}
+    <ErrorNotice scope="capture-test" type="unknown-request" active={!!control.pending}>開始要求の受付結果が未確認です。開始は再送しません。</ErrorNotice>
     {!control.connected&&<p role="status">テストの状態を確認できていません。</p>}
-    {control.error&&<p role="alert" className="action-error">{control.error}</p>}
+    <ErrorNotice scope="capture-test" type="CaptureTestPanel-operation" active={!!(control.error)}>{control.error}</ErrorNotice>
     </CommonModal>
   </section>;
 }

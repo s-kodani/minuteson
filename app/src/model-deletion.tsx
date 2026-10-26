@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { rowMenuReturnTarget } from "./row-menu";
@@ -188,10 +189,10 @@ export function ModelDeletionDialog({ operation, control: c }: { operation: Data
           <dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}</dd></dl>
         {p.pending && <p role="alert">途中まで削除している可能性があります。消したファイルは復元しません。</p>}
         {p.phase === "reconfirmation" && <p>以前の計画では {p.previousProcessedPaths} / {p.previousPathCount} パスを処理済みです。現在残る範囲に新しく同意して続行します。</p>}
-        {p.resumeReason && <p role="alert">{p.resumeReason}</p>}
+        <ErrorNotice scope="model-deletion" type="ModelDeletionDialog-resume" active={!!(p.resumeReason)}>{p.resumeReason}</ErrorNotice>
         {p.reconfirmationAllowed && <button type="button" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>変更後の残り範囲を確認する</button>}
         {c.pageBusy && <p role="status">対象ファイルを確認中…</p>}
-        {c.pageError && <p role="alert">{c.pageError}</p>}
+        <ErrorNotice scope="model-deletion" type="ModelDeletionDialog-paths" active={!!(c.pageError)}>{c.pageError}</ErrorNotice>
         {c.page && <><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><code>{e.relativePath}</code><span> — {e.directory ? "フォルダー" : e.present ? bytesLabel(e.bytes ?? 0) : "欠落"}{e.changed ? " · 変更あり" : ""}{!e.registered ? " · 未登録" : ""}</span></li>)}</ul>
           <div className="analysis-actions"><IconButton label="前の50件" icon="previous" type="button" className="small-secondary" disabled={!c.canResolve || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, c.page!.offset - 50))} /><IconButton label="次の50件" icon="next" type="button" className="small-secondary" disabled={!c.canResolve || c.page.nextOffset === null} onClick={() => void c.loadPage(c.page!.nextOffset!)} /></div></>}
         {!!p.unregisteredCount && ["review", "not_started", "reconfirmation"].includes(p.phase) && <label className="deletion-consent"><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={e => c.setIncludeUnknown(e.target.checked)} />一覧の未登録ファイルも削除する</label>}
@@ -202,7 +203,7 @@ export function ModelDeletionDialog({ operation, control: c }: { operation: Data
         {p?.keepAllowed && p.pending && <button type="button" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}
         <button type="button" className="small-secondary" data-dialog-cancel disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.dismiss()}>削除せず閉じる</button></div>}
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ操作の安全な停止を要求</button></div>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
+
     </CommonModal>
   </>;
 }

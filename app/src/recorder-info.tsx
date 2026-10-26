@@ -61,10 +61,12 @@ export function RecorderInfoTrigger({ disabled = false, problem = "" }: { disabl
 export function RecorderInfoWindow() {
   const button = useRef<HTMLButtonElement>(null), running = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [closeResolved, setCloseResolved] = useState(false);
+  useRecorderOperationPublisher("info_read", error, !busy, closeResolved);
   const close = async () => {
     if (running.current || !isTauri()) return;
-    running.current = true; setBusy(true); setError("");
-    try { await invoke("close_recorder_info"); }
+    running.current = true; setBusy(true); setError(""); setCloseResolved(false);
+    try { await invoke("close_recorder_info"); setCloseResolved(true); }
     catch (cause) { setError(String(cause)); }
     finally { running.current = false; setBusy(false); }
   };
@@ -85,7 +87,7 @@ export function RecorderInfoWindow() {
     <p>メイン画面がアクティブな間はミニパネルを隠します。×で閉じても録音は停止しません。メイン画面へ戻り、再び非アクティブにすると表示されます。録音を停止すると閉じます。</p>
     <p>マイクとPCの音声は別々の入力です。無音、切断、欠損は区別して表示します。入力状態や保存の要対応は、メイン画面で詳細と対処方法を確認してください。</p>
     <p>文字起こし・話者分離は録音終了後に行います。説明は×・Esc・infoアイコンの再クリックで閉じられます。他のウィンドウへ移っても表示を保ちます。録音終了・ミニパネル非表示・停止確認時には閉じます。説明を閉じても、録音の停止やデータの変更は行いません。</p>
-    {error && <p role="alert">説明画面を閉じられません：{error}。閉じる操作を再試行できます。</p>}
+
     <ThemeReadNotice />
     <RecorderOperationDetails />
   </main>;

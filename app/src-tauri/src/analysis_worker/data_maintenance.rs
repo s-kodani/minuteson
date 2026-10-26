@@ -65,7 +65,9 @@ impl AnalysisController {
     }
     // Informational only. Actual starts recheck all gates atomically.
     pub(crate) fn data_operation_blocker(&self) -> Result<Option<String>, String> {
-        self.operation_blocker(false)
+        // Short notification reads/writes drain after maintenance reserves its
+        // admission. Sampling them here makes idle backup buttons flicker.
+        self.operation_blocker(true)
     }
     pub(crate) fn deletion_operation_blocker(&self) -> Result<Option<String>, String> {
         self.operation_blocker(true)
@@ -110,6 +112,15 @@ impl AnalysisController {
         cancelled: &impl Fn() -> bool,
     ) -> Result<DataMaintenanceLease, String> {
         self.begin_data_maintenance_inner(recording_active, import_blocked, cancelled, false, false)
+    }
+
+    pub(crate) fn begin_data_maintenance_wait(
+        &self,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DataMaintenanceLease, String> {
+        self.begin_data_maintenance_inner(recording_active, import_blocked, cancelled, false, true)
     }
 
     pub(crate) fn begin_deletion_wait(
@@ -192,7 +203,9 @@ impl AnalysisController {
         {
             if cancelled() || lease.cancelled() || started.elapsed() >= timeout {
                 drop(state);
-                return Err("通知履歴の処理が終わらないため、削除を開始できませんでした".into());
+                return Err(
+                    "通知履歴の処理が終わらないため、データ操作を開始できませんでした".into(),
+                );
             }
             state = self
                 .idle

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ChunkPlayer, decodeAudioPacket, missingAtFrame, nextSavedFrame, playbackStartFrame, playbackPacketFrames, validateMissingRanges, type PlaybackMissingRange, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "../src/playback.ts";
+import { ChunkPlayer, decodeAudioPacket, playbackStartFrame, playbackPacketFrames, validateMissingRanges, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "../src/playback.ts";
 
 function packet(frames: number, channels = 1, rate = 48000) {
   const buffer = new ArrayBuffer(12 + frames * channels * 4);
@@ -179,127 +179,17 @@ test("seeking to the end stops instead of unexpectedly restarting", async () => 
   assert.equal(player.snapshot().frame, info.totalFrames);
 });
 
-function gap(startUs:number,endUs:number,trackKind:PlaybackMissingRange["trackKind"]="mic"):PlaybackMissingRange {
-  return {startUs,endUs,trackKind,startFrame:Math.floor(startUs*48000/1e6),endFrame:Math.ceil(endUs*48000/1e6),reasonCode:"capture_timestamp_gap"};
-}
-function missingInfo(ranges:PlaybackMissingRange[]):PlaybackInfo {
-  return {...info,endUs:10_000_000,totalFrames:480000,missingRanges:ranges};
-}
-function missingPlayer(data:PlaybackInfo) {
+test("canonical playback rejects missing-range metadata rather than skipping meeting time",()=>{
+  const clock=new FakeClock();
+  const player=new ChunkPlayer(clock,async()=>packet(1),()=>{});
+  assert.throws(()=>player.load({...info,missingRanges:[{trackKind:"mic",startUs:100000,endUs:200000,startFrame:4800,endFrame:9600,reasonCode:"capture_timestamp_gap"}]}),/欠損補完済み/);
+  assert.deepEqual(validateMissingRanges({...info,missingRanges:[]}),[]);
+});
+
+test("silent canonical PCM keeps every frame and never advances the cursor early",async()=>{
   const clock=new FakeClock(),reads:number[]=[];
-  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);const frames=playbackPacketFrames(data,offset);assert.ok(frames>0,"no IPC read in a missing interval");return packet(frames);},()=>{});
-  player.load(data);return {clock,reads,player};
-}
-
-test("missing metadata preserves microsecond boundaries and conservatively excludes partial frames",()=>{
-  const data=missingInfo([gap(100001,100002)]);
-  validateMissingRanges(data);
-  assert.deepEqual(missingAtFrame(data,4800),data.missingRanges);
-  assert.equal(playbackPacketFrames(data,0),4800);
-  assert.equal(playbackPacketFrames(data,4800),0);
-  assert.equal(nextSavedFrame(data,4800),4801);
-  assert.deepEqual(missingAtFrame(data,4801),[]);
-});
-
-test("missing metadata rejects forged bounds, shapes, foreign tracks, fabricated alignment and excess records",()=>{
-  const data=missingInfo([gap(100000,200000)]),original=data.missingRanges![0];
-  for(const patch of [{startUs:-1},{endUs:10000001},{endUs:original.startUs},{startUs:0.5},{startFrame:0},{endFrame:9601},{endFrame:NaN},{trackKind:"system"},{reasonCode:""},{reasonCode:"x\n"},{reasonCode:"語".repeat(86)},{foreign:true}]) {
-    assert.throws(()=>validateMissingRanges({...data,missingRanges:[{...original,...patch} as PlaybackMissingRange]}));
-  }
-  for(const patch of [{sampleRate:44100},{channels:2},{startUs:1},{alignment:"verified"},{trackKind:"processed"},{totalFrames:479999},{missingRanges:null}])assert.throws(()=>validateMissingRanges({...data,...patch} as PlaybackInfo));
-  assert.throws(()=>validateMissingRanges(missingInfo([gap(200000,300000),gap(100000,200000)])));
-  assert.throws(()=>validateMissingRanges(missingInfo(Array.from({length:65_538},()=>gap(100000,200000)))));
-  assert.deepEqual(validateMissingRanges(info),[]);
-});
-
-test("dense native clock gaps exceed legacy capacity without padding or crossing missing audio",()=>{
-  const ranges=Array.from({length:2048},(_,index)=>[gap(index*20_000+10_000,(index+1)*20_000,"mic"),gap(index*20_000+10_000,(index+1)*20_000,"system")]).flat();
-  const data:PlaybackInfo={...info,endUs:42_000_000,totalFrames:2_016_000,trackKind:"both",missingRanges:ranges};
-  assert.equal(validateMissingRanges(data).length,4096);
-  assert.equal(playbackPacketFrames(data,0),480);
-  assert.equal(playbackPacketFrames(data,480),0);
-  assert.equal(nextSavedFrame(data,480),960);
-  assert.equal(missingAtFrame(data,480).length,2);
-  assert.equal(playbackPacketFrames(data,960),480);
-});
-
-test("both-track missing ranges advance through overlaps and adjacent boundaries without collapsing meeting time",()=>{
-  const data={...missingInfo([gap(100000,200000),gap(150000,300000,"system"),gap(300000,400000)]),trackKind:"both"};
-  validateMissingRanges(data);
-  assert.equal(nextSavedFrame(data,8000),19200);
-  assert.equal(missingAtFrame(data,8000).length,2);
-  assert.equal(nextSavedFrame(data,500),500);
-  const tail=missingInfo([gap(9_000_000,10_000_000)]);
-  assert.equal(nextSavedFrame(tail,432000),null);
-  assert.equal(nextSavedFrame(tail,480000),null);
-});
-
-test("play at zero skips a leading gap and schedules saved PCM without fabricated silence",async()=>{
-  const {clock,reads,player}=missingPlayer(missingInfo([gap(0,200000)]));
-  await player.play();assert.equal(reads[0],9600);assert.equal(clock.parts.length,3);
-  assert.equal(player.snapshot().frame,9600);assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().error,null);
-  assert.equal(clock.parts[0].packet.channels[0][0],0.25);
-  player.pause();player.seek(0);await player.play();assert.equal(reads[3],9600);
-  player.clear();
-});
-
-test("prefetch finishes all preceding PCM before skipping an interior gap and continuing playback",async()=>{
-  const {clock,reads,player}=missingPlayer(missingInfo([gap(3_000_000,4_000_000)]));
-  await player.play();assert.deepEqual(reads,[0,65536,131072]);
-  assert.equal(clock.parts[2].packet.frames,144000-131072);
-  assert.equal(player.snapshot().playing,true);
-  clock.end(0);await tick();clock.end(1);await tick();
-  assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().frame,131072);
-  clock.end(2);await tick();assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().frame,192000);
-  assert.deepEqual(reads,[0,65536,131072,192000,257536,323072]);assert.equal(player.snapshot().error,null);
-  assert.equal(clock.parts[3].packet.channels[0][0],0.25);
-  player.clear();
-});
-
-test("a trailing gap finishes at the exact timeline end without reading missing PCM or looping",async()=>{
-  const {clock,reads,player}=missingPlayer(missingInfo([gap(100000,10_000_000)]));
-  await player.play();assert.deepEqual(reads,[0]);assert.equal(clock.parts[0].packet.frames,4800);assert.equal(player.snapshot().playing,true);
-  clock.end(0);await tick();assert.equal(player.snapshot().frame,480000);assert.equal(player.snapshot().playing,false);
-  assert.deepEqual(reads,[0]);assert.equal(player.snapshot().error,null);player.clear();
-});
-
-test("all-missing audio completes at the end without any read or scheduled source",async()=>{
-  const {clock,reads,player}=missingPlayer(missingInfo([gap(0,10_000_000)]));
-  await player.play();assert.deepEqual(reads,[]);assert.equal(clock.parts.length,0);
-  assert.equal(player.snapshot().frame,480000);assert.equal(player.snapshot().playing,false);player.clear();
-});
-
-test("overlapping input gaps are skipped as a union before reading valid saved audio",async()=>{
-  const data={...missingInfo([gap(0,200000),gap(100000,300000,"system"),gap(300000,400000)]),trackKind:"both"};
-  const {reads,player}=missingPlayer(data);await player.play();
-  assert.equal(reads[0],19200);assert.equal(player.snapshot().frame,19200);assert.equal(player.snapshot().playing,true);player.clear();
-});
-
-test("a non-step-aligned final PCM packet reaches the exact frame count and can replay from zero",async()=>{
-  const totalFrames=48000+137,data={...info,totalFrames},clock=new FakeClock(),reads:number[]=[];
-  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);return packet(totalFrames-offset);},()=>{});
-  player.load(data);await player.play();assert.deepEqual(reads,[0]);clock.end(0);await tick();
-  assert.equal(player.snapshot().frame,totalFrames);assert.equal(player.snapshot().playing,false);
-  await player.play();assert.deepEqual(reads,[0,0]);assert.equal(player.snapshot().frame,0);player.clear();
-});
-
-test("seek into missing audio invalidates an in-flight packet and resumes only new saved PCM",async()=>{
-  const data=missingInfo([gap(100000,200000)]),clock=new FakeClock(),reads:number[]=[];
-  let release!:(data:ArrayBuffer)=>void;
-  const pending=new Promise<ArrayBuffer>(resolve=>{release=resolve;});
-  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);return reads.length===1?pending:packet(playbackPacketFrames(data,offset));},()=>{});
-  player.load(data);const playing=player.play();await tick();player.seek(6000);release(packet(4800));await playing;await tick();
-  assert.deepEqual(reads,[0,9600,75136,140672]);assert.equal(clock.parts.length,3);assert.equal(player.snapshot().frame,9600);assert.equal(player.snapshot().playing,true);player.clear();
-});
-
-test("native packet crossing a known gap fails before any PCM is scheduled",async()=>{
-  const clock=new FakeClock(),player=new ChunkPlayer(clock,async()=>packet(65536),()=>{});
-  player.load(missingInfo([gap(100000,200000)]));await player.play();
-  assert.equal(clock.parts.length,0);assert.match(player.snapshot().error!,/一致しません/);player.clear();
-});
-
-test("loaded missing metadata is an owned snapshot rather than a mutable IPC object",async()=>{
-  const data=missingInfo([gap(0,200000)]),{reads,player}=missingPlayer(data);
-  data.missingRanges![0].endFrame=1;data.missingRanges!.length=0;
-  await player.play();assert.equal(reads[0],9600);assert.equal(player.snapshot().info!.missingRanges![0].endFrame,9600);player.clear();
+  const data={...info,totalFrames:48000,endUs:1000000,trackKind:"mixed"};
+  const player=new ChunkPlayer(clock,async(_,frame)=>{reads.push(frame);const p=packet(playbackPacketFrames(data,frame));new Uint8Array(p,12).fill(0);return p;},()=>{});
+  player.load(data);await player.play();assert.deepEqual(reads,[0]);assert.equal(player.snapshot().frame,0);
+  clock.end(0);await tick();assert.equal(player.snapshot().frame,48000);assert.equal(player.snapshot().playing,false);
 });

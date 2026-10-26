@@ -1,6 +1,8 @@
 //! Finite, checkpointed recovery. A rejected engine result is evidence, never
 //! transcript text. Only individually checked leaves contribute utterances.
-use super::{guard, wave, whisper};
+use super::{guard, whisper};
+#[cfg(test)]
+use super::wave;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -211,19 +213,9 @@ fn run_with(
         &dyn Fn() -> bool,
     ) -> Result<Option<Vec<whisper::Segment>>, String>,
 ) -> Result<Option<PathBuf>, String> {
-    let mut wav = vec![];
-    fs::File::open(directory.join("input.wav"))
-        .map_err(|e| e.to_string())?
-        .take(44 + 124 * RATE * 2 + 1)
-        .read_to_end(&mut wav)
-        .map_err(|e| e.to_string())?;
-    if wav.len() < 44 || (wav.len() - 44) % 2 != 0 {
-        return Err("再認識用PCMが不正です".into());
-    }
-    let frames = (wav.len() as u64 - 44) / 2;
-    if frames > 124 * RATE || wav[..44] != wave::wav_header(frames as u32) {
-        return Err("再認識用WAVが固定形式と一致しません".into());
-    }
+    let input=super::input::Input::load(directory,cancelled)?;
+    let frames=input.frames();
+    if frames>124*RATE {return Err("再認識入力が長すぎます".into());}
     let core_end = core_end.min(frames);
     if state.is_none() {
         let mut remaining = vec![];
@@ -272,16 +264,7 @@ fn run_with(
             uuid::Uuid::new_v4()
         ));
         fs::create_dir(&child).map_err(|e| e.to_string())?;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(child.join("input.wav"))
-            .map_err(|e| e.to_string())?;
-        file.write_all(&wave::wav_header((end - first) as u32))
-            .and_then(|_| file.write_all(&wav[44 + first as usize * 2..44 + end as usize * 2]))
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        drop(file);
+        input.slice(first,end)?.write(&child)?;
         let mut plain = config.clone();
         plain.prompt.clear();
         if range.depth == 4 || range.end - range.first <= 8 * RATE {

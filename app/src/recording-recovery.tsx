@@ -3,6 +3,19 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { acceptRecovery, recoveryProgress, type RecoverySnapshot } from "./recording-recovery-state";
 import { usePublishJobReadStatus, usePublishProgress } from "./operation-progress";
+import { IssueNotice, ToastNotice } from "./toast";
+import type { RecoverySnapshot as Snapshot } from "./recording-recovery-state";
+
+export function RecordingRecoveryNotifications({ snapshot, error }: { snapshot: Snapshot | null; error: string | null }) {
+  return <>
+    <IssueNotice scope="recording-recovery" type="read" label="録音回復の状態" message={error ? `回復状態を確認できません。表示は前回取得した状態です。${error}` : snapshot?.error} />
+    {snapshot?.items.filter(item => item.phase === "failed" || item.phase === "succeeded").map(item =>
+      <ToastNotice key={item.sessionId} scope={item.sessionId} type="recording-recovery-result"
+        meetingId={item.meetingId} eventId={`${snapshot.runId}:${item.sessionId}:${item.phase}`}
+        level={item.phase === "failed" ? "error" : "success"}
+        message={item.phase === "failed" ? `「${item.meetingTitle}」を回復できませんでした。録音は未完了のまま保持しています。元ファイルは保持しています。${item.error ?? "詳細は内部ログで確認してください。"}` : `「${item.meetingTitle}」の録音を回復し、保存を完了しました。`} />)}
+  </>;
+}
 
 export function useRecordingRecovery() {
   const latest = useRef<RecoverySnapshot | null>(null);

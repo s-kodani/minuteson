@@ -26,7 +26,7 @@ async (page, capturePath, platform = "windows") => {
   await page.getByText(/回復状態を確認できません。表示は前回取得した状態です。/).first().waitFor();
   await common().getByText("録音を回復中",{exact:true}).waitFor();
   await page.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
-  await page.getByText("ジョブの状態を取得できません。表示は前回取得した状態です。自動で再確認します。",{exact:true}).waitFor();
+  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"ジョブの状態を取得できません"}).waitFor();
   check(await page.getByRole("heading",{name:"進行中のジョブはありません",exact:true}).count()===0,"failed read showed empty success");
   results.push("failed reads retain progress and suppress empty success");
   await page.evaluate(()=>{window.recordingRecoveryFixture.fail=false;});
@@ -43,7 +43,7 @@ async (page, capturePath, platform = "windows") => {
   await page.evaluate(async()=>{const r=window.recordingRecoveryFixture;r.stale=false;window.dataFixture.meetings[0].lifecycle="recording";await r.change({phase:"completed",items:[{...r.snapshot.items[0],phase:"failed",error:"合成manifest検証失敗"}]});});
   await page.getByText(/回復できませんでした。録音は未完了のまま保持しています。/).first().waitFor();
   await page.reload();
-  await page.getByRole("cell",{name:/録音未完了・要確認/}).waitFor();
+  await page.getByRole("row").filter({hasText:"回復中の会議"}).getByRole("cell",{name:/録音未完了・要確認/}).waitFor();
   if(capturePath)await page.screenshot({path:capturePath("recording-recovery-failure.png")});
   results.push("failed recovery remains visible without an endless progress bar");
   return {passed:results.length,results};

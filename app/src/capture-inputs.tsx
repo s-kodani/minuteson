@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {useEffect,useId,useRef,useState} from "react";
 import {checkedCaptureInputs,microphoneChoice,usableAutomaticMicrophone,usableMicrophone,type CaptureInputs} from "./capture-input-state";
@@ -47,9 +48,10 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
       {inputs?.devices.map(d=><option key={d.uid} value={d.uid}>{d.name}{d.isDefault?"（OSの既定）":""}</option>)}
     </select>
     {loading&&<p role="status">機器一覧を確認中</p>}
-    {inputs&&!present&&<p role="alert">{mode==="automatic"?"OSの既定入力を確認できません。マイクを接続して再確認してください。":"選択したマイクが見つかりません。接続して再確認するか、別のマイクを選択してください。"}</p>}
-    {permission==="denied"||permission==="restricted"?<p role="alert">{windows?"Windowsの設定 → プライバシーとセキュリティ → マイクで、マイクへのアクセスとデスクトップアプリのアクセスを許可し、一覧を再確認してください。":"マイクの利用を許可してください。macOSのシステム設定で録音ヘルパーのマイク権限を確認し、一覧を再確認してください。"}</p>:inputs&&<p className="capture-input-hint">{permission==="authorized"?"入力未確認":"権限未確認 / 入力未確認"}</p>}
-    {error&&<p role="alert" className="action-error">{error}</p>}
+    <ErrorNotice scope="capture-inputs" type="missing-input" active={!!(inputs&&!present)}>{mode==="automatic"?"OSの既定入力を確認できません。マイクを接続して再確認してください。":"選択したマイクが見つかりません。接続して再確認するか、別のマイクを選択してください。"}</ErrorNotice>
+    <ErrorNotice scope="capture-inputs" type="permission" active={permission==="denied"||permission==="restricted"}>{windows?"Windowsの設定 → プライバシーとセキュリティ → マイクで、マイクへのアクセスとデスクトップアプリのアクセスを許可し、一覧を再確認してください。":"マイクの利用を許可してください。macOSのシステム設定で録音ヘルパーのマイク権限を確認し、一覧を再確認してください。"}</ErrorNotice>
+    {inputs&&permission!=="denied"&&permission!=="restricted"&&<p className="capture-input-hint">{permission==="authorized"?"入力未確認":"権限未確認 / 入力未確認"}</p>}
+    <ErrorNotice scope="capture-inputs" type="CaptureInputSelection-operation" active={!!(error)}>{error}</ErrorNotice>
     </div>
     <CaptureApplicationSelection control={scopeControl} locked={locked}/>
   </section>;

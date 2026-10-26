@@ -756,7 +756,7 @@ pub(super) fn read_snapshot(
     {
         return Err("生成入力の由来情報が変更されています".into());
     }
-    let view = read_analysis_content(tx, meeting_id, id, &hash)?;
+    let view = super::analysis::read_stored_analysis_content(tx, meeting_id, id, &hash)?;
     if working_hash(tx, &view, &title, created_at, started_at, None)? != working {
         return Err("生成入力の作業内容ハッシュが一致しません".into());
     }

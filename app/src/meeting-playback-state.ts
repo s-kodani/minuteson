@@ -1,7 +1,7 @@
 import { validateMissingRanges, type PlaybackInfo } from "./playback.ts";
 import type { DraftUtteranceAudioRequest } from "./transcript-state.ts";
 
-export type MeetingPlaybackMode = "mic" | "system" | "both" | "imported";
+export type MeetingPlaybackMode = "mixed";
 export type MeetingPlaybackStartReference =
   | { kind: "utterance"; analysisId: string; utteranceId: string; expectedContentHash: string; startUs: number; endUs: number }
   | { kind: "draftUtterance"; request: DraftUtteranceAudioRequest }
@@ -19,18 +19,17 @@ export function meetingPlaybackStart(reference: MeetingPlaybackStartReference, d
 }
 
 export function meetingPlaybackModes(sourceType?: "recording" | "audio_import" | null): MeetingPlaybackMode[] {
-  return sourceType === "recording" ? ["mic", "system", "both"] : sourceType === "audio_import" ? ["imported"] : [];
+  return sourceType ? ["mixed"] : [];
 }
 
 // Prefer both only when both saved sources actually exist. Never manufacture
 // a missing PC track or change an explicitly selected mode after preparation.
 export function preferredMeetingPlaybackMode(modes: readonly MeetingPlaybackMode[]): MeetingPlaybackMode | null {
-  return modes.includes("imported") ? "imported" : modes.includes("both") ? "both"
-    : modes.includes("mic") ? "mic" : modes.includes("system") ? "system" : null;
+  return modes.includes("mixed") ? "mixed" : null;
 }
 
 export function meetingPlaybackLabel(mode: MeetingPlaybackMode): string {
-  return { mic:"マイク音声", system:"PC音声", both:"マイク＋PC音声", imported:"取り込み音声" }[mode];
+  return mode === "mixed" ? "会議音声" : "会議音声";
 }
 
 // This contract is distinct from a version-scoped utterance/evidence range.

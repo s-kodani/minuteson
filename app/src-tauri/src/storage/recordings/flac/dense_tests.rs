@@ -115,7 +115,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
             .prepare_meeting_audio(&MeetingPlaybackRequest {
                 start_reference: None,
                 meeting_id: meeting.into(),
-                mode: MeetingPlaybackMode::Both,
+                mode: MeetingPlaybackMode::Mixed,
             })
             .unwrap();
         let store = crate::playback::PlaybackStore::default();

@@ -40,7 +40,8 @@ async (page, capturePath = name => name) => {
   check(await callCount("finish_main_close")===0,"titlebar forced application exit");
   await page.evaluate(()=>{window.titlebarFixture.fail="plugin:window|minimize";});
   await chrome().getByRole("button",{name:"最小化",exact:true}).click();
-  await chrome().getByRole("alert").filter({hasText:"合成ウィンドウ操作失敗"}).waitFor();
+  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"合成ウィンドウ操作失敗"}).waitFor();
+  check(await chrome().getByRole("alert").count()===0,"window error leaked into titlebar");
   check(await chrome().getByRole("button",{name:"ウィンドウを閉じる",exact:true}).isEnabled(),"failed operation disabled controls");
   await page.evaluate(()=>{window.titlebarFixture.fail=null;});
   await chrome().getByRole("button",{name:"最小化",exact:true}).click();

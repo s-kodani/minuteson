@@ -39,7 +39,11 @@ pub(crate) mod meeting_access;
 #[cfg(test)]
 mod meeting_access_tests;
 pub(crate) mod meeting_mix;
-mod meeting_mix_reset;
+pub(crate) mod meeting_audio;
+mod audio_publication;
+#[cfg(any(unix,windows))]
+mod publication_files;
+pub(crate) mod legacy_audio_migration;
 mod meeting_playback;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
@@ -135,6 +139,7 @@ const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recover
 const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
 const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
 const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
+const MIGRATION_35: &str = include_str!("migrations/0035_single_meeting_audio.sql");
 const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
 const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
@@ -460,7 +465,6 @@ impl Storage {
             "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
             params![now_ms()?],
         )?;
-            meeting_mix_reset::initialize(&mut connection, &root)?;
             connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
             connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
             #[cfg(any(unix, windows))]
@@ -808,7 +812,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
         return Ok(true);
     }
     let version = verify_migration_history(connection)?;
-    if version != MIGRATIONS.len() {
+    if version != MIGRATIONS.len() && !legacy_audio_migration::admits_schema(version) {
         return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
     }
     Ok(false)
@@ -816,6 +820,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
 
 fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
+        legacy_audio_migration::upgrade_schema(connection)?;
         return Ok(());
     }
     // These trusted SQL definitions construct a NEW current database only.
@@ -878,6 +883,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (32, MIGRATION_32),
     (33, MIGRATION_33),
     (34, MIGRATION_34),
+    (35, MIGRATION_35),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

@@ -1626,7 +1626,6 @@ mod tests {
         spec.total_units = Some(1);
         let mut input = super::super::analysis::tests::input();
         input.profile_snapshot = spec.profile_snapshot.clone();
-        storage.connection.lock().unwrap().execute("INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES ('manifest',?1,'meeting','meetings/test/manifest.json','application/json',16,'sha256',?2,'ready',0,0)",params![meeting.id,"a".repeat(64)]).unwrap();
         let (source, known) = storage.recorded_analysis_input(&meeting.id).unwrap();
         let known = known.unwrap();
         spec.parameters["source"] = serde_json::to_value(&source).unwrap();

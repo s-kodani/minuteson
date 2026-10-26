@@ -441,7 +441,9 @@ impl<'p, 's> FixedData<'p, 's> {
             {
                 return Err("取り込み変換音声と検査済み欠落履歴が一致しません".into());
             }
-        } else if audio_state != "ready" {
+        } else if audio_state != "ready"
+            && !super::super::meeting_audio::superseded_asset(&source.database, &audio_id)?
+        {
             return Err("取り込み変換音声が利用可能ではありません".into());
         }
         if !deleted_audio::audio_media(&media) || audio_size < 0 || source_size < 0 {
@@ -529,6 +531,15 @@ impl<'p, 's> FixedData<'p, 's> {
         Ok(())
     }
 
+    pub(super) fn absent_superseded_asset(&self,meeting:&str,id:&str)->Result<(),String> {
+        let source=self.ids.source();
+        if !super::super::meeting_audio::superseded_asset(&source.database,id)? {return Err("置換済み音声の検査済み履歴がありません".into());}
+        self.ids.get("file_assets",meeting,id)?;
+        let (size,hash):(i64,String)=source.database.query_row("SELECT size_bytes,content_hash FROM file_assets WHERE id=?1 AND meeting_id=?2",params![id,meeting],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+        self.remember_asset(meeting,id,&hash,size,hash.clone())?;
+        Ok(())
+    }
+
     fn register_asset(
         &self,
         meeting: &str,
@@ -598,7 +609,7 @@ impl<'p, 's> FixedData<'p, 's> {
         let mut plan: RecordedAudioPlan =
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
         let source = self.ids.source();
-        let expected = if known.is_some() {
+        let mut expected = if known.is_some() {
             super::super::transcription::read_analysis_audio_plan(
                 &source.database,
                 meeting,
@@ -616,6 +627,9 @@ impl<'p, 's> FixedData<'p, 's> {
         } else {
             super::super::transcription::read_audio_plan(&source.database, meeting)?
         };
+        if plan!=expected && super::retired_audio::verifies(&source.database,meeting,&plan)? {
+            expected=plan.clone();
+        }
         if plan != expected {
             return Err("固定音声のトラック・区間・時刻・由来が元版と一致しません".into());
         }
@@ -639,6 +653,9 @@ impl<'p, 's> FixedData<'p, 's> {
         for track in &mut plan.tracks {
             track.id = self.ids.get("audio_tracks", meeting, &track.id)?;
             for chunk in &mut track.chunks {
+                if super::super::meeting_audio::superseded_asset(&source.database,&chunk.asset_id)? {
+                    self.absent_superseded_asset(meeting,&chunk.asset_id)?;
+                }
                 let (size, hash) = self.asset_hash(meeting, &chunk.asset_id, &chunk.hash)?;
                 // Audio samples are not transformed. A changed waveform is never
                 // accepted as an ID-only rebase of a fixed audio input.

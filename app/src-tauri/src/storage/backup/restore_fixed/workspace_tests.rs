@@ -150,7 +150,7 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(assets.len(), 4);
+    assert_eq!(assets.len(), 2);
     for (relative, size, hash) in assets {
         assert!(relative.starts_with(&format!("meetings/{new_meeting}/restored/")));
         assert!(!relative.contains(&meeting));

@@ -26,7 +26,7 @@ pub(super) fn candidates(
         events.push((start, kind, key.clone(), 1));
         events.push((end, kind, key, -1));
     };
-    let mut q = tx.prepare("SELECT track_id,start_us,end_us,COALESCE(speaker_id,'') FROM speaker_segments WHERE analysis_revision_id=?1").map_err(|e| e.to_string())?;
+    let mut q = tx.prepare("SELECT COALESCE((SELECT a.track_id FROM meeting_audio_commits a WHERE a.meeting_id=s.meeting_id),s.track_id),start_us,end_us,COALESCE(speaker_id,'') FROM speaker_segments s WHERE analysis_revision_id=?1").map_err(|e| e.to_string())?;
     let mut rows = q.query([&view.id]).map_err(|e| e.to_string())?;
     let mut count = 0;
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {

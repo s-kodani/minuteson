@@ -1,3 +1,4 @@
+import { ErrorNotice, ToastHost } from "./toast";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -66,16 +67,16 @@ export function StartupGate({ children }: { children: ReactNode }) {
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
   </> : !state.error && (!state.report || state.report.phase === "starting")
-    ? <main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main>
+    ? <><ToastHost /><main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main></>
     : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
   const { report, error, busy, quitting, read, quit } = state, f = report?.failure;
   const normal = new URL(window.location.href); normal.searchParams.delete("window"); normal.hash = "";
-  return <main className="startup-attention" aria-label="起動診断">
+  return <main className="startup-attention" aria-label="起動診断"><ToastHost />
     <h1>{report?.platform === "windows" ? "MONの起動と復旧" : "保存先の起動確認"}</h1>
     <p>この画面では録音・取り込み・解析・編集・削除・保存先変更を開始しません。</p>
-    {!isTauri() && <p role="alert">デスクトップ接続がありません。起動結果を確認できません。</p>}
+    <ErrorNotice scope="startup" type="desktop-connection" active={!isTauri()}>デスクトップ接続がありません。起動結果を確認できません。</ErrorNotice>
     {(!report || report.phase === "starting") && <p role="status">起動結果を確認できるまで通常操作は利用できません。</p>}
     {report?.phase === "blocked" && report.platform === "windows" && <StartupInstanceRecovery />}
     {f && <section className="status-card" aria-label="起動を続けられない理由">
@@ -89,9 +90,10 @@ function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport
       <p>他のMONが同じ保存先を使用していないか、外付け保存先の接続、空き容量やアクセス権を確認してください。これらが原因だと断定しているわけではありません。解決できなければ、表示された段階・保存先・診断内容を確認担当者へ伝えてください。共有前に個人情報を確認してください。</p>
       <p>{report?.platform === "windows" ? "上の復旧操作から、既存画面の表示や起動の再試行ができます。" : "終了後、原因を確認してから明示的に再起動してください。"}再起動時は保存先を改めて検証します。保存済みのデータを巻き戻す操作ではありません。</p>
     </section>}
+    {report?.phase === "starting" && report.migration && <p role="status">会議音声を移行しています：{report.migration.completed} / {report.migration.total}件。完了後に通常画面を開きます。</p>}
     {report?.phase === "ready" && <p role="status">保存先の起動確認は完了しています。<a href={normal.href}>通常画面を開く</a></p>}
     <div className="analysis-actions"><IconButton label="保持した診断だけを再読込" icon="refresh" type="button" className="secondary" disabled={!isTauri() || busy || quitting} onClick={() => void read()} />{report?.phase === "blocked" && <button type="button" disabled={busy || quitting} onClick={() => void quit()}>このアプリを終了</button>}</div>
     <p>再読込はメモリに保持した診断だけを読みます。保存先を再び開く、検査・回収する、自動再試行する操作ではありません。</p>
-    {error && <p className="action-error" role="alert">{error}</p>}
+    <ErrorNotice scope="startup-attention" type="StartupAttention-operation" active={!!(error)}>{error}</ErrorNotice>
   </main>;
 }

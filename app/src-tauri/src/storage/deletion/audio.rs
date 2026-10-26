@@ -106,6 +106,10 @@ pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Resu
     Ok(())
 }
 
+pub(in crate::storage) fn source_deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
+    intent::removal::completion::deleted(db, meeting)
+}
+
 pub(in crate::storage) fn backup_deleted(
     storage: &Storage,
     db: &Connection,

@@ -47,7 +47,7 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_application_close_activity") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") {
-    const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker;
+    const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker === "録音通知履歴の確認・更新中" ? null : f.blocker;
     const deletionReason=reason==="録音通知履歴の確認・更新中"?null:reason;
     const result = { available: reason === null, reason, deletionAvailable:deletionReason===null, deletionReason };
     if (f.holdAvailability) return new Promise(resolve => { f.availabilityComplete = () => resolve(result); });

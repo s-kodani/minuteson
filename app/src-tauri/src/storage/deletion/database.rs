@@ -12,6 +12,8 @@ const MAX_MANIFEST: usize = 65_536;
 // Every selector is repository-owned SQL. No request may choose tables or SQL.
 // Order is dependency order, except the three self-referential trees below.
 pub(in crate::storage) const TARGETS: &[(&str, &str)] = &[
+    ("audio_upgrade_progress", "meeting_id=?1"),
+    ("meeting_audio_commits", "meeting_id=?1"),
     ("voice_matches", "meeting_id=?1"),
     ("analysis_flows", "meeting_id=?1"),
     (
@@ -172,7 +174,8 @@ fn current_schema() -> Result<&'static KnownSchema, String> {
 pub(in crate::storage) fn trusted_schema(db: &Connection) -> Result<String, String> {
     Ok(inspect_schema(db)?.hash.clone())
 }
-// Saved deletion history uses the same current schema as new operations.
+// The live DB must be current. Saved receipts may retain the recognized
+// pre-migration schema; that historical consent cannot erase current rows.
 pub(super) fn trusted_history_schema(db: &Connection) -> Result<String, String> {
     trusted_schema(db)
 }
@@ -187,7 +190,15 @@ fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static Kno
     if actual.hash == hash {
         Ok(actual)
     } else {
-        Err("削除履歴のDB定義が現行形式と一致しません".into())
+        static PREVIOUS: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+        let previous = PREVIOUS.get_or_init(|| {
+            let objects = crate::storage::legacy_audio_migration::deletion_schema()?.clone();
+            let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
+            let targets = TARGETS.iter().copied().filter(|(name,_)| objects.iter().any(|(kind,table,_,_)| kind=="table" && table==name)).collect();
+            Ok(KnownSchema { version:34, objects, hash, targets })
+        }).as_ref().map_err(Clone::clone)?;
+        if previous.hash == hash { Ok(previous) }
+        else { Err("削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into()) }
     }
 }
 fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
@@ -869,5 +880,5 @@ pub(super) fn finish_database_purge(
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod history_tests;

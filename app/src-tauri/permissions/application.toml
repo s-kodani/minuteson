@@ -176,6 +176,7 @@ description = "Application commands for recorder-info only."
 commands.allow = [
   "close_recorder_info",
   "get_recorder_operation_notices",
+  "publish_recorder_operation_notice",
   "get_ui_preferences",
 ]
 
@@ -183,6 +184,8 @@ commands.allow = [
 identifier = "recording-confirmation-commands"
 description = "Application commands for recording-confirmation only."
 commands.allow = [
+  "get_recorder_operation_notices",
+  "publish_recorder_operation_notice",
   "decide_recording_confirmation",
   "get_recording_confirmation",
   "get_ui_preferences",

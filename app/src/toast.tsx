@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { Toaster, toast as sonnerToast } from "sonner";
 import { createPortal } from "react-dom";
 import { notificationCapacity, notificationPresenterId, presentationId, presentationStamp, removedPresentationIds, stackCardExposed } from "./toast-presentation";
@@ -31,6 +31,16 @@ export function ToastNotice({ scope, type, message, level = "success", important
 
 export function IssueNotice({ scope, type, message, label, action, historyOnly }: { scope: string; type: string; message: string | null | undefined; label: string; action?: ToastAction; historyOnly?: boolean }) {
   return <ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} historyOnly={historyOnly} />;
+}
+
+/** Operation failures share one notification presenter, including inside a
+ * modal. Explanations and user-opened diagnostics remain ordinary content. */
+export function ErrorNotice({ scope, type, active = true, children }: { scope: string; type: string; active?: boolean; children: ReactNode }) {
+  const text = (value: ReactNode): string => Children.toArray(value).map(child =>
+    typeof child === "string" || typeof child === "number" ? String(child)
+      : isValidElement<{ children?: ReactNode }>(child) ? text(child.props.children) : ""
+  ).join("");
+  return <ToastNotice scope={scope} type={type} level="error" message={active ? text(children) : ""} />;
 }
 
 export function NotificationList({ visible, onOpen, locked=false }: { visible: boolean; onOpen?:(meetingId:string)=>Promise<void>;locked?:boolean }) {

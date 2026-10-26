@@ -316,7 +316,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query=db.prepare("SELECT meeting_id FROM analysis_flows WHERE stage IN ('pending','transcription','diarization') ORDER BY created_at,rowid").map_err(|e|e.to_string())?;
+        let mut query=db.prepare("SELECT f.meeting_id FROM analysis_flows f WHERE f.stage IN ('pending','transcription','diarization') AND EXISTS(SELECT 1 FROM meeting_audio_commits a WHERE a.meeting_id=f.meeting_id AND a.phase='cleaned') ORDER BY f.created_at,f.rowid").map_err(|e|e.to_string())?;
         let ids = query
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?

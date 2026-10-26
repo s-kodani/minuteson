@@ -35,7 +35,7 @@ fn empty_scope() -> Scope {
 }
 
 #[test]
-fn history_schema_checks_do_not_admit_old_database_initialization() {
+fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initialize_old_data() {
     for version in 20..=MIGRATIONS.len() {
         let mut db = database(version);
         let scope = empty_scope();
@@ -49,8 +49,12 @@ fn history_schema_checks_do_not_admit_old_database_initialization() {
         );
         assert_eq!(trusted_history_schema(&db).is_ok(), current);
         assert_eq!(trusted_schema(&db).is_ok(), current);
-        assert_eq!(initialize_database(&mut db).is_ok(), current);
-        assert_eq!(schema(&db).unwrap(), before);
+        assert_eq!(initialize_database(&mut db).is_ok(), current || version == 34);
+        if version == 34 {
+            assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
+        } else {
+            assert_eq!(schema(&db).unwrap(), before);
+        }
         if !current {
             continue;
         }
@@ -66,6 +70,30 @@ fn history_schema_checks_do_not_admit_old_database_initialization() {
         // A current empty synthetic scope also refuses the claimed meeting row
         // count; no older scope can reach the first UPDATE/DELETE at all.
     }
+}
+
+#[test]
+fn pre_audio_migration_receipt_is_readable_but_never_current_deletion_consent() {
+    let previous = database(34);
+    let objects = schema(&previous).unwrap();
+    let hash = digest(&serde_json::to_vec(&objects).unwrap());
+    let known = saved_schema(current_schema().unwrap(), &hash).unwrap();
+    assert_eq!(known.version, 34);
+    assert_eq!(known.targets.len() + 2, TARGETS.len());
+    let mut scope = empty_scope();
+    scope.schema_hash = hash;
+    scope.tables.retain(|t| known.targets.iter().any(|(name,_)| *name == t.name));
+    let original = scope.encode().unwrap();
+    let mut db = database(MIGRATIONS.len());
+    scope.validate_format(&db).unwrap();
+    verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
+    assert!(scope.validate_current(&db).unwrap_err().contains("旧版"));
+    let tx = db.transaction().unwrap();
+    assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
+    tx.rollback().unwrap();
+    assert_eq!(scope.encode().unwrap(), original);
+    scope.schema_hash = "a".repeat(64);
+    assert!(scope.validate_format(&db).is_err());
 }
 
 #[test]

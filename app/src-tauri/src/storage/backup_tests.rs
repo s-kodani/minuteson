@@ -28,18 +28,9 @@ fn rows(db: &Connection, table: &str) -> Vec<Vec<Value>> {
 fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = super::super::current_minutes_fixture::meeting(&storage);
-    // Existing analysis fixture uses a fake path/hash. Materialize real managed
-    // bytes without changing revision provenance, then include a second asset.
-    let relative = format!("meetings/{meeting}/audio/original.caf");
-    let path = storage.managed_path(Path::new(&relative)).unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, b"fixture audio").unwrap();
-    storage.connection.lock().unwrap().execute(
-        "UPDATE file_assets SET relative_path=?1,size_bytes=?2,content_hash=?3 WHERE id='asset'",
-        params![relative, 13, format!("{:x}", Sha256::digest(b"fixture audio"))],
-    ).unwrap();
-    asset(&storage, &meeting, b"second asset");
+    let (meeting,analysis,_)=super::playback::tests::fixture(&storage);
+    storage.create_transcript_draft(&meeting,&analysis).unwrap();
+    asset(&storage,&meeting,b"second asset");
     let body = super::super::current_minutes_fixture::save(&storage, &meeting, "# 保持する追記\n");
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     draft
@@ -85,7 +76,7 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .unwrap();
     let stage = snapshot.stage.path().to_path_buf();
-    assert_eq!(snapshot.assets.len(), 2);
+    assert_eq!(snapshot.assets.len(), 3);
     assert_eq!(snapshot.meetings[0].id, meeting);
     let saved = read_only(&snapshot.database).unwrap();
     let original = storage.connection.lock().unwrap();

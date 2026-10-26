@@ -14,6 +14,217 @@ fn helper() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
+
+struct DriftFixture {
+    _temp: tempfile::TempDir,
+    storage: Storage,
+    session: String,
+    meeting: String,
+    directory: PathBuf,
+}
+impl DriftFixture {
+    fn new() -> Self {
+        use std::os::windows::process::CommandExt;
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().join("data")).unwrap();
+        let meeting = storage.create_meeting("Synthetic timestamp drift").unwrap();
+        let session = storage
+            .prepare_recording(
+                &meeting.id,
+                &crate::storage::RecordingConfig {
+                    mode: "system".into(),
+                    backend: "wasapi".into(),
+                    target_pids: vec![],
+                    microphone_device_uid: None,
+                    target_application_identity: None,
+                },
+                &Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        storage.mark_recording_started(&session.id).unwrap();
+        let directory = storage
+            .root()
+            .join("meetings")
+            .join(&meeting.id)
+            .join("audio")
+            .join(&session.id);
+        fs::create_dir_all(&directory).unwrap();
+        let output = Command::new(helper())
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+            .args([
+                "--backend",
+                "wasapi",
+                "--mode",
+                "system",
+                "--input-level-owner",
+                &session.id,
+                "--parent-pid",
+                &std::process::id().to_string(),
+                "--synthetic",
+                "--synthetic-clock-drift",
+            ])
+            .arg("--output")
+            .arg(&directory)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Self {
+            _temp: temp,
+            storage,
+            session: session.id,
+            meeting: meeting.id,
+            directory,
+        }
+    }
+    fn legacy_manifest(&self) {
+        let path = self.directory.join("manifest.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("clockMappingSource");
+        for lane in ["microphone", "system"] {
+            let maps = value[lane]["clockSegments"].as_array().unwrap();
+            assert!(maps.len() >= 2);
+            let mut whole = maps[0].clone();
+            whole["sourceFrameEnd"] = value[lane]["frames"].clone();
+            whole["timelineEndUs"] = maps.last().unwrap()["timelineEndUs"].clone();
+            value[lane]["clockSegments"] = serde_json::json!([whole]);
+        }
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn windows_clock_drift_uses_the_same_committed_raw_maps_and_finalizes() {
+    let f = DriftFixture::new();
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.directory.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(value["clockMappingSource"], "sealed_raw_v1");
+    f.storage.finalize_recording(&f.session).unwrap();
+    let plan = f.storage.recorded_audio_plan(&f.meeting).unwrap();
+    assert_eq!(plan.tracks.len(),1);
+    assert_eq!(plan.tracks[0].kind,"processed");
+    assert_eq!(plan.tracks[0].end_us,plan.tracks[0].chunks[0].frames*1000000/16000);
+    f.storage.verify_canonical_audio(&f.meeting,&||false).unwrap();
+}
+
+#[test]
+fn windows_legacy_clock_drift_recovers_to_canonical_audio_and_retains_manifest() {
+    let f = DriftFixture::new();
+    f.legacy_manifest();
+    let manifest = fs::read(f.directory.join("manifest.json")).unwrap();
+    f.storage.interrupt_recording(&f.session).unwrap();
+    assert_eq!(
+        f.storage.recover_completed_recordings().unwrap(),
+        vec![f.session.clone()]
+    );
+    assert_eq!(
+        fs::read(f.directory.join("manifest.json")).unwrap(),
+        manifest
+    );
+    assert!(!f.directory.join("microphone.caf").exists());
+    f.storage.verify_canonical_audio(&f.meeting,&||false).unwrap();
+    let source:String=crate::storage::with_test_database(&f.storage,|db|db.query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&f.meeting],|r|r.get(0)).unwrap());
+    let source:crate::storage::RecordedAudioPlan=serde_json::from_str(&source).unwrap();
+    assert!(source.tracks.iter().all(|t|t.chunks.iter().map(|c|c.clock_segments.len()).sum::<usize>()>=2));
+    assert!(f.storage.recover_completed_recordings().unwrap().is_empty());
+}
+
+#[test]
+fn windows_clock_reconciliation_rejects_different_pcm_and_new_producer_mismatch() {
+    for problem in ["pcm", "canonical", "endpoint"] {
+        let f = DriftFixture::new();
+        f.legacy_manifest();
+        let path = f.directory.join("manifest.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if problem == "pcm" {
+            let audio = f.directory.join("microphone.caf");
+            let mut bytes = fs::read(&audio).unwrap();
+            bytes[68..72].copy_from_slice(&0.25_f32.to_le_bytes());
+            fs::write(audio, bytes).unwrap();
+        } else if problem == "canonical" {
+            value["clockMappingSource"] = serde_json::json!("sealed_raw_v1");
+        } else {
+            value["microphone"]["clockSegments"][0]["timelineEndUs"] = serde_json::json!(5000400);
+        }
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(
+            f.storage.finalize_recording(&f.session).is_err(),
+            "{problem}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!f.directory.join("final-flac.json").exists());
+    }
+}
+
+#[test]
+#[ignore = "finalizes only an explicitly supplied isolated recording-error-copy; never the source app data"]
+fn windows_clock_repair_on_isolated_recording_copy() {
+    let root = PathBuf::from(
+        std::env::var_os("MON_CLOCK_REPAIR_COPY_ROOT").expect("isolated copy required"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert!(root.ends_with("recording-error-copy"));
+    let proof: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("clock-repair-copy.json")).unwrap()).unwrap();
+    let session = proof["sessionId"].as_str().unwrap();
+    let meeting = proof["meetingId"].as_str().unwrap();
+    let directory = root
+        .join("meetings")
+        .join(meeting)
+        .join("audio")
+        .join(session);
+    let before = fs::read(directory.join("manifest.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(manifest["recordingOwnerId"], session);
+    let storage = Storage::open(root).unwrap();
+    let was_saved: bool = crate::storage::with_test_database(&storage, |db| {
+        db.query_row(
+            "SELECT state='saved' FROM recording_sessions WHERE id=?1",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap()
+    });
+    let recovered = storage.recover_completed_recordings().unwrap();
+    assert!(was_saved || recovered.contains(&session.to_string()));
+    // A recording with genuine capture gaps may be saved, but it cannot be
+    // admitted as one continuous playback/analysis range. Check publication
+    // without asking that separate consumer to erase the original gaps.
+    let tracks: Vec<(String, i64)> = crate::storage::with_test_database(&storage, |db| {
+        let mut query = db.prepare("SELECT t.kind,sum(c.frame_count) FROM audio_tracks t JOIN audio_chunks c ON c.track_id=t.id WHERE t.session_id=?1 GROUP BY t.id").unwrap();
+        query
+            .query_map([session], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    });
+    assert_eq!(tracks.len(), 2);
+    for (kind, frames) in &tracks {
+        let lane = if kind == "mic" {
+            "microphone"
+        } else {
+            "system"
+        };
+        assert_eq!(*frames, manifest[lane]["frames"].as_i64().unwrap());
+    }
+    let reconciled: i64 = crate::storage::with_test_database(&storage, |db| {
+        db.query_row(
+        "SELECT count(*) FROM audio_tracks WHERE session_id=?1 AND json_extract(processing_config_json,'$.legacy_clock_reconciled')=1",
+        [session], |row| row.get(0)).unwrap()
+    });
+    assert_eq!(reconciled, 2);
+    assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), before);
+    assert!(storage.recover_completed_recordings().unwrap().is_empty());
+    eprintln!("Isolated recording copy recovered: {} tracks, complete source frames, unchanged manifest, retry idempotent", tracks.len());
+}
+
 #[test]
 fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
     use std::os::windows::process::CommandExt;
@@ -591,22 +802,20 @@ fn windows_parity_independent_input_recovery_and_sealed_history() {
         assert_eq!(history[input]["events"][1]["status"]["sourceEpoch"], 2);
     }
     let (plan, known) = storage.recorded_analysis_input(&meeting).unwrap();
-    assert_eq!(plan.tracks.len(), 2);
-    let gaps = known.unwrap().gaps;
-    for track in 0..2 {
-        assert!(gaps.iter().any(|g| g.track_index == track
-            && g.reason_code == "capture_timestamp_gap"
-            && !g.recovered));
-    }
+    assert_eq!(plan.tracks.len(),1);
+    assert_eq!(plan.tracks[0].kind,"processed");
+    assert!(known.unwrap().gaps.iter().all(|g|g.track_index==0));
+    storage.verify_canonical_audio(&meeting,&||false).unwrap();
 }
 #[test]
 fn windows_parity_missing_microphone_keeps_pc_audio() {
     let (_temp, storage, meeting, _session, output) = synthetic_recording("system-only");
     let (plan, _) = storage.recorded_analysis_input(&meeting).unwrap();
     assert_eq!(plan.tracks.len(), 1);
-    assert_eq!(plan.tracks[0].kind, "system");
+    assert_eq!(plan.tracks[0].kind, "processed");
     assert!(!output.join("microphone.caf").exists());
-    assert!(output.join("system.caf").exists());
+    assert!(!output.join("system.caf").exists());
+    storage.verify_canonical_audio(&meeting,&||false).unwrap();
 }
 #[test]
 fn windows_model_directory_keeps_existing_bytes_and_rejects_links_and_parent_replacement() {
@@ -634,7 +843,7 @@ fn windows_model_directory_keeps_existing_bytes_and_rejects_links_and_parent_rep
     );
 }
 #[test]
-fn windows_capture_stop_validates_real_pcm_publishes_flac_and_builds_analysis_mix() {
+fn windows_capture_stop_publishes_one_wav_and_restores_its_capture_history() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let store = Storage::open_with_models(root.join("data"), root.join("models")).unwrap();
@@ -742,13 +951,13 @@ fn windows_capture_stop_validates_real_pcm_publishes_flac_and_builds_analysis_mi
         "recorded"
     );
     let (plan, known) = store.recorded_analysis_input(&meeting.id).unwrap();
-    assert_eq!(plan.tracks.len(), 2);
+    assert_eq!(plan.tracks.len(), 1);
     let known = known.unwrap();
-    for track in 0..2 {
+    for track in 0..1 {
         assert!(known.gaps.iter().any(|gap| gap.track_index == track
             && gap.start_us == 70_000
             && gap.end_us == 90_000
-            && gap.reason_code == "capture_timestamp_gap"
+            && gap.reason_code == "meeting_input_missing"
             && !gap.recovered));
     }
     for track in &plan.tracks {
@@ -778,7 +987,7 @@ fn windows_capture_stop_validates_real_pcm_publishes_flac_and_builds_analysis_mi
             .0
             .tracks
             .len(),
-        2
+        1
     );
     let sessions = destination.closed_input_recordings(None).unwrap().0;
     let restored_session = sessions

@@ -214,6 +214,7 @@ pub(super) fn register_assets_except(
 }
 
 pub(super) fn rebuild_analyses(fixed: &FixedData<'_, '_>, target: &mut Connection) {
+    target.execute_batch("UPDATE meeting_audio_commits SET manifest_hash=(SELECT content_hash FROM file_assets WHERE id=manifest_asset_id);").unwrap();
     for id in strings(
         &fixed.ids.source().database,
         "SELECT id FROM analysis_revisions ORDER BY meeting_id,revision_no",

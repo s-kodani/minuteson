@@ -1,3 +1,4 @@
+import { ErrorNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {useEffect,useId,useState} from "react";
@@ -44,9 +45,10 @@ export function CaptureApplicationSelection({control,locked}:{control:ReturnType
       </select></label>
       <IconButton icon="refresh" label="アプリ一覧を再確認" disabled={locked||loading} onClick={control.reload}/></div>
       {loading&&<p role="status">アプリ一覧を確認中</p>}
-      {applications&&!selected&&<p role="alert">{application?"アプリが終了・再起動しました。選び直してください。":"録音するアプリを選択してください。"}</p>}
-      {applications?.systemPermission==="permissionRequired"&&<p>{windows?"PC音声を取得できません。Windowsのサウンド設定で出力機器と対象アプリの再生状態、他のアプリによる排他使用を確認してください。":"PC音声の取得権限を確認してください。macOSのシステム設定で「システムオーディオ録音のみ」の許可を確認してください。画面の収録許可は要求しません。"}</p>}
-      {error&&<p role="alert" className="action-error">{error}</p>}
+      <ErrorNotice scope="capture-applications" type="application-ended" active={!!(applications&&!selected&&application)}>アプリが終了・再起動しました。選び直してください。</ErrorNotice>
+      {applications&&!selected&&!application&&<p>録音するアプリを選択してください。</p>}
+      <ErrorNotice scope="capture-applications" type="system-permission" active={applications?.systemPermission==="permissionRequired"}>{windows?"PC音声を取得できません。Windowsのサウンド設定で出力機器と対象アプリの再生状態、他のアプリによる排他使用を確認してください。":"PC音声の取得権限を確認してください。macOSのシステム設定で「システムオーディオ録音のみ」の許可を確認してください。画面の収録許可は要求しません。"}</ErrorNotice>
+      <ErrorNotice scope="capture-applications" type="CaptureApplicationSelection-operation" active={!!(error)}>{error}</ErrorNotice>
     </>}
     <p className="capture-input-hint">{applications?.systemPermission==="unknown"?"権限未確認 / 入力未確認":"入力未確認"}</p>
   </section>;

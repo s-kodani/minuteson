@@ -12,7 +12,7 @@ mod tests;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct CaptureClock {
-    domain: String,
+    pub(super) domain: String,
     pub(super) origin_utc_ms: i64,
     uncertainty_ns: i64,
 }
@@ -92,6 +92,19 @@ impl CaptureManifest {
         Ok(true)
     }
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
+        if let Some(source) = &self.clock_mapping_source {
+            if source != "sealed_raw_v1"
+                || self.backend != "wasapi"
+                || !self
+                    .capture_clock
+                    .as_ref()
+                    .is_some_and(|clock| clock.domain == "query_performance_counter")
+                || self.microphone.raw_segments.is_none()
+                || self.system.raw_segments.is_none()
+            {
+                return Err("録音の時計対応の出所が不正です".into());
+            }
+        }
         match (self.schema_version, &self.capture_clock) {
             (crate::current_formats::CAPTURE, Some(clock))
                 if matches!(

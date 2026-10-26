@@ -35,6 +35,12 @@ pub(super) fn retain(
         let reason = match item.reason {
             archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
             archive::OmittedReason::NativeLog => "native_log",
+            archive::OmittedReason::SupersededAudio => {
+                if !super::super::meeting_audio::superseded_asset(db,&asset)? {
+                    return Err("置換済み原音声の除外証拠がありません".into());
+                }
+                continue;
+            }
             archive::OmittedReason::SourceAudioDeleted => {
                 #[cfg(not(any(unix, windows)))]
                 return Err("Windowsの削除済み音声の追加復元は保留中です".into());

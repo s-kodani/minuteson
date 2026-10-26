@@ -84,7 +84,7 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
         return Err("登録した人物が上限を超えています".into());
     }
     for person in &mut people {
-        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meetings m JOIN audio_tracks t ON t.meeting_id=m.id JOIN audio_chunks c ON c.track_id=t.id JOIN file_assets f ON f.id=c.file_asset_id WHERE m.id=s.source_meeting_id AND t.id=s.source_track_id AND f.state='ready'),s.start_us,s.end_us,s.created_at FROM voice_samples s WHERE person_id=?1 ORDER BY created_at,id").map_err(|e|e.to_string())?;
+        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at FROM voice_samples s WHERE person_id=?1 ORDER BY created_at,id").map_err(|e|e.to_string())?;
         person.samples = q
             .query_map([&person.id], |r| {
                 Ok(SampleView {
@@ -207,7 +207,7 @@ fn windows(tx: &Transaction<'_>, view: &AnalysisView) -> Result<Vec<Window>, Str
         events.push((start, kind, speaker.clone(), 1));
         events.push((end, kind, speaker, -1));
     };
-    let mut q=tx.prepare("SELECT track_id,COALESCE(speaker_id,''),start_us,end_us FROM speaker_segments WHERE analysis_revision_id=?1").map_err(|e|e.to_string())?;
+    let mut q=tx.prepare("SELECT COALESCE((SELECT a.track_id FROM meeting_audio_commits a WHERE a.meeting_id=s.meeting_id),s.track_id),COALESCE(speaker_id,''),start_us,end_us FROM speaker_segments s WHERE analysis_revision_id=?1").map_err(|e|e.to_string())?;
     let mut rows = q.query([&view.id]).map_err(|e| e.to_string())?;
     let mut count = 0;
     while let Some(r) = rows.next().map_err(|e| e.to_string())? {
@@ -1083,27 +1083,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
         let (m, _, _) = super::super::playback::tests::fixture(&s);
-        let manifest_path = PathBuf::from("meetings")
-            .join(&m)
-            .join("audio/manifest.json");
-        std::fs::write(
-            s.managed_path(&manifest_path).unwrap(),
-            b"{\"state\":\"saved\"}",
-        )
-        .unwrap();
-        let manifest = s
-            .register_ready_meeting_asset(&m, &manifest_path, "application/json")
-            .unwrap();
-        s.connection
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE recording_sessions SET audio_manifest_hash=?1 WHERE meeting_id=?2",
-                params![manifest.content_hash, m],
-            )
-            .unwrap();
+        let manifest_hash=s.canonical_audio_plan(&m).unwrap().manifest_hash;
         let input = AnalysisInput {
-            audio_manifest_hash: manifest.content_hash,
+            audio_manifest_hash: manifest_hash,
             profile_snapshot: serde_json::json!({}),
             config: serde_json::json!({}),
             speakers: vec![SpeakerInput {
@@ -1375,16 +1357,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             (audio.start_us, audio.end_us, audio.total_frames()),
-            (250000, 750000, 24000)
+            (250000, 750000, 8000)
         );
-        assert_eq!(audio.track_kind, "mic");
-        let pcm = audio.read_pcm(0, 24000).unwrap();
+        assert_eq!(audio.track_kind, "processed");
+        let pcm = audio.read_pcm(0, 8000).unwrap();
         let values: Vec<_> = pcm
             .chunks_exact(4)
             .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
             .collect();
-        assert!(values[..12000].iter().all(|v| *v == 0.25));
-        assert!(values[12000..].iter().all(|v| *v == -0.5));
+        assert!(values[..4000].iter().all(|v| *v == 0.25));
+        assert!(values[4000..].iter().all(|v| *v == -0.5));
         assert_eq!(
             serde_json::to_value(s.voice_people().unwrap()).unwrap(),
             serde_json::to_value(before).unwrap()
@@ -1479,7 +1461,7 @@ mod tests {
                 params![m, sample],
             )
             .unwrap();
-        let path = root.path().join("meetings").join(m).join("audio/0.caf");
+        let path = root.path().join("meetings").join(m).join("audio/meeting.wav");
         let mut bytes = std::fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         std::fs::write(path, bytes).unwrap();

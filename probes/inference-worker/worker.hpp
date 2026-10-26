@@ -82,7 +82,7 @@ static int mon_loop(int argc, char **argv, int (*infer)(const std::string &,int,
             id = request.at("id").get<uint64_t>();
             const std::string op = request.at("op");
             if (op == "shutdown") return 0;
-            if (op == "init" && !initialized) { initialized = true; mon_reply(id,"ready"); continue; }
+            if (op == "init" && !initialized) { initialized = true; mon_reply(id,"ready","canonical_pcm_range_v1"); continue; }
             if (!initialized || op != "infer" || id <= previous) throw std::runtime_error("invalid request order");
             previous = id;
             std::string directory = request.at("directory");

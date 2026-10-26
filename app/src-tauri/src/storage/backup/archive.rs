@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Seek, SeekFrom};
 
-const MAGIC: &[u8; 8] = b"MONBAK01";
+const MAGIC: &[u8; 8] = b"MONBAK02";
 const MAX_MANIFEST: usize = 32 * 1024 * 1024;
 const MAX_ENTRIES: usize = 65_536;
 const HEADER_BYTES: u64 = 8 + 4 + 32;
@@ -32,6 +32,7 @@ pub(super) enum OmittedReason {
     RecreatablePcm,
     NativeLog,
     SourceAudioDeleted,
+    SupersededAudio,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -176,6 +177,8 @@ impl Snapshot<'_> {
             let asset = &item.asset;
             let reason = if self.deleted_audio.contains_asset(asset) {
                 Some(OmittedReason::SourceAudioDeleted)
+            } else if super::super::meeting_audio::superseded_asset(&db,&asset.id)? {
+                Some(OmittedReason::SupersededAudio)
             } else if portable::temporary_pcm(&db, asset)? {
                 Some(OmittedReason::RecreatablePcm)
             } else if portable::native_log(&db, asset)? {
@@ -728,10 +731,11 @@ fn validate_inventory(
                 || e.source_size != size as u64
                 || e.source_sha256 != hash
                 || state != "missing"
-                || (referenced && e.reason != OmittedReason::SourceAudioDeleted)
+                || (referenced && !matches!(e.reason,OmittedReason::SourceAudioDeleted|OmittedReason::SupersededAudio))
                 || match e.reason {
                     OmittedReason::RecreatablePcm => media != "audio/wav",
                     OmittedReason::NativeLog => media != "text/plain",
+                    OmittedReason::SupersededAudio => !super::super::meeting_audio::superseded_asset(db,&id)?,
                     OmittedReason::SourceAudioDeleted => {
                         !deleted.contains(&meeting) || !deleted_audio::audio_media(&media)
                     }

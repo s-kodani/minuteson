@@ -442,10 +442,9 @@ fn run_track_inner(
         .map(StableFile::watch)
         .collect::<Result<_, _>>()?;
     let directory = directory.canonicalize().map_err(|e| e.to_string())?;
-    let wav = directory.join("input.wav");
-    // Validate the exact mono 16k PCM16 WAV produced by write_track. Don't
-    // silently let a CLI interpret a truncated/differently timed input.
-    let input = check_wav(&wav, duration_us, cancelled)?;
+    let input=crate::transcription::input::Input::load(&directory,cancelled)?;
+    if input.frames()>i32::MAX as u64 || ((input.frames()*1_000_000/16000) as i64-duration_us).abs()>100 {return Err("話者分離の入力範囲が不正です".into());}
+    let wav=input.proof.path.clone();
     let stdout_path = directory.join("stdout.log");
     let stderr_path = directory.join("stderr.log");
     let stdout = OpenOptions::new()
@@ -520,7 +519,9 @@ fn run_track_inner(
                 config.min_duration_off_ms
             })
         ))
-        .arg(&wav);
+        .arg(&wav)
+        .arg("--mon-first-frame").arg(input.first_frame.to_string())
+        .arg("--mon-end-frame").arg(input.end_frame.to_string());
     if crate::local_engine::resident::enabled() {
         let libraries: Vec<_> = config
             .runtime_libraries
@@ -639,43 +640,6 @@ fn failure_detail(stderr: &Path, error: &str) -> String {
         return "話者分離に必要なメモリを確保できませんでした。会議全体の処理を停止しました。元音声と保存済みの本文は保持しています".into();
     }
     format!("会議全体の話者分離を完了できませんでした: {error}")
-}
-
-fn check_wav(
-    path: &Path,
-    duration_us: i64,
-    cancelled: &impl Fn() -> bool,
-) -> Result<Fingerprint, String> {
-    let proof = Fingerprint::capture(path, cancelled)?;
-    if proof.path != path || proof.size <= 44 {
-        return Err("話者分離入力WAVが不正です".into());
-    }
-    let mut header = [0; 44];
-    File::open(path)
-        .map_err(|e| e.to_string())?
-        .read_exact(&mut header)
-        .map_err(|e| e.to_string())?;
-    let frames = (proof.size - 44) / 2;
-    if (proof.size - 44) % 2 != 0
-        || frames > u64::from((u32::MAX - 36) / 2)
-        || &header[..4] != b"RIFF"
-        || &header[8..16] != b"WAVEfmt "
-        || u32::from_le_bytes(header[4..8].try_into().unwrap()) as u64 + 8 != proof.size
-        || u32::from_le_bytes(header[16..20].try_into().unwrap()) != 16
-        || u16::from_le_bytes(header[20..22].try_into().unwrap()) != 1
-        || u16::from_le_bytes(header[22..24].try_into().unwrap()) != 1
-        || u32::from_le_bytes(header[24..28].try_into().unwrap()) != 16_000
-        || u32::from_le_bytes(header[28..32].try_into().unwrap()) != 32_000
-        || u16::from_le_bytes(header[32..34].try_into().unwrap()) != 2
-        || u16::from_le_bytes(header[34..36].try_into().unwrap()) != 16
-        || &header[36..40] != b"data"
-        || u32::from_le_bytes(header[40..44].try_into().unwrap()) as u64 != proof.size - 44
-        || duration_us <= 0
-        || ((frames * 1_000_000 / 16_000) as i64 - duration_us).abs() > 100
-    {
-        return Err("話者分離入力WAVの形式・長さが固定入力と一致しません".into());
-    }
-    Ok(proof)
 }
 
 #[cfg(test)]

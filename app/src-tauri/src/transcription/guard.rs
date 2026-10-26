@@ -229,8 +229,7 @@ pub(super) fn run(
     }
     let fallback = directory.join("without-hints");
     std::fs::create_dir(&fallback).map_err(|e| e.to_string())?;
-    std::fs::copy(directory.join("input.wav"), fallback.join("input.wav"))
-        .map_err(|e| e.to_string())?;
+    super::input::Input::load(directory,cancelled)?.write(&fallback)?;
     let mut plain = config.clone();
     plain.prompt.clear();
     let Some(second) = whisper::run_unit_with_suppression(

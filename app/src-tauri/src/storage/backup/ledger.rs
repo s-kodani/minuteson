@@ -105,6 +105,7 @@ pub(super) fn valid_domain(domain: &str) -> bool {
                 | "diarization_manual_assignments"
                 | "utterance_speakers"
                 | "audio_import_commits"
+                | "meeting_audio_commits"
         ))
         || matches!(
             domain,

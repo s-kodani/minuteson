@@ -34,7 +34,7 @@ impl FixedData<'_, '_> {
         // Verify the consumed semantic input hash instead; the target uses the
         // normal full snapshot reader after dependency reconstruction.
         let view =
-            crate::storage::analysis::read_analysis_content(db, &spec.meeting_id, id, &hash)?;
+            crate::storage::analysis::read_stored_analysis_content(db, &spec.meeting_id, id, &hash)?;
         if crate::storage::minutes_input::working_hash(db, &view, &title, created, started, None)?
             != working
         {

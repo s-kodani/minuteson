@@ -204,10 +204,7 @@ fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover(
     assert!(controller
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .is_err());
-    assert_eq!(
-        controller.data_operation_blocker().unwrap().as_deref(),
-        Some("録音通知履歴の確認・更新中")
-    );
+    assert!(controller.data_operation_blocker().unwrap().is_none());
     drop(first);
     assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 1);
     assert!(second.validate_active().is_ok());
@@ -216,6 +213,36 @@ fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover(
     assert!(controller.begin_notice_storage().is_err());
     drop(second);
     assert!(controller.state.lock().unwrap().notice_writers.is_empty());
+}
+
+#[test]
+fn backup_admission_stays_available_during_notice_polling_and_drains_actual_io() {
+    let controller = Arc::new(AnalysisController::default());
+    let writer = controller.begin_notice_storage().unwrap();
+    for _ in 0..20 {
+        assert!(controller.data_operation_blocker().unwrap().is_none());
+    }
+    let worker = controller.clone();
+    let pending =
+        std::thread::spawn(move || worker.begin_data_maintenance_wait(false, false, &|| false));
+    let started = Instant::now();
+    while !controller.notice_storage_paused(None) {
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::yield_now();
+    }
+    assert!(controller
+        .try_begin_scoped_notice_storage(None)
+        .unwrap()
+        .is_none());
+    assert!(!pending.is_finished());
+    writer.validate_active().unwrap();
+    drop(writer);
+    let backup = pending.join().unwrap().unwrap();
+    assert!(controller.begin_notice_storage().is_err());
+    backup.validate_active().unwrap();
+    drop(backup);
+    assert!(controller.data_operation_blocker().unwrap().is_none());
+    controller.begin_notice_storage().unwrap();
 }
 
 #[test]

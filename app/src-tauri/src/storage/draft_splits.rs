@@ -378,8 +378,8 @@ mod tests {
             expected_end_us: first.end_us,
         };
         let mut first_audio = storage.prepare_draft_utterance_audio(&request).unwrap();
-        assert_eq!(first_audio.total_frames(), 12_000);
-        for sample in first_audio.read_pcm(0, 12_000).unwrap().chunks_exact(4) {
+        assert_eq!(first_audio.total_frames(), 4_000);
+        for sample in first_audio.read_pcm(0, 4_000).unwrap().chunks_exact(4) {
             assert_eq!(f32::from_le_bytes(sample.try_into().unwrap()), 0.25);
         }
         let mut second_request = request.clone();
@@ -389,7 +389,7 @@ mod tests {
         let mut second_audio = storage
             .prepare_draft_utterance_audio(&second_request)
             .unwrap();
-        for sample in second_audio.read_pcm(0, 12_000).unwrap().chunks_exact(4) {
+        for sample in second_audio.read_pcm(0, 4_000).unwrap().chunks_exact(4) {
             assert_eq!(f32::from_le_bytes(sample.try_into().unwrap()), -0.5);
         }
         let mut invalid = request.clone();
@@ -435,7 +435,7 @@ mod tests {
             }
             let request = super::super::meeting_playback::MeetingPlaybackRequest {
                 meeting_id: meeting.clone(),
-                mode: super::super::meeting_playback::MeetingPlaybackMode::Mic,
+                mode: super::super::meeting_playback::MeetingPlaybackMode::Mixed,
                 start_reference: Some(
                     super::super::meeting_playback::MeetingPlaybackStartReference::DraftUtterance {
                         request: DraftUtteranceAudioRequest {
@@ -471,7 +471,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(info.start_us, 0);
                 assert_eq!(info.end_us, 1000000);
-                assert_eq!(info.total_frames, 48000);
+                assert_eq!(info.total_frames, 16000);
             }
         }
     }

@@ -582,7 +582,11 @@ impl DataController {
             return Err("会議または要確認一覧から対象を選択してください".into());
         }
         let app = window.app_handle().clone();
-        let lease = work::Admission::acquire(&app)?;
+        let admission_app = app.clone();
+        let lease =
+            tauri::async_runtime::spawn_blocking(move || work::Admission::acquire(&admission_app))
+                .await
+                .map_err(|e| e.to_string())??;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(kind)?;
         let token = snapshot.token.clone().ok_or("データ操作IDがありません")?;
         Self::emit(&app, snapshot.clone());

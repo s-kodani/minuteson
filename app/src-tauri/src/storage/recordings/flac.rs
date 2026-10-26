@@ -1,4 +1,4 @@
-//! Normal native-stop FLAC publication. Durable plans bind original evidence,
+//! Interrupted-prefix recovery publication. Durable plans bind original evidence,
 //! output UUIDs and staging inodes; a DB rollback never removes raw audio.
 use super::*;
 use crate::audio::flac::{encode_segment_file_pending, PcmSource, SavedFlac};
@@ -14,10 +14,8 @@ use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 
-mod files;
+use super::super::publication_files as files;
 mod inventory;
-#[cfg(test)]
-mod parallel_tests;
 #[cfg(any(target_os = "macos", windows))]
 pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
@@ -95,6 +93,8 @@ pub(super) struct Publication {
     plan_name: &'static str,
     documents: Vec<(String, Stamp)>,
     tracks: Vec<Track>,
+    clock_reconciled: bool,
+    clock_originals: Vec<crate::audio::VerifiedAudio>,
     #[cfg(any(target_os = "macos", windows))]
     recovery_rebind: Option<relocation::RecoveryRebind>,
 }
@@ -102,13 +102,41 @@ const PLAN: &str = "final-flac.json";
 const PARTIAL_PLAN: &str = "partial-flac.json";
 const LOCK: &str = ".final-flac.lock";
 
+/// Validate sealed capture evidence without producing an intermediate FLAC.
+/// The authoritative maps are used for the one final WAV instead.
+pub(super) fn canonical_maps(storage:&Storage,base:&Path,manifest:&CaptureManifest,prefixes:&[Prefix])
+    ->Result<(Vec<ClockSegment>,Vec<ClockSegment>,Vec<crate::audio::VerifiedAudio>),String> {
+    let active:Vec<_>=prefixes.iter().filter(|p|p.frames()>0).collect();
+    let origin=active.iter().map(|p|p.first_capture_nanoseconds()).collect::<Result<Vec<_>,_>>()?.into_iter().min().ok_or("保存音声がありません")?;
+    let mut mic=Vec::new();let mut system=Vec::new();let mut originals=Vec::new();
+    for prefix in active {
+        let track=match prefix.lane(){crate::recording_segments::Lane::Microphone=>&manifest.microphone,crate::recording_segments::Lane::System=>&manifest.system};
+        let (parts,original)=groups(prefix,origin,track,manifest.clock_mapping_source.as_deref()==Some("sealed_raw_v1"),
+            (manifest.backend=="wasapi"&&manifest.clock_mapping_source.is_none()).then_some((storage,base)))?;
+        if let Some(original)=original {originals.push(original);}
+        let target=match prefix.lane(){crate::recording_segments::Lane::Microphone=>&mut mic,crate::recording_segments::Lane::System=>&mut system};
+        let mut frames=0;
+        for part in parts {
+            for mut map in part.clock_segments {map.source_frame_start+=frames;map.source_frame_end+=frames;target.push(map);}
+            frames+=part.frames as i64;
+        }
+    }
+    Ok((mic,system,originals))
+}
+
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn uuid(value: &str) -> bool {
     crate::input_levels::valid_owner(value)
 }
-fn groups(prefix: &Prefix, origin: i64, track: &CaptureTrack) -> Result<Vec<FlacGroup>, String> {
+fn groups(
+    prefix: &Prefix,
+    origin: i64,
+    track: &CaptureTrack,
+    canonical: bool,
+    legacy_windows: Option<(&Storage, &Path)>,
+) -> Result<(Vec<FlacGroup>, Option<crate::audio::VerifiedAudio>), String> {
     let groups = prefix.flac_groups(origin)?;
     if groups.is_empty() || groups.len() > 1024 {
         return Err("最終FLAC区間数が対応範囲外です".into());
@@ -125,17 +153,98 @@ fn groups(prefix: &Prefix, origin: i64, track: &CaptureTrack) -> Result<Vec<Flac
         frames += group.frames as i64;
     }
     let global = track.validated_timeline(true)?;
-    verify_maps(&maps, global.segments, track.sample_rate.unwrap() as u32)?;
     if frames != track.frames {
         return Err("原音声のフレーム数と録音manifestが一致しません".into());
     }
-    Ok(groups)
+    let checked = verify_maps(&maps, global.segments, track.sample_rate.unwrap() as u32);
+    if canonical && maps != global.segments {
+        return Err("原音声と録音全体の共通時計対応が一致しません".into());
+    }
+    let reconciled = match checked {
+        Ok(()) => None,
+        #[cfg(windows)]
+        Err(MapMismatch::Clock) if !canonical && legacy_windows.is_some() => {
+            let (storage, base) = legacy_windows.unwrap();
+            Some(verify_original_pcm(storage, base, prefix, track)?)
+        }
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(not(windows))]
+    let _ = legacy_windows;
+    Ok((groups, reconciled))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MapMismatch {
+    Bounds,
+    Frames,
+    Clock,
+    Coverage,
+}
+impl From<MapMismatch> for String {
+    fn from(value: MapMismatch) -> Self {
+        match value {
+            MapMismatch::Bounds => "原音声と録音全体の取得時刻・欠損が一致しません",
+            MapMismatch::Frames => "原音声と録音全体のフレーム対応が不正です",
+            MapMismatch::Clock => "原音声と録音全体の時計変換が一致しません",
+            MapMismatch::Coverage => "原音声の時計対応が録音全体を覆っていません",
+        }
+        .into()
+    }
+}
+
+/// Only legacy Windows interior affine fits may be reconciled. Before this
+/// point verify_maps has already required identical endpoints and exact gaps.
+/// Bind the two independently stored timelines to identical physical samples.
+#[cfg(windows)]
+fn verify_original_pcm(
+    storage: &Storage,
+    base: &Path,
+    prefix: &Prefix,
+    track: &CaptureTrack,
+) -> Result<crate::audio::VerifiedAudio, String> {
+    use crate::audio::VerifiedAudio;
+    let name = match prefix.lane() {
+        crate::recording_segments::Lane::Microphone => "microphone.caf",
+        crate::recording_segments::Lane::System => "system.caf",
+    };
+    let proof = storage.checked_capture_file(&base.join(name), Some(track))?;
+    let file = crate::windows_files::read(&storage.root.join(&proof.relative), false)?;
+    let mut original =
+        VerifiedAudio::open_cancellable(file, proof.size_bytes as u64, &proof.hash, &|| {
+            storage.data_write_blocked()
+        })?;
+    let cancelled = || storage.data_write_blocked();
+    let mut source = prefix.source(0, prefix.entries().len(), &cancelled)?;
+    if original.format.frames != source.format().frames
+        || original.format.sample_rate != source.format().sample_rate
+        || original.format.channels != source.format().channels
+    {
+        return Err("録音全体と原音声のPCM形式が一致しません".into());
+    }
+    let mut first = 0;
+    while first < prefix.frames() {
+        partial::check_cancel(&cancelled)?;
+        let count = (prefix.frames() - first).min(crate::audio::PREVIEW_FRAMES);
+        if original.read_raw_recording_frames(first, count)? != source.read_frames(first, count)? {
+            return Err("録音全体と原音声のPCM内容が一致しません".into());
+        }
+        first += count;
+    }
+    original.check_unchanged()?;
+    source.verify_unchanged()?;
+    prefix.verify_at(&storage.root.join(base), &cancelled)?;
+    Ok(original)
 }
 
 /// Both compressors describe the same physical source frames. Keep every
 /// gap exactly; permit only the combined, specified one-frame compression
 /// error of their independent affine fits, never nominal-rate replacement.
-fn verify_maps(raw: &[ClockSegment], global: &[ClockSegment], rate: u32) -> Result<(), String> {
+fn verify_maps(
+    raw: &[ClockSegment],
+    global: &[ClockSegment],
+    rate: u32,
+) -> Result<(), MapMismatch> {
     fn gaps(maps: &[ClockSegment]) -> Vec<(i64, i64, i64)> {
         maps.windows(2)
             .filter_map(|pair| {
@@ -154,7 +263,7 @@ fn verify_maps(raw: &[ClockSegment], global: &[ClockSegment], rate: u32) -> Resu
         || raw.last().unwrap().source_frame_end != global.last().unwrap().source_frame_end
         || gaps(raw) != gaps(global)
     {
-        return Err("原音声と録音全体の取得時刻・欠損が一致しません".into());
+        return Err(MapMismatch::Bounds);
     }
     fn at(map: &ClockSegment, frame: i64) -> (i128, i128) {
         let length = i128::from(map.source_frame_end - map.source_frame_start);
@@ -171,13 +280,13 @@ fn verify_maps(raw: &[ClockSegment], global: &[ClockSegment], rate: u32) -> Resu
         let first = raw[r].source_frame_start.max(global[g].source_frame_start);
         let last = raw[r].source_frame_end.min(global[g].source_frame_end);
         if last <= first {
-            return Err("原音声と録音全体のフレーム対応が不正です".into());
+            return Err(MapMismatch::Frames);
         }
         for frame in [first, last] {
             let (a, ad) = at(&raw[r], frame);
             let (b, bd) = at(&global[g], frame);
             if (a * bd - b * ad).abs() > tolerance * ad * bd {
-                return Err("原音声と録音全体の時計変換が一致しません".into());
+                return Err(MapMismatch::Clock);
             }
         }
         if raw[r].source_frame_end == last {
@@ -188,91 +297,12 @@ fn verify_maps(raw: &[ClockSegment], global: &[ClockSegment], rate: u32) -> Resu
         }
     }
     if r != raw.len() || g != global.len() {
-        return Err("原音声の時計対応が録音全体を覆っていません".into());
+        return Err(MapMismatch::Coverage);
     }
     Ok(())
 }
 
 impl Publication {
-    pub(super) fn prepare(
-        storage: &Storage,
-        base: &Path,
-        manifest_hash: &str,
-        manifest: &CaptureManifest,
-        prefixes: &[Prefix],
-    ) -> Result<Self, String> {
-        if prefixes.len() != 2 {
-            return Err("原音声の確定証拠が両入力で揃っていません".into());
-        }
-        let audio_prefixes: Vec<_> = prefixes
-            .iter()
-            .filter(|prefix| prefix.frames() > 0)
-            .collect();
-        if audio_prefixes.len() != 2
-            && !(manifest.system_audio_unreceived
-                && audio_prefixes.len() == 1
-                && audio_prefixes[0].lane() == crate::recording_segments::Lane::Microphone)
-            && !(manifest.microphone_audio_unreceived
-                && audio_prefixes.len() == 1
-                && audio_prefixes[0].lane() == crate::recording_segments::Lane::System)
-        {
-            return Err("原音声の未取得範囲と録音manifestが一致しません".into());
-        }
-        let origin = audio_prefixes
-            .iter()
-            .map(|prefix| prefix.first_capture_nanoseconds())
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .min()
-            .unwrap();
-        let all_groups = audio_prefixes
-            .iter()
-            .map(|prefix| {
-                groups(
-                    prefix,
-                    origin,
-                    match prefix.lane() {
-                        crate::recording_segments::Lane::Microphone => &manifest.microphone,
-                        crate::recording_segments::Lane::System => &manifest.system,
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let descriptions: Vec<_> = all_groups
-            .iter()
-            .map(|groups| {
-                groups
-                    .iter()
-                    .map(|group| {
-                        serde_json::json!([
-                            group.first_entry,
-                            group.entries,
-                            group.frames,
-                            group.clock_segments
-                        ])
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let input_hash = hash(
-            &serde_json::to_vec(&serde_json::json!({"version":1,
-            "manifest":manifest_hash, "raw":prefixes.iter().map(Prefix::tip_hash).collect::<Vec<_>>(),
-            "origin":origin, "groups":descriptions}))
-            .map_err(|e| e.to_string())?,
-        );
-        Self::prepare_groups(
-            storage,
-            base,
-            PLAN,
-            input_hash,
-            &audio_prefixes,
-            all_groups,
-            &|| false,
-            #[cfg(any(target_os = "macos", windows))]
-            None,
-        )
-    }
-
     pub(super) fn prepare_recovery(
         storage: &Storage,
         base: &Path,
@@ -529,6 +559,8 @@ impl Publication {
             plan_name,
             documents: Vec::new(),
             tracks,
+            clock_reconciled: false,
+            clock_originals: Vec::new(),
             #[cfg(any(target_os = "macos", windows))]
             recovery_rebind,
         };
@@ -586,6 +618,11 @@ impl Publication {
         })
     }
     pub(super) fn verify(&self, storage: &Storage) -> Result<(), String> {
+        // Legacy reconciliation remains bound to the physical whole-track
+        // evidence until the final DB commit, not just the initial comparison.
+        for original in &self.clock_originals {
+            original.check_unchanged()?;
+        }
         storage.require_data_writable()?;
         storage.managed_anchor.verify()?;
         self.root.verify()?;
@@ -623,6 +660,13 @@ impl Publication {
         boundary_gaps: bool,
         now: i64,
     ) -> Result<(), String> {
+        let mut processing: serde_json::Value =
+            serde_json::from_str(config).map_err(|e| e.to_string())?;
+        processing["clock_mapping_source"] = serde_json::json!("sealed_raw_v1");
+        if self.clock_reconciled {
+            processing["legacy_clock_reconciled"] = serde_json::json!(true);
+        }
+        let config = processing.to_string();
         for track in &self.tracks {
             let audio = &track.chunks[0].audio;
             tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,?4,'flac',?5,?6,'ready',?7,?8,?8)",

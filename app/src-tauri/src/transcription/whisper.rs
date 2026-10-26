@@ -207,11 +207,10 @@ pub(crate) fn run_unit_with_suppression(
         watched.push(StableFile::watch(vad)?);
     }
     let directory = directory.canonicalize().map_err(|e| e.to_string())?;
-    let wav = directory.join("input.wav");
-    if !wav.is_file() {
-        return Err("文字起こし入力WAVがありません".into());
-    }
-    let input_proof = Fingerprint::capture(&wav, cancelled)?;
+    let input=super::input::Input::load(&directory,cancelled)?;
+    if input.frames()>124*16000 || ((input.frames()*1_000_000/16000) as i64-duration_us).abs()>100 {return Err("文字起こし入力範囲が不正です".into());}
+    let input_proof=input.proof.clone();
+    let wav=input.proof.path.clone();
     let output_base = directory.join("result");
     let json = directory.join("result.json");
     if json.exists() {
@@ -249,6 +248,8 @@ pub(crate) fn run_unit_with_suppression(
         .arg(&config.model.path)
         .arg("--file")
         .arg(wav)
+        .arg("--mon-first-frame").arg(input.first_frame.to_string())
+        .arg("--mon-end-frame").arg(input.end_frame.to_string())
         .args(["--language", "ja", "--output-json", "--output-file"])
         .arg(output_base)
         .arg("--threads")

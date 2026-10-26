@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { OptionsModal } from "./options-modal";
 import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";
-import { meetingPlaybackLabel, meetingPlaybackModes, preferredMeetingPlaybackMode, type MeetingPlaybackMode, type MeetingPlaybackStartReference } from "./meeting-playback-state";
+import { meetingPlaybackModes, preferredMeetingPlaybackMode, type MeetingPlaybackMode, type MeetingPlaybackStartReference } from "./meeting-playback-state";
 import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
 import { IssueNotice } from "./toast";
 
@@ -25,7 +25,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, ch
 }) {
   const [modes, setModes] = useState<MeetingPlaybackMode[]>([]);
   const [summaryError, setSummaryError] = useState("");
-  const [mode, setMode] = useState<MeetingPlaybackMode>(sourceType === "audio_import" ? "imported" : "both");
+  const [mode, setMode] = useState<MeetingPlaybackMode>("mixed");
   const [summary, setSummary] = useState<(MeetingAudioSummary & { meetingId: string; sourceType: typeof sourceType }) | null>(null);
   const available = active && !!meetingId && summary?.meetingId === meetingId && summary.sourceType === sourceType && modes.includes(mode);
   const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, active });
@@ -63,16 +63,12 @@ export function MeetingAudioControls({ meetingId, locked, host }: {
 }) {
   const audio = useMeetingAudio(meetingId);
   if (!audio) return null;
-  const { mode, modes, canPlay:available, summaryError } = audio;
+  const { mode, canPlay:available, summaryError } = audio;
   return <><IssueNotice scope={meetingId} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{host && createPortal(<div className="meeting-audio-actions">
     <OptionsModal label="再生設定" icon="more" className="meeting-audio-settings"><div className="meeting-audio-settings-fields">
-      <label>会議全体の再生トラック<select value={mode} disabled={locked || !available} onChange={event => {
-        const next = event.target.value as MeetingPlaybackMode;
-        if (!modes.includes(next)) return;
-        audio.changeMode(next);
-      }}>{modes.map(value => <option key={value} value={value}>{meetingPlaybackLabel(value)}</option>)}</select></label>
+      <p>保存した会議音声を再生します。</p>
       <button type="button" className="small-secondary" disabled={locked || !available || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議の先頭に戻す</button>
-      <p>選択したトラックは発言・議事録からの再生にも適用します。開始時刻から、停止操作または音声末尾まで再生を続けます。</p>
+      <p>同じ会議音声を発言・議事録からも再生します。開始時刻から、停止操作または音声末尾まで再生を続けます。</p>
     </div></OptionsModal>
   </div>, host)}</>;
 }
