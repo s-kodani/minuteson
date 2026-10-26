@@ -30,8 +30,8 @@ try {
     $tauriArgs += @('--', '--locked')
     & npm @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed ($LASTEXITCODE)." }
-    $baseConfig = Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-    $productName = if ($Qa) { (Get-Content -LiteralPath 'src-tauri/tauri.qa.conf.json' -Raw | ConvertFrom-Json).productName } else { $baseConfig.productName }
+    $baseConfig = Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+    $productName = if ($Qa) { (Get-Content -LiteralPath 'src-tauri/tauri.qa.conf.json' -Raw -Encoding UTF8 | ConvertFrom-Json).productName } else { $baseConfig.productName }
     $installerName = '{0}_{1}_x64-setup.exe' -f $productName, $baseConfig.version
     $installer = Get-Item -LiteralPath (Join-Path $PSScriptRoot "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/$installerName")
     if (-not $Qa) {
