@@ -83,7 +83,15 @@ int main() {
     different_rate.observe(480,start,0,0,start+100000);
     auto different=different_rate.observe(480,start,960,0,start+200000);
     require(different.start==start+100000&&std::string(different.source)=="sample_count","native counter at a different rate invented a gap");
-    std::cout<<"packet clock: overlap, discontinuities, gaps, equal/backwards/zero/error/future QPC, device reset, rounding and restart passed\n";
+    for(const auto capacity:{PacketClock::bounded_capacity,PacketClock::recording_capacity}){
+      PacketClock bounded(capacity);
+      for(std::uint64_t i=0;i<capacity;++i)bounded.append(i*480,480,start+i*400000,true);
+      require(bounded.parts.size()==capacity,"clock failed before its selected capacity");
+      bool rejected=false;try{bounded.append(capacity*480,480,start+capacity*400000,true);}catch(const std::runtime_error&){rejected=true;}
+      require(rejected&&bounded.parts.size()==capacity,"clock capacity overflow changed committed maps");
+      require(bounded.parts.back().first+bounded.parts.back().frames==capacity*480,"capacity boundary lost PCM");
+    }
+    std::cout<<"packet clock: overlap, discontinuities, gaps, clock recovery, bounded 1024 and recording 65536 capacity passed\n";
     return 0;
   } catch(const std::exception& error) {
     std::cerr<<error.what()<<'\n';return 1;

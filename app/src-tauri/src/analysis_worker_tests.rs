@@ -3,110 +3,174 @@ use std::sync::Arc;
 
 #[test]
 fn deletion_never_holds_analysis_lock_while_waiting_for_another_meetings_database() {
-    let temp=tempfile::tempdir().unwrap();
-    let storage=Arc::new(Storage::open(temp.path().join("data")).unwrap());
-    let meeting=storage.create_meeting("削除対象").unwrap().id;
-    let other=storage.create_meeting("履歴保存中").unwrap().id;
-    let controller=Arc::new(AnalysisController::default());
-    let writer=controller.begin_scoped_notice_storage(Some(&other)).unwrap();
-    let mut task=None;
-    crate::storage::with_test_database(&storage,|_db|{
-        let c=controller.clone();let db=storage.clone();let target=meeting.clone();
-        task=Some(std::thread::spawn(move||c.begin_meeting_deletion(&db,&target)));
-        let started=Instant::now();let mut reserved=false;
-        while started.elapsed()<Duration::from_secs(2){
-            if let Ok(state)=controller.state.try_lock(){if state.meeting_deletions.contains_key(&meeting){reserved=true;break;}}
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Arc::new(Storage::open(temp.path().join("data")).unwrap());
+    let meeting = storage.create_meeting("削除対象").unwrap().id;
+    let other = storage.create_meeting("履歴保存中").unwrap().id;
+    let controller = Arc::new(AnalysisController::default());
+    let writer = controller
+        .begin_scoped_notice_storage(Some(&other))
+        .unwrap();
+    let mut task = None;
+    crate::storage::with_test_database(&storage, |_db| {
+        let c = controller.clone();
+        let db = storage.clone();
+        let target = meeting.clone();
+        task = Some(std::thread::spawn(move || {
+            c.begin_meeting_deletion(&db, &target)
+        }));
+        let started = Instant::now();
+        let mut reserved = false;
+        while started.elapsed() < Duration::from_secs(2) {
+            if let Ok(state) = controller.state.try_lock() {
+                if state.meeting_deletions.contains_key(&meeting) {
+                    reserved = true;
+                    break;
+                }
+            }
             std::thread::yield_now();
         }
-        assert!(reserved,"deletion held the analysis mutex while waiting for SQLite");
+        assert!(
+            reserved,
+            "deletion held the analysis mutex while waiting for SQLite"
+        );
         writer.validate_active().unwrap();
     });
-    let deletion=task.unwrap().join().unwrap().unwrap();
+    let deletion = task.unwrap().join().unwrap().unwrap();
     writer.validate_active().unwrap();
-    storage.release_meeting_deletion(&meeting).unwrap();drop(deletion);
+    storage.release_meeting_deletion(&meeting).unwrap();
+    drop(deletion);
 }
 
 #[test]
 fn shared_history_five_second_timeout_and_unwind_keep_files_protected() {
-    let c=AnalysisController::default();
-    let writer=c.begin_notice_storage().unwrap();
-    let started=Instant::now();
-    assert!(c.begin_deletion_wait(false,false,&||false).err().unwrap().contains("通知履歴の処理が終わらないため"));
-    assert!(started.elapsed()>=Duration::from_secs(5));
-    assert!(started.elapsed()<Duration::from_secs(7));
+    let c = AnalysisController::default();
+    let writer = c.begin_notice_storage().unwrap();
+    let started = Instant::now();
+    assert!(c
+        .begin_deletion_wait(false, false, &|| false)
+        .err()
+        .unwrap()
+        .contains("通知履歴の処理が終わらないため"));
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert!(started.elapsed() < Duration::from_secs(7));
     assert!(c.state.lock().unwrap().data_maintenance.is_none());
     writer.validate_active().unwrap();
-    let calls=std::cell::Cell::new(0);
-    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
-        let _=c.begin_deletion_wait(false,false,&||{calls.set(calls.get()+1);if calls.get()>1{panic!("injected wait failure")}false});
+    let calls = std::cell::Cell::new(0);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = c.begin_deletion_wait(false, false, &|| {
+            calls.set(calls.get() + 1);
+            if calls.get() > 1 {
+                panic!("injected wait failure")
+            }
+            false
+        });
     }));
     assert!(result.is_err());
-    assert!(c.state.lock().unwrap_or_else(|e|e.into_inner()).data_maintenance.is_none());
+    assert!(c
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .data_maintenance
+        .is_none());
     drop(writer);
 }
 
 #[test]
 fn deletion_reservation_drains_history_without_starving_other_meetings() {
-    let temp=tempfile::tempdir().unwrap();
-    let storage=Arc::new(Storage::open(temp.path().join("data")).unwrap());
-    let meeting=storage.create_meeting("対象").unwrap().id;
-    let other=storage.create_meeting("他会議").unwrap().id;
-    let c=Arc::new(AnalysisController::default());
-    let writer=c.begin_scoped_notice_storage(Some(&meeting)).unwrap();
-    let worker=c.clone(); let db=storage.clone(); let target=meeting.clone();
-    let join=std::thread::spawn(move||worker.begin_meeting_deletion_wait(&db,&target,&||false,Duration::from_secs(5)));
-    let started=Instant::now();
-    while !c.notice_storage_paused(Some(&meeting)) { assert!(started.elapsed()<Duration::from_secs(2)); std::thread::yield_now(); }
-    assert!(c.try_begin_scoped_notice_storage(Some(&meeting)).unwrap().is_none());
-    let unrelated=c.begin_scoped_notice_storage(Some(&other)).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Arc::new(Storage::open(temp.path().join("data")).unwrap());
+    let meeting = storage.create_meeting("対象").unwrap().id;
+    let other = storage.create_meeting("他会議").unwrap().id;
+    let c = Arc::new(AnalysisController::default());
+    let writer = c.begin_scoped_notice_storage(Some(&meeting)).unwrap();
+    let worker = c.clone();
+    let db = storage.clone();
+    let target = meeting.clone();
+    let join = std::thread::spawn(move || {
+        worker.begin_meeting_deletion_wait(&db, &target, &|| false, Duration::from_secs(5))
+    });
+    let started = Instant::now();
+    while !c.notice_storage_paused(Some(&meeting)) {
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::yield_now();
+    }
+    assert!(c
+        .try_begin_scoped_notice_storage(Some(&meeting))
+        .unwrap()
+        .is_none());
+    let unrelated = c.begin_scoped_notice_storage(Some(&other)).unwrap();
     writer.validate_active().unwrap();
     assert!(!join.is_finished());
     drop(writer);
-    let deletion=join.join().unwrap().unwrap();
+    let deletion = join.join().unwrap().unwrap();
     unrelated.validate_active().unwrap();
-    assert!(c.try_begin_scoped_notice_storage(Some(&meeting)).unwrap().is_none());
-    storage.release_meeting_deletion(&meeting).unwrap(); drop(deletion);
+    assert!(c
+        .try_begin_scoped_notice_storage(Some(&meeting))
+        .unwrap()
+        .is_none());
+    storage.release_meeting_deletion(&meeting).unwrap();
+    drop(deletion);
     c.begin_scoped_notice_storage(Some(&meeting)).unwrap();
 }
 
 #[test]
 fn history_timeout_cancellation_and_failed_reservation_release_admission() {
-    let temp=tempfile::tempdir().unwrap();
-    let storage=Storage::open(temp.path().join("data")).unwrap();
-    let meeting=storage.create_meeting("対象").unwrap().id;
-    let c=AnalysisController::default();
-    let writer=c.begin_scoped_notice_storage(Some(&meeting)).unwrap();
-    let result=c.begin_meeting_deletion_wait(&storage,&meeting,&||false,Duration::from_millis(20));
-    assert!(result.err().unwrap().contains("通知履歴の処理が終わらないため"));
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("data")).unwrap();
+    let meeting = storage.create_meeting("対象").unwrap().id;
+    let c = AnalysisController::default();
+    let writer = c.begin_scoped_notice_storage(Some(&meeting)).unwrap();
+    let result =
+        c.begin_meeting_deletion_wait(&storage, &meeting, &|| false, Duration::from_millis(20));
+    assert!(result
+        .err()
+        .unwrap()
+        .contains("通知履歴の処理が終わらないため"));
     assert!(!c.notice_storage_paused(Some(&meeting)));
-    assert!(c.begin_meeting_deletion_wait(&storage,&meeting,&||true,Duration::from_secs(5)).is_err());
+    assert!(c
+        .begin_meeting_deletion_wait(&storage, &meeting, &|| true, Duration::from_secs(5))
+        .is_err());
     assert!(!c.notice_storage_paused(Some(&meeting)));
-    writer.validate_active().unwrap(); drop(writer);
-    let work=storage.begin_meeting_work(&meeting,"job",None).unwrap();
-    assert!(c.begin_meeting_deletion(&storage,&meeting).is_err());
-    assert!(!c.notice_storage_paused(Some(&meeting))); drop(work);
-    let deletion=c.begin_meeting_deletion(&storage,&meeting).unwrap();
-    storage.release_meeting_deletion(&meeting).unwrap(); drop(deletion);
+    writer.validate_active().unwrap();
+    drop(writer);
+    let work = storage.begin_meeting_work(&meeting, "job", None).unwrap();
+    assert!(c.begin_meeting_deletion(&storage, &meeting).is_err());
+    assert!(!c.notice_storage_paused(Some(&meeting)));
+    drop(work);
+    let deletion = c.begin_meeting_deletion(&storage, &meeting).unwrap();
+    storage.release_meeting_deletion(&meeting).unwrap();
+    drop(deletion);
 }
 
 #[test]
 fn shared_deletion_waits_for_actual_io_and_releases_on_shutdown() {
-    let c=Arc::new(AnalysisController::default());
-    let writer=c.begin_notice_storage().unwrap();
-    let worker=c.clone();
-    let join=std::thread::spawn(move||worker.begin_deletion_wait(false,false,&||false));
-    let started=Instant::now();
-    while !c.notice_storage_paused(None) { assert!(started.elapsed()<Duration::from_secs(2)); std::thread::yield_now(); }
+    let c = Arc::new(AnalysisController::default());
+    let writer = c.begin_notice_storage().unwrap();
+    let worker = c.clone();
+    let join = std::thread::spawn(move || worker.begin_deletion_wait(false, false, &|| false));
+    let started = Instant::now();
+    while !c.notice_storage_paused(None) {
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::yield_now();
+    }
     assert!(c.try_begin_scoped_notice_storage(None).unwrap().is_none());
-    writer.validate_active().unwrap(); assert!(!join.is_finished()); drop(writer);
-    let deletion=join.join().unwrap().unwrap(); drop(deletion);
+    writer.validate_active().unwrap();
+    assert!(!join.is_finished());
+    drop(writer);
+    let deletion = join.join().unwrap().unwrap();
+    drop(deletion);
     c.begin_notice_storage().unwrap();
-    let writer=c.begin_notice_storage().unwrap(); let worker=c.clone();
-    let join=std::thread::spawn(move||worker.begin_deletion_wait(false,false,&||false));
-    while !c.notice_storage_paused(None) { std::thread::yield_now(); }
-    c.shutdown.store(true,Ordering::SeqCst);
+    let writer = c.begin_notice_storage().unwrap();
+    let worker = c.clone();
+    let join = std::thread::spawn(move || worker.begin_deletion_wait(false, false, &|| false));
+    while !c.notice_storage_paused(None) {
+        std::thread::yield_now();
+    }
+    c.shutdown.store(true, Ordering::SeqCst);
     assert!(join.join().unwrap().is_err());
-    assert!(c.state.lock().unwrap().data_maintenance.is_none()); drop(writer);
+    assert!(c.state.lock().unwrap().data_maintenance.is_none());
+    drop(writer);
 }
 
 #[test]
@@ -117,7 +181,10 @@ fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover(
     assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 2);
     assert!(controller.deletion_operation_blocker().unwrap().is_none());
     controller.state.lock().unwrap().busy = true;
-    assert_eq!(controller.deletion_operation_blocker().unwrap().as_deref(),Some("AI処理中"));
+    assert_eq!(
+        controller.deletion_operation_blocker().unwrap().as_deref(),
+        Some("AI処理中")
+    );
     controller.state.lock().unwrap().busy = false;
     assert!(controller
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)

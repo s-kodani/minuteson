@@ -1,11 +1,12 @@
-async (page, baseUrl="http://127.0.0.1:1438")=>{
+async (page, baseUrl="http://127.0.0.1:1420")=>{
+  if(typeof baseUrl!=="string")baseUrl="http://127.0.0.1:1420";
   const results=[];
   const button=()=>page.getByRole("button",{name:/削除確認用の合成モデル.*をローカルから削除/});
-  const boot=async()=>{await page.goto(`${baseUrl}/tests/model-deletion-enabled-browser.html?resident=windows`);await button().waitFor();await page.waitForFunction(()=>!document.querySelector(".deletion-trigger")?.disabled);};
+  const boot=async(query="")=>{await page.goto(`${baseUrl}/tests/model-deletion-enabled-browser.html?resident=windows${query}`);await button().waitFor();await page.waitForFunction(()=>!document.querySelector(".deletion-trigger")?.disabled);};
   await boot();
   await button().click();
   await page.getByRole("dialog",{name:"モデルの削除対象を確認中"}).waitFor();
-  await page.getByText(/検査の読取り/).waitFor();
+  await page.getByRole("dialog").getByText(/検査の読取り/).waitFor();
   if(!await page.evaluate(()=>window.modelAdmissionFixture.calls.some(c=>c.command==="review_model_body_deletion"&&c.args.packageId==="11111111-1111-4111-8111-111111111111")))throw Error("wrong deletion target");
   results.push("Windows idle model button starts native target review and shows measured inspection bytes");
   await page.getByRole("button",{name:"確認を中止する",exact:true}).click();
@@ -39,5 +40,46 @@ async (page, baseUrl="http://127.0.0.1:1438")=>{
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
   if(!await page.evaluate(()=>window.modelAdmissionFixture.calls.filter(c=>c.command==="review_model_body_deletion").length===1))throw Error("review was automatically replayed");
   results.push("lost review response is reconciled and never auto-replayed");
+  await boot("&admission=notice");
+  await button().click();
+  await page.getByRole("dialog",{name:"モデルの削除対象を確認中"}).waitFor();
+  await page.getByRole("button",{name:"確認を中止する",exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
+  results.push("notification maintenance does not block the independent model deletion lane");
+  for(const reason of ["AI処理中","モデル準備中","録音・音声保存中","保存先切替中"]){
+    await page.evaluate(reason=>{window.modelAdmissionFixture.availability={available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:false,deletionReason:reason};},reason);
+    await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
+    await page.getByText(`${reason}のため削除できません。`,{exact:true}).waitFor();
+  }
+  await page.evaluate(()=>{window.modelAdmissionFixture.availability={available:true,reason:null,deletionAvailable:true,deletionReason:null};});
+  await page.getByRole("button",{name:"削除できる状態か再確認"}).click();
+  await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
+  await page.evaluate(()=>{window.modelAdmissionFixture.recordingActive=true;window.modelAdmissionFixture.render();});
+  await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
+  await page.getByText("録音・音声保存が完了すると削除できます。",{exact:true}).waitFor();
+  results.push("AI, model preparation, recording and exclusive blockers retain their actual reasons");
+  await boot("&admission=legacy");
+  await button().click();
+  await page.getByRole("dialog",{name:"モデルの削除対象を確認中"}).waitFor();
+  results.push("older native admission replies remain compatible");
+  await boot();
+  await page.evaluate(async()=>{
+    const f=window.modelAdmissionFixture;
+    f.otherProgress=[{id:"analysis",kind:"transcription",state:"running",target:"別会議",label:"文字起こし中",completed:null,total:null},{id:"recovery",kind:"recording_recovery",state:"running",target:"回復する会議",label:"回復中",completed:null,total:null}];
+    f.render();
+    await f.change({token:"22222222-2222-4222-8222-222222222222",kind:"deletion",busy:true,phase:"deleting_files",
+      deletionPreview:{confirmationId:"33333333-3333-4333-8333-333333333333",operationId:"44444444-4444-4444-8444-444444444444",meetingId:"55555555-5555-4555-8555-555555555555",title:"週次会議",phase:"files",pending:true,executeAllowed:true,resumeReason:null,keepAllowed:false,pathCount:10,processedPaths:7,fileCount:10,missingCount:0,changedCount:0,unregisteredCount:0,bytes:1000,rowCount:1,rowPhaseCommitted:false},
+      progress:{stage:"deleting_files",completed:7,total:10,unit:"paths"}});
+  });
+  const progress=page.locator(".common-operation-progress");
+  await progress.getByText("週次会議",{exact:true}).waitFor();
+  await progress.getByText("確認した項目を削除中",{exact:true}).waitFor();
+  await progress.getByText("7 / 10 項目",{exact:true}).waitFor();
+  if(await progress.locator(".operation-progress-percent").count() || await progress.locator("progress").getAttribute("value")!==null || /経過時間/.test(await progress.innerText()))throw Error("deletion invented a global percentage or elapsed time");
+  await page.evaluate(()=>window.modelAdmissionFixture.change({phase:"cancelling"}));
+  await progress.getByText("安全な停止を待機中",{exact:true}).waitFor();
+  await page.evaluate(()=>window.modelAdmissionFixture.change({phase:"cancelled",busy:false}));
+  await progress.getByText("回復する会議",{exact:true}).waitFor();
+  results.push("meeting deletion and safe stopping take header priority with target and measured counts until completion");
   return results;
 }

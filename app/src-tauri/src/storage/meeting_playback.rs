@@ -364,7 +364,6 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        #[cfg(unix)]
         super::deletion::audio::require_source(&db, meeting)?;
         let source: (Option<String>, String, Option<String>, Option<String>) = db.query_row(
             "SELECT source_type, lifecycle, (SELECT state FROM recording_sessions WHERE meeting_id = meetings.id), (SELECT state FROM audio_imports WHERE meeting_id = meetings.id) FROM meetings WHERE id = ?1",

@@ -201,7 +201,6 @@ struct Records {
     sessions: BTreeSet<String>,
     imports: BTreeSet<String>,
     jobs: BTreeMap<String, String>,
-    #[cfg(unix)]
     flac_files: crate::storage::recordings::flac::WorkspaceFiles,
 }
 impl Records {
@@ -260,7 +259,6 @@ impl Records {
             sessions: ids("recording_sessions")?,
             imports: ids("audio_imports")?,
             jobs,
-            #[cfg(unix)]
             flac_files: Default::default(),
         })
     }
@@ -425,12 +423,8 @@ fn walk(
                     sha256: Some(sha256),
                     registered: records.assets.get(&child_path).cloned(),
                     stage_hint: {
-                        #[cfg(unix)]
                         let hint = records.flac_files.hint(&child_path, &file)?;
-                        #[cfg(unix)]
                         let hint = hint.or_else(|| records.hint(&child_path));
-                        #[cfg(windows)]
-                        let hint = records.hint(&child_path);
                         hint
                     },
                 },
@@ -745,7 +739,6 @@ impl Census {
         };
         let (scope, mut records) = metadata()?;
         let (root, database) = storage.managed_anchor.identity()?;
-        #[cfg(unix)]
         if inspect_flac {
             records.flac_files = crate::storage::recordings::flac::inspect_workspaces(
                 storage,
@@ -759,7 +752,6 @@ impl Census {
         if inventory(directory, meeting, &records, check, reserved, roots, long)? != entries {
             return Err("検査中に削除対象が変更されました".into());
         }
-        #[cfg(unix)]
         if inspect_flac
             && crate::storage::recordings::flac::inspect_workspaces(
                 storage,
@@ -939,7 +931,6 @@ impl Census {
         let (root, database) = storage.managed_anchor.identity()?;
         let scope = capture_scope()?;
         let mut records = Records::read(db, meeting)?;
-        #[cfg(unix)]
         if inspect_flac {
             records.flac_files = crate::storage::recordings::flac::inspect_workspaces(
                 storage,
@@ -960,7 +951,6 @@ impl Census {
             reservation_roots,
             long_audio,
         )?;
-        #[cfg(unix)]
         let changed_workspaces = inspect_flac
             && crate::storage::recordings::flac::inspect_workspaces(
                 storage,
@@ -968,8 +958,6 @@ impl Census {
                 &records.sessions,
                 check,
             )? != records.flac_files;
-        #[cfg(windows)]
-        let changed_workspaces = false;
         if inventory(
             root_directory,
             meeting,

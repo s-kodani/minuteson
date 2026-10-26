@@ -24,11 +24,14 @@ class InstallerPublicationTests(unittest.TestCase):
         self.source = self.root / 'built-setup.exe'
         self.source.write_bytes(b'MZ' + b'first installer payload' * 20)
 
-    def publish(self, *, source=None, output=None, success=True):
-        result = subprocess.run([
+    def publish(self, *, source=None, output=None, success=True, manifest=None):
+        command = [
             'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
             '-Installer', str(source or self.source), '-OutputRoot', str(output or self.root),
-        ], capture_output=True, text=True, encoding='utf-8', errors='replace')
+        ]
+        if manifest:
+            command += ['-BuildManifest', str(manifest)]
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
@@ -69,6 +72,30 @@ class InstallerPublicationTests(unittest.TestCase):
         self.publish(success=False)
         self.assertEqual((self.download / 'MON-QA-setup.exe').read_bytes(), previous)
         self.assertTrue((self.download / 'build.log').exists())
+
+    def test_manifest_mismatch_retains_previous_download_and_evidence(self):
+        self.publish()
+        previous = (self.download / 'MON-QA-setup.exe').read_bytes()
+        (self.download / 'build.log').write_text('preserve evidence')
+        helper = self.root / 'capture.exe'
+        helper.write_bytes(b'MZcapture helper')
+        manifest = self.root / 'build.json'
+        snapshot = self.root / 'source.json'
+        evidence_tool = ROOT / 'tools/mon_windows_build_evidence.py'
+        for arguments in [
+            ['begin', '--output', str(snapshot)],
+            ['finish', '--snapshot', str(snapshot), '--app', str(self.source),
+             '--helper', str(helper), '--installer', str(self.source), '--output', str(manifest)],
+        ]:
+            subprocess.run(['python', str(evidence_tool), *arguments], check=True, capture_output=True)
+        self.publish(manifest=manifest)
+        # Source remains a valid PE-looking file, but its recorded helper no
+        # longer matches. Publication must stop before moving diagnostics.
+        (self.download / 'build.log').write_text('preserve evidence')
+        helper.write_bytes(b'MZchanged helper')
+        self.publish(manifest=manifest, success=False)
+        self.assertEqual((self.download / 'MON-QA-setup.exe').read_bytes(), previous)
+        self.assertEqual((self.download / 'build.log').read_text(), 'preserve evidence')
 
     def test_default_destination_is_the_workspace_output_directory(self):
         tools = self.root / 'tools'

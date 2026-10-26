@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Installer,
     [ValidateSet('qa', 'release')][string]$Flavor = 'qa',
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [string]$BuildManifest
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -46,6 +47,15 @@ try {
     }
 } finally { $stream.Dispose() }
 $expectedHash = Get-Sha256 $source
+if ($BuildManifest) {
+    $BuildManifest = Assert-WorkspacePath $BuildManifest
+    & python (Join-Path $PSScriptRoot 'mon_windows_build_evidence.py') verify --manifest $BuildManifest --require-current-source
+    if ($LASTEXITCODE -ne 0) { throw 'Build manifest verification failed; previous installer retained.' }
+    $buildEvidence = Get-Content -LiteralPath $BuildManifest -Raw | ConvertFrom-Json
+    if ($buildEvidence.artifacts.installer.sha256 -ne $expectedHash) {
+        throw 'Installer does not match the verified build manifest.'
+    }
+}
 New-Item -ItemType Directory -Path $distribution, $work -Force | Out-Null
 $stage = Assert-WorkspacePath (Join-Path $work ('.installer-' + [guid]::NewGuid().ToString('N') + '.tmp'))
 try {

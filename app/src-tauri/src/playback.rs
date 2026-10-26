@@ -209,9 +209,16 @@ impl PlaybackStore {
         Ok(info)
     }
 
-    pub(crate) fn own_meeting(&self, info: PlaybackInfo, owner: crate::storage::meeting_access::MeetingWork) -> Result<PlaybackInfo, String> {
+    pub(crate) fn own_meeting(
+        &self,
+        info: PlaybackInfo,
+        owner: crate::storage::meeting_access::MeetingWork,
+    ) -> Result<PlaybackInfo, String> {
         let mut sessions = self.0.lock().map_err(|_| "再生ロックを取得できません")?;
-        let session = sessions.iter_mut().find(|s|s.info.token==info.token).ok_or("音声の所有が変更されました")?;
+        let session = sessions
+            .iter_mut()
+            .find(|s| s.info.token == info.token)
+            .ok_or("音声の所有が変更されました")?;
         session._meeting_owner = Some(owner);
         Ok(info)
     }

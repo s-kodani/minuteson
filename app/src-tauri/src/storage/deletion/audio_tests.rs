@@ -753,14 +753,16 @@ fn audio_only_census_requires_new_review_after_edits_to_retained_text() {
 
 #[test]
 fn audio_only_census_rejects_links_aliases_special_objects_and_registered_path_escape() {
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
-    for mode in 0..4 {
+    for mode in (0..4).filter(|mode| *mode != 0 || cfg!(unix)) {
         let f = Fixture::new();
         let external = f.base.path().join("external.caf");
         std::fs::write(&external, b"EXTERNAL AUDIO").unwrap();
         match mode {
             0 => {
                 std::fs::remove_file(&f.path).unwrap();
+                #[cfg(unix)]
                 symlink(&external, &f.path).unwrap();
             }
             1 => {
@@ -796,13 +798,31 @@ fn audio_only_census_rejects_links_aliases_special_objects_and_registered_path_e
 fn audio_only_census_rejects_replaced_root_and_database_without_adopting_them() {
     for database in [false, true] {
         let f = Fixture::new();
-        if database {
-            let path = f.storage.root().join("meetings.sqlite3");
-            std::fs::rename(&path, f.storage.root().join("original.sqlite3")).unwrap();
-            std::fs::write(&path, b"REPLACEMENT DATABASE").unwrap();
+        let from = if database {
+            f.storage.root().join("meetings.sqlite3")
         } else {
-            std::fs::rename(f.storage.root(), f.base.path().join("old-root")).unwrap();
-            std::fs::create_dir(f.storage.root()).unwrap();
+            f.storage.root().to_owned()
+        };
+        let to = if database {
+            f.storage.root().join("original.sqlite3")
+        } else {
+            f.base.path().join("old-root")
+        };
+        let replaced = std::fs::rename(&from, to);
+        #[cfg(windows)]
+        if replaced.is_err() {
+            // SQLite/native handles may prevent the replacement itself.
+            // The unchanged original remains usable and is never adopted
+            // as a different database or root through an alternate path.
+            f.storage.managed_anchor.verify().unwrap();
+            f.census();
+            continue;
+        }
+        replaced.unwrap();
+        if database {
+            std::fs::write(&from, b"REPLACEMENT DATABASE").unwrap();
+        } else {
+            std::fs::create_dir(&from).unwrap();
         }
         assert!(Census::capture(
             &f.storage,

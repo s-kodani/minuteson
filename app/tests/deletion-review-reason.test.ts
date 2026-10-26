@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deletionReviewReason } from "../src/deletion-review-reason.ts";
+import { deletionAvailability, deletionReviewReason } from "../src/deletion-review-reason.ts";
 import type { DataOperation } from "../src/data-operation.ts";
 
 test("deletion explains the actual shared recording/AI blocker rather than platform support", () => {
@@ -30,4 +30,18 @@ test("a pending model receipt and a failed read are explained without claiming W
   assert.match(deletionReviewReason(operation,state), /権限/);
   operation.connected = true; operation.snapshot = null; operation.error = "";
   assert.doesNotMatch(deletionReviewReason(operation,state), /このアプリでは削除機能/);
+});
+
+test("deletion admission uses its native lane while retaining real blockers and old-build compatibility", () => {
+  assert.deepEqual(deletionAvailability({available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:true,deletionReason:null}), {available:true,reason:null});
+  for (const reason of ["AI処理中", "モデル準備中", "録音・音声保存中", "保存先切替中"]) {
+    const availability = {available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:false,deletionReason:reason};
+    const admission = deletionAvailability(availability);
+    assert.equal(admission.available, false);
+    const operation = {connected:true,availability} as DataOperation;
+    assert.equal(deletionReviewReason(operation,{native:true,supported:true,locked:false,protectedNow:false,sharedAvailable:admission.available,availabilityReason:admission.reason}), `${reason}のため削除できません。`);
+  }
+  assert.deepEqual(deletionAvailability({available:true,reason:null}), {available:true,reason:null});
+  assert.deepEqual(deletionAvailability({available:false,reason:"AI処理中"}), {available:false,reason:"AI処理中"});
+  assert.equal(deletionAvailability(null).available, false);
 });

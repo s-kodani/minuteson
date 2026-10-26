@@ -1,6 +1,7 @@
 use super::*;
 use crate::storage::deletion::audio::{intent, Census, Disposition};
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 fn failed_fixture() -> Fixture {
@@ -297,7 +298,10 @@ fn flac_workspace_partial_rollback_and_saved_partial_retain_history_after_audio_
 
 #[test]
 fn flac_workspace_invalid_receipt_duplicate_outputs_and_links_fail_closed() {
-    for kind in ["hash", "duplicate", "link"] {
+    for kind in ["hash", "duplicate", "link"]
+        .into_iter()
+        .filter(|kind| *kind != "link" || cfg!(unix))
+    {
         let f = failed_fixture();
         let (directory, name, mut checkpoint) = first_checkpoint(&f);
         let final_path = directory.path.join(format!("{}.flac", checkpoint.chunk_id));
@@ -313,9 +317,12 @@ fn flac_workspace_invalid_receipt_duplicate_outputs_and_links_fail_closed() {
                 b"unknown duplicate",
             );
         } else {
-            let external = directory.path.join("external.bin");
-            std::fs::rename(&final_path, &external).unwrap();
-            std::os::unix::fs::symlink(&external, &final_path).unwrap();
+            #[cfg(unix)]
+            {
+                let external = directory.path.join("external.bin");
+                std::fs::rename(&final_path, &external).unwrap();
+                std::os::unix::fs::symlink(&external, &final_path).unwrap();
+            }
         }
         let original = tree_without_links(f.base.parent().unwrap());
         assert!(
@@ -333,10 +340,14 @@ fn flac_workspace_invalid_receipt_duplicate_outputs_and_links_fail_closed() {
 
 #[test]
 fn flac_workspace_unproven_sidecars_allow_raw_audio_review_without_adopting_final_outputs() {
-    for invalid_lock in [false, true] {
+    for invalid_lock in [false, true]
+        .into_iter()
+        .filter(|invalid| !invalid || cfg!(unix))
+    {
         let f = failed_fixture();
         let plan = f.plan();
         if invalid_lock {
+            #[cfg(unix)]
             std::fs::set_permissions(f.base.join(LOCK), std::fs::Permissions::from_mode(0o644))
                 .unwrap();
         } else {
@@ -376,6 +387,7 @@ fn tree_without_links(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+#[cfg(unix)]
 #[ignore = "Dedicated owned synthetic SIGKILL children; no capture devices"]
 fn flac_workspace_owned_sigkill_audio_deletion_keeps_pre_identity_files_and_all_receipts() {
     use std::os::unix::process::ExitStatusExt;

@@ -23,6 +23,10 @@ struct PacketTime {
 // https://learn.microsoft.com/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer
 class PacketClock {
  public:
+  static constexpr std::size_t bounded_capacity=1024,recording_capacity=65536;
+  explicit PacketClock(std::size_t capacity=bounded_capacity):capacity_(capacity) {
+    if(!capacity_||capacity_>recording_capacity)throw std::invalid_argument("invalid recording clock capacity");
+  }
   std::vector<ClockPart> parts;
   std::uint64_t boundary_adjustments=0, max_boundary_adjustment_ticks=0;
   std::uint64_t equal_timestamps=0, reversed_timestamps=0, timestamp_errors=0,
@@ -84,7 +88,7 @@ class PacketClock {
     if(end<time)throw std::runtime_error("recording clock overflow");
     const bool boundary=parts.empty()||discontinuity||time>parts.back().last_end+200000;
     if(boundary) {
-      if(parts.size()>=1024)throw std::runtime_error("too many recording clock discontinuities");
+      if(parts.size()>=capacity_)throw std::runtime_error("too many recording clock discontinuities");
       if(!parts.empty()&&time<parts.back().last_end) {
         // Close the preceding affine map at the newly observed first frame.
         // This retains every captured sample, introduces no overlap or invented
@@ -108,6 +112,7 @@ class PacketClock {
     have_packet_=true;
   }
  private:
+  std::size_t capacity_;
   bool have_packet_=false;
   std::uint64_t last_packet_start_=0;
   bool have_observation_=false,estimated_=false,matching_position_rate_=true;

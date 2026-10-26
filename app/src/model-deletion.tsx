@@ -9,7 +9,7 @@ import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operati
 import { assertModelDeletionPage, modelDeletionPhaseLabel, type ModelDeletionPage, type ModelDeletionReceipt } from "./model-deletion-operation-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
-import { deletionReviewReason } from "./deletion-review-reason";
+import { deletionAvailability, deletionReviewReason } from "./deletion-review-reason";
 import { stageLabel, stageDetail } from "./stage-progress";
 
 export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted }: {
@@ -42,11 +42,12 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const canInspect = isTauri() && operation.modelDeletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
   // Restart normally forbids all work. A canonical pending deletion alone can
   // use its restricted native resume lane; it never enables ordinary writes.
-  const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
+  const admission = deletionAvailability(operation.availability);
+  const sharedAvailable = admission.available || (!!listing?.restartRequired && admission.reason === "保存先の切替後は終了して再起動が必要です");
   const canReviewPending = canInspect && sharedAvailable;
   const canReviewModel = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !s?.deletionPreview?.pending && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
   const reviewUnavailableReason = canReviewModel ? null : deletionReviewReason(operation, {
-    native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable,
+    native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable, availabilityReason: admission.reason,
   });
   const retryAvailability = async () => {
     try { await latest.current.operation.refresh(); setError(""); }

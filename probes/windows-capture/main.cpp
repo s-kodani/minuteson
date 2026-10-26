@@ -65,7 +65,7 @@ using WaveFormat = std::unique_ptr<WAVEFORMATEX, CoTaskMemFreeDeleter>;
 
 class ActivationHandler final : public Microsoft::WRL::RuntimeClass<
     Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
-    IActivateAudioInterfaceCompletionHandler> {
+    IActivateAudioInterfaceCompletionHandler,Microsoft::WRL::FtmBase> {
  public:
   ActivationHandler() : completed_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
     if (!completed_) throw std::runtime_error("could not create activation event");
@@ -93,12 +93,13 @@ class ActivationHandler final : public Microsoft::WRL::RuntimeClass<
   ComPtr<IAudioClient> client_;
 };
 
-ComPtr<IAudioClient> activate_process_loopback(DWORD process_id) {
+ComPtr<IAudioClient> activate_process_loopback(DWORD process_id,bool exclude_tree=false,DWORD wait_ms=15000) {
   AUDIOCLIENT_ACTIVATION_PARAMS activation = {};
   activation.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
   activation.ProcessLoopbackParams.TargetProcessId = process_id;
   activation.ProcessLoopbackParams.ProcessLoopbackMode =
-      PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+      exclude_tree?PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE:
+        PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
   PROPVARIANT parameters = {};
   parameters.vt = VT_BLOB;
   parameters.blob.cbSize = sizeof(activation);
@@ -110,7 +111,7 @@ ComPtr<IAudioClient> activate_process_loopback(DWORD process_id) {
                                     __uuidof(IAudioClient), &parameters,
                                     handler.Get(), operation.GetAddressOf()),
         "ActivateAudioInterfaceAsync");
-  if (WaitForSingleObject(handler->event(), 15000) != WAIT_OBJECT_0)
+  if (WaitForSingleObject(handler->event(), wait_ms) != WAIT_OBJECT_0)
     throw std::runtime_error("process loopback activation timed out");
   check(handler->result(), "process loopback activation");
   return handler->client();

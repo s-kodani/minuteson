@@ -170,7 +170,7 @@ pub(super) fn serve(
                         .run_on_main_thread(move || {
                             let shown = !cancelled.load(Ordering::SeqCst)
                                 && handle.get_webview_window("main").is_some_and(|main| {
-                        crate::residency::restore(&handle).is_ok()
+                                    crate::residency::restore(&handle).is_ok()
                                         && main.is_visible().unwrap_or(false)
                                         && !main.is_minimized().unwrap_or(true)
                                 });

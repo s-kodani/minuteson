@@ -22,9 +22,9 @@ mod parallel_tests;
 pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
 pub(in crate::storage) use inventory::{inspect_workspaces, WorkspaceFiles};
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "macos"))]
 mod dense_tests;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(super) mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

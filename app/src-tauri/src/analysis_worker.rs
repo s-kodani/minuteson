@@ -433,7 +433,9 @@ impl AnalysisController {
                 app.state::<Storage>().pause_for_exit()?;
             }
             controller.shutdown.store(true, Ordering::SeqCst);
-            for cancel in state.meeting_deletions.values() { cancel.store(true, Ordering::SeqCst); }
+            for cancel in state.meeting_deletions.values() {
+                cancel.store(true, Ordering::SeqCst);
+            }
             state.cancel_notice_writers();
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
@@ -472,7 +474,9 @@ impl AnalysisController {
         self.shutdown.store(true, Ordering::SeqCst);
         state.cancel_notice_writers();
         if cancel_work {
-            for cancel in state.meeting_deletions.values() { cancel.store(true, Ordering::SeqCst); }
+            for cancel in state.meeting_deletions.values() {
+                cancel.store(true, Ordering::SeqCst);
+            }
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
                 cancel.store(true, Ordering::SeqCst);

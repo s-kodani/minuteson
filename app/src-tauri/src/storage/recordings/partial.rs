@@ -397,7 +397,8 @@ impl Storage {
         confirmed: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordingSession, String> {
-        let _meeting_owner = self.begin_meeting_work(&reviewed.session.meeting_id, "recording", None)?;
+        let _meeting_owner =
+            self.begin_meeting_work(&reviewed.session.meeting_id, "recording", None)?;
         check_cancel(cancelled)?;
         if !confirmed {
             return Err("確定済み部分だけを救出する明示的な同意が必要です".into());

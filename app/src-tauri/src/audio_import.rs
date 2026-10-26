@@ -1,6 +1,6 @@
 //! Local file import. Paths never become permanent analysis dependencies.
 mod mp3;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 mod pcm;
 use crate::audio::VerifiedAudio;
 use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};

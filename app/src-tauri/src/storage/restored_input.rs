@@ -168,8 +168,13 @@ pub(super) struct Registry {
 
 impl Storage {
     pub(crate) fn evict_restored_input_cache(&self, meeting: Option<&str>) -> Result<(), String> {
-        let mut registry = self.restored_inputs.lock().map_err(|_| "復元通知のキャッシュを解放できません")?;
-        registry.entries.retain(|_, entry| meeting.is_some_and(|id| entry.meeting != id));
+        let mut registry = self
+            .restored_inputs
+            .lock()
+            .map_err(|_| "復元通知のキャッシュを解放できません")?;
+        registry
+            .entries
+            .retain(|_, entry| meeting.is_some_and(|id| entry.meeting != id));
         Ok(())
     }
 

@@ -15,11 +15,11 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
-#[cfg(test)]
-mod tests;
 mod retired;
 #[cfg(test)]
 mod retired_tests;
+#[cfg(test)]
+mod tests;
 
 const SCHEMA: &str = "
 CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),proof TEXT NOT NULL,hash TEXT NOT NULL);

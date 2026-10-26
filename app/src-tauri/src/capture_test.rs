@@ -99,7 +99,11 @@ struct Run {
     levels: crate::input_levels::LevelReader,
     playback_tokens: Vec<String>,
 }
-impl Snapshot { pub(crate) fn is_busy(&self)->bool {self.busy} }
+impl Snapshot {
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy
+    }
+}
 #[derive(Default)]
 struct State {
     current: Option<Run>,
@@ -607,7 +611,8 @@ impl CaptureTests {
                 match result {
                     Ok(ready) if !cancelled() => {
                         run.snapshot.phase = "ready".into();
-                        run.snapshot.microphone = ready.microphone.as_ref().map(|track| track.info.clone());
+                        run.snapshot.microphone =
+                            ready.microphone.as_ref().map(|track| track.info.clone());
                         run.snapshot.system = ready.system.as_ref().map(|track| track.info.clone());
                         run.ready = Some(ready);
                     }
@@ -726,7 +731,9 @@ impl CaptureTests {
         }
         let ready = run.ready.as_ref().ok_or("検証済み音声がありません")?;
         let track = match kind {
-            "mic" => ready.microphone.as_ref().ok_or("マイク音声は未受信のため再生できません。マイクを確認して再テストしてください")?,
+            "mic" => ready.microphone.as_ref().ok_or(
+                "マイク音声は未受信のため再生できません。マイクを確認して再テストしてください",
+            )?,
             "system" => ready
                 .system
                 .as_ref()

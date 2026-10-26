@@ -12,7 +12,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
     & python ../tools/mon_third_party_notices.py --target x86_64-pc-windows-msvc
     if ($LASTEXITCODE -ne 0) { throw 'Third-party notice generation failed.' }
-    & cmake -S ../probes/windows-capture -B ../probes/windows-capture/build -G 'Visual Studio 17 2022' -A x64
+    & cmake -S ../probes/windows-capture -B ../probes/windows-capture/build -G 'Visual Studio 17 2022' -A x64 -DBUILD_TESTING=ON
     if ($LASTEXITCODE -ne 0) { throw 'Capture probe configuration failed.' }
     & cmake --build ../probes/windows-capture/build --config Release
     if ($LASTEXITCODE -ne 0) { throw 'Capture probe build failed.' }

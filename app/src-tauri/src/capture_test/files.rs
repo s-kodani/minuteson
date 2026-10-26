@@ -815,10 +815,16 @@ pub(super) fn verify(
         return Err("マイク・PC音声を取得できませんでした".into());
     }
     for (unreceived, name, t) in [
-        (microphone_unreceived, "microphone.caf", &manifest.microphone),
+        (
+            microphone_unreceived,
+            "microphone.caf",
+            &manifest.microphone,
+        ),
         (system_unreceived, "system.caf", &manifest.system),
     ] {
-        if !unreceived { continue; }
+        if !unreceived {
+            continue;
+        }
         if t.frames != 0
             || t.callback_count != Some(0)
             || t.sample_rate.is_some()
@@ -829,7 +835,9 @@ pub(super) fn verify(
                 .as_ref()
                 .is_none_or(|segments| !segments.is_empty())
         {
-            return Err(format!("{name}の未受信記録に書込み・形式・取得時刻の矛盾があります"));
+            return Err(format!(
+                "{name}の未受信記録に書込み・形式・取得時刻の矛盾があります"
+            ));
         }
         // Absence is not an empty/corrupt saved CAF. Reject even a dangling
         // link; never discard a payload or pass it off as unreceived audio.
@@ -839,18 +847,29 @@ pub(super) fn verify(
         }
     }
     let first_start = |unreceived: bool, track: &Track| {
-        if unreceived { i64::MAX } else {
-            track.clock_segments.as_ref().and_then(|s| s.first())
-                .map(|s| s.timeline_start_us).unwrap_or(-1)
+        if unreceived {
+            i64::MAX
+        } else {
+            track
+                .clock_segments
+                .as_ref()
+                .and_then(|s| s.first())
+                .map(|s| s.timeline_start_us)
+                .unwrap_or(-1)
         }
     };
     if first_start(microphone_unreceived, &manifest.microphone)
-        .min(first_start(system_unreceived, &manifest.system)) != 0
+        .min(first_start(system_unreceived, &manifest.system))
+        != 0
     {
         return Err("テストの共通原点が最初の保存音声と一致しません".into());
     }
     Ok(Ready {
-        microphone: if microphone_unreceived { None } else { Some(track("microphone.caf", manifest.microphone)?) },
+        microphone: if microphone_unreceived {
+            None
+        } else {
+            Some(track("microphone.caf", manifest.microphone)?)
+        },
         system: if system_unreceived {
             None
         } else {

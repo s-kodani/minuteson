@@ -944,7 +944,10 @@ fn completed_metadata_corruption_and_ready_resurrection_never_grant_audio_access
 }
 #[test]
 fn completed_parent_replacement_or_symlink_is_attention_not_auto_cleanup() {
-    for symlink in [false, true] {
+    for symlink in [false, true]
+        .into_iter()
+        .filter(|symlink| !symlink || cfg!(unix))
+    {
         let mut f = Fixture::new();
         let lease = owner();
         let op = removed(&f, &lease);
@@ -964,6 +967,7 @@ fn completed_parent_replacement_or_symlink_is_attention_not_auto_cleanup() {
         let keep = outside.join("microphone.caf");
         std::fs::write(&keep, b"OUTSIDE").unwrap();
         if symlink {
+            #[cfg(unix)]
             std::os::unix::fs::symlink(&outside, parent).unwrap();
         } else {
             std::fs::create_dir(parent).unwrap();
@@ -1012,6 +1016,7 @@ fn availability_validation_is_independent_of_other_meeting_running_jobs() {
         .contains("削除済み"));
 }
 #[test]
+#[cfg(unix)]
 fn completion_sigkill_each_atomic_boundary_is_cleanup_or_fully_completed() {
     use std::os::unix::process::ExitStatusExt;
     for boundary in [
@@ -1075,6 +1080,7 @@ fn completion_sigkill_each_atomic_boundary_is_cleanup_or_fully_completed() {
     }
 }
 #[test]
+#[cfg(unix)]
 #[ignore = "subprocess-only parent-owned synthetic audio completion fixture"]
 fn audio_completion_crash_child() {
     let root = std::path::PathBuf::from(std::env::var("MON_AUDIO_COMPLETION_ROOT").unwrap());

@@ -429,9 +429,13 @@ fn model_deletion_body_panic_releases_writer_without_releasing_persistent_fence(
         }
     )))
     .is_err());
-    // A poisoned Storage mutex refuses all subsequent work; it must reopen.
+    // File I/O no longer holds the DB mutex. A panic must leave it usable,
+    // while the durable deletion fence still rejects ordinary writes.
     assert!(f.storage.data_write_blocked());
-    assert!(f.storage.connection.lock().is_err());
+    let db = f.storage.connection.lock().unwrap();
+    assert!(db.execute("UPDATE meetings SET title=title", []).is_err());
+    drop(db);
+    assert!(f.storage.list_meetings().is_ok());
     let mut f = f;
     drop(owner);
     reopen(&mut f, |_| {});

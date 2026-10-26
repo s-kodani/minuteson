@@ -23,21 +23,31 @@ pub(crate) struct NoticeStorageLease {
     cancel: Arc<AtomicBool>,
 }
 
-struct MeetingReservation<'a> { storage: &'a Storage, meeting: &'a str, keep: bool }
+struct MeetingReservation<'a> {
+    storage: &'a Storage,
+    meeting: &'a str,
+    keep: bool,
+}
 impl Drop for MeetingReservation<'_> {
     fn drop(&mut self) {
-        if !self.keep { let _ = self.storage.release_meeting_deletion(self.meeting); }
+        if !self.keep {
+            let _ = self.storage.release_meeting_deletion(self.meeting);
+        }
     }
 }
 
 impl AnalysisController {
     pub(crate) fn notice_storage_busy(&self, meeting: Option<&str>) -> bool {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.notice_writers.iter().any(|w| meeting.is_none() || w.meeting.as_deref() == meeting)
+        state
+            .notice_writers
+            .iter()
+            .any(|w| meeting.is_none() || w.meeting.as_deref() == meeting)
     }
     pub(crate) fn notice_storage_paused(&self, meeting: Option<&str>) -> bool {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.data_maintenance.is_some() || state.storage_restart_required
+        state.data_maintenance.is_some()
+            || state.storage_restart_required
             || self.shutdown.load(Ordering::SeqCst)
             || meeting.is_some_and(|id| state.meeting_deletions.contains_key(id))
     }
@@ -48,8 +58,12 @@ impl AnalysisController {
         state.wake = false;
     }
     // Informational only. Actual starts recheck all gates atomically.
-    pub(crate) fn data_operation_blocker(&self) -> Result<Option<String>, String> { self.operation_blocker(false) }
-    pub(crate) fn deletion_operation_blocker(&self) -> Result<Option<String>, String> { self.operation_blocker(true) }
+    pub(crate) fn data_operation_blocker(&self) -> Result<Option<String>, String> {
+        self.operation_blocker(false)
+    }
+    pub(crate) fn deletion_operation_blocker(&self) -> Result<Option<String>, String> {
+        self.operation_blocker(true)
+    }
     fn operation_blocker(&self, ignore_notice_writers: bool) -> Result<Option<String>, String> {
         let state = self
             .state
@@ -91,7 +105,10 @@ impl AnalysisController {
     }
 
     pub(crate) fn begin_deletion_wait(
-        &self, recording_active: bool, import_blocked: bool, cancelled: &impl Fn() -> bool,
+        &self,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
     ) -> Result<DataMaintenanceLease, String> {
         self.begin_data_maintenance_inner(recording_active, import_blocked, cancelled, false, true)
     }
@@ -124,7 +141,11 @@ impl AnalysisController {
     }
 
     pub(super) fn begin_meeting_deletion_wait(
-        &self, storage: &Storage, meeting: &str, cancelled: &impl Fn() -> bool, timeout: Duration,
+        &self,
+        storage: &Storage,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+        timeout: Duration,
     ) -> Result<DataMaintenanceLease, String> {
         let mut state = self
             .state
@@ -152,13 +173,20 @@ impl AnalysisController {
         };
         let mut state = self.state.lock().map_err(|_| "削除予約を確認できません")?;
         let started = Instant::now();
-        while state.notice_writers.iter().any(|w| w.meeting.as_deref() == Some(meeting)) {
+        while state
+            .notice_writers
+            .iter()
+            .any(|w| w.meeting.as_deref() == Some(meeting))
+        {
             if cancelled() || lease.cancelled() || started.elapsed() >= timeout {
                 drop(state);
                 return Err("通知履歴の処理が終わらないため、削除を開始できませんでした".into());
             }
-            state = self.idle.wait_timeout(state, Duration::from_millis(25))
-                .map_err(|_| "通知履歴の停止待ちを確認できません")?.0;
+            state = self
+                .idle
+                .wait_timeout(state, Duration::from_millis(25))
+                .map_err(|_| "通知履歴の停止待ちを確認できません")?
+                .0;
         }
         if cancelled() || lease.cancelled() {
             drop(state);
@@ -168,8 +196,14 @@ impl AnalysisController {
         // its notice lease. Never wait for SQLite while holding this mutex.
         drop(state);
         storage.reserve_meeting_deletion(meeting)?;
-        let mut reservation = MeetingReservation { storage, meeting, keep: false };
-        if cancelled() || lease.cancelled() { return Err("削除の開始待ちを取り消しました".into()); }
+        let mut reservation = MeetingReservation {
+            storage,
+            meeting,
+            keep: false,
+        };
+        if cancelled() || lease.cancelled() {
+            return Err("削除の開始待ちを取り消しました".into());
+        }
         lease.validate_active()?;
         reservation.keep = true;
         Ok(lease)
@@ -239,11 +273,16 @@ impl AnalysisController {
                 drop(state);
                 return Err("通知履歴の処理が終わらないため、削除を開始できませんでした".into());
             }
-            state = self.idle.wait_timeout(state, Duration::from_millis(25))
-                .map_err(|_| "通知履歴の停止待ちを確認できません")?.0;
+            state = self
+                .idle
+                .wait_timeout(state, Duration::from_millis(25))
+                .map_err(|_| "通知履歴の停止待ちを確認できません")?
+                .0;
         }
         drop(state);
-        if cancelled() || lease.cancelled() { return Err("削除の開始待ちを取り消しました".into()); }
+        if cancelled() || lease.cancelled() {
+            return Err("削除の開始待ちを取り消しました".into());
+        }
         Ok(lease)
     }
 
@@ -306,10 +345,17 @@ impl AnalysisController {
     pub(crate) fn begin_notice_storage(&self) -> Result<NoticeStorageLease, String> {
         self.begin_scoped_notice_storage(None)
     }
-    pub(crate) fn begin_scoped_notice_storage(&self, meeting: Option<&str>) -> Result<NoticeStorageLease, String> {
-        self.try_begin_scoped_notice_storage(meeting)?.ok_or_else(|| "データ操作・保存先切替・終了処理中は通知履歴を保存できません".into())
+    pub(crate) fn begin_scoped_notice_storage(
+        &self,
+        meeting: Option<&str>,
+    ) -> Result<NoticeStorageLease, String> {
+        self.try_begin_scoped_notice_storage(meeting)?
+            .ok_or_else(|| "データ操作・保存先切替・終了処理中は通知履歴を保存できません".into())
     }
-    pub(crate) fn try_begin_scoped_notice_storage(&self, meeting: Option<&str>) -> Result<Option<NoticeStorageLease>, String> {
+    pub(crate) fn try_begin_scoped_notice_storage(
+        &self,
+        meeting: Option<&str>,
+    ) -> Result<Option<NoticeStorageLease>, String> {
         if meeting.is_some_and(|id| !crate::input_levels::valid_owner(id)) {
             return Err("通知履歴の会議IDが不正です".into());
         }
@@ -328,7 +374,10 @@ impl AnalysisController {
             return Err("通知履歴の共有所有が上限に達しました".into());
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        state.notice_writers.push(NoticeWriter { cancel: cancel.clone(), meeting: meeting.map(str::to_owned) });
+        state.notice_writers.push(NoticeWriter {
+            cancel: cancel.clone(),
+            meeting: meeting.map(str::to_owned),
+        });
         Ok(Some(NoticeStorageLease {
             state: self.state.clone(),
             shutdown: self.shutdown.clone(),

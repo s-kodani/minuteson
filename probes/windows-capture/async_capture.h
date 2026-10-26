@@ -2,17 +2,20 @@
 // Included inside namespace product after InputFailure. Acquisition owns no
 // filesystem work. GetBuffer and ReleaseBuffer always run on this one thread.
 class AsyncCapture {
-  ComPtr<IAudioClient> client_;
-  ComPtr<IAudioCaptureClient> capture_;
   UINT32 channels_;
   std::atomic<bool> stopping_{false};
   std::thread thread_;
-  void drain() {
+  std::mutex startup_mutex_;
+  std::condition_variable startup_changed_;
+  bool startup_finished_=false;
+  std::exception_ptr startup_error_;
+  void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
+  void drain(IAudioCaptureClient* capture) {
     UINT32 available=0;
-    acquisition(capture_->GetNextPacketSize(&available),"poll WASAPI packets");
+    acquisition(capture->GetNextPacketSize(&available),"poll WASAPI packets");
     for(UINT32 drained=0;available&&drained<256;++drained) {
       BYTE* data=nullptr;UINT32 count=0;DWORD flags=0;UINT64 position=0,time=0;
-      acquisition(capture_->GetBuffer(&data,&count,&flags,&position,&time),"read WASAPI packet");
+      acquisition(capture->GetBuffer(&data,&count,&flags,&position,&time),"read WASAPI packet");
       try {
         if(count) {
           if(count>PacketQueue::max_frames)throw std::runtime_error("Windows音声パケットが保存待ち上限を超えています");
@@ -24,27 +27,41 @@ class AsyncCapture {
           }
           queue.push(std::move(packet));
         }
-      }catch(...){capture_->ReleaseBuffer(count);throw;}
-      acquisition(capture_->ReleaseBuffer(count),"release WASAPI packet");
-      acquisition(capture_->GetNextPacketSize(&available),"poll next WASAPI packet");
+      }catch(...){capture->ReleaseBuffer(count);throw;}
+      acquisition(capture->ReleaseBuffer(count),"release WASAPI packet");
+      acquisition(capture->GetNextPacketSize(&available),"poll next WASAPI packet");
     }
   }
  public:
   PacketQueue queue;
-  AsyncCapture(ComPtr<IAudioClient> client,ComPtr<IAudioCaptureClient> capture,UINT32 channels):client_(std::move(client)),capture_(std::move(capture)),channels_(channels) {
-    thread_=std::thread([this]{
+  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels):channels_(channels) {
+    thread_=std::thread([this,client=std::move(client)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
       DWORD index=0;HANDLE priority=nullptr;
-      try {
-        acquisition(initialized,"initialize WASAPI acquisition thread");
-        priority=AvSetMmThreadCharacteristicsW(L"Audio",&index);
-        if(priority)AvSetMmThreadPriority(priority,AVRT_PRIORITY_HIGH);
-        while(!stopping_.load(std::memory_order_acquire)){drain();Sleep(1);}
-        client_->Stop();drain();
-      }catch(...){queue.fail(std::current_exception());client_->Stop();}
+      {
+        // WASAPI requires releasing IAudioCaptureClient on the GetService
+        // thread. Keep its sole service reference, start/stop and all buffer
+        // operations inside this scope, before leaving the COM apartment.
+        ComPtr<IAudioCaptureClient> capture;bool started=false;
+        try {
+          acquisition(initialized,"initialize WASAPI acquisition thread");
+          acquisition(client->GetService(IID_PPV_ARGS(capture.GetAddressOf())),"get WASAPI capture service");
+          acquisition(client->Start(),"音声入力を開始できません");started=true;
+          priority=AvSetMmThreadCharacteristicsW(L"Audio",&index);
+          if(priority)AvSetMmThreadPriority(priority,AVRT_PRIORITY_HIGH);
+          startup();
+          while(!stopping_.load(std::memory_order_acquire)){drain(capture.Get());Sleep(1);}
+          client->Stop();started=false;drain(capture.Get());
+        }catch(...){auto error=std::current_exception();queue.fail(error);if(started)client->Stop();startup(error);}
+      }
+      client.Reset();
       if(priority)AvRevertMmThreadCharacteristics(priority);
       if(SUCCEEDED(initialized))CoUninitialize();
     });
+    // This wait runs only on the independently owned preparation worker in
+    // production. It cannot stall PCM writing, status publication or stop.
+    std::unique_lock lock(startup_mutex_);startup_changed_.wait(lock,[&]{return startup_finished_;});
+    if(startup_error_){auto error=startup_error_;lock.unlock();if(thread_.joinable())thread_.join();std::rethrow_exception(error);}
   }
   void stop(){stopping_.store(true,std::memory_order_release);if(thread_.joinable())thread_.join();}
   ~AsyncCapture(){stop();}

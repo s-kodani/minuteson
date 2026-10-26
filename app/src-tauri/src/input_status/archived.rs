@@ -6,17 +6,28 @@ use super::{
     queue::{Action, ArchiveQueue, ArchivedBatch},
     Receipt,
 };
-use crate::{analysis_worker::{AnalysisController, data_maintenance::NoticeStorageLease}, storage::Storage};
+use crate::{
+    analysis_worker::{data_maintenance::NoticeStorageLease, AnalysisController},
+    storage::Storage,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use std::{collections::BTreeMap, fs::File, sync::{Arc, Mutex}};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    sync::{Arc, Mutex},
+};
 
 const CACHE_LIMIT: usize = 128;
 pub(crate) const PAUSED: &str = "notification_history_paused";
 
 #[derive(Default)]
 pub(crate) struct ArchivedInputs(Mutex<BTreeMap<String, CachedEntry>>);
-struct CachedEntry { meeting: String, touched: Instant, value: Arc<Mutex<Entry>> }
+struct CachedEntry {
+    meeting: String,
+    touched: Instant,
+    value: Arc<Mutex<Entry>>,
+}
 struct Entry {
     meeting: String,
     directory: File,
@@ -118,24 +129,64 @@ impl Entry {
     }
 }
 impl ArchivedInputs {
-    fn entry(&self, storage: &Storage, lease: &NoticeStorageLease, meeting: &str, owner: &str) -> Result<Arc<Mutex<Entry>>, String> {
+    fn entry(
+        &self,
+        storage: &Storage,
+        lease: &NoticeStorageLease,
+        meeting: &str,
+        owner: &str,
+    ) -> Result<Arc<Mutex<Entry>>, String> {
         lease.validate_active()?;
         let directory = storage.closed_input_directory(meeting, owner)?;
-        let mut entries = self.0.lock().map_err(|_| "保存後通知の所有を取得できません")?;
+        let mut entries = self
+            .0
+            .lock()
+            .map_err(|_| "保存後通知の所有を取得できません")?;
         let value = if let Some(cached) = entries.get_mut(owner) {
-            if cached.meeting != meeting { return Err("保存後通知の会議が変更されています".into()); }
-            cached.touched = Instant::now(); cached.value.clone()
+            if cached.meeting != meeting {
+                return Err("保存後通知の会議が変更されています".into());
+            }
+            cached.touched = Instant::now();
+            cached.value.clone()
         } else {
             if entries.len() >= CACHE_LIMIT {
-                let old = entries.iter().filter(|(_, e)| Arc::strong_count(&e.value)==1).min_by_key(|(_,e)|e.touched).map(|(key,_)| key.clone());
-                if let Some(old) = old { entries.remove(&old); } else { return Err("通知履歴の処理数が上限に達しました".into()); }
+                let old = entries
+                    .iter()
+                    .filter(|(_, e)| Arc::strong_count(&e.value) == 1)
+                    .min_by_key(|(_, e)| e.touched)
+                    .map(|(key, _)| key.clone());
+                if let Some(old) = old {
+                    entries.remove(&old);
+                } else {
+                    return Err("通知履歴の処理数が上限に達しました".into());
+                }
             }
             let reader = journal::Reader::pin_at(&directory)?;
-            let value = Arc::new(Mutex::new(Entry { meeting: meeting.into(), directory: directory.try_clone().map_err(|e|e.to_string())?, reader, queue: None, touched: Instant::now() }));
-            entries.insert(owner.into(), CachedEntry {meeting: meeting.into(), touched: Instant::now(), value: value.clone()}); value
+            let value = Arc::new(Mutex::new(Entry {
+                meeting: meeting.into(),
+                directory: directory.try_clone().map_err(|e| e.to_string())?,
+                reader,
+                queue: None,
+                touched: Instant::now(),
+            }));
+            entries.insert(
+                owner.into(),
+                CachedEntry {
+                    meeting: meeting.into(),
+                    touched: Instant::now(),
+                    value: value.clone(),
+                },
+            );
+            value
         };
         drop(entries);
-        same_directory(&value.lock().map_err(|_|"保存後通知の入力を確認できません")?.directory, &directory)?;
+        same_directory(
+            &value
+                .lock()
+                .map_err(|_| "保存後通知の入力を確認できません")?
+                .directory,
+            &directory,
+        )?;
         lease.validate_active()?;
         Ok(value)
     }
@@ -153,13 +204,20 @@ impl ArchivedInputs {
     }
 
     pub(crate) fn evict(&self, meeting: Option<&str>) -> Result<(), String> {
-        let mut entries = self.0.lock().map_err(|_| "通知履歴のキャッシュを解放できません")?;
+        let mut entries = self
+            .0
+            .lock()
+            .map_err(|_| "通知履歴のキャッシュを解放できません")?;
         entries.retain(|_, entry| meeting.is_some_and(|id| entry.meeting != id));
         Ok(())
     }
 
     pub(crate) fn page_scoped(
-        &self, storage: &Storage, analysis: &AnalysisController, after: Option<&str>, visible: &impl Fn() -> bool,
+        &self,
+        storage: &Storage,
+        analysis: &AnalysisController,
+        after: Option<&str>,
+        visible: &impl Fn() -> bool,
     ) -> Result<Page, String> {
         self.page_inner(storage, None, Some(analysis), after, visible)
     }
@@ -175,28 +233,47 @@ impl ArchivedInputs {
     }
 
     fn page_inner(
-        &self, storage: &Storage, fallback: Option<&NoticeStorageLease>, analysis: Option<&AnalysisController>,
-        after: Option<&str>, visible: &impl Fn() -> bool,
+        &self,
+        storage: &Storage,
+        fallback: Option<&NoticeStorageLease>,
+        analysis: Option<&AnalysisController>,
+        after: Option<&str>,
+        visible: &impl Fn() -> bool,
     ) -> Result<Page, String> {
-        if let Some(lease) = fallback { lease.validate_active()?; }
-        let discovery = match analysis { Some(a) => Some(a.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?), None => None };
+        if let Some(lease) = fallback {
+            lease.validate_active()?;
+        }
+        let discovery = match analysis {
+            Some(a) => Some(a.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?),
+            None => None,
+        };
         let (rows, next_cursor) = storage.closed_input_recordings(after)?;
         drop(discovery);
         let mut recordings = Vec::with_capacity(rows.len());
         let mut batch_times = Vec::with_capacity(rows.len());
         for row in rows {
-            let owned = match analysis.map(|a| a.try_begin_scoped_notice_storage(Some(&row.meeting_id))) {
-                Some(Ok(Some(lease))) => Some(lease),
-                Some(Ok(None)) => {
-                    recordings.push(Row { meeting_id: row.meeting_id, session_id: row.session_id, title: row.title,
-                        batch: None, issue: Some("paused".into()), history_save_issue: None });
-                    batch_times.push(Instant::now());
-                    continue;
-                }
-                Some(Err(error)) => return Err(error),
-                None => None,
-            };
-            let lease = owned.as_ref().or(fallback).ok_or("通知履歴の所有がありません")?;
+            let owned =
+                match analysis.map(|a| a.try_begin_scoped_notice_storage(Some(&row.meeting_id))) {
+                    Some(Ok(Some(lease))) => Some(lease),
+                    Some(Ok(None)) => {
+                        recordings.push(Row {
+                            meeting_id: row.meeting_id,
+                            session_id: row.session_id,
+                            title: row.title,
+                            batch: None,
+                            issue: Some("paused".into()),
+                            history_save_issue: None,
+                        });
+                        batch_times.push(Instant::now());
+                        continue;
+                    }
+                    Some(Err(error)) => return Err(error),
+                    None => None,
+                };
+            let lease = owned
+                .as_ref()
+                .or(fallback)
+                .ok_or("通知履歴の所有がありません")?;
             let imported = match storage.closed_input_snapshot(&row.meeting_id, &row.session_id) {
                 Ok(imported) => imported,
                 Err(_) => {
@@ -253,17 +330,28 @@ impl ArchivedInputs {
             let mut history_save_issue = Some("unavailable".into());
             let result = (|| {
                 let handle = self.entry(storage, lease, &row.meeting_id, &row.session_id)?;
-                let mut entry = handle.lock().map_err(|_| "保存後通知の入力を確認できません")?;
-                let history = super::persistence::archived_issue(&entry.directory, &row.session_id).map(str::to_owned);
+                let mut entry = handle
+                    .lock()
+                    .map_err(|_| "保存後通知の入力を確認できません")?;
+                let history = super::persistence::archived_issue(&entry.directory, &row.session_id)
+                    .map(str::to_owned);
                 Self::verify(storage, lease, &entry, &row.session_id)?;
                 history_save_issue = history;
                 let (source, issue) = entry.refresh(&row.session_id, lease)?;
                 Self::verify(storage, lease, &entry, &row.session_id)?;
-                let mut batch = entry.queue.as_mut().map(|q|q.poll(source, issue, visible())).transpose()?;
+                let mut batch = entry
+                    .queue
+                    .as_mut()
+                    .map(|q| q.poll(source, issue, visible()))
+                    .transpose()?;
                 let observed_at = Instant::now();
                 Self::verify(storage, lease, &entry, &row.session_id)?;
-                if !visible() { if let Some(b) = &mut batch { b.hide_notices(); } }
-                Ok::<_,String>((batch, observed_at))
+                if !visible() {
+                    if let Some(b) = &mut batch {
+                        b.hide_notices();
+                    }
+                }
+                Ok::<_, String>((batch, observed_at))
             })();
             let (batch, issue, at) = match result {
                 Ok((batch, at)) => (batch, None, at),
@@ -280,9 +368,14 @@ impl ArchivedInputs {
             });
             lease.validate_active()?;
         }
-        let _final_check = match analysis { Some(a) => Some(a.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?), None => None };
+        let _final_check = match analysis {
+            Some(a) => Some(a.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?),
+            None => None,
+        };
         storage.verify_closed_input_storage()?;
-        if let Some(lease) = fallback { lease.validate_active()?; }
+        if let Some(lease) = fallback {
+            lease.validate_active()?;
+        }
         let still_visible = visible();
         for (row, at) in recordings.iter_mut().zip(batch_times) {
             if let Some(batch) = &mut row.batch {
@@ -342,7 +435,9 @@ impl ArchivedInputs {
             );
         }
         let handle = self.entry(storage, lease, &request.meeting_id, &request.session_id)?;
-        let mut entry = handle.lock().map_err(|_| "保存後通知の入力を確認できません")?;
+        let mut entry = handle
+            .lock()
+            .map_err(|_| "保存後通知の入力を確認できません")?;
         let (source, issue) = entry.refresh(&request.session_id, lease)?;
         Self::verify(storage, lease, &entry, &request.session_id)?;
         let queue = entry

@@ -6,6 +6,7 @@ on:
     paths:
       - 'app/**'
       - 'probes/windows-capture/**'
+      - 'probes/macos-capture/**'
       - 'probes/inference-worker/**'
       - 'probes/speaker-embedding/**'
       - 'tools/mon_third_party_notices.py'
@@ -13,7 +14,10 @@ on:
       - 'tests/test_mon_tauri_platform.py'
       - 'tests/test_mon_third_party_notices.py'
       - 'tests/test_windows_release_signing.py'
+      - 'tests/test_mon_windows_build_evidence.py'
+      - 'tests/test_mon_windows_installer_publication.py'
       - 'tools/sign-windows.ps1'
+      - 'tools/publish-windows-installer.ps1'
       - 'third-party/**'
       - '.github/workflows/desktop-platform-build.yml'
   push:
@@ -21,6 +25,7 @@ on:
     paths:
       - 'app/**'
       - 'probes/windows-capture/**'
+      - 'probes/macos-capture/**'
       - 'probes/inference-worker/**'
       - 'probes/speaker-embedding/**'
       - 'tools/mon_third_party_notices.py'
@@ -28,7 +33,10 @@ on:
       - 'tests/test_mon_tauri_platform.py'
       - 'tests/test_mon_third_party_notices.py'
       - 'tests/test_windows_release_signing.py'
+      - 'tests/test_mon_windows_build_evidence.py'
+      - 'tests/test_mon_windows_installer_publication.py'
       - 'tools/sign-windows.ps1'
+      - 'tools/publish-windows-installer.ps1'
       - 'third-party/**'
       - '.github/workflows/desktop-platform-build.yml'
 
@@ -71,6 +79,12 @@ jobs:
         env:
           PYTHONUTF8: '1'
         run: python -m unittest discover -s tests -p test_mon_third_party_notices.py -v
+      - name: Installer identity and safe publication tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_mon_windows_build_evidence.py -v
+          python -m unittest discover -s tests -p test_mon_windows_installer_publication.py -v
       - name: Frontend tests and build
         working-directory: app
         run: |
@@ -116,7 +130,7 @@ jobs:
         # capture/storage tests without microphones or real model downloads.
         if: runner.os == 'Windows'
         run: |
-          ctest --test-dir probes/windows-capture/build -C Release --output-on-failure
+          ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MON_WINDOWS_MODEL_OPTIONS = Join-Path $env:RUNNER_TEMP 'mon-windows-model-options.json'
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_integration_tests
@@ -137,5 +151,13 @@ jobs:
         with:
           name: mon-windows-x64-qa
           path: app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Windows build identity
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mon-windows-x64-qa-identity
+          path: output/windows-qa-work/*-build.json
           if-no-files-found: error
           retention-days: 7

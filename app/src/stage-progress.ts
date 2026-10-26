@@ -16,7 +16,11 @@ export function stageLabel(p: StageProgress | null | undefined): string | undefi
     verifying_model_delete_scope:"モデルの削除対象を確認中",fixing_model_delete_scope:"モデル削除の同意を記録中",
     model_delete_scope_fixed:"モデルの削除を準備中",deleting_model_files:"モデルの内容を検査・削除中",
     deleting_files:"確認した項目を削除中",verifying_audio_delete_scope:"音声の削除対象を確認中",
-    verifying_delete_scope:"会議の削除対象を確認中"} as Record<string,string>)[p.stage] ?? "確認した処理を実行中";
+    verifying_delete_scope:"会議の削除対象を確認中",fixing_delete_scope:"会議削除の同意を記録中",
+    delete_scope_fixed:"会議の削除を準備中",deleting_database:"会議の削除結果を登録中",
+    fixing_audio_delete_scope:"音声削除の同意を記録中",audio_delete_scope_fixed:"音声の削除を準備中",
+    deleting_audio_files:"確認した音声を削除中",fixing_audio_unavailable:"音声の削除結果を登録中",
+    audio_delete_completed:"音声の削除完了を確認中",model_delete_completed:"モデルの削除完了を確認中"} as Record<string,string>)[p.stage] ?? "確認した処理を実行中";
 }
 export function stageDetail(value: StageProgress | null | undefined): string | undefined {
   const p = checkedStageProgress(value);

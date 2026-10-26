@@ -246,7 +246,11 @@ pub(super) fn stopped(db: &Connection) -> Result<(), String> {
 fn stopped_for_meeting(db: &Connection, meeting: &str) -> Result<(), String> {
     // Only a native live reservation can authorize ignoring persisted work
     // states. Ordinary / historical callers retain the original global check.
-    if super::super::meeting_access::reserved(db, meeting)? { Ok(()) } else { stopped(db) }
+    if super::super::meeting_access::reserved(db, meeting)? {
+        Ok(())
+    } else {
+        stopped(db)
+    }
 }
 
 // A crash-stale partial model package is a legitimate deletion target. The

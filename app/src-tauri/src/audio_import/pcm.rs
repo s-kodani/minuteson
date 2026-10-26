@@ -1,13 +1,16 @@
 //! Streaming Windows import for PCM WAV and strictly verified FLAC. The
 //! meeting-mix WAV reader intentionally remains restricted to its fixed format.
 use super::*;
-use std::io::{BufWriter, SeekFrom};
+#[cfg(windows)]
+use std::io::BufWriter;
+use std::io::SeekFrom;
 struct Wave {
     rate: u32,
     channels: u32,
     frames: u64,
     offset: u64,
     bits: u16,
+    valid_bits: u16,
     float: bool,
     unsigned: bool,
 }
@@ -54,28 +57,31 @@ fn wave(file: &mut File) -> Result<Wave, String> {
                 let channels = u32::from(u16at(2));
                 let rate = u32at(4);
                 let bits = u16at(14);
+                let mut valid_bits = bits;
                 if codec == 0xfffe {
                     if length < 40
                         || u16at(16) < 22
+                        || usize::from(u16at(16)) + 18 > fmt.len()
                         || fmt[26..40] != [0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113]
                     {
                         return Err("WAV拡張形式のGUIDが不正です".into());
                     }
                     codec = u16at(24);
-                    if u16at(18) != bits {
-                        return Err("WAVの有効ビット数が未対応です".into());
-                    }
+                    valid_bits = u16at(18);
                 }
                 let float = codec == 3;
                 if !(8000..=384000).contains(&rate)
                     || !(1..=8).contains(&channels)
                     || !matches!((codec, bits), (1, 8 | 16 | 24 | 32) | (3, 32 | 64))
+                    || valid_bits == 0
+                    || valid_bits > bits
+                    || (float && valid_bits != bits)
                     || u32::from(u16at(12)) != channels * u32::from(bits / 8)
                     || u32at(8) != rate * channels * u32::from(bits / 8)
                 {
                     return Err("WAVは対応するPCM音声形式にしてください".into());
                 }
-                format = Some((rate, channels, bits, float));
+                format = Some((rate, channels, bits, valid_bits, float));
             }
             b"data" => {
                 if data.replace((first, length)).is_some() {
@@ -92,7 +98,7 @@ fn wave(file: &mut File) -> Result<Wave, String> {
     if position != size {
         return Err("WAVのチャンク数が上限を超えています".into());
     }
-    let (rate, channels, bits, float) = format.ok_or("WAVの音声形式がありません")?;
+    let (rate, channels, bits, valid_bits, float) = format.ok_or("WAVの音声形式がありません")?;
     let (offset, bytes) = data.ok_or("WAVに音声がありません")?;
     let block = u64::from(channels) * u64::from(bits / 8);
     if bytes == 0 || bytes % block != 0 {
@@ -104,10 +110,41 @@ fn wave(file: &mut File) -> Result<Wave, String> {
         frames: bytes / block,
         offset,
         bits,
+        valid_bits,
         float,
         unsigned: bits == 8,
     })
 }
+impl Wave {
+    fn sample(&self, sample: &[u8]) -> Result<f32, String> {
+        // WAVEFORMATEXTENSIBLE stores integer valid bits left-aligned in the
+        // container. Discard the unused low bits before sign/scale conversion.
+        let shift = self.bits - self.valid_bits;
+        let value = match (self.float, self.bits) {
+            (true, 32) => f32::from_le_bytes(sample.try_into().unwrap()),
+            (true, 64) => f64::from_le_bytes(sample.try_into().unwrap()) as f32,
+            (false, 8) if self.unsigned => {
+                let midpoint = 1u32 << (self.valid_bits - 1);
+                (f32::from(sample[0] >> shift) - midpoint as f32) / midpoint as f32
+            }
+            (false, 16 | 24 | 32) => {
+                let integer = match self.bits {
+                    16 => i32::from(i16::from_le_bytes(sample.try_into().unwrap())),
+                    24 => (i32::from_le_bytes([sample[0], sample[1], sample[2], 0]) << 8) >> 8,
+                    32 => i32::from_le_bytes(sample.try_into().unwrap()),
+                    _ => unreachable!(),
+                };
+                (integer >> shift) as f32 / (1u64 << (self.valid_bits - 1)) as f32
+            }
+            _ => return Err("WAVのPCM形式が不正です".into()),
+        };
+        if !value.is_finite() {
+            return Err("WAVに非有限のPCM値があります".into());
+        }
+        Ok(value)
+    }
+}
+#[cfg(windows)]
 pub(super) fn decode(
     input: &Path,
     output: Option<&Path>,
@@ -183,26 +220,7 @@ pub(super) fn decode(
             file.read_exact(&mut raw).map_err(|e| e.to_string())?;
             let mut pcm = Vec::with_capacity(count as usize * channels as usize * 4);
             for sample in raw.chunks_exact(bytes) {
-                let value = match (w.float, w.bits) {
-                    (true, 32) => f32::from_le_bytes(sample.try_into().unwrap()),
-                    (true, 64) => f64::from_le_bytes(sample.try_into().unwrap()) as f32,
-                    (false, 8) if w.unsigned => (f32::from(sample[0]) - 128.0) / 128.0,
-                    (false, 16) => {
-                        f32::from(i16::from_le_bytes(sample.try_into().unwrap())) / 32768.0
-                    }
-                    (false, 24) => {
-                        ((i32::from_le_bytes([sample[0], sample[1], sample[2], 0]) << 8) >> 8)
-                            as f32
-                            / 8388608.0
-                    }
-                    (false, 32) => {
-                        i32::from_le_bytes(sample.try_into().unwrap()) as f32 / 2147483648.0
-                    }
-                    _ => return Err("WAVのPCM形式が不正です".into()),
-                };
-                if !value.is_finite() {
-                    return Err("WAVに非有限のPCM値があります".into());
-                }
+                let value = w.sample(sample)?;
                 pcm.extend_from_slice(&value.to_le_bytes());
             }
             pcm
@@ -220,3 +238,6 @@ pub(super) fn decode(
     proof.verify(cancelled)?;
     Ok(info)
 }
+
+#[cfg(test)]
+mod tests;

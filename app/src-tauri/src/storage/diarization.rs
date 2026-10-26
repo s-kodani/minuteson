@@ -71,7 +71,6 @@ impl Storage {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
         super::deletion::audio::require_source(&tx, &request.meeting_id)?;
         let existing: Option<String> = tx
             .query_row(
@@ -263,7 +262,6 @@ pub(super) fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<Diariza
     if spec.kind != JobKind::Diarization {
         return Err("話者分離ジョブではありません".into());
     }
-    #[cfg(unix)]
     super::deletion::audio::require_source(tx, &spec.meeting_id)?;
     let id = spec
         .input_analysis_id

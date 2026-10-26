@@ -37,7 +37,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 12);
+    assert_eq!(catalog.as_array().unwrap().len(), 14);
     assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(

@@ -1,6 +1,8 @@
 use super::*;
+use crate::audio::{flac::encode_segment_file, VerifiedAudio};
 use serde_json::{json, Value};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(target_os = "macos")]
 #[path = "relocation_tests.rs"]
@@ -15,13 +17,13 @@ pub(crate) struct Fixture {
     pub(crate) base: PathBuf,
 }
 fn write(path: &Path, bytes: &[u8]) {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .unwrap();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).unwrap();
+    #[cfg(windows)]
+    crate::windows_files::set_private(path).unwrap();
     file.write_all(bytes).unwrap();
     file.sync_all().unwrap();
 }
@@ -625,12 +627,28 @@ fn workspace_refuses_links_replaced_directories_and_final_overwrite() {
         std::fs::read(child.path.join("final.flac")).unwrap(),
         b"original"
     );
-    std::os::unix::fs::symlink("final.flac", child.path.join("alias")).unwrap();
-    assert!(child.optional("alias", true).is_err());
-    std::fs::rename(&child.path, actual.join("displaced")).unwrap();
-    std::fs::create_dir(&child.path).unwrap();
-    assert!(child.create("unbound.part").is_err());
-    assert!(!child.path.join("unbound.part").exists());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("final.flac", child.path.join("alias")).unwrap();
+        assert!(child.optional("alias", true).is_err());
+    }
+    #[cfg(unix)]
+    {
+        std::fs::rename(&child.path, actual.join("displaced")).unwrap();
+        std::fs::create_dir(&child.path).unwrap();
+        assert!(child.create("unbound.part").is_err());
+        assert!(!child.path.join("unbound.part").exists());
+    }
+    #[cfg(windows)]
+    {
+        // A live native directory handle denies delete sharing. Windows
+        // prevents replacement before it can require an identity recheck.
+        assert!(std::fs::rename(&child.path, actual.join("displaced")).is_err());
+        child.verify().unwrap();
+        identity
+            .require(&child.required("final.flac", false).unwrap())
+            .unwrap();
+    }
 }
 
 #[test]
@@ -762,9 +780,13 @@ fn published_output_checkpoint_and_directory_substitution_never_fall_back_to_caf
                 write(&receipt_path, &serde_json::to_vec(&value).unwrap());
             }
             "directory" => {
-                std::fs::rename(&directory.path, directory.path.with_extension("displaced"))
-                    .unwrap();
-                std::fs::create_dir(&directory.path).unwrap();
+                // Release this test's pin so the fixture can replace the
+                // directory on Windows as well. The saved producer identity
+                // must still reject the replacement during the retry.
+                let path = directory.path.clone();
+                drop(directory);
+                std::fs::rename(&path, path.with_extension("displaced")).unwrap();
+                std::fs::create_dir(&path).unwrap();
             }
             _ => unreachable!(),
         }
@@ -1001,6 +1023,7 @@ fn minute_sized_output_chunks_rebase_source_frames_without_concatenating_across_
 }
 
 #[test]
+#[cfg(unix)]
 #[ignore = "Owned synthetic SIGKILL child; only its dedicated parent may launch it"]
 fn final_flac_crash_child() {
     assert_eq!(
@@ -1015,6 +1038,7 @@ fn final_flac_crash_child() {
 }
 
 #[test]
+#[cfg(unix)]
 #[ignore = "Dedicated owned-child crash/restart verification; synthetic PCM only, no capture devices"]
 fn final_flac_owned_sigkill_checkpoints_recover_without_registering_partial_audio() {
     use std::os::unix::process::ExitStatusExt;
@@ -1975,6 +1999,7 @@ fn partial_recovery_commit_marker_cannot_authorize_unmarked_track_or_invent_know
 }
 
 #[test]
+#[cfg(unix)]
 fn partial_recovery_symlinked_input_and_replaced_directory_are_retained_not_adopted() {
     let fixture = partial_fixture();
     let external = tempfile::tempdir().unwrap();
@@ -2044,6 +2069,7 @@ fn partial_recovery_preserves_original_failure_observation_without_claiming_acqu
 }
 
 #[test]
+#[cfg(unix)]
 #[ignore = "Owned synthetic SIGKILL child; only its dedicated parent may launch it"]
 fn partial_recovery_crash_child() {
     assert_eq!(
@@ -2059,6 +2085,7 @@ fn partial_recovery_crash_child() {
 }
 
 #[test]
+#[cfg(unix)]
 #[ignore = "Dedicated owned-child crash/restart verification; synthetic PCM only, no capture devices"]
 fn partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh_consent() {
     use std::os::unix::process::ExitStatusExt;

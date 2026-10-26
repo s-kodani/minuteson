@@ -367,7 +367,10 @@ mod tests {
             .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
         let mut command =
             crate::capture_test::owned_command(&helper, &directory, &request).unwrap();
-        command.arg("--synthetic").args(["--scenario", scenario]).stderr(Stdio::piped());
+        command
+            .arg("--synthetic")
+            .args(["--scenario", scenario])
+            .stderr(Stdio::piped());
         let child = command.spawn().unwrap();
         drop(command);
         let output = child.wait_with_output().unwrap();
@@ -381,8 +384,19 @@ mod tests {
         if scenario == "system-only" {
             assert!(audio.microphone.is_none());
             assert!(!directory.path.join("microphone.caf").exists());
-            assert_eq!(audio.system.as_ref().unwrap().playback(&directory, "system", &||false).unwrap().total_frames(), 240_000);
-        } else { assert_eq!(audio.microphone.as_ref().unwrap().info.frames, 240_000); }
+            assert_eq!(
+                audio
+                    .system
+                    .as_ref()
+                    .unwrap()
+                    .playback(&directory, "system", &|| false)
+                    .unwrap()
+                    .total_frames(),
+                240_000
+            );
+        } else {
+            assert_eq!(audio.microphone.as_ref().unwrap().info.frames, 240_000);
+        }
         directory.cleanup().unwrap();
     }
     #[test]

@@ -3,11 +3,7 @@
 //! bounded whole-track map while physical chunks retain their existing limits.
 use crate::current_formats::CAPTURE as CAPTURE_VERSION;
 pub(crate) const SMALL_MANIFEST_BYTES: u64 = 256 * 1024;
-pub(crate) const MAX_BYTES: u64 = if cfg!(unix) {
-    32 * 1024 * 1024
-} else {
-    SMALL_MANIFEST_BYTES
-};
+pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 pub(crate) fn validate_size(bytes: &[u8]) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
@@ -25,7 +21,6 @@ pub(crate) fn validate_size(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() as u64 <= SMALL_MANIFEST_BYTES {
         return Ok(());
     }
-    #[cfg(unix)]
     {
         use crate::recording_segments::{Lane, Status};
         use serde::Deserialize;

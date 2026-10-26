@@ -23,15 +23,18 @@ export const operationName = (kind: OperationProgress["kind"]) => ({ deletion:"�
 export function deletionProgress(s: DataSnapshot | null): OperationProgress | null {
   if (!s?.busy || !s.token || !["deletion", "audio_deletion", "model_deletion"].includes(s.kind ?? "")) return null;
   const kind = s.kind as "deletion" | "audio_deletion" | "model_deletion";
+  const stage = ["choosing", "verifying"].includes(s.phase) ? {deletion:"verifying_delete_scope",audio_deletion:"verifying_audio_delete_scope",model_deletion:"verifying_model_delete_scope"}[kind] : s.phase;
   return {id:`data:${s.token}`,kind,state:s.phase === "cancelling" ? "pausing" : "running",
-    target:s.modelDeletionPreview?.modelName ?? s.deletionPreview?.title ?? s.audioDeletionPreview?.meetingId ?? operationName(kind),
-    label:s.phase === "cancelling" ? "安全な停止を待機中" : stageLabel(s.progress) ?? "削除対象を確認中",
+    target:(kind === "model_deletion" ? s.modelDeletionPreview?.modelName : kind === "deletion" ? s.deletionPreview?.title : undefined) ?? operationName(kind),
+    meetingId:kind === "deletion" ? s.deletionPreview?.meetingId : kind === "audio_deletion" ? s.audioDeletionPreview?.meetingId : undefined,
+    label:s.phase === "cancelling" ? "安全な停止を待機中" : stageLabel(s.progress ?? {stage,completed:0,total:null,unit:"paths"}) ?? "削除対象を確認中",
     completed:null,total:null,detail:stageDetail(s.progress)};
 }
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
-  return [...items].sort((a, b) => Number(b.kind === "recording_recovery" && b.state === "running") - Number(a.kind === "recording_recovery" && a.state === "running") || priority[a.state] - priority[b.state]);
+  const foreground = (item: OperationProgress) => item.kind === "deletion" && ["running", "pausing"].includes(item.state) ? 0 : item.kind === "recording_recovery" && item.state === "running" ? 1 : 2;
+  return [...items].sort((a, b) => foreground(a) - foreground(b) || priority[a.state] - priority[b.state]);
 }
 
 export function progressPercent(completed: number | null, total: number | null): number | null {

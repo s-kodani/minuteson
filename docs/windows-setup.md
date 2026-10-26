@@ -6,6 +6,16 @@ Windows 11 24H2以降・x64向けのローカルビルド手順。リポジト�
 
 ## 必要なツール
 
+10月26日以降のビルドは、開始時のコミット・追跡差分SHA-256・未追跡ファイルを含むソース一覧と、本体・録音ヘルパー・インストーラーのSHA-256を `output/windows-qa-work/<build-id>-source.json` と `<build-id>-build.json` に保存する。ビルド中および配布直前のソース照合とネイティブCTestに成功した場合だけ `output/windows-qa/MON-QA-setup.exe` を置き換える。ビルド記録の `installedVerification: pending` はインストール先の実行ファイルが未照合であることを示す。
+
+隔離したQA環境へのインストール後、次のコマンドでインストール先の本体と録音ヘルパーを照合する。アプリ本体の実ファイル名はインストール先に合わせて指定する。確認結果は別の新規ファイルへ保存する。これはバイナリ照合だけを行い、アプリの起動やデータ削除は行わない。
+
+```powershell
+python tools/mon_windows_build_evidence.py verify --manifest output/windows-qa-work/<build-id>-build.json --installed-app '<隔離環境のアプリ.exe>' --installed-helper '<隔離環境のmon-windows-capture.exe>' --published-installer output/windows-qa/MON-QA-setup.exe --output output/windows-qa-work/<build-id>-installed.json
+```
+
+`currentSourceMatches` は現在のソースとの一致、`installed` の `app` と `helper` はインストール先の照合結果を表す。本体・ヘルパー・配布物の3パスを明示すれば、元のビルドディレクトリがないQA端末でも照合できる。過去のインストールを確認するときは現在のソースと違っていてもそのビルドとの対応を表示する。配布時は `--require-current-source` と元のビルド成果物を必須にして不一致を拒否する。今回のMacでの修正ではWindows QAを再生成しておらず、以前のビルド成功記録は今回のコードの検証結果へ流用しない。
+
 | ツール | 使用する系列・構成 |
 | --- | --- |
 | Git | Windows版Git |

@@ -2,6 +2,8 @@
 #include "json.hpp"
 #include "packet_clock.h"
 #include "packet_queue.h"
+#include "input_preparation.h"
+#include "loopback_scope.h"
 #include <avrt.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <tlhelp32.h>
@@ -50,9 +52,10 @@ void atomic_json(const fs::path& path,const Json& value,bool durable=true){
 }
 #include "metadata_worker.h"
 Json process_identity(DWORD pid){
-  Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid));if(!process.value)throw std::runtime_error("application is no longer available");
+  Handle process(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid));if(!process.value||WaitForSingleObject(process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("application is no longer available");
   FILETIME created,ended,kernel,user;if(!GetProcessTimes(process.value,&created,&ended,&kernel,&user))throw std::runtime_error("application creation time unavailable");
   std::wstring path(32768,0);DWORD n=DWORD(path.size());if(!QueryFullProcessImageNameW(process.value,0,path.data(),&n))throw std::runtime_error("application identity unavailable");path.resize(n);
+  if(WaitForSingleObject(process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("application is no longer available");
   return Json{{"pid",pid},{"bundleIdentifier",utf8(path)},{"launchTimeUs",(ticks(created)-EPOCH)/10}};
 }
 Json applications(){
@@ -71,30 +74,83 @@ Json microphones(){
 #include "input_binding.h"
 #include "raw_segments.h"
 #include "async_capture.h"
+struct CaptureApartment {
+  CaptureApartment(){acquisition(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"initialize WASAPI preparation thread");}
+  ~CaptureApartment(){CoUninitialize();}
+};
+struct PreparedInput {
+  ComPtr<IAudioClient> client;
+  std::unique_ptr<AsyncCapture> reader;
+  MicrophoneChoice choice;
+  bool matching_position_rate=false;
+  PreparedInput()=default;
+  PreparedInput(PreparedInput&& other)noexcept{swap(other);}
+  PreparedInput& operator=(PreparedInput&& other)noexcept{swap(other);return *this;}
+  void swap(PreparedInput& other)noexcept{client.Swap(other.client);reader.swap(other.reader);std::swap(choice,other.choice);std::swap(matching_position_rate,other.matching_position_rate);}
+  ~PreparedInput(){if(reader)reader->stop();}
+};
+using NativePreparation=InputPreparation<PreparedInput,CaptureApartment>;
+MicrophoneChoice current_microphone_choice(const std::string& uid,DWORD selected_pid,const Json& identity){
+  bool live=true;try{if(selected_pid)live=process_identity(selected_pid)==identity;}catch(...){live=false;}
+  auto choice=choose_microphone(uid,live?selected_pid:0);
+  if(selected_pid&&uid.empty()&&live){try{live=process_identity(selected_pid)==identity;}catch(...){live=false;}if(!live)choice=choose_microphone("",0);}
+  if(selected_pid&&uid.empty()&&!live)choice.fallback="application_input_unavailable";
+  return choice;
+}
+Json microphone_selection_status(const std::string& owner,std::uint64_t revision,std::uint64_t request_revision,const std::string& requested,const std::string& selected,const MicrophoneChoice& choice,bool pending){
+  const auto& uid=pending&&!requested.empty()?requested:selected;
+  if(uid.empty())return nullptr;
+  return Json{{"schemaVersion",1},{"ownerId",owner},{"revision",revision},{"requestRevision",request_revision},{"mode",requested.empty()?"automatic":"fixed"},{"deviceUID",uid},{"source",pending?"pending":choice.source},{"fallbackReason",pending||choice.fallback.empty()?Json(nullptr):Json(choice.fallback)}};
+}
+PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selected_pid,const Json& identity,NativePreparation::Cancellation cancelled){
+  PreparedInput result;
+  auto current=[&]{
+    if(cancelled())throw InputFailure(E_ABORT,"obsolete WASAPI preparation");
+    if(!microphone&&selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
+  };
+  current();
+  if(microphone){
+    result.choice=current_microphone_choice(uid,selected_pid,identity);
+    current();auto e=enumerator();ComPtr<IMMDevice> device;
+    acquisition(e->GetDevice(wide(result.choice.uid).c_str(),&device),"get selected microphone");
+    acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(result.client.GetAddressOf())),"activate WASAPI microphone");
+  }else{
+    if(selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
+    const auto target=loopback_target(selected_pid,GetCurrentProcessId());
+    // Process loopback includes every render endpoint. The global mode excludes
+    // this helper's tree only; selected-app capture never falls back to global.
+    // The worker retains an unfinished native activation even after UI timeout.
+    result.client=activate_process_loopback(target.pid,target.exclude_tree,INFINITE);
+  }
+  current();
+  WAVEFORMATEX* mix=nullptr;
+  result.matching_position_rate=SUCCEEDED(result.client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
+  if(mix)CoTaskMemFree(mix);
+  current();
+  const UINT32 channels=microphone?1:2;
+  WAVEFORMATEX format={};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=WORD(channels);format.nSamplesPerSec=48000;format.wBitsPerSample=32;format.nBlockAlign=WORD(channels*4);format.nAvgBytesPerSec=48000*format.nBlockAlign;
+  acquisition(result.client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY|(microphone?0:AUDCLNT_STREAMFLAGS_LOOPBACK),5000000,0,&format,nullptr),"initialize 48 kHz floating-point WASAPI");
+  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels);
+  current();
+  return result;
+}
 class Lane {
  public:
   fs::path path;UINT32 channels;std::uint64_t frames=0,packets=0,first=0;double rms=0,peak=0;UINT32 window_frames=0;std::uint64_t measured=0;PacketClock clock;
-  ComPtr<IAudioClient> client;ComPtr<IAudioCaptureClient> capture;Handle file;
-  bool started=false;std::uint64_t window_start=0,window_end=0;
+  Handle file;
+  bool started=false,holding_for_window=false;std::uint64_t window_start=0,window_end=0;
   Binding binding;
   std::unique_ptr<RawSegments> raw;
   std::unique_ptr<AsyncCapture> reader;
+  std::unique_ptr<NativePreparation> preparation;
+  PreparationSchedule preparation_schedule;
   std::uint64_t peak_queued_frames=0,discontinuities=0;
   Json recent=Json::array(),anomalies=Json::array();std::uint64_t observed=0;
-  Lane(fs::path output,UINT32 count):path(std::move(output)),channels(count){}
-  ~Lane(){if(reader)reader->stop();if(started&&client)client->Stop();}
-  void open(bool microphone,const std::wstring& uid,DWORD pid){
-    if(!microphone&&pid){try{client=activate_process_loopback(pid);}catch(const std::exception&){throw InputFailure(E_FAIL,"指定アプリの音声を再取得できません");}}
-    else {auto e=enumerator();ComPtr<IMMDevice> device;if(uid.empty())acquisition(e->GetDefaultAudioEndpoint(microphone?eCapture:eRender,microphone?eCommunications:eConsole,&device),"get selected endpoint");else acquisition(e->GetDevice(uid.c_str(),&device),"get fixed microphone");acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(client.GetAddressOf())),"activate WASAPI endpoint");}
-    WAVEFORMATEX* mix=nullptr;
-    const bool matching_position_rate=SUCCEEDED(client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
-    if(mix)CoTaskMemFree(mix);
-    clock.begin_stream(matching_position_rate);
-    WAVEFORMATEX format={};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=WORD(channels);format.nSamplesPerSec=48000;format.wBitsPerSample=32;format.nBlockAlign=WORD(channels*4);format.nAvgBytesPerSec=48000*format.nBlockAlign;
-    acquisition(client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY|(microphone?0:AUDCLNT_STREAMFLAGS_LOOPBACK),5000000,0,&format,nullptr),"initialize 48 kHz floating-point WASAPI");acquisition(client->GetService(IID_PPV_ARGS(capture.GetAddressOf())),"get WASAPI capture service");
-  }
-  void start(){acquisition(client->Start(),"音声入力を開始できません");started=true;reader=std::make_unique<AsyncCapture>(client,capture,channels);binding.connected();}
-  void detach(const char* reason,bool unavailable=false){if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}reader.reset();}if(started&&client)client->Stop();started=false;capture.Reset();client.Reset();window_frames=0;binding.lost(reason,unavailable);}
+  Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
+  ~Lane(){if(reader)reader->stop();}
+  void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
+  void adopt(PreparedInput input){clock.begin_stream(input.matching_position_rate);reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
+  void detach(const char* reason,bool unavailable=false){cancel_preparation();if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}reader.reset();}started=false;window_frames=0;binding.lost(reason,unavailable);}
   void begin_file(){
     file.value=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("capture destination already exists");
     std::vector<BYTE> header={'c','a','f','f',0,1,0,0,'d','e','s','c'};
@@ -102,6 +158,7 @@ class Lane {
     be(32,8);double rate=48000;std::uint64_t bits;std::memcpy(&bits,&rate,8);be(bits,8);header.insert(header.end(),{'l','p','c','m'});for(auto value:{3u,channels*4,1u,channels,32u})be(value,4);header.insert(header.end(),{'d','a','t','a'});be(~std::uint64_t(0),8);be(0,4);write_all(file.value,header.data(),header.size());
   }
   void append(const float* samples,UINT32 count,std::uint64_t raw,std::uint64_t position,DWORD flags,std::uint64_t arrival){
+    if(holding_for_window)return;
     const bool silent=(flags&AUDCLNT_BUFFERFLAGS_SILENT)!=0;
     discontinuities+=(flags&AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY)!=0;
     auto previous=recent.empty()?Json(nullptr):recent.back()["rawQpc100ns"];
@@ -123,14 +180,14 @@ class Lane {
     std::vector<float> zeros;if(silent){zeros.assign(std::size_t(count)*channels,0);samples=zeros.data();}
     double sum=0,maximum=0;for(std::size_t i=0;i<std::size_t(count)*channels;++i){if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid captured PCM amplitude");sum+=double(samples[i])*samples[i];maximum=std::max(maximum,double(std::abs(samples[i])));}
     clock.append(frames,count,time,packet.boundary);
-    if(clock.parts.size()>65536)throw std::runtime_error("録音時刻の区間数が保存上限に達しました。確定済みの原音声は保持しています");
     if(this->raw)this->raw->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary);
     write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
   }
   void pump(std::uint64_t budget=4800){if(!reader)return;std::uint64_t frames_written=0;while(frames_written<budget){auto packet=reader->queue.pop();if(!packet)break;append(packet->samples.data(),packet->frames,packet->time,packet->position,packet->flags,packet->arrival);frames_written+=packet->frames;}}
   bool queued(){return reader&&reader->queue.pending_frames()!=0;}
   Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
-  void close(){if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}client->Stop();started=false;}if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
+  void close(){cancel_preparation();if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}started=false;}if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
+  bool acquisition_closed() const{return !preparation||preparation->finished();}
   Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});return Json{{"frames",frames},{"sampleRate",frames?Json(48000):Json(nullptr)},{"channels",frames?Json(channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}
 };
@@ -193,7 +250,8 @@ int run(int argc,wchar_t** argv){
       if(actual.dwVolumeSerialNumber!=expected.dwVolumeSerialNumber||actual.nFileIndexHigh!=expected.nFileIndexHigh||actual.nFileIndexLow!=expected.nFileIndexLow||ticks(actual.ftCreationTime)!=ticks(expected.ftCreationTime))throw std::runtime_error("録音前テストの永続所有ディレクトリが一致しません");
     }
     auto attributes=GetFileAttributesW(s.output.c_str());if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT)||!fs::is_empty(s.output))throw std::runtime_error("capture destination must be an empty ordinary directory");
-    mic_lane=std::make_unique<Lane>(s.output/L"microphone.caf",1);system_lane=std::make_unique<Lane>(s.output/L"system.caf",2);auto& mic=*mic_lane;auto& system=*system_lane;
+    mic_lane=std::make_unique<Lane>(s.output/L"microphone.caf",1,s.test);system_lane=std::make_unique<Lane>(s.output/L"system.caf",2,s.test);auto& mic=*mic_lane;auto& system=*system_lane;
+    mic.holding_for_window=system.holding_for_window=s.test;
     if(!s.test){mic.raw=std::make_unique<RawSegments>(s.output,s.owner,"microphone",1);system.raw=std::make_unique<RawSegments>(s.output,s.owner,"system",2);}
     manifest=Json{{"schemaVersion",4},{"captureMode",s.mode},{"backend","wasapi"},{"targetPIDs",s.pid?Json::array({s.pid}):Json::array()},{"targetApplicationIdentity",nullptr},{"microphoneDeviceUID",s.uid.empty()?Json(nullptr):Json(s.uid)},{"recordingOwnerId",s.owner},{"inputDiagnosticsState","reported"},{"state","starting"},{"errors",Json::array()}, {"microphone",mic.track(0)}, {"system",system.track(0)}};
     manifest["consoleWindowPresent"]=GetConsoleWindow()!=nullptr;
@@ -211,37 +269,69 @@ int run(int argc,wchar_t** argv){
     FILETIME wall;GetSystemTimePreciseAsFileTime(&wall);auto utc=(ticks(wall)-EPOCH)/10000;auto before=qpc();
     MicrophoneChoice choice{s.uid,"fixed",""};
     std::string selected=s.uid;
-    auto choose=[&]{
-      bool live=!s.pid||WaitForSingleObject(application_process.value,0)==WAIT_TIMEOUT;
-      auto result=choose_microphone(s.uid,live?s.pid:0);
-      if(s.pid&&s.uid.empty()&&(!live||WaitForSingleObject(application_process.value,0)!=WAIT_TIMEOUT)) {result=choose_microphone("",0);result.fallback="application_input_unavailable";}
-      return result;
-    };
     auto reconnect=[&](Lane& lane,bool microphone){
-      if(lane.started||GetTickCount64()<lane.binding.next_attempt)return;
-      try{
-        if(!microphone&&s.pid&&process_identity(s.pid)!=identity){lane.binding.lost("application_unavailable",true);return;}
-        if(microphone){choice=choose();selected=choice.uid;}
-        lane.open(microphone,microphone?wide(selected):L"",microphone?0:s.pid);lane.start();
-      }catch(const InputFailure& error){lane.detach(error.result==E_ACCESSDENIED?"permission_unavailable":microphone?"device_disconnected":"restart_failed",error.result==E_ACCESSDENIED);}
-      catch(const std::exception&){lane.detach(microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",!microphone&&s.pid);}
+      const auto now=GetTickCount64();
+      if(lane.preparation){
+        // Expiry wins over a result first observed after the deadline. Such a
+        // result is never allowed to restart a timed-out or stopped input.
+        if(lane.preparation_schedule.timed_out(now)){
+          lane.cancel_preparation();lane.preparation_schedule.initial_resolved=true;lane.binding.lost("restart_failed");
+        }
+        if(!lane.preparation_schedule.cancelled){
+          if(!microphone&&s.pid){
+            try{if(process_identity(s.pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");}
+            catch(...){lane.cancel_preparation();lane.binding.lost("application_unavailable",true);return;}
+          }
+          if(auto ready=lane.preparation->take()){
+            if(microphone){
+              choice=ready->choice;selected=choice.uid;
+              // The manifest records the initial input, matching the stored
+              // start configuration. Later switches belong to selection
+              // status/history, not a rewrite of that initial identity.
+              if(manifest["microphoneDeviceUID"].is_null()){
+                manifest["microphoneDeviceUID"]=selected;atomic_json(s.output/L"manifest.json",manifest);
+              }
+            }
+            lane.adopt(std::move(*ready));lane.preparation.reset();return;
+          }
+        }
+        if(lane.preparation->finished()){
+          auto error=lane.preparation->error();lane.preparation.reset();lane.preparation_schedule.finish(now);
+          if(error&&!lane.preparation_schedule.cancelled){
+            try{std::rethrow_exception(error);}
+            catch(const InputFailure& failure){lane.binding.lost(failure.result==E_ACCESSDENIED?"permission_unavailable":microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",failure.result==E_ACCESSDENIED||(!microphone&&s.pid));}
+            catch(...){lane.binding.lost(microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",!microphone&&s.pid);}
+          }
+          // Includes cleanup of a timed-out stream; never overlap activations.
+          lane.binding.next_attempt=lane.preparation_schedule.retry_at;
+        }
+        return;
+      }
+      if(lane.started||now<lane.binding.next_attempt||!lane.preparation_schedule.may_start(now))return;
+      lane.preparation_schedule.begin(now);
+      // Capture values only: a cancelled preparation can outlive this run.
+      lane.preparation=std::make_unique<NativePreparation>([microphone,uid=s.uid,pid=s.pid,identity](NativePreparation::Cancellation cancelled){return prepare_input(microphone,uid,pid,identity,cancelled);});
     };
-    if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();}
+    if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();mic.preparation_schedule.initial_resolved=system.preparation_schedule.initial_resolved=true;}
     else{reconnect(mic,true);reconnect(system,false);}
-    std::uint64_t revision=0,selection_revision=0,synthetic_packet=0,last_diagnostics=0,reported_estimates=0;auto start=qpc();
-    if(s.test){mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
-    manifest["state"]="recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
-    if(s.test)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
+    std::uint64_t revision=0,selection_revision=0,synthetic_packet=0,last_diagnostics=0,reported_estimates=0;std::uint64_t start=s.test&&!s.synthetic?0:qpc();
+    if(s.test&&start){mic.holding_for_window=system.holding_for_window=false;mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
+    manifest["state"]=s.test&&!start?"starting":"recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
+    if(s.test&&start)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
     atomic_json(s.output/L"manifest.json",manifest);
     metadata=std::make_unique<MetadataWorker>(s.output,s.owner);
-    auto selection=[&]{if(!selected.empty())metadata->observe(L"microphone-selection.status.json",Json{{"schemaVersion",1},{"ownerId",s.owner},{"revision",revision},{"requestRevision",selection_revision},{"mode",s.uid.empty()?"automatic":"fixed"},{"deviceUID",selected},{"source",choice.source},{"fallbackReason",choice.fallback.empty()?Json(nullptr):Json(choice.fallback)}});};
+    auto selection=[&]{auto value=microphone_selection_status(s.owner,revision,selection_revision,s.uid,selected,choice,!s.synthetic&&!mic.started);if(!value.is_null())metadata->observe(L"microphone-selection.status.json",std::move(value));};
     auto publish_status=[&](bool sealed){
       Json report={{"schemaVersion",3},{"ownerId",s.owner},{"revision",++revision},{"microphone",mic.binding.status()},{"system",system.binding.status()},{"microphoneHistory",mic.binding.history()},{"systemHistory",system.binding.history()}};
       metadata->publish(std::move(report),sealed);
     };
-    std::uint64_t next_selection=0,next_status=0;
+    using SelectionPreparation=InputPreparation<MicrophoneChoice,CaptureApartment>;
+    std::unique_ptr<SelectionPreparation> selection_preparation;
+    PreparationSchedule selection_schedule;
+    std::uint64_t next_status=0;
     while(true){
       if(WaitForSingleObject(parent.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture parent exited");
+      if(fs::exists(s.output/L"stop.request"))break;
       // Writer latency is not a clock change or a WASAPI device failure.
       if(!s.synthetic&&s.pid&&system.started){try{if(process_identity(s.pid)!=identity)system.detach("application_unavailable",true);}catch(...){system.detach("application_unavailable",true);}}
       if(s.synthetic){
@@ -271,9 +361,36 @@ int run(int argc,wchar_t** argv){
         std::vector<float> silence(count*2,0);if(system.binding.state=="connected")system.append(silence.data(),count,time,position,flags,arrival);++synthetic_packet;
       }
       else{
-        if(s.uid.empty()&&GetTickCount64()>=next_selection){next_selection=GetTickCount64()+1000;try{auto next=choose();if(mic.started&&next.uid!=selected)mic.detach("device_changed");choice=next;}catch(const InputFailure&){if(mic.started)mic.detach("device_disconnected");}}
+        // Endpoint/session enumeration can block too. Poll it independently of
+        // PCM writes and stop requests, with one outstanding query and no Lane
+        // references in its worker. An obsolete query cannot select a device.
+        const auto selection_now=GetTickCount64();
+        if(selection_preparation){
+          if(!s.uid.empty()||!mic.started||selection_schedule.timed_out(selection_now)){selection_preparation->cancel();selection_schedule.cancel();}
+          if(!selection_schedule.cancelled){
+            if(auto next=selection_preparation->take()){
+              selection_preparation.reset();selection_schedule.accept();selection_schedule.retry_at=selection_now+PreparationSchedule::retry_ms;
+              if(next->uid!=selected)mic.detach("device_changed");choice=std::move(*next);
+            }
+          }
+          if(selection_preparation&&selection_preparation->finished()){
+            auto error=selection_preparation->error();selection_preparation.reset();selection_schedule.finish(selection_now);
+            if(error&&!selection_schedule.cancelled&&mic.started)mic.detach("device_disconnected");
+          }
+        }
+        if(s.uid.empty()&&mic.started&&!selection_preparation&&selection_schedule.may_start(selection_now)){
+          selection_schedule.begin(selection_now);
+          selection_preparation=std::make_unique<SelectionPreparation>([uid=s.uid,pid=s.pid,identity](auto){return current_microphone_choice(uid,pid,identity);});
+        }
         for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputFailure& error){lane->detach(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
         reconnect(mic,true);reconnect(system,false);
+        if(s.test&&!start&&mic.preparation_schedule.initial_resolved&&system.preparation_schedule.initial_resolved){
+          start=qpc();mic.holding_for_window=system.holding_for_window=false;
+          mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;
+          manifest["state"]="recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
+          manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
+          atomic_json(s.output/L"manifest.json",manifest);
+        }
       }
       const auto estimates=mic.clock.estimated_packets+system.clock.estimated_packets;
       if(!last_diagnostics||qpc()-last_diagnostics>=10000000||(estimates&&!reported_estimates)){
@@ -292,15 +409,21 @@ int run(int argc,wchar_t** argv){
         auto next_revision=next.at("revision").get<std::uint64_t>();if(next_revision>selection_revision){
           std::string uid=next.at("uid").is_null()?"":next.at("uid").get<std::string>();
           // A running lane keeps its file and timeline. Restart only its input.
+          if(selection_preparation){selection_preparation->cancel();selection_schedule.cancel();}
           mic.detach("device_changed");s.uid=uid;selection_revision=next_revision;
           if(s.synthetic){selected=uid.empty()?"synthetic-microphone":uid;choice={selected,uid.empty()?"systemDefault":"fixed",uid.empty()?"mon_direct_recording":""};mic.binding.connected();}
           else{mic.binding.next_attempt=0;reconnect(mic,true);}publish_status(false);selection();
         }
       }
-      if(fs::exists(s.output/L"stop.request")||(s.synthetic?synthetic_packet>=500:s.test&&qpc()-start>=50000000ULL))break;
+      if(fs::exists(s.output/L"stop.request")||(s.synthetic?synthetic_packet>=500:s.test&&start&&qpc()-start>=50000000ULL))break;
       if(s.synthetic||(!mic.queued()&&!system.queued()))Sleep(10);
     }
+    if(selection_preparation)selection_preparation->cancel();
     mic.close();auto mic_closed=std::max(qpc(),mic.clock.parts.empty()?0ULL:mic.clock.parts.back().last_end);system.close();auto closed=std::max(qpc(),system.clock.parts.empty()?0ULL:system.clock.parts.back().last_end);closed=std::max(closed,mic_closed);
+    // Preserve the buffered tail even when an unreturned native preparation
+    // prevents producer-closure proof. Only finish() may publish closed=true.
+    if(mic.raw){mic.raw->seal();system.raw->seal();}
+    if(!mic.acquisition_closed()||!system.acquisition_closed())throw std::runtime_error("音声入力の準備処理の終了を確認できません。確定済み原音声を保持しています。録音を回復してください");
     if(mic.raw){mic.raw->finish();system.raw->finish();}mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
     if(!mic.frames&&!system.frames)throw std::runtime_error("マイク・PC音声を取得できませんでした。Windowsのマイク権限と入力機器を確認してください");
     auto origin=mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
@@ -320,7 +443,7 @@ int run(int argc,wchar_t** argv){
     try{diagnostics("failed",error.what());}catch(...){}
     if(!manifest.is_null()){
       manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]="録音異常終了のため履歴の停止時封印を確認できません";
-      if(mic_lane&&system_lane){auto origin=mic_lane->frames?mic_lane->first:system_lane->first;if(system_lane->frames)origin=std::min(origin,system_lane->first);manifest["microphone"]=mic_lane->track(origin);manifest["system"]=system_lane->track(origin);}
+      if(mic_lane&&system_lane){auto origin=mic_lane->frames?mic_lane->first:system_lane->first;if(system_lane->frames)origin=std::min(origin,system_lane->first);manifest["microphone"]=mic_lane->track(origin);manifest["system"]=system_lane->track(origin);if(mic_lane->raw){manifest["microphone"]["rawSegments"]=mic_lane->raw->status();manifest["system"]["rawSegments"]=system_lane->raw->status();}}
       manifest["state"]="failed";manifest["errors"]=Json::array({error.what()});try{atomic_json(s.output/L"manifest.json",manifest);}catch(...){}
     }std::cerr<<error.what()<<std::endl;return 1;
   }

@@ -619,6 +619,6 @@ impl Census {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "audio_tests.rs"]
 pub(crate) mod tests;

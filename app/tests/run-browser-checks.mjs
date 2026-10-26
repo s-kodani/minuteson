@@ -35,6 +35,7 @@ const suites = [
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
   ["model-management", "model-management-browser-fixture.tsx", "model-management-browser-check.js"],
+  ["model-deletion-admission", null, "model-deletion-enabled-browser-check.js"],
   ["settings-layout", "browser-fixture.js", "settings-layout-browser-check.js"],
   ["vad-settings", "model-download-browser-fixture.tsx", "vad-settings-browser-check.js"],
   ["speaker-completion-settings", "browser-fixture.js", "speaker-completion-browser-check.js"],
@@ -58,8 +59,6 @@ const suites = [
   ["capture-test-pc-only", null, "capture-test-pc-only-browser-check.js"],
   ["data-action", "data-save-browser-fixture.js", "data-action-confirmation-browser-check.js"],
   ["move", "data-save-browser-fixture.js", "storage-move-browser-check.js"],
-  // Model deletion/rebinding dialogs were retired with maintenance UI.
-  // Current download/selection and hidden cleanup have their own suites.
   ["info-production", "browser-fixture.js", "info-production-browser-check.js"],
   ["info-headings", "browser-fixture.js", "info-headings-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],

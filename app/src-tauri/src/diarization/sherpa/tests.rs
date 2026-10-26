@@ -415,7 +415,7 @@ fn native_process_gets_literal_frozen_arguments_and_does_not_overwrite_outputs()
     assert!(args.contains(&"--clustering.num-clusters=3"));
     assert!(args.contains(&"--clustering.compute-confidence=false"));
     assert!(args.contains(&"--embedding.provider=cpu"));
-    assert!(args.contains(&"--min-duration-off=0"));
+    assert!(args.contains(&"--min-duration-off=0.5"));
     let canonical_wav = unit.join("input.wav").canonicalize().unwrap();
     assert_eq!(args.last(), Some(&canonical_wav.to_str().unwrap()));
     assert!(run_track(

@@ -166,7 +166,6 @@ pub(super) fn read_audio_plan(
     transaction: &Connection,
     meeting_id: &str,
 ) -> Result<RecordedAudioPlan, String> {
-    #[cfg(unix)]
     super::deletion::audio::require_source(transaction, meeting_id)?;
     read_audio_metadata(
         transaction,
@@ -205,7 +204,6 @@ pub(super) fn read_analysis_audio_plan(
         history.verify_meeting(db, meeting)?;
         AudioMetadataState::Deleted
     } else {
-        #[cfg(unix)]
         super::deletion::audio::require_source(db, meeting)?;
         AudioMetadataState::Available
     };
