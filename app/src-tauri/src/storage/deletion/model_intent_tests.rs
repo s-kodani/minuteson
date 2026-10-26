@@ -8,7 +8,7 @@ mod removing;
 
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap()
 }
 fn consent(
@@ -288,7 +288,7 @@ fn model_deletion_consent_requires_live_lease_even_with_valid_saved_evidence() {
     let p = f.preview().unwrap();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = uuid::Uuid::new_v4().to_string();
     let saved = consent(
@@ -473,6 +473,9 @@ fn model_deletion_consent_cold_keep_requires_restart_before_deferred_recovery() 
     controller.require_storage_restart();
     assert!(controller
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(controller
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .is_err());
     let owner = controller
         .begin_model_deletion_maintenance(

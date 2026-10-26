@@ -96,7 +96,7 @@ fn windows_real_model_body_deletion_keeps_history_and_other_packages() {
     let entry = catalog.iter().find(|entry| entry.package_id == id).unwrap();
     let controller = crate::analysis_worker::AnalysisController::default();
     let lease = controller
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_model_deletion(false, false, &|| false)
         .unwrap();
     let mut deletion = crate::storage::deletion::models::operations::Prepared::fresh(
         &storage,

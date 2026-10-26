@@ -33,7 +33,7 @@ impl Fixture {
                 .unwrap(),
             None => self
                 .analysis
-                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+                .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
                 .unwrap(),
         }
     }
@@ -250,7 +250,7 @@ fn model_body_controller_without_shared_lease_never_deletes() {
     assert_eq!(f.model.operation_count(), 0);
     assert!(f
         .analysis
-        .begin_data_maintenance(true, false, &|| false)
+        .begin_model_deletion(true, false, &|| false)
         .is_err());
 }
 

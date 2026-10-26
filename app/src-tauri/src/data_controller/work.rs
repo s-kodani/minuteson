@@ -181,6 +181,8 @@ impl Admission {
         } else {
             if matches!(lane, DeletionLane::Audio) {
                 analysis.begin_deletion_wait(recording, import_blocked, cancelled)?
+            } else if matches!(lane, DeletionLane::Model) {
+                analysis.begin_model_deletion(recording, import_blocked, cancelled)?
             } else {
                 analysis.begin_data_maintenance(recording, import_blocked, cancelled)?
             }
@@ -193,15 +195,23 @@ impl Admission {
         if deletion_operation.is_none() {
             app.state::<Storage>().require_global_data_writable()?;
         }
-        app.state::<crate::playback::mix_cache::MixCache>()
-            .suspend();
+        if !lease.is_model_deletion() {
+            app.state::<crate::playback::mix_cache::MixCache>()
+                .suspend();
+        }
         let admission = Self {
             app: app.clone(),
             lease: Some(lease),
         };
-        app.state::<crate::input_status::archived::ArchivedInputs>()
-            .evict(None)?;
-        app.state::<Storage>().evict_restored_input_cache(None)?;
+        if !admission
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_model_deletion())
+        {
+            app.state::<crate::input_status::archived::ArchivedInputs>()
+                .evict(None)?;
+            app.state::<Storage>().evict_restored_input_cache(None)?;
+        }
         Ok(admission)
     }
     pub(super) fn cancelled(&self) -> bool {
@@ -216,6 +226,10 @@ impl Admission {
 
 impl Drop for Admission {
     fn drop(&mut self) {
+        let model_deletion = self
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_model_deletion());
         let meeting = self
             .lease
             .as_ref()
@@ -234,7 +248,7 @@ impl Drop for Admission {
                 .resume_meeting(meeting);
         }
         drop(self.lease.take());
-        if meeting.is_none() {
+        if meeting.is_none() && !model_deletion {
             self.app
                 .state::<crate::playback::mix_cache::MixCache>()
                 .resume();

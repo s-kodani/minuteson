@@ -1098,7 +1098,7 @@ fn model_deletion_renewal_completed_cancel_and_cancelled_lease_do_not_leave_a_ph
         let f = Fixture::new();
         let controller = AnalysisController::default();
         let mut owner = controller
-            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+            .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         let op = prepare(&f, false, &owner);
         let fixed = receipt(&f, &op);

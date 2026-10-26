@@ -13,6 +13,9 @@ mod model_preparation;
 #[path = "analysis_worker_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+mod model_deletion_tests;
+
 #[derive(Default)]
 struct State {
     busy: bool,
@@ -21,6 +24,7 @@ struct State {
     import_intent: bool,
     model_preparation: Option<std::sync::Arc<AtomicBool>>,
     data_maintenance: Option<std::sync::Arc<AtomicBool>>,
+    model_deletion: Option<std::sync::Arc<AtomicBool>>,
     meeting_deletions: std::collections::HashMap<String, std::sync::Arc<AtomicBool>>,
     export_intent: bool,
     storage_restart_required: bool,
@@ -34,10 +38,17 @@ impl State {
             || self.import_intent
             || self.model_preparation.is_some()
             || self.data_maintenance.is_some()
+            || self.model_deletion.is_some()
     }
 
     fn cancel_model_preparation(&self) {
         if let Some(cancel) = &self.model_preparation {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn cancel_model_deletion(&self) {
+        if let Some(cancel) = &self.model_deletion {
             cancel.store(true, Ordering::SeqCst);
         }
     }
@@ -344,6 +355,7 @@ impl AnalysisController {
             if state.recording_intent
                 || state.import_intent
                 || state.data_maintenance.is_some()
+                || state.model_deletion.is_some()
                 || state.storage_restart_required
                 || controller.shutdown.load(Ordering::SeqCst)
             {
@@ -385,6 +397,7 @@ impl AnalysisController {
                 || state.import_intent
                 || state.model_preparation.is_some()
                 || state.data_maintenance.is_some()
+                || state.model_deletion.is_some()
                 || state.storage_restart_required
                 || c.shutdown.load(Ordering::SeqCst)
                 || cancelled()
@@ -438,6 +451,7 @@ impl AnalysisController {
             }
             state.cancel_notice_writers();
             state.cancel_model_preparation();
+            state.cancel_model_deletion();
             if let Some(cancel) = &state.data_maintenance {
                 cancel.store(true, Ordering::SeqCst);
             }
@@ -478,6 +492,7 @@ impl AnalysisController {
                 cancel.store(true, Ordering::SeqCst);
             }
             state.cancel_model_preparation();
+            state.cancel_model_deletion();
             if let Some(cancel) = &state.data_maintenance {
                 cancel.store(true, Ordering::SeqCst);
             }
@@ -514,6 +529,7 @@ impl AnalysisController {
             || !state.meeting_deletions.is_empty()
             || state.model_preparation.is_some()
             || state.data_maintenance.is_some()
+            || state.model_deletion.is_some()
             || (include_notices && !state.notice_writers.is_empty())
         {
             if cancelled() {

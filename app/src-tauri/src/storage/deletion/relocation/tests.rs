@@ -577,7 +577,7 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
         .unwrap();
         let op = uuid::Uuid::new_v4().to_string();
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+            .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         super::super::models::intent::prepare(
             &f.storage,

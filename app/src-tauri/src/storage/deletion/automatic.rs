@@ -156,7 +156,9 @@ mod tests {
     fn automatic_model_cleanup_cancels_unstarted_and_finishes_fixed_scope_only() {
         for started in [false, true] {
             let f = super::super::models::tests::Fixture::new();
-            let lease = lease();
+            let lease = crate::analysis_worker::AnalysisController::default()
+                .begin_model_deletion(false, false, &|| false)
+                .unwrap();
             let mut p = super::super::models::operations::Prepared::fresh(
                 &f.storage,
                 &f.root,

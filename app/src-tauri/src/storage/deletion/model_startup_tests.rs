@@ -21,7 +21,7 @@ fn lease(f: &Fixture, op: &str) -> DataMaintenanceLease {
 fn finish(f: &Fixture) -> String {
     let op = uuid::Uuid::new_v4().to_string();
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let view = models::preview(
         &f.storage,
@@ -132,7 +132,7 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
     let f = Fixture::new();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let view = models::preview(
         &f.storage,
@@ -283,6 +283,9 @@ fn model_startup_defers_stale_jobs_but_never_bypasses_actual_worker_admission() 
         .unwrap();
     assert!(controller
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .is_err());
+    assert!(controller
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .is_err());
     accept(&f, &op, &owner);
     removal::run(

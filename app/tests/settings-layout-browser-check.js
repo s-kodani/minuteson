@@ -40,7 +40,9 @@ async page => {
   const workspace = page.locator('main.content');
   const bounds = () => page.evaluate(() => {
     const main = document.querySelector('main.content'), header = document.querySelector('.topbar'), sidebar = document.querySelector('.sidebar');
+    const frame = document.querySelector('.windows-desktop-content');
     return { height: innerHeight, width: innerWidth, pageHeight: document.documentElement.scrollHeight, pageWidth: document.documentElement.scrollWidth,
+      contentTop: document.querySelector('.windows-titlebar')?.getBoundingClientRect().bottom ?? 0, frameScroll: frame?.scrollTop ?? 0,
       pageX: scrollX, pageY: scrollY, headerTop: header.getBoundingClientRect().top, sidebarTop: sidebar.getBoundingClientRect().top, mainScroll: main.scrollTop };
   });
   for (const modelState of ['unselected', 'selected']) {
@@ -65,14 +67,14 @@ async page => {
       check(before.pageHeight <= before.height + 1 && before.pageWidth <= before.width, `settings overflowed viewport (${modelState}): ${JSON.stringify(before)}`);
       await page.evaluate(() => window.scrollTo(10000, 10000));
       const outer = await bounds();
-      check(outer.pageX === 0 && outer.pageY === 0 && outer.headerTop === 0 && outer.sidebarTop === 0, `outer settings scroll moved navigation: ${JSON.stringify(outer)}`);
+      check(outer.pageX === 0 && outer.pageY === 0 && outer.frameScroll === 0 && outer.headerTop === outer.contentTop && outer.sidebarTop === outer.contentTop, `outer settings scroll moved navigation: ${JSON.stringify(outer)}`);
       await workspace.focus(); await workspace.press('PageDown');
       await page.waitForFunction(() => document.querySelector('main.content').scrollTop > 0);
       await workspace.evaluate(main => { main.scrollTop = main.scrollHeight; });
       await page.mouse.move(size.width - 50, size.height - 50); await page.mouse.wheel(0, 1000);
       await page.waitForTimeout(100);
       const bottom = await bounds();
-      check(bottom.mainScroll > 0 && bottom.pageY === 0 && bottom.headerTop === 0 && bottom.sidebarTop === 0, `settings body scroll moved navigation: ${JSON.stringify(bottom)}`);
+      check(bottom.mainScroll > 0 && bottom.pageY === 0 && bottom.frameScroll === 0 && bottom.headerTop === bottom.contentTop && bottom.sidebarTop === bottom.contentTop, `settings body scroll moved navigation: ${JSON.stringify(bottom)}`);
       check(await page.getByRole('region', { name: 'データと保存', exact: true }).evaluate(section => {
         const rect = section.getBoundingClientRect(), main = section.closest('main').getBoundingClientRect();
         return rect.bottom <= main.bottom + 1 && rect.bottom > main.top;

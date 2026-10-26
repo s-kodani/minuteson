@@ -647,7 +647,7 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
     .unwrap();
     let operation = Uuid::new_v4().to_string();
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     models::intent::prepare(
         storage,
@@ -702,7 +702,7 @@ fn deletion_startup_admission_models_use_only_native_root_and_never_moved_consen
             assert_eq!(synthetic_consent_record(&storage, &operation), before);
             assert_eq!(file.exists(), !completed);
             let lease = AnalysisController::default()
-                .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+                .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
                 .unwrap();
             assert!(models::intent::removal::start(
                 &storage,

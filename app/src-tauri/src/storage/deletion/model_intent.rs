@@ -89,7 +89,7 @@ fn decode_chunk(json: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(), String> {
-    lease.validate_active()?;
+    lease.validate_model_deletion()?;
     if check() {
         Err("モデル削除の操作を取り消しました。未処理の対象を保持し、既に削除したファイルは復元しません".into())
     } else {

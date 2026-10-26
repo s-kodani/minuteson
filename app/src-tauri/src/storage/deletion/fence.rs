@@ -361,7 +361,7 @@ pub(super) fn write_model_prepared<'a>(
     confirmed: &super::models::intent::Prepared,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
-    lease.validate_active()?;
+    lease.validate_model_deletion()?;
     confirmed.verify_current_schema(db)?;
     confirmed.verify_saved(db)?;
     Writer::begin(storage, db, true)
@@ -376,7 +376,7 @@ pub(super) fn write_model_reconfirmation<'a>(
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
-    lease.validate_active()?;
+    lease.validate_model_deletion()?;
     confirmed.verify_saved(db)?;
     review.verify(storage, db, check)?;
     let discovered = super::startup::contains(db, confirmed.operation())?;
@@ -396,7 +396,7 @@ pub(super) fn write_model_removal<'a>(
     confirmed: &super::models::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
-    lease.validate_active()?;
+    lease.validate_model_deletion()?;
     confirmed.verify_saved(db)?;
     confirmed.verify_anchor(storage)?;
     let discovered = super::startup::contains(db, confirmed.operation())?;

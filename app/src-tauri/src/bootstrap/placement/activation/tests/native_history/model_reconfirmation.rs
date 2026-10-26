@@ -354,7 +354,7 @@ fn model_relocated_consent_unowned_database_copy_never_gets_review_or_execution(
         )
         .is_err());
     let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(renewal::review(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());
     assert!(removal::run(&storage, &op, &lease, &crate::test_support::never_cancelled).is_err());

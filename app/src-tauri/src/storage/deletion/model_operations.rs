@@ -158,7 +158,7 @@ pub(crate) struct Prepared {
     target: Target,
 }
 fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(), String> {
-    lease.validate_active()?;
+    lease.validate_model_deletion()?;
     if check() {
         Err("モデル削除の操作を停止しました。既に消したファイルは復元しません".into())
     } else {

@@ -454,7 +454,7 @@ fn model_deletion_body_cancelled_real_lease_rejects_resume_and_preserves_remaini
     let f = Fixture::new();
     let controller = AnalysisController::default();
     let owner = controller
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+        .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let op = prepare(&f, false, &owner);
     removal::start(

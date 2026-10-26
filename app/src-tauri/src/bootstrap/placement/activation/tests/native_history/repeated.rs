@@ -496,7 +496,7 @@ fn deletion_repeat_moves_models_keep_native_root_and_never_reuse_moved_consent()
             assert_eq!(std::fs::read(&file).unwrap(), b"SYNTHETIC MODEL");
         }
         let lease = AnalysisController::default()
-            .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
+            .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
             .unwrap();
         assert!(models::intent::removal::start(
             &storage,

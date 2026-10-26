@@ -3,10 +3,86 @@ use super::*;
 use crate::analysis_worker::AnalysisController;
 
 #[test]
+fn model_delete_and_resume_keep_notification_owners_active() {
+    let f = Fixture::new();
+    let c = AnalysisController::default();
+    let history = c.begin_notice_storage().unwrap();
+    let owner = c.begin_model_deletion(false, false, &|| false).unwrap();
+    let mut p =
+        operations::Prepared::fresh(&f.storage, &f.root, &f.package, &f.review, &owner, &|| {
+            false
+        })
+        .unwrap();
+    let preview = p.preview();
+    let stop = Cell::new(false);
+    assert!(p
+        .execute(
+            &f.storage,
+            &owner,
+            &preview.confirmation_id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "model_delete_scope_fixed" {
+                stop.set(true);
+            },
+        )
+        .is_err());
+    history.validate_active().unwrap();
+    assert!(f.path("cli").exists());
+    drop(owner);
+    let owner = c
+        .begin_model_deletion_maintenance(&f.storage, &preview.operation_id, false, false, &|| {
+            false
+        })
+        .unwrap();
+    let next_history = c.begin_notice_storage().unwrap();
+    let mut p =
+        operations::Prepared::pending(&f.storage, &f.root, &preview.operation_id, &owner, &|| {
+            false
+        })
+        .unwrap();
+    let receipt = p
+        .execute(
+            &f.storage,
+            &owner,
+            &p.preview().confirmation_id,
+            false,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert!(receipt.body_deleted && receipt.history_retained);
+    assert!(!f.path("cli").exists());
+    assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
+    history.validate_active().unwrap();
+    next_history.validate_active().unwrap();
+    drop(owner);
+    assert!(c.begin_model_deletion(false, false, &|| false).is_ok());
+}
+
+#[test]
+fn global_maintenance_cannot_authorize_model_body_removal() {
+    let f = Fixture::new();
+    let c = AnalysisController::default();
+    let global = c.begin_data_maintenance(false, false, &|| false).unwrap();
+    assert!(operations::Prepared::fresh(
+        &f.storage,
+        &f.root,
+        &f.package,
+        &f.review,
+        &global,
+        &|| false,
+    )
+    .is_err());
+    assert!(f.path("cli").exists());
+    assert_eq!(f.operation_count(), 0);
+}
+
+#[test]
 fn model_review_hashes_outside_database_lock_and_retains_exact_consent() {
     let f = Fixture::new();
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_model_deletion(false, false, &|| false)
         .unwrap();
     let _measure = crate::operation_observation::Scope::enter("test", |_| {});
     let observed = Cell::new(false);
@@ -48,7 +124,7 @@ fn model_removal_releases_database_and_write_bypass_at_every_boundary() {
         let f = Fixture::new();
         let _cache = crate::storage::deletion::verification::Scope::enter();
         let owner = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_model_deletion(false, false, &|| false)
             .unwrap();
         let p = operations::Prepared::fresh(
             &f.storage,
@@ -237,7 +313,7 @@ fn benchmark_model_review_and_removal() {
         file.sync_all().unwrap();
         drop(file);
         let owner = AnalysisController::default()
-            .begin_data_maintenance(false, false, &|| false)
+            .begin_model_deletion(false, false, &|| false)
             .unwrap();
         let _cache = (std::env::var("MON_OPERATION_BENCH_UNCACHED").as_deref() != Ok("1"))
             .then(crate::storage::deletion::verification::Scope::enter);
@@ -344,7 +420,7 @@ fn windows_native_appdata_spelling_reviews_and_deletes_only_the_confirmed_model(
     drop(opened);
     drop(canonical);
     let owner = AnalysisController::default()
-        .begin_data_maintenance(false, false, &|| false)
+        .begin_model_deletion(false, false, &|| false)
         .unwrap();
     let mut p =
         operations::Prepared::fresh(&f.storage, &plain, &f.package, &f.review, &owner, &|| false)
