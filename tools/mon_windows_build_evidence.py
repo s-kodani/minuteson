@@ -32,8 +32,13 @@ def sha256_file(path):
         after = os.fstat(source.fileno())
         current = Path(path).stat()
         def identity(stat):
-            return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-        if identity(before) != identity(after) or identity(after) != identity(current):
+            # Windows fstat reports metadata-change time in st_ctime, while
+            # path stat can still report creation time there. Birth time is
+            # consistent across both APIs; retain ctime for the same open fd.
+            stamp = stat.st_birthtime_ns if os.name == "nt" else stat.st_ctime_ns
+            return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stamp)
+        if (identity(before) != identity(after) or before.st_ctime_ns != after.st_ctime_ns
+                or identity(after) != identity(current)):
             raise ValueError(f"File changed while calculating SHA-256: {path}")
     return digest
 

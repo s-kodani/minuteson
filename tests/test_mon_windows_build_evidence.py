@@ -1,15 +1,57 @@
 """Source drift and binary mismatch must not pass installer identification."""
 import importlib.util
 import json
+import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("build_evidence", ROOT / "tools/mon_windows_build_evidence.py")
 evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evidence)
+
+
+class FileHashTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "source"
+        self.path.write_bytes(b"source bytes")
+
+    @unittest.skipUnless(os.name == "nt", "Windows stat/fstat timestamp semantics")
+    def test_windows_path_creation_time_can_differ_from_descriptor_change_time(self):
+        opened = SimpleNamespace(st_dev=1, st_ino=2, st_size=12, st_mtime_ns=20,
+                                 st_ctime_ns=30, st_birthtime_ns=10)
+        current = SimpleNamespace(**{**vars(opened), "st_ctime_ns": 10})
+        with patch.object(evidence.os, "fstat", return_value=opened), patch.object(Path, "stat", return_value=current):
+            self.assertEqual(evidence.sha256_file(self.path), hashlib.sha256(b"source bytes").hexdigest())
+
+    def test_descriptor_change_and_path_replacement_are_still_rejected(self):
+        with self.path.open("rb") as stream:
+            original = os.fstat(stream.fileno())
+        fields = {name: getattr(original, name) for name in
+                  ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")}
+        if hasattr(original, "st_birthtime_ns"):
+            fields["st_birthtime_ns"] = original.st_birthtime_ns
+        before = SimpleNamespace(**fields)
+        # ctime-only changes during the read must still fail, even on Windows.
+        for field in ("st_ctime_ns", "st_mtime_ns", "st_size"):
+            with self.subTest(descriptor_change=field):
+                changed = SimpleNamespace(**{**fields, field: fields[field] + 1})
+                with patch.object(evidence.os, "fstat", side_effect=[before, changed]):
+                    with self.assertRaisesRegex(ValueError, "File changed"):
+                        evidence.sha256_file(self.path)
+        for field in ("st_ino", "st_dev", "st_mtime_ns", "st_size"):
+            with self.subTest(path_change=field):
+                replaced = SimpleNamespace(**{**fields, field: fields[field] + 1})
+                with patch.object(evidence.os, "fstat", return_value=before), patch.object(Path, "stat", return_value=replaced):
+                    with self.assertRaisesRegex(ValueError, "File changed"):
+                        evidence.sha256_file(self.path)
 
 
 class BuildEvidenceTests(unittest.TestCase):
