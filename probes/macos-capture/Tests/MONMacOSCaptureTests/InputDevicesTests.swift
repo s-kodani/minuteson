@@ -73,6 +73,29 @@ final class InputDevicesTests: XCTestCase {
       try InputDevices.automaticChoice(from: [devices[1]], processInputObjects: nil))
   }
 
+  func testAutomaticInputAggregatesVerifiedFamilyAndDeduplicatesDevices() throws {
+    let childOnly = try InputDevices.applicationInputObjects(pids: [123, 456]) {
+      $0 == 456 ? [2] : nil
+    }
+    XCTAssertEqual(
+      try InputDevices.automaticChoice(from: devices, processInputObjects: childOnly).source,
+      .application)
+    let shared = try InputDevices.applicationInputObjects(pids: [123, 456]) { _ in [2] }
+    XCTAssertEqual(shared, [2])
+    let ambiguous = try InputDevices.applicationInputObjects(pids: [123, 456]) {
+      $0 == 123 ? [1] : [2]
+    }
+    XCTAssertEqual(
+      try InputDevices.automaticChoice(from: devices, processInputObjects: ambiguous).device.uid,
+      "built-in")
+    XCTAssertThrowsError(
+      try InputDevices.applicationInputObjects(pids: [123]) { _ in [kAudioObjectUnknown] })
+    XCTAssertThrowsError(
+      try InputDevices.applicationInputObjects(pids: [123]) { _ in
+        throw ProbeError.capture("metadata unavailable")
+      })
+  }
+
   func testProcessLookupRejectsInvalidPIDWithoutOpeningAudio() {
     XCTAssertThrowsError(try InputDevices.activeInputObjects(for: 0))
     XCTAssertThrowsError(try InputDevices.activeInputObjects(for: -1))

@@ -6,6 +6,60 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
+  func testPCOnlyRecordingExportsActualCAFEmptyMicrophoneProofAndAcquisitionClosures() async throws
+  {
+    let requested = ProcessInfo.processInfo.environment["MON_PC_ONLY_FIXTURE_DIR"]
+    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let directory = requested.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? temporary
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let canonical = try XCTUnwrap(realpath(directory.path, nil))
+    defer {
+      free(canonical)
+      if requested == nil { try? FileManager.default.removeItem(at: directory) }
+    }
+    let root = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+    let owner =
+      ProcessInfo.processInfo.environment["MON_PC_ONLY_FIXTURE_OWNER"]
+      ?? UUID().uuidString.lowercased()
+    let empty = try RawRecordingSegments(output: root, owner: owner, lane: "microphone")
+    let raw = try RawRecordingSegments(output: root, owner: owner, lane: "system")
+    let box = ReadingBox(
+      CaptureClockReading(
+        hostBeforeNs: 1_000_000_000, continuousNs: 1_000_000_010,
+        utcMs: 1_700_000_000_000, hostAfterNs: 1_000_000_020))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), read: box.read)
+    let writer = SystemPCMWriter(
+      outputURL: root.appendingPathComponent("system.caf"), rawSegments: raw)
+    try writer.append(
+      sample(frames: 480, value: 0.25, presentation: .zero),
+      observation: .timestamp(1_000_000_010), sourceEpoch: 1, levelsEnabled: false, receivedAt: nil)
+    try await writer.finish()
+    try empty.finish()
+    box.set(
+      CaptureClockReading(
+        hostBeforeNs: 1_100_000_000, continuousNs: 1_100_000_010,
+        utcMs: 1_700_000_000_100, hostAfterNs: 1_100_000_020))
+    let microphoneClosure = try clock.close(.microphone)
+    let systemClosure = try clock.close(.system)
+    var microphone = TrackStats()
+    microphone.rawSegments = empty.snapshot()
+    microphone.microphoneRecovery = .init(
+      state: "stopped", sourceEpoch: 0, interruptions: 1, reason: "permission_unavailable")
+    var manifest = Manifest(
+      schemaVersion: 4, scenario: "synthetic-pc-only", captureMode: "system",
+      backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
+      requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: microphone, system: writer.stats, errors: [], recordingOwnerId: owner)
+    try manifest.finalizeStoppedClock(
+      clock, microphoneClosure: microphoneClosure, systemClosure: systemClosure)
+    XCTAssertEqual(manifest.microphoneAudioUnreceived, true)
+    XCTAssertEqual(manifest.system.frames, 480)
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("microphone.caf").path))
+    try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
+  }
+
   func testSegmentedManifestCapacityCoversBothMaximumTracksAtSafeIntegerEndpoints() throws {
     let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
     let maximum: Int64 = 9_007_199_254_740_991

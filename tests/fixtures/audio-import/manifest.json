@@ -1,0 +1,137 @@
+[
+  {
+    "file": "structure-sound.m4a",
+    "accepted": true,
+    "decode": false,
+    "bytes": 68,
+    "sha256": "b22e0353f10f4583192ecf9b88fe05b952e978ea10562d83ff2090d3912a93cb"
+  },
+  {
+    "file": "structure-chapter.m4a",
+    "accepted": true,
+    "decode": false,
+    "bytes": 148,
+    "sha256": "9ef10950873bde94dbd4c908e6ae73ceb52e41fc67f7aca4b86f67366354331f"
+  },
+  {
+    "file": "structure-chapter-v1.m4a",
+    "accepted": true,
+    "decode": false,
+    "bytes": 164,
+    "sha256": "688bb3a6ebff0167796628c9124973da9cd99b408c2c204e7f525e756b1cbce9"
+  },
+  {
+    "file": "structure-two-chapters.m4a",
+    "accepted": true,
+    "decode": false,
+    "bytes": 212,
+    "sha256": "e438c3570cd420543d0573b021295ac63fd22223de8b350f561cd2edd126fa18"
+  },
+  {
+    "file": "structure-unreferenced-text.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 128,
+    "sha256": "26470c7f6f758429c0173f15edc2fd8b6f14d83734c5e90e7119cefc520115e5"
+  },
+  {
+    "file": "structure-missing-chapter.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 88,
+    "sha256": "3dbdf59ebc4203c78fae1faef4662574f4e8c2e0b223e4ca348655c9f9bd276d"
+  },
+  {
+    "file": "structure-self-reference.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 148,
+    "sha256": "7a123c22f2e62ff8c8abebbf57eadafd096ce33d8e34adc8dd6e277da21638a0"
+  },
+  {
+    "file": "structure-duplicate-reference.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 152,
+    "sha256": "636925a0c132226afbd807c2f045f61fbe6fb31d62f8d77ee49674ab302acdb3"
+  },
+  {
+    "file": "structure-duplicate-id.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 148,
+    "sha256": "bcab96f335f504f920ca078d4b4c0d3b28a2c30bfd4ea6f7e719c52588719cd6"
+  },
+  {
+    "file": "structure-zero-id.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 68,
+    "sha256": "648aace836e2015a8466f704bcf4ae749444b6a6332b32b2b0dd3e14c52d6b3b"
+  },
+  {
+    "file": "structure-unknown-track.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 128,
+    "sha256": "34ee478620520f558265810e55c08f857ae47a214b29d01b50e3138e53a93af3"
+  },
+  {
+    "file": "structure-video.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 128,
+    "sha256": "2a69e10e2eb143c7536a4f9608708ae8ba158cb18c21f09f58158ba969943248"
+  },
+  {
+    "file": "structure-multi-audio.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 128,
+    "sha256": "a4b77e3e0952b0ad9d707184ccc37cc5303f955af727446d4d5907ab09718a06"
+  },
+  {
+    "file": "structure-chapter-references.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 168,
+    "sha256": "c71d20a5c831e6825a3e2f21b66bc244fb2a3b8fa178e3242bb596c67acff434"
+  },
+  {
+    "file": "structure-truncated.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 67,
+    "sha256": "e78d8b1c71ff4a0df665a6c08617c83e573f41a6879e06c04bb45196fd83a250"
+  },
+  {
+    "file": "structure-invalid-size.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 8,
+    "sha256": "c769a8f67479fe9f24544ae40168e7f6a4f33133dc8d3bdfbac39d5b3fa03f4c"
+  },
+  {
+    "file": "structure-duplicate-moov.m4a",
+    "accepted": false,
+    "decode": false,
+    "bytes": 136,
+    "sha256": "aa1b6f534a65ed178c25e0580e287f96c17d72cc413fe5e689a19370d5bc1e5f"
+  },
+  {
+    "file": "chapters-aac.m4a",
+    "accepted": true,
+    "decode": true,
+    "codec": "aac",
+    "bytes": 10604,
+    "sha256": "e7702d13c40a10982019e6f0c267c302170ee4c3c72da33d8531aca513631acf"
+  },
+  {
+    "file": "chapters-alac.m4a",
+    "accepted": true,
+    "decode": true,
+    "codec": "alac",
+    "bytes": 20381,
+    "sha256": "5c8d40196e0aa4fddd0d9d11f7eab6f6487c668b60c20876d5940e406fbb15a2"
+  }
+]

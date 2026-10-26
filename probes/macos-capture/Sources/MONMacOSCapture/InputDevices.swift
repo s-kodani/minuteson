@@ -138,7 +138,8 @@ enum InputDevices {
   }
 
   static func automaticChoice(
-    from devices: [CaptureInputDevice], application: CaptureApplicationIdentity?
+    from devices: [CaptureInputDevice], application: CaptureApplicationIdentity?,
+    processFamily: CaptureProcessFamily? = nil
   ) throws -> AutomaticChoice {
     guard let application else {
       return AutomaticChoice(
@@ -150,11 +151,32 @@ enum InputDevices {
     guard (try? CaptureApplications.current(application)) != nil else {
       return try automaticChoice(from: devices, processInputObjects: nil)
     }
-    let objects = try? activeInputObjects(for: application.pid)
+    let objects: [AudioObjectID]?
+    do {
+      let family = processFamily ?? CaptureProcessFamily(root: application)
+      let members = try family.snapshot()
+      objects = try applicationInputObjects(pids: Array(members.keys), read: activeInputObjects)
+      try family.verify(members)
+    } catch { return try automaticChoice(from: devices, processInputObjects: nil) }
     guard (try? CaptureApplications.current(application)) != nil else {
       return try automaticChoice(from: devices, processInputObjects: nil)
     }
     return try automaticChoice(from: devices, processInputObjects: objects)
+  }
+
+  static func applicationInputObjects(
+    pids: [pid_t], read: (pid_t) throws -> [AudioObjectID]?
+  ) throws -> [AudioObjectID]? {
+    var inputs = Set<AudioObjectID>()
+    for pid in pids {
+      if let objects = try read(pid) {
+        guard !objects.contains(kAudioObjectUnknown) else {
+          throw ProbeError.capture("application input device identity is unavailable")
+        }
+        inputs.formUnion(objects)
+      }
+    }
+    return inputs.isEmpty ? nil : inputs.sorted()
   }
 
   static func verifyDevice(

@@ -20,18 +20,22 @@ enum AudioImporter {
     let length = try handle.seekToEnd()
     var boxes = 0
     var moov = 0
-    var audio = 0
-    var video = 0
-    func uint(_ bytes: Data) -> UInt64 {
-      bytes.reduce(0) { ($0 << 8) | UInt64($1) }
+    struct Track {
+      var id: UInt64?
+      var handler: String?
+      var media = false
+      var references = false
+      var chapters: [UInt64] = []
     }
+    var tracks: [Track] = []
+    func uint(_ bytes: Data) -> UInt64 { bytes.reduce(0) { ($0 << 8) | UInt64($1) } }
     func read(_ offset: UInt64, _ count: Int) throws -> Data {
       try handle.seek(toOffset: offset)
       let data = try handle.read(upToCount: count) ?? Data()
       guard data.count == count else { throw ProbeError.usage("truncated M4A box") }
       return data
     }
-    func walk(_ first: UInt64, _ end: UInt64, _ path: [String]) throws {
+    func walk(_ first: UInt64, _ end: UInt64, _ path: [String], _ track: Int? = nil) throws {
       var offset = first
       while offset < end {
         boxes += 1
@@ -52,26 +56,68 @@ enum AudioImporter {
         guard size >= headerSize, size <= end - offset else {
           throw ProbeError.usage("invalid M4A box size")
         }
+        let body = offset + headerSize
+        let count = size - headerSize
         if path.isEmpty && type == "moov" {
           moov += 1
-          try walk(offset + headerSize, offset + size, ["moov"])
+          try walk(body, offset + size, ["moov"])
         } else if path == ["moov"] && type == "trak" {
-          try walk(offset + headerSize, offset + size, ["moov", "trak"])
-        } else if path == ["moov", "trak"] && type == "mdia" {
-          try walk(offset + headerSize, offset + size, ["moov", "trak", "mdia"])
-        } else if path == ["moov", "trak", "mdia"] && type == "hdlr" {
-          guard size - headerSize >= 12 else { throw ProbeError.usage("truncated M4A handler") }
-          let handler = try read(offset + headerSize + 8, 4)
-          if handler == Data("soun".utf8) { audio += 1 }
-          if handler == Data("vide".utf8) { video += 1 }
+          guard tracks.count < 128 else { throw ProbeError.usage("excessive M4A tracks") }
+          tracks.append(Track())
+          try walk(body, offset + size, ["trak"], tracks.count - 1)
+        } else if let track {
+          if path == ["trak"] && type == "tkhd" {
+            guard tracks[track].id == nil, count >= 4 else {
+              throw ProbeError.usage("invalid M4A track ID")
+            }
+            let version = try read(body, 1)[0]
+            let idOffset: UInt64 = version == 0 ? 12 : 20
+            guard version <= 1, count >= idOffset + 4 else {
+              throw ProbeError.usage("truncated M4A track ID")
+            }
+            let id = uint(try read(body + idOffset, 4))
+            guard id > 0 else { throw ProbeError.usage("invalid M4A track ID") }
+            tracks[track].id = id
+          } else if path == ["trak"] && type == "mdia" {
+            guard !tracks[track].media else { throw ProbeError.usage("duplicate M4A media") }
+            tracks[track].media = true
+            try walk(body, offset + size, ["mdia"], track)
+          } else if path == ["mdia"] && type == "hdlr" {
+            guard count >= 12, tracks[track].handler == nil else {
+              throw ProbeError.usage("invalid M4A handler")
+            }
+            tracks[track].handler = String(data: try read(body + 8, 4), encoding: .ascii)
+          } else if path == ["trak"] && type == "tref" {
+            guard !tracks[track].references else {
+              throw ProbeError.usage("duplicate M4A references")
+            }
+            tracks[track].references = true
+            try walk(body, offset + size, ["tref"], track)
+          } else if path == ["tref"] {
+            guard type == "chap", tracks[track].chapters.isEmpty,
+              count > 0, count % 4 == 0, count <= 128 * 4
+            else { throw ProbeError.usage("invalid M4A chapter references") }
+            for position in stride(from: UInt64(0), to: count, by: 4) {
+              tracks[track].chapters.append(uint(try read(body + position, 4)))
+            }
+          }
         }
         offset += size
       }
     }
     try walk(0, length, [])
-    guard moov == 1, audio == 1, video == 0 else {
-      throw ProbeError.usage("M4A requires one audio track and no video")
-    }
+    let ids = tracks.compactMap(\.id)
+    let audio = tracks.filter { $0.handler == "soun" }
+    guard moov == 1, !tracks.isEmpty, ids.count == tracks.count,
+      Set(ids).count == ids.count, audio.count == 1,
+      tracks.allSatisfy({ $0.handler == "soun" || $0.handler == "text" }),
+      let sound = audio.first
+    else { throw ProbeError.usage("M4A requires one audio track and no video or unknown tracks") }
+    let chapters = tracks.filter { $0.handler == "text" }
+    guard Set(sound.chapters).count == sound.chapters.count,
+      Set(sound.chapters) == Set(chapters.compactMap(\.id)),
+      chapters.allSatisfy({ !$0.references })
+    else { throw ProbeError.usage("M4A text tracks require valid audio chapter references") }
   }
   // Files only. This does not request microphone, screen or recording power.
   static func decode(

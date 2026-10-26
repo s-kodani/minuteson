@@ -356,6 +356,7 @@ struct Manifest: Encodable {
   var targetApplicationIdentity: CaptureApplicationIdentity?
   var captureTest: CaptureTestMetadata? = nil
   var systemAudioUnreceived: Bool? = nil
+  var microphoneAudioUnreceived: Bool? = nil
   var recordingOwnerId: String? = nil
   var captureEnd: CaptureEndMetadata? = nil
   // Notification retention failure is separate from saved PCM/clock failure.
@@ -385,22 +386,56 @@ struct Manifest: Encodable {
       previous.windowStartNs == completed.windowStartNs,
       previous.windowEndNs == completed.windowEndNs
     else { throw ProbeError.capture("capture test completion does not match its starting window") }
-    guard schemaVersion == 4, completed.completed == true,
-      let micStart = microphone.firstCaptureNanoseconds
-    else { throw ProbeError.capture("completed test and microphone capture clock are required") }
-    captureTest = completed
-    if system.frames > 0 {
-      try finalizeClock(clock)
-      return
+    guard schemaVersion == 4, completed.completed == true else {
+      throw ProbeError.capture("completed capture test is required")
     }
-    try system.requireWritable()
-    guard system.callbackCount == 0, system.sampleRate == nil, system.channels == nil,
-      system.firstCaptureNanoseconds == nil, system.captureFailureDetail == nil
-    else { throw ProbeError.capture("empty system test track has inconsistent capture evidence") }
-    try microphone.finishClock(originNanoseconds: micStart)
-    system.clockSegments = []
-    captureClock = try clock.metadata(originNanoseconds: micStart)
-    systemAudioUnreceived = true
+    captureTest = completed
+    let origin = try finishAvailableClocks()
+    captureClock = try clock.metadata(originNanoseconds: origin)
+  }
+
+  // A missing lane is explicit evidence, never a silent placeholder. The
+  // normal recording additionally requires its closed, empty raw producer.
+  private mutating func finishAvailableClocks(owner: String? = nil) throws -> Int64 {
+    guard microphone.frames > 0 || system.frames > 0 else {
+      throw ProbeError.capture("both audio inputs are empty")
+    }
+    func empty(_ track: TrackStats, lane: String) throws {
+      try track.requireWritable()
+      guard track.frames == 0, track.callbackCount == 0, track.sampleRate == nil,
+        track.channels == nil, track.firstCaptureNanoseconds == nil,
+        track.captureFailureDetail == nil
+      else { throw ProbeError.capture("empty \(lane) track has inconsistent capture evidence") }
+      if let owner {
+        guard let raw = track.rawSegments, raw.ownerId == owner, raw.lane == lane,
+          raw.producerClosed, raw.sealedSegments == 0, raw.sealedFrames == 0,
+          raw.lastEntrySHA256 == nil, raw.failure == nil,
+          (lane == "system" ? track.systemRecovery?.state : track.microphoneRecovery?.state)
+            == "stopped"
+        else {
+          throw ProbeError.capture("unreceived \(lane) track has inconsistent closure evidence")
+        }
+      }
+    }
+    let starts = [microphone.firstCaptureNanoseconds, system.firstCaptureNanoseconds].compactMap {
+      $0
+    }
+    guard let origin = starts.min() else { throw ProbeError.capture("capture clock is missing") }
+    if microphone.frames == 0 {
+      try empty(microphone, lane: "microphone")
+      microphone.clockSegments = []
+      microphoneAudioUnreceived = true
+    } else {
+      try microphone.finishClock(originNanoseconds: origin)
+    }
+    if system.frames == 0 {
+      try empty(system, lane: "system")
+      system.clockSegments = []
+      systemAudioUnreceived = true
+    } else {
+      try system.finishClock(originNanoseconds: origin)
+    }
+    return origin
   }
 
   mutating func finalizeStoppedClock(
@@ -408,32 +443,13 @@ struct Manifest: Encodable {
   ) throws {
     guard schemaVersion == 4, captureTest == nil,
       let owner = recordingOwnerId, InputLevelReport.validOwner(owner),
-      let micStart = microphone.firstCaptureNanoseconds,
       let microphoneClosure, let systemClosure
     else { throw ProbeError.capture("recording owner and both acquisition closures are required") }
-    let unreceived = system.frames == 0
-    if unreceived {
-      try system.requireWritable()
-      guard system.callbackCount == 0, system.sampleRate == nil, system.channels == nil,
-        system.firstCaptureNanoseconds == nil, system.captureFailureDetail == nil,
-        let raw = system.rawSegments, raw.ownerId == owner, raw.lane == "system",
-        raw.producerClosed, raw.sealedSegments == 0, raw.sealedFrames == 0,
-        raw.lastEntrySHA256 == nil, raw.failure == nil,
-        system.systemRecovery?.state == "stopped"
-      else { throw ProbeError.capture("unreceived system track has inconsistent closure evidence") }
-      system.clockSegments = []
-      systemAudioUnreceived = true
-    }
-    guard unreceived || system.firstCaptureNanoseconds != nil else {
-      throw ProbeError.capture("system capture clock is missing")
-    }
-    let origin = min(micStart, system.firstCaptureNanoseconds ?? micStart)
-    try microphone.finishClock(originNanoseconds: origin)
-    if !unreceived { try system.finishClock(originNanoseconds: origin) }
+    let origin = try finishAvailableClocks(owner: owner)
     let (metadata, ending) = try clock.ending(
       originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
-    guard let micEnd = microphone.clockSegments?.last?.timelineEndUs,
-      let pcEnd = unreceived ? 0 : system.clockSegments?.last?.timelineEndUs,
+    guard let micEnd = microphone.frames == 0 ? 0 : microphone.clockSegments?.last?.timelineEndUs,
+      let pcEnd = system.frames == 0 ? 0 : system.clockSegments?.last?.timelineEndUs,
       micEnd <= ending.microphoneClosedUs, pcEnd <= ending.systemClosedUs
     else { throw ProbeError.capture("saved PCM extends beyond its acquisition closure") }
     captureClock = metadata
@@ -454,11 +470,18 @@ struct Manifest: Encodable {
     encoder.outputFormatting = extended ? [.sortedKeys] : [.prettyPrinted, .sortedKeys]
     let original = try encoder.encode(self)
     var object = try JSONSerialization.jsonObject(with: original) as! [String: Any]
-    for key in ["captureClock", "captureEnd", "recordingOwnerId", "microphoneDeviceUID", "targetApplicationIdentity", "inputEventJournalError", "inputEventJournalPersistence", "microphoneSelectionError"] {
+    for key in [
+      "captureClock", "captureEnd", "recordingOwnerId", "microphoneDeviceUID",
+      "targetApplicationIdentity", "inputEventJournalError", "inputEventJournalPersistence",
+      "microphoneSelectionError",
+    ] {
       if object[key] == nil { object[key] = NSNull() }
     }
     object["systemAudioUnreceived"] = systemAudioUnreceived ?? false
-    object["inputDiagnosticsState"] = inputEventJournalError != nil ? "unavailable" : (inputEventJournalPersistence == nil ? "unconfirmed" : "reported")
+    object["microphoneAudioUnreceived"] = microphoneAudioUnreceived ?? false
+    object["inputDiagnosticsState"] =
+      inputEventJournalError != nil
+      ? "unavailable" : (inputEventJournalPersistence == nil ? "unconfirmed" : "reported")
     let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     let limit = extended ? 32 * 1024 * 1024 : 256 * 1024
     guard data.count <= limit else {
@@ -500,6 +523,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private let requireIdentity: @Sendable (CaptureApplicationIdentity) throws -> Void
   private let mayContinue: @Sendable () -> Bool
   private let inputEventObserver: InputEventJournal.Observer?
+  private let processFamily: CaptureProcessFamily?
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
@@ -512,7 +536,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       CaptureApplications.current,
     mayContinue: @escaping @Sendable () -> Bool = { true },
     inputEventObserver: InputEventJournal.Observer? = nil,
-    rawSegments: RawRecordingSegments? = nil
+    rawSegments: RawRecordingSegments? = nil,
+    processFamily: CaptureProcessFamily? = nil
   ) {
     self.outputURL = outputURL
     self.pcm = SystemPCMWriter(outputURL: outputURL, rawSegments: rawSegments)
@@ -526,6 +551,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     self.requireIdentity = requireIdentity
     self.mayContinue = mayContinue
     self.inputEventObserver = inputEventObserver
+    self.processFamily = processFamily
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
@@ -553,6 +579,13 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       }
       if lock.withLock({ streamToken == token }) { try? await retireStream() }
       throw error
+    }
+  }
+
+  func cancelInitialPreparation() {
+    lock.withLock {
+      recovery?.interrupt("acquisition_timeout", unavailable: true)
+      pcm.invalidateLevels()
     }
   }
 
@@ -640,7 +673,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
           && self.lock.withLock { !self.stopping && self.recovery?.owns(token) == true }
       }
       return CoreAudioCaptureStream(
-        driver: NativeCoreAudioCaptureDriver(scope: scope, mayContinue: allowed),
+        driver: NativeCoreAudioCaptureDriver(
+          scope: scope, processFamily: processFamily, mayContinue: allowed),
         bundleIdentifier: applicationIdentity?.bundleIdentifier,
         mayContinue: allowed,
         deliver: { [weak self] source, sample in
@@ -798,7 +832,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       guard !stopping, recovery?.owns(token) == true else { return }
       recovery?.interrupt("stream_stopped")
       pcm.invalidateLevels()
-      if !retries { pcm.recordFailure(error) }
+      if !retries, testWindow == nil || testWindow?.accepting == true { pcm.recordFailure(error) }
     }
   }
 
@@ -950,7 +984,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     let allowUnreceivedAudio =
       (proveEnding && lock.withLock { captureClosure != nil }
         || !proveEnding && testWindow?.metadata().completed == true)
-      && streamStopError == nil && previous?.state == "connected"
+      && streamStopError == nil && lock.withLock { recovery?.operation == nil }
     do { try await pcm.finish(allowUnreceivedAudio: allowUnreceivedAudio) } catch {
       let failure =
         streamStopError.map { "system stop failed: \($0); writer finalization: \(error)" }
@@ -1015,7 +1049,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         do { try requireIdentity(identity) } catch {
           recovery?.interrupt("application_unavailable", unavailable: true)
           pcm.invalidateLevels()
-          if !retries { pcm.recordFailure(error) }
+          if !retries, testWindow == nil || testWindow?.accepting == true {
+            pcm.recordFailure(error)
+          }
           return
         }
       }
@@ -1096,6 +1132,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
 
   private var requestedUID: String?
   private let applicationIdentity: CaptureApplicationIdentity?
+  private let processFamily: CaptureProcessFamily?
   private let inputEventObserver: InputEventJournal.Observer?
   private let makeEngine: @Sendable () throws -> any MicrophoneCaptureEngine
   private let devices: @Sendable () throws -> CaptureInputDevices
@@ -1104,6 +1141,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let rawSegments: RawRecordingSegments?
   private let mayContinue: @Sendable () -> Bool
   private let controlNow: @Sendable () -> ContinuousClock.Instant
+  private var initialPreparationCancelled = false
+  private var initialPreparationPending = false
+  private var initialNativePending = false
+  private var stopped = false
   private var selectedDeviceID: AudioObjectID?
   private var automaticSource: InputDevices.AutomaticSource?
   private(set) var deviceUID: String?
@@ -1111,6 +1152,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
     applicationIdentity: CaptureApplicationIdentity? = nil,
+    processFamily: CaptureProcessFamily? = nil,
     levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil,
     inputEventObserver: InputEventJournal.Observer? = nil,
     rawSegments: RawRecordingSegments? = nil,
@@ -1131,6 +1173,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     self.clock = clock
     self.requestedUID = microphoneUID
     self.applicationIdentity = applicationIdentity
+    self.processFamily = processFamily
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
     self.inputEventObserver = inputEventObserver
@@ -1145,36 +1188,85 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   func start() async throws {
-    let available = try devices().devices
-    let automatic =
-      try requestedUID == nil
-      ? InputDevices.automaticChoice(from: available, application: applicationIdentity) : nil
-    let selected = try automatic?.device ?? InputDevices.choose(requestedUID, from: available)
+    try Task.checkCancellation()
+    try lock.withLock {
+      guard recovery == nil, !stopped, !initialPreparationCancelled, mayContinue() else {
+        throw ProbeError.capture("microphone start is already owned or stopped")
+      }
+      recovery = try MicrophoneRecovery(uid: requestedUID, observe: inputEventObserver)
+      deviceUID = requestedUID
+      initialPreparationPending = true
+    }
+    defer {
+      lock.withLock {
+        initialPreparationPending = false
+        initialNativePending = false
+        if testWindow == nil, !stopped { initialPreparationCancelled = false }
+      }
+    }
+    let selected: CaptureInputDevice
+    do {
+      let available = try devices().devices
+      let automatic =
+        try requestedUID == nil
+        ? InputDevices.automaticChoice(
+          from: available, application: applicationIdentity,
+          processFamily: processFamily) : nil
+      selected = try automatic?.device ?? InputDevices.choose(requestedUID, from: available)
+      try lock.withLock {
+        guard !stopped, !initialPreparationCancelled, mayContinue() else {
+          throw ProbeError.capture("microphone device discovery is obsolete")
+        }
+        try recovery?.retarget(selected.uid)
+        deviceUID = selected.uid
+        automaticSource = automatic?.source
+      }
+    } catch {
+      suspend("metadata_unavailable", unavailable: true)
+      throw error
+    }
     var authorization = permission()
     if authorization == .notDetermined {
       _ = await requestPermission()
       authorization = permission()
     }
     guard authorization == .authorized else {
-      throw ProbeError.permission(
-        CaptureFailureGuide.microphonePermission(authorization)
-      )
-    }
-    try lock.withLock {
-      guard recovery == nil, mayContinue() else {
-        throw ProbeError.capture("microphone start is already owned or stopped")
-      }
-      recovery = try MicrophoneRecovery(uid: selected.uid, observe: inputEventObserver)
-      deviceUID = selected.uid
-      automaticSource = automatic?.source
+      suspend("permission_unavailable", unavailable: true)
+      throw ProbeError.permission(CaptureFailureGuide.microphonePermission(authorization))
     }
     do {
+      try lock.withLock {
+        guard !stopped, !initialPreparationCancelled, mayContinue() else {
+          throw ProbeError.capture("microphone initialization is obsolete")
+        }
+        initialNativePending = true
+      }
       try configure(selected)
     } catch {
-      stop()
+      suspend("restart_failed", unavailable: true)
+      if clock == nil || testWindow != nil || !mayContinue() {
+        lock.withLock { recovery?.stop() }
+      }
       throw ProbeError.capture(CaptureFailureGuide.microphoneInitialization(error))
     }
   }
+
+  func cancelInitialPreparation() {
+    let mayRetire = lock.withLock {
+      initialPreparationCancelled = initialPreparationPending || testWindow != nil
+      recovery?.interrupt("restart_failed", unavailable: true)
+      selectedDeviceID = nil
+      normalPreparation = nil
+      normalAdmission = nil
+      stats.inputLevel.invalidate()
+      return !initialNativePending
+    }
+    // Native start may still be on its owner thread. Its catch path retires
+    // the engine after returning; timeout cannot stop/deallocate it in parallel.
+    if mayRetire { releaseEngine() }
+  }
+
+  var initialAcquisitionPending: Bool { lock.withLock { initialPreparationPending } }
 
   func selectInput(_ uid: String?) throws {
     guard uid.map(InputDevices.validUID) ?? true else {
@@ -1553,8 +1645,14 @@ final class MicrophoneRecorder: @unchecked Sendable {
       try await Task.sleep(for: .milliseconds(100))
     }
   ) async throws {
-    guard let testWindow, let engine else {
+    guard let testWindow else {
       throw ProbeError.capture("five-second test microphone is not initialized")
+    }
+    let engine = try lock.withLock {
+      guard !initialPreparationPending, !initialNativePending, let engine = self.engine else {
+        throw ProbeError.capture("five-second test microphone preparation is still pending")
+      }
+      return engine
     }
     let (token, format) = try lock.withLock {
       guard testWindow.preparing, stats.frames == 0, let recovery, let file else {
@@ -1669,9 +1767,34 @@ final class MicrophoneRecorder: @unchecked Sendable {
   func maintain() {
     // Formal bounded probes and a private 5-second test retain their existing
     // fail/verify contract; only an active production recording retries inputs.
+    if lock.withLock({ recovery?.uid == nil }), mayContinue(), clock != nil, testWindow == nil,
+      lock.withLock({ !stopped && !initialPreparationCancelled && !initialPreparationPending }),
+      permission() == .authorized
+    {
+      // No device metadata was available at explicit start. Discovery may
+      // recover, but this heartbeat must never request OS permission.
+      do {
+        let available = try devices().devices
+        let automatic =
+          try requestedUID == nil
+          ? InputDevices.automaticChoice(
+            from: available, application: applicationIdentity,
+            processFamily: processFamily) : nil
+        let selected = try automatic?.device ?? InputDevices.choose(requestedUID, from: available)
+        try lock.withLock {
+          guard !stopped, !initialPreparationCancelled, recovery != nil else {
+            throw ProbeError.capture("microphone preparation is obsolete")
+          }
+          try recovery?.retarget(selected.uid)
+          deviceUID = selected.uid
+          automaticSource = automatic?.source
+        }
+      } catch { return }
+    }
     guard mayContinue(), clock != nil, testWindow == nil,
       lock.withLock({
-        recovery?.status.state != "stopped"
+        !stopped && !initialPreparationCancelled && !initialPreparationPending
+          && recovery?.status.state != "stopped"
           && (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil
       }), let uid = deviceUID
     else { return }
@@ -1680,7 +1803,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       suspend("metadata_unavailable", unavailable: true)
       return
     }
-    guard report.microphonePermission == "authorized" else {
+    guard report.microphonePermission == "authorized", permission() == .authorized else {
       suspend("permission_unavailable", unavailable: true)
       return
     }
@@ -1689,7 +1812,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
       let automatic =
         try requestedUID == nil
         ? InputDevices.automaticChoice(
-          from: report.devices, application: applicationIdentity) : nil
+          from: report.devices, application: applicationIdentity, processFamily: processFamily)
+        : nil
       desired = try automatic?.device ?? InputDevices.choose(requestedUID, from: report.devices)
       lock.withLock { automaticSource = automatic?.source }
     } catch {
@@ -1765,13 +1889,21 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   func stop() {
-    lock.withLock {
+    let pending = lock.withLock {
+      stopped = true
       recovery?.stop()
       selectedDeviceID = nil
       normalPreparation = nil
       normalAdmission = nil
       stats.inputLevel.invalidate()
+      if initialNativePending {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(
+          ProbeError.capture("microphone acquisition is still pending; closure is unproven"))
+      }
+      return initialNativePending
     }
+    guard !pending else { return }
     releaseEngine()
     lock.withLock {
       if captureClosure == nil {
@@ -1779,7 +1911,18 @@ final class MicrophoneRecorder: @unchecked Sendable {
           stats.clockFailure = stats.clockFailure ?? String(describing: error)
         }
       }
+      let ownedEmptyFile = file != nil && stats.frames == 0 && stats.callbackCount == 0
       file = nil
+      if ownedEmptyFile, stats.captureFailure == nil {
+        do {
+          try FileManager.default.removeItem(at: outputURL)
+          stats.sampleRate = nil
+          stats.channels = nil
+        } catch {
+          stats.appendFailures += 1
+          stats.retainCaptureFailure(error)
+        }
+      }
     }
     do { try rawSegments?.finish() } catch {
       lock.withLock {
@@ -1793,7 +1936,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     var result = stats
-    result.microphoneRecovery = recovery?.status
+    result.microphoneRecovery =
+      recovery?.status
+      ?? (stopped
+        ? MicrophoneRecovery.Status(state: "stopped", sourceEpoch: 0, interruptions: 0, reason: nil)
+        : nil)
     result.inputEventHistory = recovery?.history
     result.rawSegments = rawSegments?.snapshot()
     if result.captureFailure != nil { result.inputLevel.invalidate() }
@@ -1900,10 +2047,12 @@ public enum CaptureCommand {
       let systemStopRequest = options.output.appendingPathComponent("stop.request")
       let systemParentPID = options.parentPID
       let systemControlled = options.stopOnFile
+      let processFamily = options.applicationIdentity.map { CaptureProcessFamily(root: $0) }
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID,
         applicationIdentity: options.applicationIdentity,
+        processFamily: processFamily,
         levelsEnabled: options.inputLevelOwner != nil,
         testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone),
         rawSegments: rawMic,
@@ -1920,7 +2069,8 @@ public enum CaptureCommand {
           !systemControlled
             || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
               && !parentHasExited(systemParentPID))
-        }, inputEventObserver: inputEvents?.observer(.system), rawSegments: rawSystem)
+        }, inputEventObserver: inputEvents?.observer(.system), rawSegments: rawSystem,
+        processFamily: processFamily)
       let tap = CoreAudioTapRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil, rawSegments: rawSystem)
@@ -1952,20 +2102,33 @@ public enum CaptureCommand {
       do {
         try power.acquire()
         manifest.power.acquired = true
-        if options.startsSystemBeforeMicrophone {
-          try await system.start(
-            targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+        let keepsAvailableInput = options.publishesInputStatus || testWindow != nil
+        func prepareSystem() async throws {
+          if keepsAvailableInput {
+            _ = await InitialCapturePreparation.run(
+              operation: {
+                try await system.start(
+                  targetPID: options.targetPIDs.first,
+                  applicationIdentity: options.applicationIdentity)
+              }, cancel: { system.cancelInitialPreparation() })
+          } else {
+            try await system.start(
+              targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+          }
         }
-        try await mic.start()
+        if options.startsSystemBeforeMicrophone { try await prepareSystem() }
+        if keepsAvailableInput {
+          _ = await InitialCapturePreparation.run(
+            operation: { try await mic.start() }, cancel: { mic.cancelInitialPreparation() })
+        } else {
+          try await mic.start()
+        }
         manifest.microphoneDeviceUID = mic.deviceUID
         manifest.microphone = mic.snapshot()
         if options.usesStandaloneTapProbe {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
-          if !options.startsSystemBeforeMicrophone {
-            try await system.start(
-              targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
-          }
+          if !options.startsSystemBeforeMicrophone { try await prepareSystem() }
           manifest.targetApplicationIdentity = options.applicationIdentity
           manifest.targetApplicationName = system.targetApplicationName
           manifest.targetBundleIdentifier = system.targetBundleIdentifier
@@ -1978,7 +2141,15 @@ public enum CaptureCommand {
         {
           throw ProbeError.capture("five-second test was cancelled during initialization")
         }
-        if testWindow != nil { try await mic.openTestWindow() }
+        if let testWindow {
+          do { try await mic.openTestWindow() } catch {
+            // Retire an unprepared microphone before measuring the healthy PC
+            // lane. The shared timestamp window still rejects queued pre-roll.
+            mic.cancelInitialPreparation()
+            try mic.snapshot().requireWritable()
+            try testWindow.open(at: PCMInputLevel.nowNanoseconds())
+          }
+        }
         manifest.captureTest = testWindow?.metadata()
         try write(manifest, to: manifestURL)
         if options.stopOnFile {
@@ -2116,14 +2287,26 @@ public enum CaptureCommand {
         if let testWindow, !testWindow.metadata().completed {
           throw ProbeError.capture("five-second test stopped before its window completed")
         }
-        guard micStats.frames > 0,
-          systemStats.frames > 0 || testWindow != nil || systemClosure != nil,
+        guard micStats.frames > 0 || systemStats.frames > 0,
+          (micStats.frames > 0 && systemStats.frames > 0) || testWindow != nil
+            || systemClosure != nil,
           micStats.appendFailures == 0, systemStats.appendFailures == 0
         else {
           throw ProbeError.capture("audio track is empty or contains failed writes")
         }
-        try verifyRecordedCAF(
-          options.output.appendingPathComponent("microphone.caf"), expected: micStats)
+        for (lane, stats) in [("microphone", micStats), ("system", systemStats)]
+        where stats.frames == 0 {
+          guard
+            !FileManager.default.fileExists(
+              atPath: options.output.appendingPathComponent(lane + ".caf").path)
+          else {
+            throw ProbeError.capture("unreceived input has an unexpected CAF payload")
+          }
+        }
+        if micStats.frames > 0 {
+          try verifyRecordedCAF(
+            options.output.appendingPathComponent("microphone.caf"), expected: micStats)
+        }
         if systemStats.frames > 0 {
           try verifyRecordedCAF(
             options.output.appendingPathComponent("system.caf"), expected: systemStats)
@@ -2168,10 +2351,12 @@ public enum CaptureCommand {
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()
         manifest.system = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
-      } else if let testWindow, let micStart = manifest.microphone.firstCaptureNanoseconds {
-        let systemStart = manifest.system.firstCaptureNanoseconds ?? micStart
+      } else if let testWindow {
         manifest.captureTest = testWindow.metadata(
-          firstSavedCaptureNanoseconds: min(micStart, systemStart))
+          firstSavedCaptureNanoseconds: [
+            manifest.microphone.firstCaptureNanoseconds,
+            manifest.system.firstCaptureNanoseconds,
+          ].compactMap { $0 }.min())
       }
       try write(manifest, to: manifestURL)
       if manifest.state != "saved" {

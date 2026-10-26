@@ -31,7 +31,7 @@ struct MicrophoneRecovery {
     }
   }
 
-  private(set) var uid: String
+  private(set) var uid: String?
   private var epoch: UInt64 = 0
   private var interruptions: UInt64 = 0
   private var state = "reconnecting"
@@ -42,8 +42,10 @@ struct MicrophoneRecovery {
   private(set) var history = InputEventHistory()
   private let observe: InputEventJournal.Observer?
 
-  init(uid: String, observe: InputEventJournal.Observer? = nil) throws {
-    guard InputDevices.validUID(uid) else { throw ProbeError.capture("recovery UID is invalid") }
+  init(uid: String?, observe: InputEventJournal.Observer? = nil) throws {
+    guard uid.map(InputDevices.validUID) ?? true else {
+      throw ProbeError.capture("recovery UID is invalid")
+    }
     self.uid = uid
     self.observe = observe
   }
@@ -53,7 +55,9 @@ struct MicrophoneRecovery {
   }
 
   func device(from devices: [CaptureInputDevice]) throws -> CaptureInputDevice {
-    guard !stopped else { throw ProbeError.capture("microphone recovery is stopped") }
+    guard !stopped, let uid else {
+      throw ProbeError.capture("microphone recovery has no selected input")
+    }
     let device = try InputDevices.choose(uid, from: devices)
     guard device.objectID != kAudioObjectUnknown else {
       throw ProbeError.capture("recovery input has no Core Audio object")
@@ -63,10 +67,12 @@ struct MicrophoneRecovery {
 
   mutating func begin(_ device: CaptureInputDevice) throws -> Binding {
     guard !stopped, binding == nil, device.uid == uid, device.objectID != kAudioObjectUnknown,
-      epoch < 9_007_199_254_740_991
+      max(epoch, interruptions) < 9_007_199_254_740_991
     else { throw ProbeError.capture("microphone recovery binding is invalid") }
-    epoch += 1
-    let token = Binding(uid: uid, objectID: device.objectID, epoch: epoch)
+    // An unavailable initial attempt may precede any device binding. Keep
+    // recovered status counters monotonic without inventing a device or PCM.
+    epoch = max(epoch, interruptions) + 1
+    let token = Binding(uid: device.uid, objectID: device.objectID, epoch: epoch)
     binding = token
     state = "reconnecting"
     observe?(status, history)

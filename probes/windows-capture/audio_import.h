@@ -5,6 +5,7 @@
 #include <mfreadwrite.h>
 #include <mferror.h>
 #include <cstring>
+#include "m4a_container.h"
 namespace audio_import {
 using Json=nlohmann::json;
 struct Output {
@@ -26,23 +27,7 @@ inline std::vector<BYTE> caf(UINT32 rate,UINT32 channels,std::uint64_t frames){
 // Inspect ISO BMFF structure before allowing Media Foundation to decode it.
 // Do not silently accept the audio track of a video or multi-track container.
 inline void container(const fs::path& path){
-  std::ifstream input(path,std::ios::binary);if(!input)throw std::runtime_error("取り込み元の音声を開けません");
-  auto size=fs::file_size(path);std::size_t boxes=0,moov=0,tracks=0,audio=0,video=0;
-  auto uint_at=[&](std::uint64_t offset,int count){BYTE b[8]={};input.seekg(static_cast<std::streamoff>(offset));input.read(reinterpret_cast<char*>(b),count);if(!input)throw std::runtime_error("M4Aコンテナが途中で終了しています");std::uint64_t v=0;for(int i=0;i<count;++i)v=(v<<8)|b[i];return v;};
-  std::function<void(std::uint64_t,std::uint64_t,int)> walk;
-  walk=[&](std::uint64_t first,std::uint64_t end,int depth){
-    for(auto at=first;at<end;){if(++boxes>4096||end-at<8)throw std::runtime_error("M4Aコンテナの構造が不正です");
-      auto length=uint_at(at,4),type=uint_at(at+4,4);std::uint64_t header=8;
-      if(length==1){if(end-at<16)throw std::runtime_error("M4Aサイズが不正です");length=uint_at(at+8,8);header=16;}else if(length==0)length=end-at;
-      if(length<header||length>end-at)throw std::runtime_error("M4Aの区間が範囲外です");
-      if(depth==0&&type==0x6d6f6f76){++moov;walk(at+header,at+length,1);}
-      else if(depth==1&&type==0x7472616b){++tracks;walk(at+header,at+length,2);}
-      else if(depth==2&&type==0x6d646961)walk(at+header,at+length,3);
-      else if(depth==3&&type==0x68646c72){if(length<header+12)throw std::runtime_error("M4Aトラックが不正です");auto kind=uint_at(at+header+8,4);if(kind==0x736f756e)++audio;else if(kind==0x76696465)++video;else throw std::runtime_error("M4Aに音声以外のトラックがあります");}
-      at+=length;
-    }
-  };
-  walk(0,size,0);if(moov!=1||tracks!=1||audio!=1||video)throw std::runtime_error("M4Aは音声1トラック・動画なしのファイルにしてください");
+  m4a_container::validate(path);
 }
 inline int run(int argc,wchar_t** argv){
   try{

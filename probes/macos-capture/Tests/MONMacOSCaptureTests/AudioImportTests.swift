@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -97,6 +98,62 @@ final class AudioImportTests: XCTestCase {
     } catch {}
   }
 
+  private struct Fixture: Decodable {
+    let file: String
+    let accepted: Bool
+    let decode: Bool
+    let codec: String?
+    let bytes: Int
+    let sha256: String
+  }
+  private func fixtures() throws -> (URL, [Fixture]) {
+    var root = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 { root.deleteLastPathComponent() }
+    root.appendPathComponent("tests/fixtures/audio-import")
+    return (
+      root,
+      try JSONDecoder().decode(
+        [Fixture].self, from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+    )
+  }
+  func testSharedContainerCorpusAndProvenance() throws {
+    let (root, fixtures) = try fixtures()
+    for fixture in fixtures {
+      let url = root.appendingPathComponent(fixture.file)
+      let before = try Data(contentsOf: url)
+      XCTAssertEqual(before.count, fixture.bytes)
+      XCTAssertEqual(
+        SHA256.hash(data: before).map { String(format: "%02x", $0) }.joined(), fixture.sha256)
+      let file = try FileHandle(forReadingFrom: url)
+      defer { try? file.close() }
+      if fixture.accepted {
+        XCTAssertNoThrow(try AudioImporter.checkM4ATracks(file), fixture.file)
+      } else {
+        XCTAssertThrowsError(try AudioImporter.checkM4ATracks(file), fixture.file)
+      }
+      XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+  }
+  func testChapterAACAndALACDecodeOnlyAudioAndPreserveSource() async throws {
+    let (fixturesRoot, fixtures) = try fixtures()
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    for fixture in fixtures where fixture.decode {
+      let input = fixturesRoot.appendingPathComponent(fixture.file)
+      let before = try Data(contentsOf: input)
+      let output = root.appendingPathComponent(fixture.file + ".caf")
+      let info = try await AudioImporter.decode(input: input, output: output)
+      XCTAssertEqual(info.codec, fixture.codec)
+      XCTAssertEqual(info.detectedFormat, "m4a")
+      XCTAssertEqual(info.sampleRate, 48000)
+      XCTAssertEqual(info.channels, 1)
+      XCTAssertTrue((48000...49152).contains(info.frames))
+      let pcm = try AVAudioFile(forReading: output)
+      XCTAssertEqual(UInt64(pcm.length), info.frames)
+      XCTAssertEqual(try Data(contentsOf: input), before)
+    }
+  }
+
   func testM4ATrackInspectionRejectsVideoMultipleAudioAndInvalidBoxSizes() throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -105,7 +162,12 @@ final class AudioImportTests: XCTestCase {
       return withUnsafeBytes(of: &size) { Data($0) } + Data(type.utf8) + content
     }
     func track(_ type: String) -> Data {
-      box("trak", box("mdia", box("hdlr", Data(repeating: 0, count: 8) + Data(type.utf8))))
+      var id = UInt32(type == "soun" ? 1 : 2).bigEndian
+      let header = Data(repeating: 0, count: 12) + withUnsafeBytes(of: &id) { Data($0) }
+      return box(
+        "trak",
+        box("tkhd", header)
+          + box("mdia", box("hdlr", Data(repeating: 0, count: 8) + Data(type.utf8))))
     }
     func inspect(_ data: Data) throws {
       let url = root.appendingPathComponent("boxes")

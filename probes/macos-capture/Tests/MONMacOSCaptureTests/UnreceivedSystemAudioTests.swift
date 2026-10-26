@@ -114,6 +114,65 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(saved.captureEnd?.endUs, 1_100_000)
   }
 
+  func testOrdinaryUnreceivedMicrophoneManifestRequiresOwnedRawAndBothAcquisitionClosures()
+    async throws
+  {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let owner = UUID().uuidString.lowercased()
+    let raw = try RawRecordingSegments(output: root, owner: owner, lane: "microphone")
+    try raw.finish()
+    func reading(_ value: Int64) -> CaptureClockReading {
+      CaptureClockReading(
+        hostBeforeNs: value, continuousNs: value + 10, utcMs: 1_700_000_000_000,
+        hostAfterNs: value + 20)
+    }
+    let box = ReadingBox(reading(1_000_000_000))
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      box.read()
+    }
+    var mic = TrackStats(callbackCount: 1, frames: 8000, sampleRate: 8000, channels: 2)
+    mic.recordSavedClock(.timestamp(1_000_000_010), frames: 8000, sourceFrame: 0)
+    var pc = TrackStats()
+    pc.rawSegments = raw.snapshot()
+    pc.microphoneRecovery = .init(state: "stopped", sourceEpoch: 1, interruptions: 0, reason: nil)
+    box.set(reading(2_100_000_000))
+    let micClosure = try clock.close(.system)
+    let pcClosure = try clock.close(.microphone)
+    let original = Manifest(
+      schemaVersion: 4, scenario: "quiet-ordinary", captureMode: "system", backend: "coreaudio",
+      targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic", requestedDurationSeconds: nil,
+      osVersion: "synthetic", architecture: "arm64", state: "saved", microphone: pc, system: mic,
+      errors: [], recordingOwnerId: owner)
+    for problem in ["raw", "owner", "capture", "callback", "format", "write", "state", "closure"] {
+      var invalid = original
+      switch problem {
+      case "raw": invalid.microphone.rawSegments = nil
+      case "owner": invalid.recordingOwnerId = UUID().uuidString.lowercased()
+      case "capture":
+        invalid.microphone.retainCaptureFailure(ProbeError.permission("synthetic denial"))
+      case "callback": invalid.microphone.callbackCount = 1
+      case "format": invalid.microphone.sampleRate = 8000
+      case "write": invalid.microphone.appendFailures = 1
+      case "state":
+        invalid.microphone.microphoneRecovery = .init(
+          state: "disconnected", sourceEpoch: 1, interruptions: 1, reason: "lost")
+      default: break
+      }
+      XCTAssertThrowsError(
+        try invalid.finalizeStoppedClock(
+          clock, microphoneClosure: problem == "closure" ? nil : pcClosure,
+          systemClosure: micClosure), problem)
+    }
+    var saved = original
+    try saved.finalizeStoppedClock(clock, microphoneClosure: pcClosure, systemClosure: micClosure)
+    XCTAssertEqual(saved.schemaVersion, 4)
+    XCTAssertEqual(saved.microphoneAudioUnreceived, true)
+    XCTAssertEqual(saved.microphone.clockSegments?.count, 0)
+    XCTAssertEqual(saved.system.clockSegments?.last?.timelineEndUs, 1_000_000)
+    XCTAssertEqual(saved.captureEnd?.endUs, 1_100_000)
+  }
+
   func testTestClockUsesSavedMicrophoneOriginAndRejectsEmptyPCContradictions() throws {
     let reading = CaptureClockReading(
       hostBeforeNs: 10_000_000_000, continuousNs: 10_000_000_010,
@@ -149,6 +208,13 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
     XCTAssertNil(received.systemAudioUnreceived)
     XCTAssertEqual(received.system.clockSegments?.first?.timelineStartUs, 100_000)
     XCTAssertEqual(received.microphone.clockSegments?.first?.timelineStartUs, 0)
+    var pcOnly = original
+    pcOnly.system = original.microphone
+    pcOnly.microphone = TrackStats()
+    try pcOnly.finalizeTestClock(clock, window: window)
+    XCTAssertEqual(pcOnly.microphoneAudioUnreceived, true)
+    XCTAssertEqual(pcOnly.microphone.clockSegments?.count, 0)
+    XCTAssertEqual(pcOnly.system.clockSegments?.first?.timelineStartUs, 0)
     for kind in [
       "no-test", "wrong-window", "wrong-owner", "format", "write", "capture", "callback", "no-mic",
     ] {

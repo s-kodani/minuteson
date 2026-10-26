@@ -12,6 +12,20 @@ final class MicrophoneRecoveryTests: XCTestCase {
   private let other = CaptureInputDevice(
     uid: "other-default", name: "同じ名前", isDefault: true, objectID: 1)
 
+  func testUnboundInitialUnavailableInputRetainsHistoryAndValidRecoveredCounters() throws {
+    var recovery = try MicrophoneRecovery(uid: nil)
+    XCTAssertThrowsError(try recovery.device(from: []))
+    recovery.interrupt("metadata_unavailable", unavailable: true)
+    XCTAssertTrue(InputStatusReport.validStatus(recovery.status, input: "microphone"))
+    try recovery.retarget(first.uid)
+    let token = try recovery.begin(first)
+    try recovery.activate(token)
+    XCTAssertTrue(InputStatusReport.validStatus(recovery.status, input: "microphone"))
+    XCTAssertTrue(recovery.history.matches(recovery.status))
+    XCTAssertEqual(recovery.status.interruptions, 1)
+    XCTAssertGreaterThan(recovery.status.sourceEpoch, recovery.status.interruptions)
+  }
+
   func testRecoverySelectsOnlyFrozenUIDAndAcceptsItsNewObjectID() throws {
     var recovery = try MicrophoneRecovery(uid: first.uid)
     XCTAssertEqual(try recovery.device(from: [other, first]), first)

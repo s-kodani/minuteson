@@ -274,6 +274,48 @@ fn windows_four_hour_raw_prefix_sha_clock_and_bounded_groups() {
     );
 }
 #[test]
+fn windows_chapter_m4a_fixtures_decode_without_external_fixture_generation() {
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/audio-import");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let helper = crate::local_engine::Fingerprint::capture(&helper(), &|| false).unwrap();
+    for codec in ["aac", "alac"] {
+        let original = fixtures
+            .join(format!("chapters-{codec}.m4a"))
+            .canonicalize()
+            .unwrap();
+        let before = fs::read(&original).unwrap();
+        let selected = crate::audio_import::inspect(&original, &helper, &root, &|| false).unwrap();
+        assert_eq!(selected.info.codec, codec);
+        assert_eq!(selected.info.sample_rate, 48000);
+        assert_eq!(selected.info.channels, 1);
+        assert!((48000..=49152).contains(&selected.info.frames));
+        let storage = Storage::open(root.join(codec)).unwrap();
+        let imported = crate::audio_import::import(
+            &storage,
+            selected,
+            &helper,
+            codec,
+            &Uuid::new_v4().to_string(),
+            &|| false,
+            &|_, _| {},
+        )
+        .unwrap();
+        assert_eq!(imported.state, "ready");
+        assert_eq!(
+            storage
+                .recorded_audio_plan(&imported.meeting_id)
+                .unwrap()
+                .tracks
+                .len(),
+            1
+        );
+        assert_eq!(fs::read(original).unwrap(), before);
+    }
+}
+
+#[test]
 #[ignore = "requires independent fixture files in MON_WINDOWS_IMPORT_FIXTURES"]
 fn windows_real_import_four_formats_aac_alac_and_invalid_containers() {
     let fixtures = PathBuf::from(std::env::var_os("MON_WINDOWS_IMPORT_FIXTURES").unwrap())

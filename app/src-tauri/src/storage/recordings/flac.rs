@@ -212,8 +212,7 @@ impl Publication {
             && !(manifest.system_audio_unreceived
                 && audio_prefixes.len() == 1
                 && audio_prefixes[0].lane() == crate::recording_segments::Lane::Microphone)
-            && !(cfg!(windows)
-                && manifest.microphone_audio_unreceived
+            && !(manifest.microphone_audio_unreceived
                 && audio_prefixes.len() == 1
                 && audio_prefixes[0].lane() == crate::recording_segments::Lane::System)
         {

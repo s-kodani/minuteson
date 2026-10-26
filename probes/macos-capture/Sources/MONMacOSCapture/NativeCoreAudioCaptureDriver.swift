@@ -10,7 +10,10 @@ enum CoreAudioTapScope: Equatable, Sendable {
   case system
   case application(CaptureApplicationIdentity)
 
-  func description(objects: [(pid: pid_t, objectID: AudioObjectID)], ownPID: pid_t)
+  func description(
+    objects: [(pid: pid_t, objectID: AudioObjectID)], ownPID: pid_t,
+    family: CaptureProcessFamily.Members? = nil
+  )
     throws -> CATapDescription
   {
     guard objects.count <= TapAudioProcesses.maximumObjects,
@@ -27,9 +30,15 @@ enum CoreAudioTapScope: Equatable, Sendable {
       guard identity.valid, identity.pid != ownPID else {
         throw ProbeError.capture("selected tap application identity is invalid")
       }
-      let selected = objects.filter { $0.pid == identity.pid }.map(\.objectID)
-      // One application may have several audio objects; all must retain the
-      // exact confirmed PID. No name/bundle-only selection or global fallback.
+      if let family, family[identity.pid] != identity.launchTimeUs {
+        throw ProbeError.capture("tap application family has another root")
+      }
+      let selected = objects.filter { object in
+        if let family { return family[object.pid] != nil }
+        return object.pid == identity.pid
+      }.map(\.objectID)
+      // No name/bundle-only selection or global fallback. Production supplies
+      // the verified root and descendants, including child-only audio objects.
       guard !selected.isEmpty else {
         throw ProbeError.capture("selected application has no audio process object; no fallback")
       }
@@ -80,14 +89,17 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
   private var detached = false
   private let requireIdentity: @Sendable (CaptureApplicationIdentity) throws -> Void
   private let mayContinue: @Sendable () -> Bool
+  private let processFamily: CaptureProcessFamily?
 
   init(
     scope: CoreAudioTapScope, hal: any CoreAudioTapHAL = NativeCoreAudioTapHAL(),
+    processFamily: CaptureProcessFamily? = nil,
     mayContinue: @escaping @Sendable () -> Bool = { true },
     requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void =
       CaptureApplications.current
   ) {
     self.scope = scope
+    self.processFamily = processFamily
     self.hal = hal
     self.mayContinue = mayContinue
     self.requireIdentity = requireIdentity
@@ -104,7 +116,12 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
     }
     if case .application(let identity) = scope { try requireIdentity(identity) }
     let objects = try hal.processes()
-    let description = try scope.description(objects: objects, ownPID: getpid())
+    let family = try processFamily?.snapshot()
+    let description = try scope.description(objects: objects, ownPID: getpid(), family: family)
+    let selectedProcesses = Dictionary(
+      uniqueKeysWithValues: objects.filter {
+        description.processes.contains($0.objectID)
+      }.map { ($0.objectID, $0.pid) })
     tap = try hal.createTap(description)
     let uid = try hal.tapUID(tap)
     aggregate = try hal.createAggregate(tapUID: uid)
@@ -129,7 +146,7 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
     }
     if case .application(let identity) = scope {
       try requireIdentity(identity)
-      try requireObjects(description.processes, pid: identity.pid)
+      try requireObjects(description.processes, pid: identity.pid, family: family)
     }
     guard mayContinue() else {
       throw ProbeError.capture("tap acquisition cancelled before native IO start")
@@ -150,7 +167,19 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
       do {
         if case .application(let identity) = self.scope {
           try self.requireIdentity(identity)
-          try self.requireObjects(selected, pid: identity.pid)
+          let currentFamily = try self.processFamily?.snapshot()
+          let currentObjects = try self.hal.processes()
+          let current = try self.scope.description(
+            objects: currentObjects, ownPID: getpid(), family: currentFamily)
+          let currentProcesses = Dictionary(
+            uniqueKeysWithValues: currentObjects.filter {
+              current.processes.contains($0.objectID)
+            }.map { ($0.objectID, $0.pid) })
+          guard Set(current.processes) == Set(selected), currentProcesses == selectedProcesses,
+            family == nil
+              || selectedProcesses.values.allSatisfy({ currentFamily?[$0] == family?[$0] })
+          else { throw ProbeError.capture("selected application audio processes changed") }
+          try self.requireObjects(selected, pid: identity.pid, family: currentFamily)
         }
         let alive = try self.hal.alive(aggregateID)
         let current = try self.hal.format(tapID)
@@ -210,11 +239,16 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
       && a.mChannelsPerFrame == b.mChannelsPerFrame && a.mBitsPerChannel == b.mBitsPerChannel
   }
 
-  private func requireObjects(_ selected: [AudioObjectID], pid: pid_t) throws {
+  private func requireObjects(
+    _ selected: [AudioObjectID], pid: pid_t, family: CaptureProcessFamily.Members?
+  ) throws {
     guard !selected.isEmpty else { throw ProbeError.capture("selected tap objects are empty") }
+    if let family { try processFamily?.verify(family) }
     for object in selected {
       let current = try hal.processPID(object)
-      guard current == pid else { throw ProbeError.capture("tap process object identity changed") }
+      guard family.map({ $0[current] != nil }) ?? (current == pid) else {
+        throw ProbeError.capture("tap process object identity changed")
+      }
     }
   }
 

@@ -7,6 +7,7 @@ on:
       - 'app/**'
       - 'probes/windows-capture/**'
       - 'probes/macos-capture/**'
+      - 'tests/fixtures/audio-import/**'
       - 'probes/inference-worker/**'
       - 'probes/speaker-embedding/**'
       - 'tools/mon_third_party_notices.py'
@@ -26,6 +27,7 @@ on:
       - 'app/**'
       - 'probes/windows-capture/**'
       - 'probes/macos-capture/**'
+      - 'tests/fixtures/audio-import/**'
       - 'probes/inference-worker/**'
       - 'probes/speaker-embedding/**'
       - 'tools/mon_third_party_notices.py'
@@ -140,11 +142,31 @@ jobs:
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
+      - name: macOS Swift compiler and capture regression tests
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer an installed toolchain satisfying the package tools version.
+          # macos-15 images may default to an older Xcode despite carrying 26.x.
+          for developer in "$(xcode-select -p)" /Applications/Xcode*.app/Contents/Developer; do
+            if DEVELOPER_DIR="$developer" /usr/bin/swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else 1)'; then
+              export DEVELOPER_DIR="$developer"
+              echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          swift --version
+          swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)", sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else "Swift 6.2 or later is required")'
+          swift build --package-path probes/macos-capture --configuration release
+          swift test --package-path probes/macos-capture
       - name: macOS common and native regression tests
         if: runner.os == 'macOS'
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
+        run: |
+          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
+          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib swift_generated_pc_only_capture -- --ignored
       - name: Upload Windows QA installer artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4

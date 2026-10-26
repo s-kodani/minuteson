@@ -19,6 +19,7 @@ private final class StartupConditions: @unchecked Sendable {
   func requestedPermission() { lock.withLock { requested += 1 } }
   var requests: Int { lock.withLock { requested } }
   func disconnect() { lock.withLock { connected = false } }
+  func connect() { lock.withLock { connected = true } }
   var deviceConnected: Bool { lock.withLock { connected } }
 }
 
@@ -490,6 +491,205 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     await expectFailure(recorder, contains: "not running after initialization")
     assertClosed(engine, recorder)
     XCTAssertEqual(engine.startCount, 1)
+  }
+
+  func testMissingInitialDeviceCanRecoverWithHistoryAndWithoutPermissionPrompt() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let conditions = StartupConditions()
+    conditions.disconnect()
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let recorder = recorder(
+      dir, engine, conditions, clock: try StartupClock().domain(), control: control,
+      devices: {
+        guard conditions.deviceConnected else {
+          throw ProbeError.capture("synthetic device metadata missing")
+        }
+        return Self.devices()
+      })
+    defer { recorder.stop() }
+    await expectFailure(recorder, contains: "synthetic device metadata missing")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.reason, "metadata_unavailable")
+    conditions.connect()
+    recorder.maintain()
+    control.settle(recorder)
+    try engine.emit(host: 1_000_000_000)
+    let stats = recorder.snapshot()
+    XCTAssertEqual(stats.frames, 480)
+    let status = try XCTUnwrap(stats.microphoneRecovery)
+    XCTAssertTrue(InputStatusReport.validStatus(status, input: "microphone"))
+    XCTAssertTrue(stats.inputEventHistory?.matches(status) == true)
+    XCTAssertEqual(conditions.requests, 0)
+    XCTAssertEqual(engine.selectedBinding?.uid, "frozen-mic")
+  }
+
+  func testFailedNormalInitializationRetriesSameUIDWithoutAnotherPermissionRequest() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = SilentMicrophoneEngine()
+    first.onStart = { _, _ in throw ProbeError.capture("synthetic unavailable input") }
+    let second = SilentMicrophoneEngine()
+    let factory = StartupFactory([first, second])
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let conditions = StartupConditions()
+    let recorder = recorder(
+      dir, first, conditions, clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    await expectFailure(recorder, contains: "synthetic unavailable input")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
+    XCTAssertFalse(first.hasTap)
+    recorder.maintain()
+    control.settle(recorder)
+    try second.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.deviceUID, "frozen-mic")
+    XCTAssertEqual(second.selectedBinding?.uid, "frozen-mic")
+    XCTAssertEqual(conditions.requests, 0)
+    XCTAssertEqual(factory.calls, 2)
+  }
+
+  func testLateInitialPermissionCanRecoverOnlyThroughNormalControlLoopWithoutReprompt() async throws
+  {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let conditions = StartupConditions()
+    conditions.setPermission(.notDetermined)
+    let gate = PreparationGate()
+    let engine = SilentMicrophoneEngine()
+    let factory = StartupFactory([engine])
+    let control = StartupControlClock()
+    let recorder = recorder(
+      dir, engine, conditions, clock: try StartupClock().domain(), factory: factory,
+      control: control,
+      request: {
+        conditions.requestedPermission()
+        await gate.wait()
+        conditions.setPermission(.authorized)
+        return true
+      })
+    defer { recorder.stop() }
+    let result = await InitialCapturePreparation.run(
+      timeout: .milliseconds(20),
+      operation: { try await recorder.start() }, cancel: recorder.cancelInitialPreparation)
+    XCTAssertEqual(result, .timedOut)
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 0)
+    gate.release()
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    while recorder.initialAcquisitionPending, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    XCTAssertFalse(recorder.initialAcquisitionPending)
+    XCTAssertEqual(factory.calls, 0)
+    recorder.maintain()
+    control.settle(recorder)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(conditions.requests, 1)
+    XCTAssertEqual(factory.calls, 1)
+  }
+
+  func testTimedOutSynchronousNativeStartCannotMintClosureOrStopEngineInParallel() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    engine.onStart = { _, _ in
+      entered.signal()
+      release.wait()
+    }
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain())
+    let initial = Task { try await recorder.start() }
+    XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+    recorder.cancelInitialPreparation()
+    recorder.stop()
+    XCTAssertNil(recorder.captureClosure)
+    XCTAssertEqual(engine.stopCount, 0)
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable())
+    release.signal()
+    do {
+      try await initial.value
+      XCTFail("late start must not activate")
+    } catch {}
+    XCTAssertGreaterThan(engine.stopCount, 0)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    recorder.stop()
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable())
+  }
+
+  func testLatePermissionAfterInitialDeadlineCannotStartAnEngineOrReopenClosedProducer()
+    async throws
+  {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let conditions = StartupConditions()
+    conditions.setPermission(.notDetermined)
+    let gate = PreparationGate()
+    let engine = SilentMicrophoneEngine()
+    let factory = StartupFactory([engine])
+    let recorder = recorder(
+      dir, engine, conditions, clock: try StartupClock().domain(), factory: factory,
+      request: {
+        conditions.requestedPermission()
+        await gate.wait()
+        conditions.setPermission(.authorized)
+        return true
+      })
+    let result = await InitialCapturePreparation.run(
+      timeout: .milliseconds(20),
+      operation: { try await recorder.start() }, cancel: recorder.cancelInitialPreparation)
+    XCTAssertEqual(result, .timedOut)
+    recorder.stop()
+    gate.release()
+    try await Task.sleep(for: .milliseconds(30))
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 0)
+    XCTAssertEqual(conditions.requests, 1)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "stopped")
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+  }
+
+  func testDeniedMicrophoneClosesEmptyRawProducerWithoutCAFOrInventedPCM() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let owner = UUID().uuidString.lowercased()
+    let canonical = try XCTUnwrap(realpath(dir.path, nil))
+    defer { free(canonical) }
+    let raw = try RawRecordingSegments(
+      output: URL(fileURLWithPath: String(cString: canonical), isDirectory: true), owner: owner,
+      lane: "microphone")
+    let time = StartupClock()
+    let recorder = MicrophoneRecorder(
+      outputURL: dir.appendingPathComponent("microphone.caf"), clock: try time.domain(),
+      rawSegments: raw,
+      makeEngine: {
+        XCTFail("permission denied")
+        return SilentMicrophoneEngine()
+      },
+      devices: Self.devices, permission: { .denied },
+      requestPermission: {
+        XCTFail("denial must not prompt again")
+        return false
+      })
+    do {
+      try await recorder.start()
+      XCTFail("must report unavailable microphone")
+    } catch {}
+    recorder.stop()
+    let stats = recorder.snapshot()
+    XCTAssertEqual(stats.frames, 0)
+    XCTAssertEqual(stats.callbackCount, 0)
+    XCTAssertNil(stats.sampleRate)
+    XCTAssertNil(stats.captureFailure)
+    XCTAssertNotNil(recorder.captureClosure)
+    XCTAssertEqual(stats.microphoneRecovery?.state, "stopped")
+    XCTAssertTrue(raw.snapshot().producerClosed)
+    XCTAssertEqual(raw.snapshot().sealedFrames, 0)
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: dir.appendingPathComponent("microphone.caf").path))
   }
 
   func testUnderlyingInitializationFailureIsRetainedAndResourcesAreClosed() async throws {

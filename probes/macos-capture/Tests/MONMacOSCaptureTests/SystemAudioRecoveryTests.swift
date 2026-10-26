@@ -160,7 +160,9 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       FileManager.default.fileExists(atPath: output.appendingPathComponent("system.caf").path))
   }
 
-  func testUnreceivedTestNeverHidesCancellationStartFailureOrStopFailure() async throws {
+  func testUnreceivedTestAllowsFailedInitialInputButNeverHidesCancellationOrClosureFailure()
+    async throws
+  {
     for failure in ["cancel", "start", "stop", "detach", "ordinary"] {
       let output = try directory()
       defer { try? FileManager.default.removeItem(at: output) }
@@ -180,8 +182,8 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       window.finish(at: failure == "cancel" ? 2_000_000_000 : 6_000_000_000)
       do {
         try await recorder.stop()
-        XCTFail("unreceived PC must not hide \(failure)")
-      } catch {}
+        XCTAssertEqual(failure, "start", "unreceived PC must not hide \(failure)")
+      } catch { XCTAssertNotEqual(failure, "start") }
       XCTAssertFalse(
         FileManager.default.fileExists(atPath: output.appendingPathComponent("system.caf").path))
     }
@@ -1247,6 +1249,34 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(factory.calls, 2)
     XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "stopped")
     XCTAssertEqual(recorder.snapshot().frames, 480)
+  }
+
+  func testInitialDeadlineFencesLateNativeAcquisitionUntilItIsActuallyRetired() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let gate = SilentSystemSource(held: true)
+    let source = SilentSystemSource()
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"),
+      clock: try clock(), retries: true,
+      factory: { _, _ in
+        try await gate.start()
+        return source
+      })
+    let result = await InitialCapturePreparation.run(
+      timeout: .milliseconds(20),
+      operation: { try await recorder.start(targetPID: nil) },
+      cancel: recorder.cancelInitialPreparation)
+    XCTAssertEqual(result, .timedOut)
+    XCTAssertTrue(recorder.acquisitionPending)
+    gate.release()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(source.counts.0, 0)
+    XCTAssertEqual(source.counts.2, 1)
+    _ = try await recorder.stopRecording()
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: output.appendingPathComponent("system.caf").path))
   }
 
   func testLateShareableContentCannotEvenStartAStreamAfterTimeout() async throws {

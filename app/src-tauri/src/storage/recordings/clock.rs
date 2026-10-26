@@ -32,8 +32,7 @@ impl CaptureManifest {
             return Ok(false);
         }
         let track = &self.microphone;
-        if !cfg!(windows)
-            || self.schema_version != crate::current_formats::CAPTURE
+        if self.schema_version != crate::current_formats::CAPTURE
             || self.state != "saved"
             || !self.errors.is_empty()
             || self.recording_owner_id.as_deref() != Some(owner)
@@ -51,7 +50,6 @@ impl CaptureManifest {
         {
             return Err("未取得のマイク音声の形式・終了証拠が不正です".into());
         }
-        #[cfg(windows)]
         if !track
             .raw_segments
             .as_ref()

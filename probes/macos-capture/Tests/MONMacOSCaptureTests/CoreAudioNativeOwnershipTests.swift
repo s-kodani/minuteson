@@ -14,6 +14,12 @@ private final class SilentTapHAL: CoreAudioTapHAL, @unchecked Sendable {
   private var changedFormat = false
   private var startResult: OSStatus = noErr
   private var stopResult: OSStatus = noErr
+  private var catalog: [(pid: pid_t, objectID: AudioObjectID)]?
+  private var tapped: [AudioObjectID] = []
+  func setCatalog(_ rows: [(pid: pid_t, objectID: AudioObjectID)]) {
+    lock.withLock { catalog = rows }
+  }
+  var selectedObjects: [AudioObjectID] { lock.withLock { tapped } }
   var changePIDDuringIOCreation = false
   func fail(_ phase: String?) { lock.withLock { failedPhase = phase } }
   func setStartStatus(_ value: OSStatus) { lock.withLock { startResult = value } }
@@ -28,10 +34,15 @@ private final class SilentTapHAL: CoreAudioTapHAL, @unchecked Sendable {
       if failedPhase == name { throw ProbeError.capture("injected native \(name) failure") }
     }
   }
-  func processes() throws -> [(pid: pid_t, objectID: AudioObjectID)] { [(123, 21), (456, 22)] }
+  func processes() throws -> [(pid: pid_t, objectID: AudioObjectID)] {
+    lock.withLock { catalog ?? [(123, 21), (456, 22)] }
+  }
   func createTap(_ description: CATapDescription) throws -> AudioObjectID {
     try phase("tap")
-    _ = lock.withLock { resources.insert("tap") }
+    lock.withLock {
+      tapped = description.processes
+      resources.insert("tap")
+    }
     return 31
   }
   func tapUID(_ tap: AudioObjectID) throws -> String {
@@ -51,7 +62,17 @@ private final class SilentTapHAL: CoreAudioTapHAL, @unchecked Sendable {
     )!
     return format.streamDescription.pointee
   }
-  func processPID(_ object: AudioObjectID) throws -> pid_t { lock.withLock { selectedPID } }
+  func processPID(_ object: AudioObjectID) throws -> pid_t {
+    try lock.withLock {
+      if let catalog {
+        guard let row = catalog.first(where: { $0.objectID == object }) else {
+          throw ProbeError.capture("object exited")
+        }
+        return row.pid
+      }
+      return selectedPID
+    }
+  }
   func alive(_ device: AudioObjectID) throws -> UInt32 { 1 }
   func createIO(
     _ device: AudioObjectID, queue: DispatchQueue,
@@ -207,6 +228,38 @@ final class CoreAudioNativeOwnershipTests: XCTestCase, @unchecked Sendable {
       mayContinue: { !hal.trace.contains("io") })
     XCTAssertThrowsError(try driver.start(sample: { _ in }, failure: { _ in }))
     XCTAssertFalse(hal.trace.contains("start"))
+    try driver.stop()
+    try driver.detach()
+    XCTAssertTrue(hal.owned.isEmpty)
+  }
+
+  func testChildOnlyTapAndNewDescendantSignalSerializedRecoveryWithoutGlobalFallback() async throws
+  {
+    let catalog = FamilyCatalog()
+    catalog.set([
+      CaptureProcess(pid: 123, parentPID: 1, launchTimeUs: 100),
+      CaptureProcess(pid: 456, parentPID: 123, launchTimeUs: 101),
+    ])
+    let hal = SilentTapHAL()
+    hal.setCatalog([(456, 22), (999, 23)])
+    let driver = NativeCoreAudioCaptureDriver(
+      scope: .application(catalog.root), hal: hal, processFamily: catalog.family(),
+      requireIdentity: catalog.require)
+    let changed = expectation(description: "descendant audio set changed")
+    try driver.start(
+      sample: { _ in XCTFail("no actual audio") },
+      failure: { error in
+        XCTAssertTrue(String(describing: error).contains("audio processes changed"))
+        changed.fulfill()
+      })
+    XCTAssertEqual(hal.selectedObjects, [22])
+    catalog.set([
+      CaptureProcess(pid: 123, parentPID: 1, launchTimeUs: 100),
+      CaptureProcess(pid: 456, parentPID: 123, launchTimeUs: 101),
+      CaptureProcess(pid: 789, parentPID: 123, launchTimeUs: 102),
+    ])
+    hal.setCatalog([(456, 22), (789, 24), (999, 23)])
+    await fulfillment(of: [changed], timeout: 2)
     try driver.stop()
     try driver.detach()
     XCTAssertTrue(hal.owned.isEmpty)

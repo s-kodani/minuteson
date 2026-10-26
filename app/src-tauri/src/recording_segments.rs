@@ -70,7 +70,7 @@ impl Status {
         frames > 0 && self.agrees_with_closed(prefix, frames)
     }
     pub(crate) fn agrees_with_unreceived(&self, prefix: &Prefix) -> bool {
-        (prefix.lane() == Lane::System || cfg!(windows)) && self.agrees_with_closed(prefix, 0)
+        self.agrees_with_closed(prefix, 0)
     }
     fn agrees_with_closed(&self, prefix: &Prefix, frames: u64) -> bool {
         self.schema_version == 2
