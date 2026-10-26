@@ -263,7 +263,11 @@ pub(crate) fn admit_storage(
 pub(crate) fn show(app: &tauri::AppHandle) {
     for label in ["recorder", "recorder-info", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.hide();
+            if label == "recorder" {
+                let _ = crate::recorder_panel::hide(&window);
+            } else {
+                let _ = window.hide();
+            }
         }
     }
     if let Some(main) = app.get_webview_window("main") {

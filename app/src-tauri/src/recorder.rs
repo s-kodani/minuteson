@@ -1372,7 +1372,7 @@ fn notify_session(app: &AppHandle) {
         // Close the floating panel before publishing a stop/saving result to
         // the rest of the UI. A delayed start notification reads this latest
         // phase too, so it cannot reopen the panel after stop.
-        let _ = crate::recorder_panel::synchronize(&handle, None);
+        let _ = crate::recorder_panel::synchronize(&handle);
         crate::recording_confirmation_window::session_changed(&handle, &snapshot);
         let _ = handle.emit("session-changed", snapshot);
     });

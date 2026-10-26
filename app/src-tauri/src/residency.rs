@@ -281,23 +281,23 @@ pub(crate) fn hide_main_to_background(window: WebviewWindow) -> Result<(), Strin
         return Err(error);
     }
     window.hide().map_err(|e| e.to_string())?;
-    let _ = crate::recorder_panel::synchronize(window.app_handle(), Some(false));
+    let _ = crate::recorder_panel::synchronize(window.app_handle());
     Ok(())
 }
 pub(crate) fn restore(app: &tauri::AppHandle) -> Result<(), String> {
     let main = app
         .get_webview_window("main")
         .ok_or("メイン画面がありません")?;
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.show();
-    }
-    main.show()
-        .and_then(|_| main.unminimize())
-        .and_then(|_| main.set_focus())
-        .map_err(|e| e.to_string())?;
-    crate::recorder_panel::main_focus_changed(app, true);
-    Ok(())
+    crate::recorder_panel::with_main_restore(app, || {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app.show();
+        }
+        main.show()
+            .and_then(|_| main.unminimize())
+            .and_then(|_| main.set_focus())
+            .map_err(|e| e.to_string())
+    })
 }
 pub(crate) fn quit(app: &tauri::AppHandle) {
     if app.state::<crate::startup_attention::Startup>().blocked() {

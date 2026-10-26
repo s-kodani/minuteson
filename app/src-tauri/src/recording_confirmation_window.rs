@@ -169,7 +169,7 @@ pub fn request_recording_confirmation(
         popup.show().map_err(|e| e.to_string())?;
         popup.set_focus().map_err(|e| e.to_string())?;
         // A panel failure must not block the stop confirmation itself.
-        let _ = crate::recorder_panel::synchronize(app, None);
+        let _ = crate::recorder_panel::synchronize(app);
         Ok(())
     };
     if let Err(error) = present() {
@@ -257,10 +257,10 @@ pub fn hide_recorder(app: &AppHandle) -> Result<(), String> {
     // Visibility only: no recorder lock, state read, stop, save or decision.
     // Even failed help dismissal must not trap the panel on screen.
     crate::recorder_panel::dismiss(app);
-    app.get_webview_window("recorder")
-        .ok_or("録音パネルがありません")?
-        .hide()
-        .map_err(|e| e.to_string())?;
+    let panel = app
+        .get_webview_window("recorder")
+        .ok_or("録音パネルがありません")?;
+    crate::recorder_panel::hide(&panel)?;
     let _ = crate::recorder_info::hide(app, false);
     if let Some(main) = app.get_webview_window("main") {
         if !main.is_visible().map_err(|e| e.to_string())? {
