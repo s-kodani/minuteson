@@ -14,6 +14,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Preview {
+    pub scope_mode: &'static str,
+    pub target_directory: PathBuf,
     pub confirmation_id: String,
     pub operation_id: String,
     pub package_id: String,
@@ -130,12 +132,13 @@ impl Target {
         match self {
             Self::Fresh(s) => {
                 storage.require_data_writable()?;
-                let current = capture(
+                let current = super::capture_mode(
                     storage,
                     root,
                     &s.record.package_id,
                     &s.record.review_hash,
                     &|| check() || lease.cancelled(),
+                    s.directory_scope,
                 )?;
                 let db = crate::operation_observation::lock(&storage.connection)?;
                 super::super::database::stopped_for_model_consent(&db)?;
@@ -292,6 +295,12 @@ impl Prepared {
         let s = target.snapshot();
         let entries = target.entries();
         let mut p = Preview {
+            scope_mode: if s.directory_scope {
+                "directory"
+            } else {
+                "manifest"
+            },
+            target_directory: root.join(&s.record.package_id),
             confirmation_id: Uuid::new_v4().to_string(),
             operation_id: operation.into(),
             package_id: s.record.package_id.clone(),
@@ -375,7 +384,10 @@ impl Prepared {
             Ok(()) => preview.execute_allowed = true,
             Err(reason) => preview.resume_reason = Some(reason),
         };
-        if matches!(target, Target::Files(_)) && !preview.execute_allowed {
+        if !target.snapshot().directory_scope
+            && matches!(target, Target::Files(_))
+            && !preview.execute_allowed
+        {
             preview.reconfirmation_allowed =
                 renewal::review(storage, &operation, lease, check).is_ok();
         }
@@ -383,6 +395,30 @@ impl Prepared {
         Ok(Self {
             preview,
             root,
+            target,
+        })
+    }
+    pub(crate) fn fresh_directory(
+        storage: &Storage,
+        root: &Path,
+        package: &str,
+        review: &str,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        active(lease, check)?;
+        authorize_review(storage, None)?;
+        let snapshot = super::capture_directory(storage, root, package, review, &|| {
+            check() || lease.cancelled()
+        })?;
+        let operation = Uuid::new_v4().to_string();
+        let target = Target::Fresh(snapshot);
+        target.verify(storage, root, lease, check)?;
+        let mut preview = Self::static_preview(storage, root, &operation, &target)?;
+        preview.execute_allowed = true;
+        Ok(Self {
+            preview,
+            root: root.into(),
             target,
         })
     }
@@ -475,12 +511,13 @@ impl Prepared {
                 check,
             )?)
         } else if matches!(self.target, Target::Fresh(_)) && !storage.data_write_blocked() {
-            Target::Fresh(capture(
+            Target::Fresh(super::capture_mode(
                 storage,
                 &self.root,
                 &self.preview.package_id,
                 &self.preview.review_hash,
                 &|| check() || lease.cancelled(),
+                self.target.snapshot().directory_scope,
             )?)
         } else {
             load(storage, &self.root, &self.preview.operation_id)?
@@ -505,7 +542,7 @@ impl Prepared {
         active(lease, check)?;
         self.confirmation(confirmation)?;
         if !self.preview.reconfirmation_allowed {
-            return Err("このモデル削除段階では残りへの再同意を開始できません".into());
+            return Err("このモデル削除段階では残りへの再確認を開始できません".into());
         }
         let target = Target::Reconfirmation(renewal::review(
             storage,
@@ -564,7 +601,7 @@ impl Prepared {
                 "処理を停止しました。消したファイルは復元していません。残りを再検査してください"
                     .into(),
             );
-            if matches!(self.target, Target::Files(_)) {
+            if !self.target.snapshot().directory_scope && matches!(self.target, Target::Files(_)) {
                 self.preview.reconfirmation_allowed = true;
             }
         }
@@ -585,7 +622,7 @@ impl Prepared {
                 Sha256::digest(serde_json::to_vec(s).map_err(|e| e.to_string())?)
             );
             progress("fixing_model_delete_scope");
-            let saved = intent::prepare(
+            let saved = intent::prepare_mode(
                 storage,
                 &self.root,
                 &self.preview.operation_id,
@@ -595,6 +632,7 @@ impl Prepared {
                 include,
                 lease,
                 check,
+                s.directory_scope,
             )?;
             self.target = Target::Unstarted(saved);
             self.preview.pending = true;

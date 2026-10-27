@@ -228,6 +228,18 @@ pub(super) struct Proof {
     change_nanos: i64,
 }
 impl Proof {
+    // Folder scope binds the object, not the contents or mutable timestamps.
+    pub(super) fn directory_scope(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            size: 0,
+            links: 1,
+            modified_seconds: 0,
+            modified_nanos: 0,
+            change_seconds: 0,
+            change_nanos: 0,
+        }
+    }
     pub(super) fn matches_after_rename(&self, original: &Self) -> bool {
         self.identity == original.identity
             && self.size == original.size
@@ -342,6 +354,78 @@ impl Directory {
             return Err(std::io::Error::last_os_error().to_string());
         }
         self.file.sync_all().map_err(|e| e.to_string())?;
+        self.verify()
+    }
+    pub(super) fn remove_reserved_tree(
+        &self,
+        leaf: &str,
+        expected: &Identity,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if !leaf.starts_with(".mon-delete-") {
+            return Err("削除用予約名ではありません".into());
+        }
+        let child = self.child(leaf)?.ok_or("削除対象がありません")?;
+        child.verify_identity(expected)?;
+        self.remove_tree_child_native(&name(leaf)?, &child, check, 0)?;
+        self.sync()
+    }
+    fn remove_tree_child_native(
+        &self,
+        leaf: &CStr,
+        child: &Self,
+        check: &impl Fn() -> bool,
+        depth: usize,
+    ) -> Result<(), String> {
+        // Native names may not be UTF-8; recurse through the same pinned path.
+        // The public root name remains repository-generated ASCII.
+        if depth > 128 {
+            return Err("削除対象のフォルダーが深すぎます".into());
+        }
+        for entry in std::fs::read_dir(&child.path).map_err(|e| e.to_string())? {
+            if check() {
+                return Err("フォルダー削除を停止しました".into());
+            }
+            child.verify()?;
+            let leaf_name = entry.map_err(|e| e.to_string())?.file_name();
+            let raw = CString::new(leaf_name.as_bytes()).map_err(|e| e.to_string())?;
+            let metadata = std::fs::symlink_metadata(child.path.join(&leaf_name))
+                .map_err(|e| e.to_string())?;
+            if metadata.is_dir() {
+                let opened = file(unsafe {
+                    libc::openat(
+                        child.file.as_raw_fd(),
+                        raw.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    )
+                })?;
+                let sub = Self::from_file(
+                    opened,
+                    child.path.join(&leaf_name),
+                    Some(child.identity.device),
+                )?;
+                child.remove_tree_child_native(&raw, &sub, check, depth + 1)?;
+            } else if unsafe { libc::unlinkat(child.file.as_raw_fd(), raw.as_ptr(), 0) } != 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+        self.remove_empty_child(leaf, child, check)
+    }
+    fn remove_empty_child(
+        &self,
+        leaf: &CStr,
+        child: &Self,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if check() {
+            return Err("フォルダー削除を停止しました".into());
+        }
+        self.verify()?;
+        child.verify()?;
+        if unsafe { libc::unlinkat(self.file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
         self.verify()
     }
     pub(super) fn sync(&self) -> Result<(), String> {

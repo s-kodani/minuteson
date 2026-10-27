@@ -523,3 +523,105 @@ fn model_deletion_census_supports_exact_legacy_app_data_child_without_scanning_m
     .is_err());
     assert!(nested.is_dir());
 }
+
+#[test]
+fn directory_model_request_deletes_the_copy_without_reading_model_contents() {
+    let f = Fixture::new();
+    let controller = crate::analysis_worker::AnalysisController::default();
+    let lease = controller
+        .begin_model_deletion(false, false, &|| false)
+        .unwrap();
+    let _measurement = crate::operation_observation::Scope::enter("test", |_| {});
+    let mut p = operations::Prepared::fresh_directory(
+        &f.storage,
+        &f.root,
+        &f.package,
+        &f.review,
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(p.preview().scope_mode, "directory");
+    assert_eq!(p.preview().target_directory, f.root.join(&f.package));
+    std::fs::write(
+        f.root.join(&f.package).join("weights/model.bin"),
+        b"modified model",
+    )
+    .unwrap();
+    std::fs::write(f.root.join(&f.package).join("unknown.tmp"), b"unknown").unwrap();
+    let outside = f.root.join("keep.txt");
+    std::fs::write(&outside, b"keep").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, f.root.join(&f.package).join("link")).unwrap();
+    let receipt = p
+        .execute(
+            &f.storage,
+            &lease,
+            &p.preview().confirmation_id,
+            false,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert!(receipt.body_deleted && receipt.history_retained);
+    assert!(!f.root.join(&f.package).exists());
+    assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+    assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
+    assert_eq!(crate::operation_observation::measurements(), (0, 0));
+    let db = f.storage.connection.lock().unwrap();
+    assert!(
+        crate::storage::model_placements::load_history(&db, &f.package)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn directory_model_request_resumes_after_cold_reopen_without_rechecking_contents() {
+    let mut f = Fixture::new();
+    let controller = crate::analysis_worker::AnalysisController::default();
+    let lease = controller
+        .begin_model_deletion(false, false, &|| false)
+        .unwrap();
+    let mut p = operations::Prepared::fresh_directory(
+        &f.storage,
+        &f.root,
+        &f.package,
+        &f.review,
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    let stop = Cell::new(false);
+    let operation = p.preview().operation_id;
+    assert!(p
+        .execute(
+            &f.storage,
+            &lease,
+            &p.preview().confirmation_id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "model_delete_scope_fixed" {
+                stop.set(true);
+            }
+        )
+        .is_err());
+    drop(lease);
+    let root = f.storage.root().to_path_buf();
+    let placeholder = tempfile::tempdir().unwrap();
+    drop(std::mem::replace(
+        &mut f.storage,
+        Storage::open(placeholder.path().into()).unwrap(),
+    ));
+    f.storage = Storage::open_with_models(root, f.root.clone()).unwrap();
+    let lease = controller
+        .begin_model_deletion_maintenance(&f.storage, &operation, false, false, &|| false)
+        .unwrap();
+    let _measurement = crate::operation_observation::Scope::enter("test", |_| {});
+    assert!(
+        super::super::automatic::model(&f.storage, &f.root, &lease, &operation, &|| false).unwrap()
+    );
+    assert!(!f.root.join(&f.package).exists());
+    assert_eq!(crate::operation_observation::measurements(), (0, 0));
+    assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
+}

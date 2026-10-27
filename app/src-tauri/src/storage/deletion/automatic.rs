@@ -39,7 +39,12 @@ pub(crate) fn meeting(
     let mut prepared =
         super::operations::Prepared::pending(storage, operation, &|| lease.cancelled() || check())?;
     let p = prepared.preview();
-    match action(p.pending, &p.phase, p.execute_allowed, p.keep_allowed) {
+    let next = if p.scope_mode == "directory" && p.pending && p.execute_allowed {
+        Action::Finish
+    } else {
+        action(p.pending, &p.phase, p.execute_allowed, p.keep_allowed)
+    };
+    match next {
         Action::Keep => {
             prepared.keep(storage, lease, &p.confirmation_id, check)?;
         }
@@ -82,7 +87,12 @@ pub(crate) fn model(
     let mut prepared =
         super::models::operations::Prepared::pending(storage, root, operation, lease, check)?;
     let p = prepared.preview();
-    match action(p.pending, &p.phase, p.execute_allowed, p.keep_allowed) {
+    let next = if p.scope_mode == "directory" && p.pending && p.execute_allowed {
+        Action::Finish
+    } else {
+        action(p.pending, &p.phase, p.execute_allowed, p.keep_allowed)
+    };
+    match next {
         Action::Keep => {
             prepared.keep(storage, lease, &p.confirmation_id, check)?;
         }

@@ -657,3 +657,140 @@ fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() 
     assert!(f.audio.exists());
     f.unaffected();
 }
+
+#[test]
+fn directory_request_removes_changed_unknown_files_without_content_reads_or_vacuum() {
+    let f = Fixture::new();
+    let marker = format!("DIRECTORY-DELETE-PRIVATE-{}", Uuid::new_v4());
+    f.storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE meetings SET title=?2 WHERE id=?1",
+            params![f.meeting, marker],
+        )
+        .unwrap();
+    let _measurement = crate::operation_observation::Scope::enter("test", |_| {});
+    let mut p = Prepared::fresh_directory(&f.storage, &f.meeting, &|| false).unwrap();
+    assert_eq!(p.preview().scope_mode, "directory");
+    assert_eq!(p.preview().path_count, 1);
+    assert_eq!(
+        p.preview().target_directory,
+        f.audio.parent().unwrap().parent().unwrap()
+    );
+    std::fs::write(&f.audio, b"changed since confirmation").unwrap();
+    std::fs::write(
+        f.audio.parent().unwrap().join("unknown.tmp"),
+        b"unregistered",
+    )
+    .unwrap();
+    let outside = f.storage.root().join("outside.txt");
+    std::fs::write(&outside, b"KEEP OUTSIDE").unwrap();
+    std::os::unix::fs::symlink(&outside, f.audio.parent().unwrap().join("external-link")).unwrap();
+    let before_pages: i64 = f
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row("PRAGMA page_count", [], |r| r.get(0))
+        .unwrap();
+    let receipt = p
+        .execute(
+            &f.storage,
+            &lease(),
+            &p.preview().confirmation_id,
+            false,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert!(receipt.deleted);
+    assert!(!f.audio.parent().unwrap().parent().unwrap().exists());
+    assert_eq!(std::fs::read(&outside).unwrap(), b"KEEP OUTSIDE");
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
+    f.unaffected();
+    assert_eq!(crate::operation_observation::measurements(), (0, 0));
+    let db = f.storage.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA secure_delete", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        db.query_row("PRAGMA page_count", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+            >= before_pages
+    );
+    drop(db);
+    for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
+        let bytes = std::fs::read(f.storage.root().join(name)).unwrap();
+        assert!(!bytes
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes()));
+    }
+}
+
+#[test]
+fn directory_request_recovers_at_folder_boundaries_after_cold_reopen() {
+    for phase in ["delete_scope_fixed", "deleting_files", "deleting_database"] {
+        let f = Fixture::new();
+        let mut p = Prepared::fresh_directory(&f.storage, &f.meeting, &|| false).unwrap();
+        let stop = Cell::new(false);
+        let operation = p.preview().operation_id;
+        assert!(p
+            .execute(
+                &f.storage,
+                &lease(),
+                &p.preview().confirmation_id,
+                false,
+                &|| stop.get(),
+                &|at| if at == phase {
+                    stop.set(true)
+                }
+            )
+            .is_err());
+        let root = f.storage.root().to_path_buf();
+        let meeting = f.meeting.clone();
+        drop(f.storage);
+        let storage = Storage::open(root).unwrap();
+        let mut p = Prepared::pending(&storage, &operation, &|| false).unwrap();
+        assert_eq!(p.preview().scope_mode, "directory");
+        assert!(
+            p.execute(
+                &storage,
+                &lease(),
+                &p.preview().confirmation_id,
+                false,
+                &|| false,
+                &|_| {}
+            )
+            .unwrap()
+            .deleted
+        );
+        assert!(storage.get_meeting(&meeting).unwrap().is_none());
+    }
+}
+
+#[test]
+fn directory_request_automatically_finishes_an_accepted_unstarted_request() {
+    let f = Fixture::new();
+    let mut p = Prepared::fresh_directory(&f.storage, &f.meeting, &|| false).unwrap();
+    let stop = Cell::new(false);
+    let operation = p.preview().operation_id;
+    assert!(p
+        .execute(
+            &f.storage,
+            &lease(),
+            &p.preview().confirmation_id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "delete_scope_fixed" {
+                stop.set(true);
+            }
+        )
+        .is_err());
+    assert!(super::super::automatic::meeting(&f.storage, &lease(), &operation, &|| false).unwrap());
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
+    f.unaffected();
+}

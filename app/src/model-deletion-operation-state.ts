@@ -5,8 +5,8 @@ export interface ModelBodyDeletionListing { items: ModelBodyDeletionItem[]; writ
 
 export function modelDeletionStartupLabel(reason: ModelDeletionStartupReason): string {
   switch (reason) {
-    case "model_completed_scope_reappeared": return "完了済みモデル削除の対象が再出現しています。自動では削除しません。現在の対象を確認し、新しい同意で解決してください。";
-    case "model_completed_receipt_invalid": return "完了済みモデル削除の記録・同意履歴を検証できません。対象を保持し、通常書込みを停止しています。";
+    case "model_completed_scope_reappeared": return "完了済みモデル削除の対象が再出現しています。自動では削除しません。現在の対象を確認し、新しい削除要求で解決してください。";
+    case "model_completed_receipt_invalid": return "完了済みモデル削除の記録・削除要求の受付履歴を検証できません。対象を保持し、通常書込みを停止しています。";
     case "model_completed_scope_uninspectable": return "完了済みモデル削除の保存領域・対象を安全に検査できません。対象を保持し、通常書込みを停止しています。";
   }
 }
@@ -26,6 +26,7 @@ export function assertModelBodyDeletionListing(l: ModelBodyDeletionListing): voi
 
 
 export interface ModelDeletionPreview {
+  scopeMode?: "manifest" | "directory"; targetDirectory?: string;
   confirmationId: string; operationId: string; packageId: string; reviewHash: string;
   modelName: string; modelVersion: string; modelsRoot: string;
   phase: "review" | "not_started" | "files" | "reconfirmation" | "awaiting_ack" | "retained" | "completed";
@@ -53,6 +54,8 @@ const reservation = (root: string, operation: string) => {
   return !!match && (match[1] === undefined || Number(match[1]) <= 32) && Number(match[2]) < 256;
 };
 export function assertModelDeletionPreview(p: ModelDeletionPreview): void {
+  if (p?.scopeMode !== undefined && !["manifest", "directory"].includes(p.scopeMode)) fail();
+  if (p?.scopeMode === "directory" && (typeof p.targetDirectory !== "string" || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(p.targetDirectory) || p.targetDirectory.includes("\0"))) fail();
   if (!p || ![p.confirmationId, p.operationId, p.packageId].every(id) || !/^[0-9a-f]{64}$/u.test(p.reviewHash)
     || !text(p.modelName) || !text(p.modelVersion) || !nativeAbsolutePath(p.modelsRoot)
     || !["review", "not_started", "files", "reconfirmation", "awaiting_ack", "retained", "completed"].includes(p.phase)
@@ -91,4 +94,4 @@ export function assertModelDeletionPage(page: ModelDeletionPage, p: ModelDeletio
   }
   if (new Set(page.entries.map(e => e.relativePath)).size !== page.entries.length) fail();
 }
-export const modelDeletionPhaseLabel = (phase: ModelDeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再同意待ち", awaiting_ack: "完了応答を未確認", retained: "保持して中止", completed: "削除完了" })[phase];
+export const modelDeletionPhaseLabel = (phase: ModelDeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再確認待ち", awaiting_ack: "完了応答を未確認", retained: "保持して中止", completed: "削除完了" })[phase];

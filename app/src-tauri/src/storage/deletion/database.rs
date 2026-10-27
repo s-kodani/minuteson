@@ -531,7 +531,7 @@ impl Scope {
     ) -> Result<Self, String> {
         source.verify_saved(db, check)?;
         if source.meeting() != meeting {
-            return Err("音声再同意の会議が一致しません".into());
+            return Err("音声再確認の会議が一致しません".into());
         }
         Self::capture_inner(db, meeting, omitted_operation, check, false)
     }
@@ -626,7 +626,7 @@ impl Scope {
             || self.tables.len() != TARGETS.len()
         {
             return Err(
-                "旧版の削除同意は現在のDB行削除に使用できません。現在の対象を再確認してください"
+                "旧版の削除要求は現在のDB行削除に使用できません。現在の対象を再確認してください"
                     .into(),
             );
         }

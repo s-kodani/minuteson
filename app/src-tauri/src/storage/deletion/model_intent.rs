@@ -1,7 +1,7 @@
 //! Durable model consent, not a deletion executor. Proof slots below contain
 //! canonical snapshot bytes; their logical names MUST NEVER be used as paths
 //! for filesystem deletion. A saved ID/hash is not shared admission authority.
-use super::{capture_unlocked, Snapshot};
+use super::Snapshot;
 use crate::{analysis_worker::data_maintenance::DataMaintenanceLease, storage::Storage};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -130,7 +130,7 @@ impl Prepared {
         self.snapshot.validate()?;
         super::super::database::verify_history_schema_hash(db, &h.schema_hash)?;
         let bytes = serde_json::to_vec(&self.snapshot).map_err(|e| e.to_string())?;
-        if h.version != 1
+        if h.version != if self.snapshot.directory_scope { 2 } else { 1 }
             || h.subtype != "modelDeletion"
             || !uuid_valid(&h.operation_id)
             || !uuid_valid(&h.package_id)
@@ -156,7 +156,7 @@ impl Prepared {
                     .iter()
                     .any(|o| !o.entry.registered))
         {
-            return Err("モデル削除の保存された同意・対象・構造が不正です".into());
+            return Err("モデル削除の保存された削除要求・対象・構造が不正です".into());
         }
         Ok(())
     }
@@ -172,7 +172,7 @@ impl Prepared {
     ) -> Result<(), String> {
         if self.header.schema_hash != super::super::database::trusted_schema(db)? {
             return Err(
-                "旧版のモデル削除同意は現在の削除開始に使用できません。対象を再確認してください"
+                "旧版のモデル削除要求は現在の削除開始に使用できません。対象を再確認してください"
                     .into(),
             );
         }
@@ -199,12 +199,13 @@ impl Prepared {
     ) -> Result<(), String> {
         active(lease, check)?;
         self.verify_anchor(storage)?;
-        let current = capture_unlocked(
+        let current = super::capture_mode(
             storage,
             Path::new(&self.header.models_root),
             &self.header.package_id,
             &self.header.review_hash,
             &|| check() || lease.cancelled(),
+            self.snapshot.directory_scope,
         )?;
         let db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_current_schema(&db)?;
@@ -254,7 +255,7 @@ fn read_with_progress(
     let (meeting, kind, state, batch, json, hash, consent, progress, error, created, updated) = row;
     let header: Header = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let kept = state == "recovered";
-    let consent = consent.ok_or("モデル削除の同意時刻がありません")?;
+    let consent = consent.ok_or("モデル削除の受付時刻がありません")?;
     if meeting.is_some()
         || batch.is_some()
         || kind != "delete_assets"
@@ -387,13 +388,44 @@ pub(crate) fn prepare(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
+    prepare_mode(
+        storage,
+        root,
+        operation,
+        package,
+        review,
+        census,
+        include_unregistered,
+        lease,
+        check,
+        false,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_mode(
+    storage: &Storage,
+    root: &Path,
+    operation: &str,
+    package: &str,
+    review: &str,
+    census: &str,
+    include_unregistered: bool,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+    directory_scope: bool,
+) -> Result<Prepared, String> {
     active(lease, check)?;
     if !uuid_valid(operation) || !hash_valid(census) {
         return Err("モデル削除の操作ID・確認ハッシュが不正です".into());
     }
-    let snapshot = capture_unlocked(storage, root, package, review, &|| {
-        check() || lease.cancelled()
-    })?;
+    let snapshot = super::capture_mode(
+        storage,
+        root,
+        package,
+        review,
+        &|| check() || lease.cancelled(),
+        directory_scope,
+    )?;
     let mut db = crate::operation_observation::lock(&storage.connection)?;
     if db
         .query_row(
@@ -437,7 +469,7 @@ pub(crate) fn prepare(
     snapshot.verify_metadata(storage, &tx, root, check)?;
     let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
     let header = Header {
-        version: 1,
+        version: if snapshot.directory_scope { 2 } else { 1 },
         subtype: "modelDeletion".into(),
         operation_id: operation.into(),
         package_id: package.into(),

@@ -199,7 +199,7 @@ impl Receipt {
         if storage.managed_anchor.identity()?
             != (self.manifest.root.clone(), self.manifest.database.clone())
         {
-            return Err("移動後の保存先では現在の一覧と新しい同意が必要です".into());
+            return Err("移動後の保存先では現在の一覧と新しい削除要求が必要です".into());
         }
         let census = self.review_census(storage, db, check)?;
         if census
@@ -353,7 +353,9 @@ fn run_locked(
         event("checkpointed");
         cancel(check)?;
         storage.managed_anchor.verify()?;
-        db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+        if !receipt.manifest.directory_scope() {
+            db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+        }
         event("vacuumed");
         cancel(check)?;
         storage.managed_anchor.verify()?;
@@ -379,7 +381,9 @@ fn run_locked(
     cancel(check)?;
     receipt.verify_live(storage, &db, check)?;
     storage.managed_anchor.verify()?;
-    database::compact_receipt_pages(&db)?;
+    if !receipt.manifest.directory_scope() {
+        database::compact_receipt_pages(&db)?;
+    }
     cancel(check)?;
     database::checkpoint(&db)?;
     event("ackCheckpointed");

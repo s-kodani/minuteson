@@ -42,7 +42,7 @@ impl Source {
         loop {
             super::super::cancel(check)?;
             if receipts.len() >= MAX_GENERATIONS || !seen.insert(next.clone()) {
-                return Err("音声再同意の世代上限・循環を検出しました。履歴を保持します".into());
+                return Err("音声再確認の世代上限・循環を検出しました。履歴を保持します".into());
             }
             // A route hint chooses the strict loader only. This terminal
             // baseline has no consent and cannot become a removal receipt.
@@ -58,13 +58,13 @@ impl Source {
                         .last()
                         .is_some_and(|r| r.source_saved().consent < baseline.published())
                 {
-                    return Err("音声再同意の復元元・会議・公開順序が一致しません".into());
+                    return Err("音声再確認の復元元・会議・公開順序が一致しません".into());
                 }
                 bytes = bytes
                     .checked_add(baseline.bytes())
-                    .ok_or("音声再同意の証拠容量が範囲外です")?;
+                    .ok_or("音声再確認の証拠容量が範囲外です")?;
                 if bytes > MAX_BYTES {
-                    return Err("音声再同意の証拠合計が容量上限を超えています".into());
+                    return Err("音声再確認の証拠合計が容量上限を超えています".into());
                 }
                 restored = Some(baseline);
                 break;
@@ -85,13 +85,13 @@ impl Source {
                     .last()
                     .is_some_and(|r| r.source_saved().consent < saved.consent)
             {
-                return Err("音声再同意の元記録・会議・同意順序が一致しません".into());
+                return Err("音声再確認の元記録・会議・削除要求順序が一致しません".into());
             }
             bytes = bytes
                 .checked_add(receipt.source_bytes())
-                .ok_or("音声再同意の証拠容量が範囲外です")?;
+                .ok_or("音声再確認の証拠容量が範囲外です")?;
             if bytes > MAX_BYTES {
-                return Err("音声再同意の証拠合計が容量上限を超えています".into());
+                return Err("音声再確認の証拠合計が容量上限を超えています".into());
             }
             expected = saved.header.origin.clone();
             receipts.push(receipt);
@@ -108,7 +108,7 @@ impl Source {
             let receipt = frame.validate(db, &paths, check)?;
             paths.extend(receipt.source_paths());
             if paths.len() > MAX_PATHS {
-                return Err("音声再同意の対象履歴が安全上限を超えています".into());
+                return Err("音声再確認の対象履歴が安全上限を超えています".into());
             }
             validated.push(receipt);
         }
@@ -120,7 +120,7 @@ impl Source {
                 Some(r) => r.source_seal(db)?,
                 None => restored
                     .as_ref()
-                    .ok_or("音声再同意の元記録がありません")?
+                    .ok_or("音声再確認の元記録がありません")?
                     .seal()
                     .to_owned(),
             },
@@ -148,14 +148,14 @@ impl Source {
             .header
             .origin
             .as_ref()
-            .ok_or("音声再同意の元記録がありません")?;
+            .ok_or("音声再確認の元記録がありません")?;
         let source = Self::load(db, &origin.operation_id, check)?;
         if source.origin != *origin
             || source.meeting() != saved.meeting()
             || source.recorded_at() > saved.consent
             || source.generations() >= MAX_GENERATIONS
         {
-            return Err("音声再同意の元記録・世代が一致しません".into());
+            return Err("音声再確認の元記録・世代が一致しません".into());
         }
         validate_historical(&saved.snapshot, &source.paths)?;
         Ok(source)
@@ -189,7 +189,7 @@ impl Source {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         if Self::load(db, &self.origin.operation_id, check)? != *self {
-            return Err("音声再同意の元記録が変更されています".into());
+            return Err("音声再確認の元記録が変更されています".into());
         }
         Ok(())
     }
@@ -201,7 +201,7 @@ impl Source {
     ) -> Result<(), String> {
         self.verify_saved(db, check)?;
         if storage.retired.load(Ordering::Acquire) || storage.maintenance.load(Ordering::Acquire) {
-            return Err("音声再同意の元履歴と現在の所有領域が一致しません".into());
+            return Err("音声再確認の元履歴と現在の所有領域が一致しません".into());
         }
         if let Some(receipt) = self.receipts.first() {
             let saved = receipt.source_saved();
@@ -211,7 +211,7 @@ impl Source {
                 &saved.snapshot.manifest.root,
                 &saved.snapshot.manifest.database,
             )? {
-                return Err("音声再同意の元履歴と現在の所有領域が一致しません".into());
+                return Err("音声再確認の元履歴と現在の所有領域が一致しません".into());
             }
         }
         if let Some(baseline) = &self.restored {
@@ -233,7 +233,7 @@ fn historical(snapshot: &Snapshot, paths: &BTreeSet<String>) -> BTreeSet<String>
 }
 fn validate_historical(snapshot: &Snapshot, paths: &BTreeSet<String>) -> Result<(), String> {
     if snapshot.historical_audio != historical(snapshot, paths) {
-        return Err("音声の履歴対象は元の型付き同意から導いた範囲に限定します".into());
+        return Err("音声の履歴対象は元の型付き削除要求から導いた範囲に限定します".into());
     }
     Ok(())
 }
@@ -298,14 +298,14 @@ fn validate_superseded_chain(
         if frames.len() + usize::from(kept.is_some()) >= MAX_GENERATIONS
             || !seen.insert(next.clone())
         {
-            return Err("音声再同意の世代上限・循環を検出しました。履歴を保持します".into());
+            return Err("音声再確認の世代上限・循環を検出しました。履歴を保持します".into());
         }
         if super::super::restored::hinted(db, &next)? {
             let child = frames
                 .last()
                 .map(|f| f.source_saved())
                 .or(kept)
-                .ok_or("復元履歴は削除同意ではありません")?;
+                .ok_or("復元履歴は削除要求ではありません")?;
             let baseline = super::super::restored::superseded_baseline(
                 db,
                 &next,
@@ -327,9 +327,9 @@ fn validate_superseded_chain(
             }
             bytes = bytes
                 .checked_add(baseline.bytes)
-                .ok_or("音声再同意の証拠容量が範囲外です")?;
+                .ok_or("音声再確認の証拠容量が範囲外です")?;
             if bytes > MAX_BYTES {
-                return Err("音声再同意の証拠合計が容量上限を超えています".into());
+                return Err("音声再確認の証拠合計が容量上限を超えています".into());
             }
             paths = baseline.paths;
             break;
@@ -350,13 +350,13 @@ fn validate_superseded_chain(
                 .last()
                 .is_some_and(|r| r.source_saved().consent < saved.consent)
         {
-            return Err("引き継ぐ音声の元記録・会議・同意順序が一致しません".into());
+            return Err("引き継ぐ音声の元記録・会議・削除要求順序が一致しません".into());
         }
         bytes = bytes
             .checked_add(frame.source_bytes())
-            .ok_or("音声再同意の証拠容量が範囲外です")?;
+            .ok_or("音声再確認の証拠容量が範囲外です")?;
         if bytes > MAX_BYTES {
-            return Err("音声再同意の証拠合計が容量上限を超えています".into());
+            return Err("音声再確認の証拠合計が容量上限を超えています".into());
         }
         expected = saved.header.origin.clone();
         frames.push(frame);
@@ -364,7 +364,7 @@ fn validate_superseded_chain(
         next = parent.operation_id.clone();
     }
     if paths.len() > MAX_PATHS {
-        return Err("音声再同意の対象履歴が安全上限を超えています".into());
+        return Err("音声再確認の対象履歴が安全上限を超えています".into());
     }
     for frame in frames.into_iter().rev() {
         super::super::cancel(check)?;
@@ -372,7 +372,7 @@ fn validate_superseded_chain(
         let receipt = frame.validate(db, &paths, check)?;
         paths.extend(receipt.source_paths());
         if paths.len() > MAX_PATHS {
-            return Err("音声再同意の対象履歴が安全上限を超えています".into());
+            return Err("音声再確認の対象履歴が安全上限を超えています".into());
         }
     }
     if let Some(saved) = kept {
@@ -410,7 +410,7 @@ pub(super) fn capture(
         || again.scope() != census.scope()
         || self::records(db, source.meeting(), check)? != snapshot.records
     {
-        return Err("音声再同意の検査中に対象・保持履歴が変更されました".into());
+        return Err("音声再確認の検査中に対象・保持履歴が変更されました".into());
     }
     Ok(snapshot)
 }
@@ -459,7 +459,7 @@ impl Review {
             .map_err(|_| "DBロックを取得できません")?;
         let source = Source::load(&db, operation, check)?;
         if source.generations() >= MAX_GENERATIONS {
-            return Err("音声再同意の世代が上限に達しています".into());
+            return Err("音声再確認の世代が上限に達しています".into());
         }
         if !storage.deletion_fence.resume_restart_required() {
             crate::storage::deletion::database::stopped(&db)?;
@@ -475,13 +475,13 @@ impl Review {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         if capture(storage, db, &self.source, "", check)? != self.snapshot {
-            return Err("音声再同意の確認後に対象・保持履歴が変更されています".into());
+            return Err("音声再確認の確認後に対象・保持履歴が変更されています".into());
         }
         Ok(())
     }
     pub(crate) fn preview(&self, inspection: &str) -> Result<Preview, String> {
         if !super::super::uuid(inspection) {
-            return Err("音声再同意の検査IDが不正です".into());
+            return Err("音声再確認の検査IDが不正です".into());
         }
         let entries = self.snapshot.entries()?;
         let targets: Vec<_> = entries.iter().filter(|e| audio(&e.disposition)).collect();
@@ -536,7 +536,7 @@ fn accept_inner(
     let cancelled = || check() || lease.cancelled();
     let check = &cancelled;
     if !super::super::uuid(operation) || operation == review.source.origin.operation_id {
-        return Err("音声再同意には新しい操作IDが必要です".into());
+        return Err("音声再確認には新しい操作IDが必要です".into());
     }
     let db = storage
         .connection
@@ -555,7 +555,7 @@ fn accept_inner(
             || saved.header.policy != policy
             || saved.header.origin.as_ref() != Some(&review.source.origin)
         {
-            return Err("同じ音声再同意IDへ別の確認を採用しません".into());
+            return Err("同じ音声再確認IDへ別の確認を採用しません".into());
         }
         saved.verify_locked(storage, &db, lease, check)?;
         storage.deletion_fence.arm(&db)?;

@@ -165,7 +165,7 @@ impl Receipt {
                     t.name != name || t.rows > MAX_ASSETS as u64 || !hash_valid(&t.sha256)
                 })
         {
-            return Err("復元音声の利用不可記録が不正です。削除同意として採用しません".into());
+            return Err("復元音声の利用不可記録が不正です。削除要求として採用しません".into());
         }
         header.root.validate(true)?;
         header.database.validate(false)?;

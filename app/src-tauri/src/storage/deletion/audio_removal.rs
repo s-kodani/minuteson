@@ -88,7 +88,7 @@ impl Progress {
                 .ok_or("欠落音声を移動対象へ採用しません")?;
             p.before.validate(false)?;
             if &p.before != original {
-                return Err("移動前の音声実体が同意と一致しません".into());
+                return Err("移動前の音声実体が削除要求と一致しません".into());
             }
             if let Some(staged) = &p.staged {
                 staged.validate(false)?;
@@ -206,7 +206,7 @@ impl Receipt {
                 .checked_add(frame.source_bytes())
                 .is_none_or(|n| n > super::MAX_BYTES)
         }) {
-            return Err("音声再同意の証拠合計が容量上限を超えています".into());
+            return Err("音声再確認の証拠合計が容量上限を超えています".into());
         }
         frame.validate(db, &ancestors, check)
     }
@@ -462,7 +462,7 @@ pub(in crate::storage::deletion) fn superseded_audit_member(
     super::reconfirmation::validate_superseded(db, operation, proof, &|| false)?;
     let receipt = Receipt::load_frame(db, operation, Some(proof), &|| false)?;
     if !receipt.completed() {
-        return Err("再同意元の音声履歴が完了していません".into());
+        return Err("再確認元の音声履歴が完了していません".into());
     }
     Ok(receipt.audits.iter().any(|id| id == audit))
 }

@@ -65,7 +65,12 @@ impl Reviewed {
         let db = crate::operation_observation::lock(&storage.connection)?;
         prepared.verify_saved(&db, check)?;
         prepared.verify_locked(storage, &db, check)?;
-        let census = Census::capture_locked(
+        let capture = if prepared.manifest().directory_scope() {
+            Census::capture_directory_locked
+        } else {
+            Census::capture_locked
+        };
+        let census = capture(
             storage,
             &db,
             &prepared.scope().meeting_id,
@@ -689,6 +694,9 @@ fn preflight(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     receipt.verify_saved(db, check)?;
+    if receipt.manifest.directory_scope() {
+        return verify_directory(storage, db, receipt, check);
+    }
     verify_remaining(storage, db, receipt, check)
 }
 fn verify_remaining(
@@ -850,11 +858,144 @@ fn compare_census(storage: &Storage, receipt: &Receipt, current: Census) -> Resu
     }
     Ok(())
 }
+fn verify_directory(
+    storage: &Storage,
+    db: &Connection,
+    receipt: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    cancel(check)?;
+    receipt.verify_saved(db, check)?;
+    let p = receipt.confirmed();
+    if super::fence::other_pending(db, Some(p.operation()))? {
+        return Err("別の保守操作があります".into());
+    }
+    if storage.managed_anchor.identity()?
+        != (
+            receipt.manifest.root.clone(),
+            receipt.manifest.database.clone(),
+        )
+    {
+        return Err("削除対象の保存領域が変更されています".into());
+    }
+    if receipt
+        .progress
+        .database_phase
+        .is_some_and(|phase| phase.rows_committed())
+    {
+        super::database::verify_rows_absent(db, p.scope(), check)?;
+    } else if super::database::Scope::capture(
+        db,
+        &receipt.manifest.meeting_id,
+        p.operation(),
+        check,
+    )? != *p.scope()
+    {
+        return Err("会議の削除対象が変更されています".into());
+    }
+    let target = receipt
+        .manifest
+        .entries
+        .first()
+        .and_then(|e| e.proof.as_ref());
+    if let Some(parent) = storage.managed_anchor.directory_ref()?.child("meetings")? {
+        super::directory_scope::verify(
+            &parent,
+            &receipt.manifest.meeting_id,
+            &receipt.reserved(),
+            target,
+            receipt
+                .progress
+                .pending
+                .as_ref()
+                .map(|p| (&p.before, p.staged.as_ref())),
+            receipt.progress.next == receipt.manifest.entries.len(),
+        )?;
+    } else if target.is_some() && !receipt.removed() {
+        return Err("確認した親フォルダーがありません".into());
+    }
+    Ok(())
+}
+fn run_directory(
+    storage: &Storage,
+    receipt: &mut Receipt,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    verify_unlocked(storage, receipt, check)?;
+    if receipt.removed() {
+        return Ok(());
+    }
+    if let Some(target) = receipt.target().cloned() {
+        let expected = target
+            .proof
+            .as_ref()
+            .ok_or("フォルダーの実体記録がありません")?;
+        let parent = storage
+            .managed_anchor
+            .directory_ref()?
+            .child("meetings")?
+            .ok_or("会議フォルダーがありません")?;
+        let original = receipt.manifest.meeting_id.clone();
+        let reserved = receipt.reserved();
+        let pending = receipt
+            .progress
+            .pending
+            .as_ref()
+            .map(|p| (p.before.clone(), p.staged.clone()));
+        super::directory_scope::remove(
+            &parent,
+            &original,
+            &reserved,
+            expected,
+            pending,
+            check,
+            |boundary| {
+                let mut next = receipt.progress.clone();
+                match boundary {
+                    super::directory_scope::Boundary::Armed(before) => {
+                        next.pending = Some(Pending {
+                            before,
+                            staged: None,
+                        });
+                        save_unlocked(storage, receipt, next, check)?;
+                        event("armed");
+                    }
+                    super::directory_scope::Boundary::Staged(staged) => {
+                        next.pending
+                            .as_mut()
+                            .ok_or("移動前の記録がありません")?
+                            .staged = Some(staged);
+                        save_unlocked(storage, receipt, next, check)?;
+                        event("staged");
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        event("unlinked");
+        let mut next = receipt.progress.clone();
+        next.next += 1;
+        next.pending = None;
+        save_unlocked(storage, receipt, next, check)?;
+        event("advanced");
+    }
+    verify_unlocked(storage, receipt, check)?;
+    let mut next = receipt.progress.clone();
+    next.file_phase = Phase::Removed;
+    save_unlocked(storage, receipt, next, check)?;
+    event("filesRemoved");
+    Ok(())
+}
 fn verify_unlocked(
     storage: &Storage,
     receipt: &Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    if receipt.manifest.directory_scope() {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        return verify_directory(storage, &db, receipt, check);
+    }
     let p = &receipt.confirmed;
     let roots = {
         let db = crate::operation_observation::lock(&storage.connection)?;
@@ -917,6 +1058,9 @@ fn run_inner(
     check: &impl Fn() -> bool,
     event: &impl Fn(&str),
 ) -> Result<(), String> {
+    if receipt.manifest.directory_scope() {
+        return run_directory(storage, receipt, check, event);
+    }
     cancel(check)?;
     verify_unlocked(storage, receipt, check)?;
     if receipt.removed() {

@@ -435,7 +435,7 @@ impl Storage {
                 .verify()?;
         }
         connection.execute_batch(
-            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON; BEGIN IMMEDIATE; COMMIT;",
         )?;
         #[cfg(any(unix, windows))]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;

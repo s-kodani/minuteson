@@ -44,7 +44,7 @@ test("meeting deletion and safe stopping remain the foreground operation with me
 
 test("older snapshots still identify the actual deletion phase without measured progress", () => {
   const s = {kind:"deletion",token:"delete",busy:true,phase:"deleting_database"} as DataSnapshot;
-  assert.equal(deletionProgress(s)!.label,"会議の削除結果を登録中");
+  assert.equal(deletionProgress(s)!.label,"会議の文書データを削除中");
   assert.equal(deletionProgress({...s,phase:"choosing"})!.label,"会議の削除対象を確認中");
   assert.equal(deletionProgress(s)!.detail,undefined);
 });

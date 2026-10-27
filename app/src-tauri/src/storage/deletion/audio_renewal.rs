@@ -52,7 +52,7 @@ impl Record {
     fn encode(&self) -> Result<String, String> {
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
         if json.len() > 65536 {
-            return Err("残り音声への再同意記録が容量上限を超えています".into());
+            return Err("残り音声への再確認記録が容量上限を超えています".into());
         }
         Ok(json)
     }
@@ -111,7 +111,7 @@ fn policy_valid(snapshot: &audio::Snapshot, policy: &intent::Policy) -> Result<(
                 .iter()
                 .any(|e| audio::audio(&e.disposition) && e.asset_id.is_none()))
     {
-        return Err("未登録音声への明示同意と不明ファイルの保持を確認してください".into());
+        return Err("未登録音声への明示した削除要求と不明ファイルの保持を確認してください".into());
     }
     Ok(())
 }
@@ -141,7 +141,7 @@ fn read_record(
         || updated != created
         || consent != Some(created)
     {
-        return Err("残り音声への再同意の固定記録が不正です".into());
+        return Err("残り音声への再確認の固定記録が不正です".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     if record.version != 3
@@ -157,7 +157,7 @@ fn read_record(
                 .as_ref()
                 .map_or(1, |r| r.generation.saturating_add(1))
     {
-        return Err("残り音声の確認と元の同意・世代が一致しません".into());
+        return Err("残り音声の確認と元の削除要求・世代が一致しません".into());
     }
     // Charge the whole chain before allocating each snapshot. A valid per-row
     // limit alone is not enough when multiple canonical plans are linked.
@@ -204,7 +204,7 @@ pub(super) fn load(
             || !current.valid()
             || !seen.insert(current.operation_id.clone())
         {
-            return Err("残り音声の再同意世代・循環が不正です".into());
+            return Err("残り音声の再確認世代・循環が不正です".into());
         }
         let (record, snapshot, consent) = read_record(db, &current, saved, &mut budget, check)?;
         reference = record.previous_progress.confirmation.clone();
@@ -239,7 +239,7 @@ pub(super) fn load(
             || next.manifest.database != saved.snapshot.manifest.database
             || !history_valid
         {
-            return Err("残り音声の固定範囲・保持履歴・同意順序が一致しません".into());
+            return Err("残り音声の固定範囲・保持履歴・削除要求順序が一致しません".into());
         }
         add_paths(&mut plan.paths, saved, &next, reference.generation)?;
         plan.snapshot = next;
@@ -249,7 +249,7 @@ pub(super) fn load(
         latest = consent;
     }
     if previous != progress.confirmation {
-        return Err("残り音声への再同意と現在の進捗が接続していません".into());
+        return Err("残り音声への再確認と現在の進捗が接続していません".into());
     }
     progress.validate(saved, &super::targets(&plan.snapshot)?)?;
     plan.bytes = budget;
@@ -276,7 +276,7 @@ fn capture_snapshot(
             .as_ref()
             .is_some_and(|r| r.generation >= MAX_GENERATIONS)
     {
-        return Err("残り音声の再同意対象ではないか、世代上限に達しています".into());
+        return Err("残り音声の再確認対象ではないか、世代上限に達しています".into());
     }
     let reserved = receipt
         .progress
@@ -318,7 +318,7 @@ fn capture_snapshot(
     if snapshot.scope != receipt.saved.snapshot.scope
         || snapshot.records != receipt.saved.snapshot.records
     {
-        return Err("元の同意で保持する音声・文書・履歴が変更されています".into());
+        return Err("元の削除要求で保持する音声・文書・履歴が変更されています".into());
     }
     let second = census()?;
     if first.manifest() != second.manifest()
@@ -356,7 +356,7 @@ impl Review {
     ) -> Result<(), String> {
         if capture_snapshot(storage, db, &self.receipt, check)? != self.snapshot {
             return Err(
-                "残り音声の再同意前に対象が変更されました。保持して再確認してください".into(),
+                "残り音声の再確認前に対象が変更されました。保持して再確認してください".into(),
             );
         }
         Ok(())
@@ -424,7 +424,7 @@ fn accept_inner(
             .progress
             .confirmation
             .as_ref()
-            .ok_or("残り音声への再同意の再送記録がありません")?;
+            .ok_or("残り音声への再確認の再送記録がありません")?;
         let mut budget = old.saved.header.snapshot_bytes;
         let (record, snapshot, _) =
             read_record(&db, reference, &old.saved, &mut budget, &cancelled)?;
@@ -433,7 +433,7 @@ fn accept_inner(
             || snapshot != review.snapshot
             || record.policy != policy
         {
-            return Err("残り音声への再同意の再送が確定した内容と一致しません".into());
+            return Err("残り音声への再確認の再送が確定した内容と一致しません".into());
         }
         super::verify_remaining(storage, &db, &current, &cancelled)?;
         active(lease, check)?;
@@ -516,7 +516,7 @@ fn accept_inner(
         .map_err(|e| e.to_string())?;
     let consent = crate::storage::now_ms()?;
     if consent < latest || consent < old.saved.consent {
-        return Err("音声再同意の時刻が保存した進捗より前です。対象を保持します".into());
+        return Err("音声再確認の時刻が保存した進捗より前です。対象を保持します".into());
     }
     tx.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES(?1,'delete_assets','prepared',?2,?3,?4,?5,?4,?4)",params![reference.operation_id,json,reference.intent_hash,consent,AUDIT_PROGRESS]).map_err(|e|e.to_string())?;
     event("audioRenewalAuditStored");
@@ -534,15 +534,15 @@ fn accept_inner(
         .map_err(|e| e.to_string())?
         != 1
     {
-        return Err("残り音声への再同意記録を確定できません".into());
+        return Err("残り音声への再確認記録を確定できません".into());
     }
     review.verify(storage, &tx, &cancelled)?;
     if tx.execute("UPDATE maintenance_operations SET state='installing',progress_json=?2,updated_at=?3 WHERE id=?1 AND kind='delete_assets' AND state=?4 AND progress_json=?5",params![old.saved.operation(),next.encode()?,consent,old.progress.state(),old.progress.encode()?]).map_err(|e|e.to_string())? != 1 {
-        return Err("残り音声への再同意の切替対象が変更されています".into());
+        return Err("残り音声への再確認の切替対象が変更されています".into());
     }
     let saved = Receipt::load(&tx, old.saved.operation(), &cancelled)?;
     if saved.plan != review.snapshot || saved.policy != record.policy {
-        return Err("残り音声への再同意の保存結果が一致しません".into());
+        return Err("残り音声への再確認の保存結果が一致しません".into());
     }
     super::verify_remaining(storage, &tx, &saved, &cancelled)?;
     event("beforeAudioRenewalCommit");

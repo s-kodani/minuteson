@@ -1,4 +1,5 @@
 export interface DeletionPreview {
+  scopeMode?: "manifest" | "directory"; targetDirectory?: string;
   confirmationId: string; operationId: string; meetingId: string; title: string;
   phase: "review" | "not_started" | "files" | "reconfirmation" | "database_files" | "database_reconfirmation" | "database" | "awaiting_ack" | "retained" | "completed";
   pending: boolean; executeAllowed: boolean; resumeReason: string | null; keepAllowed: boolean;
@@ -27,6 +28,8 @@ const validReservationRoot = (path: string, operationId: string) => {
 const validReservationRoots = (roots: unknown, operationId: string): roots is string[] => Array.isArray(roots) && roots.length <= 256
   && roots.every((p, i) => typeof p === "string" && validReservationRoot(p, operationId) && (i === 0 || roots[i - 1] < p));
 export function assertDeletionPreview(p: DeletionPreview): void {
+  if (p?.scopeMode !== undefined && !["manifest", "directory"].includes(p.scopeMode)) fail();
+  if (p?.scopeMode === "directory" && (typeof p.targetDirectory !== "string" || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(p.targetDirectory) || p.targetDirectory.includes("\0"))) fail();
   if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(uuid) || !text(p.title)
     || !["review", "not_started", "files", "reconfirmation", "database_files", "database_reconfirmation", "database", "awaiting_ack", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.rowPhaseCommitted].every(v => typeof v === "boolean")
@@ -92,4 +95,4 @@ export const deletionAttentionLabel = (code: string | null): string | null => {
     default: return null;
   }
 };
-export const deletionPhaseLabel = (phase: DeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "確認記録を保存済み・ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再同意待ち", database_files: "DB段階を保持した残りファイルの削除", database_reconfirmation: "DB段階を保持した残り範囲への再同意待ち", database: "DB削除・後処理の途中", awaiting_ack: "後処理の完了応答を未確認", retained: "未開始のまま保持して中止", completed: "削除完了を確認済み" })[phase];
+export const deletionPhaseLabel = (phase: DeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "確認記録を保存済み・ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再確認待ち", database_files: "DB段階を保持した残りファイルの削除", database_reconfirmation: "DB段階を保持した残り範囲への再確認待ち", database: "DB削除・後処理の途中", awaiting_ack: "後処理の完了応答を未確認", retained: "未開始のまま保持して中止", completed: "削除完了を確認済み" })[phase];

@@ -116,7 +116,7 @@ fn records(db: &Connection, source: &SourceFacts) -> Result<(), String> {
             || row.7 != expected.target_hash
             || paths(db, &row.1, &|| false)? != (expected.path_count, expected.paths_hash.clone())
         {
-            return Err("承認済みの元の削除同意・対象が変更・欠落しています".into());
+            return Err("承認済みの元の削除要求・対象が変更・欠落しています".into());
         }
     }
     Ok(())

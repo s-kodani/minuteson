@@ -135,7 +135,7 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
     const newScope = ["review", "reconfirmation"].includes(p.phase);
     if ((action === "keep" && !p.keepAllowed) || (action === "review_remaining" && !p.reconfirmationAllowed)
       || (action === "delete_including_unregistered" && (!newScope || !p.unregisteredAudioFiles))
-      || (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed || (action === "publish" && newScope && p.unregisteredAudioFiles > 0)))) throw Error("音声削除の対象と同意を再確認してください。");
+      || (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed || (action === "publish" && newScope && p.unregisteredAudioFiles > 0)))) throw Error("音声削除の対象と削除要求を再確認してください。");
     return { token: s.token, confirmationId: p.confirmationId, action };
   }
   if (s.kind === "model_deletion") {
@@ -145,7 +145,7 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
     if (s.attentionRequired && !resolution) throw Error("部分完了の状態を再検査してください。");
     if (!s.retryAllowed && !resolution) throw Error("削除確認が失効しています。");
     if (action === "keep" && !p.keepAllowed) throw Error("開始済み削除を保持・中止して復元することはできません。");
-    if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再同意はできません。");
+    if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再確認はできません。");
     if (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(p.phase))) throw Error("確認した対象と削除の判断が一致しません。");
     if (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed
       || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");
@@ -158,7 +158,7 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
     if (s.attentionRequired && !resolution) throw Error("部分完了の状態を再検査してください。");
     if (!s.retryAllowed && !resolution) throw Error("削除確認が失効しています。");
     if (action === "keep" && !p.keepAllowed) throw Error("開始済み削除を保持・中止して復元することはできません。");
-    if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再同意はできません。");
+    if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再確認はできません。");
     if (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase))) throw Error("確認した対象と削除の判断が一致しません。");
     if (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed
       || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");

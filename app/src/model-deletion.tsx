@@ -1,5 +1,4 @@
-import { ErrorNotice } from "./toast";
-import { IconButton } from "./action-icon";
+import { DirectoryDeletionConfirmation } from "./directory-deletion-confirmation";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { rowMenuReturnTarget } from "./row-menu";
 import { IssueNotice, ToastNotice } from "./toast";
@@ -7,11 +6,9 @@ import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
-import { assertModelDeletionPage, modelDeletionPhaseLabel, type ModelDeletionPage, type ModelDeletionReceipt } from "./model-deletion-operation-state";
-import { bytesLabel } from "./import-state";
+import { type ModelDeletionReceipt } from "./model-deletion-operation-state";
 import { stopAllPlayback } from "./playback-barrier";
 import { deletionAvailability, deletionReviewReason } from "./deletion-review-reason";
-import { stageLabel, stageDetail } from "./stage-progress";
 
 export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted }: {
   operation: DataOperation; locked: boolean;
@@ -23,10 +20,6 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
   const [toastEvent, setToastEvent] = useState("");
-  const [page, setPage] = useState<ModelDeletionPage | null>(null), [pageError, setPageError] = useState("");
-  const [pageBusy, setPageBusy] = useState(false), pageEpoch = useRef(0);
-  const [understood, saveUnderstood] = useState(false), [includeUnknown, saveIncludeUnknown] = useState(false);
-  const [understoodId, setUnderstoodId] = useState<string | null>(null), [includeUnknownId, setIncludeUnknownId] = useState<string | null>(null);
   const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
   const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
@@ -34,10 +27,6 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const opener = useRef<HTMLElement | null>(null);
   const s = operation.snapshot, preview = s?.kind === "model_deletion" ? s.modelDeletionPreview : null;
   const receipt = s?.kind === "model_deletion" ? s.modelDeletionReceipt : null;
-  const currentUnderstood = understood && understoodId === preview?.confirmationId;
-  const currentIncludeUnknown = includeUnknown && includeUnknownId === preview?.confirmationId;
-  const setUnderstood = (value: boolean) => { saveUnderstood(value); setUnderstoodId(preview?.confirmationId ?? null); };
-  const setIncludeUnknown = (value: boolean) => { saveIncludeUnknown(value); setIncludeUnknownId(preview?.confirmationId ?? null); };
   const listing = operation.modelDeletionListing;
   const protectedNow = rpcBusy || unknown;
   const canInspect = isTauri() && operation.modelDeletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
@@ -63,18 +52,6 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     if (latest.current.operation.deletionListing?.writeBlocked || latest.current.operation.modelDeletionListing?.writeBlocked || latest.current.operation.audioDeletionListing?.writeBlocked || latest.current.operation.getSnapshot()?.audioDeletionPreview?.pending || latest.current.operation.getSnapshot()?.modelDeletionPreview?.pending) await run(action);
     else await latest.current.withSavedEdits(async () => run(action));
   };
-  const loadPage = async (offset = 0) => {
-    const p = latest.current.operation.getSnapshot()?.modelDeletionPreview;
-    if (!p || latest.current.operation.getSnapshot()?.busy) return;
-    const epoch = ++pageEpoch.current;
-    setPage(null); setPageError(""); setPageBusy(true);
-    try {
-      const value = await invoke<ModelDeletionPage>("get_model_deletion_paths", { confirmationId: p.confirmationId, offset });
-      assertModelDeletionPage(value, p, offset);
-      if (epoch === pageEpoch.current && latest.current.operation.getSnapshot()?.modelDeletionPreview?.confirmationId === p.confirmationId) setPage(value);
-    } catch (cause) { if (epoch === pageEpoch.current) setPageError(String(cause)); }
-    finally { if (epoch === pageEpoch.current) setPageBusy(false); }
-  };
   const review = async (id: string, pendingReview: boolean, reviewHash?: string) => {
     if (!(pendingReview ? canReviewPending : canReviewModel)) return;
     const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -98,10 +75,10 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     catch (cause) { setUnknown(true); throw Error(`受付結果を確定できません。別の削除を始めず、同じ操作の結果を確認してください: ${String(cause)}`); }
   };
   const submit = async (action: DataRequest["action"]) => {
-    if (!canResolve) return;
+    if (!canResolve || (preview?.scopeMode === "directory" && action === "publish" && !open)) return;
     const confirmation = preview?.confirmationId;
     if (!confirmation) return;
-    if (["publish", "delete_including_unregistered"].includes(action) && (!open || !currentUnderstood || !page || pageBusy || pageError || page.confirmationId !== preview?.confirmationId || (action === "delete_including_unregistered" && !currentIncludeUnknown))) return;
+    if (action === "publish" && (preview?.scopeMode !== "directory" || !open || s?.phase !== "ready" || !preview.executeAllowed)) return;
     await protect(async () => {
       await stopAllPlayback();
       const now = latest.current.operation.getSnapshot(); if (!now) throw Error("削除状態を再確認してください。");
@@ -130,14 +107,9 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   };
   const quit = async () => { if (!rpcBusy && !s?.busy && !unknown) await run(async () => { await invoke("finish_main_close", { quit: true }); }); };
   useEffect(() => {
-    setUnderstood(false); setIncludeUnknown(false); pageEpoch.current++; setPage(null); setPageError("");
-    if (preview && !s?.busy) void loadPage();
-    return () => { pageEpoch.current++; };
-  }, [preview?.confirmationId, s?.busy]);
-  useEffect(() => {
     if (!s || s.kind !== "model_deletion") { setOpen(false); return; }
     if (receipt || ["idle", "cancelled"].includes(s.phase)) setOpen(false);
-    else if (s.busy) setOpen(true);
+    else if (s.busy) setOpen(false);
     if (unknown) {
       const c = choice.current, p = pending.current;
       if ((c && s.revision > c.revision && (s.busy || ["failed", "cancelled", "attention"].includes(s.phase) || (c.pending ? preview?.operationId === c.id : preview?.packageId === c.id)))
@@ -151,55 +123,25 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
-  const canDelete = canResolve && open && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
+  const canDelete = preview?.scopeMode === "directory" && canResolve && open && s?.phase === "ready" && !!preview.executeAllowed;
   return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve, reviewUnavailableReason,
-    rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
-    understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
+    rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast,
+    canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
 
 export type ModelDeletionControl = ReturnType<typeof useModelDeletion>;
 
 export function ModelDeletionDialog({ operation, control: c }: { operation: DataOperation; control: ModelDeletionControl }) {
   const s = operation.snapshot, p = c.preview, active = s?.kind === "model_deletion";
-  const busy = active && !!s?.busy;
-  const checking = busy && ["choosing", "verifying", "verifying_model_delete_scope"].includes(s.phase);
   return <>
     <ToastNotice scope="model-deletion" type="result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     <IssueNotice scope="model-deletion" type="model-deletion" label="モデル削除" message={c.error || (active ? operation.error || (s.phase === "cancelled" ? "" : s.errorMessage) : "")} />
-    <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss}
+    {p?.scopeMode === "directory" && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>削除要求の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>削除を停止</button></div>}
+    <CommonModal portal hideDismissButton ref={c.dialog} open={c.open && p?.scopeMode === "directory"} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss}
       restoreReady={!c.rpcBusy && !s?.busy && operation.connected}
       restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".model-inventory h2")}
       className="import-dialog data-dialog deletion-dialog" aria-labelledby="model-deletion-title">
-      <h2 id="model-deletion-title" ref={c.heading} tabIndex={-1}>{busy && s.phase === "cancelling" ? "モデル操作の停止を待機中" : checking ? "モデルの削除対象を確認中" : busy ? "モデル削除の処理中" : p?.phase === "reconfirmation" ? "残りのモデルファイルを確認" : "モデルのローカル削除を確認"}</h2>
-      {busy && <div className="model-deletion-progress"><p role="status">{s.phase === "cancelling" ? "安全な停止を待っています。" : checking ? "モデルファイルの内容と削除範囲を検査しています。この確認処理ではファイルを削除しません。" : "確認したモデルファイルの削除を処理しています。"}</p>
-        {s.progress && <p role="status">{stageLabel(s.progress)}{stageDetail(s.progress) ? ` · ${stageDetail(s.progress)}` : ""}</p>}
-        {checking && !s.progress && <p>容量の大きいモデルは確認に時間がかかります。</p>}
-        <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>{checking ? "確認を中止する" : "安全な停止を要求"}</button>
-      </div>}
-      {p && !busy && <><h3>{p.modelName}</h3><p className="data-path">パッケージID: {p.packageId}</p>
-        <p>このコピーのモデル一式を削除します。モデル本体のほか、このコピーに含まれる実行プログラム・発話検知モデル・付属文書も対象です。この操作は取り消せません。会議データ・設定・処理履歴は保持します。</p>
-        <p>選択中のモデルを削除すると、再導入または別モデルへの切替まで、そのモデルを使うAI処理は利用できません。</p>
-        <dl className="import-info"><dt>対象ファイル・容量</dt><dd>{p.fileCount} 件 · {bytesLabel(p.bytes)}</dd>
-          <dt>欠落・変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd>
-          <dt>段階</dt><dd>{modelDeletionPhaseLabel(p.phase)}</dd>
-          <dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}</dd></dl>
-        {p.pending && <p role="alert">途中まで削除している可能性があります。消したファイルは復元しません。</p>}
-        {p.phase === "reconfirmation" && <p>以前の計画では {p.previousProcessedPaths} / {p.previousPathCount} パスを処理済みです。現在残る範囲に新しく同意して続行します。</p>}
-        <ErrorNotice scope="model-deletion" type="ModelDeletionDialog-resume" active={!!(p.resumeReason)}>{p.resumeReason}</ErrorNotice>
-        {p.reconfirmationAllowed && <button type="button" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>変更後の残り範囲を確認する</button>}
-        {c.pageBusy && <p role="status">対象ファイルを確認中…</p>}
-        <ErrorNotice scope="model-deletion" type="ModelDeletionDialog-paths" active={!!(c.pageError)}>{c.pageError}</ErrorNotice>
-        {c.page && <><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><code>{e.relativePath}</code><span> — {e.directory ? "フォルダー" : e.present ? bytesLabel(e.bytes ?? 0) : "欠落"}{e.changed ? " · 変更あり" : ""}{!e.registered ? " · 未登録" : ""}</span></li>)}</ul>
-          <div className="analysis-actions"><IconButton label="前の50件" icon="previous" type="button" className="small-secondary" disabled={!c.canResolve || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, c.page!.offset - 50))} /><IconButton label="次の50件" icon="next" type="button" className="small-secondary" disabled={!c.canResolve || c.page.nextOffset === null} onClick={() => void c.loadPage(c.page!.nextOffset!)} /></div></>}
-        {!!p.unregisteredCount && ["review", "not_started", "reconfirmation"].includes(p.phase) && <label className="deletion-consent"><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={e => c.setIncludeUnknown(e.target.checked)} />一覧の未登録ファイルも削除する</label>}
-        <label className="deletion-consent"><input type="checkbox" checked={c.understood} disabled={!c.canResolve} onChange={e => c.setUnderstood(e.target.checked)} />対象コピーと削除の影響を確認しました</label>
-      </>}
-      {!busy && <div className="analysis-actions"><button type="button" className="danger-button" disabled={!c.canDelete} onClick={() => void c.submit(p?.unregisteredCount && ["review", "not_started", "reconfirmation"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{p?.pending ? "残りの削除を続行" : "ローカルから削除する"}</button>
-        <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>
-        {p?.keepAllowed && p.pending && <button type="button" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}
-        <button type="button" className="small-secondary" data-dialog-cancel disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.dismiss()}>削除せず閉じる</button></div>}
-      {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ操作の安全な停止を要求</button></div>}
-
+      {p?.scopeMode === "directory" && <DirectoryDeletionConfirmation kind="model" name={p.modelName} directory={p.targetDirectory!} titleId="model-deletion-title" heading={c.heading} blocked={c.protectedNow || !!s?.busy} canDelete={c.canDelete} onCancel={() => void c.dismiss()} onDelete={() => void c.submit("publish")} />}
     </CommonModal>
   </>;
 }

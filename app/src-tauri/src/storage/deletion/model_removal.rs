@@ -1,6 +1,6 @@
 //! Fixed model body removal. Immutable history and proof slots are retained.
 //! Normal names are never unlinked; only exact, journaled reserved names are.
-use super::super::{capture_unlocked, hash_file, usages, Entry, Observation};
+use super::super::{hash_file, usages, Entry, Observation};
 use super::{active, read_with_progress, Prepared};
 use crate::storage::deletion::fs::{Directory, Proof};
 use crate::{
@@ -194,7 +194,7 @@ impl Receipt {
             || storage.maintenance.load(Ordering::Acquire)
             || storage.managed_anchor.identity()? != self.plan.identity(&self.saved)
         {
-            return Err("モデル削除の現在の同意・保存先・DB実体が一致しません".into());
+            return Err("モデル削除の現在の削除要求・保存先・DB実体が一致しません".into());
         }
         Ok(())
     }
@@ -228,7 +228,7 @@ impl Receipt {
     ) -> Result<(), String> {
         let identity = self.plan.identity(&self.saved);
         if !anchor.matches_history_root(db, self.operation(), &identity.0, &identity.1)? {
-            return Err("モデル削除の有効な同意と保存領域が一致しません".into());
+            return Err("モデル削除の有効な削除要求と保存領域が一致しません".into());
         }
         Ok(())
     }
@@ -416,6 +416,21 @@ fn verify_tree(
 ) -> Result<Directory, String> {
     let models = Directory::root(Path::new(&r.saved.header.models_root))?;
     models.verify_identity(&r.saved.snapshot.models_root)?;
+    if r.saved.snapshot.directory_scope {
+        let expected = r.plan.observations.first().and_then(|o| o.proof.as_ref());
+        crate::storage::deletion::directory_scope::verify(
+            &models,
+            &r.saved.header.package_id,
+            &r.reserved(0),
+            expected,
+            r.progress
+                .pending
+                .as_ref()
+                .map(|p| (&p.before, p.staged.as_ref())),
+            r.progress.next == r.plan.observations.len(),
+        )?;
+        return Ok(models);
+    }
     let roots = renewal::review_roots(&r.plan, &r.progress, &r.saved.header.operation_id)?;
     let actual: BTreeMap<String, Observation> =
         renewal::inventory(&models, &r.saved, &roots, check)?
@@ -541,12 +556,13 @@ pub(crate) fn start(
         let db = crate::operation_observation::lock(&storage.connection)?;
         super::read(&db, operation)?
     };
-    let current = capture_unlocked(
+    let current = super::super::capture_mode(
         storage,
         Path::new(&saved.header.models_root),
         &saved.header.package_id,
         &saved.header.review_hash,
         &|| check() || lease.cancelled(),
+        saved.snapshot.directory_scope,
     )?;
     let db = crate::operation_observation::lock(&storage.connection)?;
     saved.verify_saved(&db)?;
@@ -559,7 +575,7 @@ pub(crate) fn start(
         || crate::storage::deletion::fence::other_pending(&db, Some(operation))?
         || current != saved.snapshot
     {
-        return Err("モデル削除の開始対象が保存した同意と一致しません".into());
+        return Err("モデル削除の開始対象が保存した削除要求と一致しません".into());
     }
     let progress = Progress {
         version: 4,
@@ -605,6 +621,75 @@ pub(crate) fn start(
     tx.commit().map_err(|e| e.to_string())?;
     Receipt::load(&db, operation)
 }
+fn run_directory(
+    storage: &Storage,
+    r: &mut Receipt,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    let cancelled = || check() || lease.cancelled();
+    let models = verify_unlocked(storage, r, &cancelled)?;
+    if r.completed() {
+        // A lost acknowledgement replays the validated terminal receipt. Its
+        // immutable progress must not be saved as a new removal transition.
+        return resolve_unlocked(storage, r, lease, check);
+    }
+    if let Some(target) = r.target().cloned() {
+        if let Some(expected) = target.proof.as_ref() {
+            let original = r.saved.header.package_id.clone();
+            let reserved = r.reserved(0);
+            let pending = r
+                .progress
+                .pending
+                .as_ref()
+                .map(|p| (p.before.clone(), p.staged.clone()));
+            crate::storage::deletion::directory_scope::remove(
+                &models,
+                &original,
+                &reserved,
+                expected,
+                pending,
+                &cancelled,
+                |boundary| {
+                    let mut next = r.progress.clone();
+                    match boundary {
+                        crate::storage::deletion::directory_scope::Boundary::Armed(before) => {
+                            next.pending = Some(Pending {
+                                before,
+                                staged: None,
+                            });
+                            save_unlocked(storage, r, next, lease, check)?;
+                            event("armed");
+                        }
+                        crate::storage::deletion::directory_scope::Boundary::Staged(staged) => {
+                            next.pending
+                                .as_mut()
+                                .ok_or("移動前の記録がありません")?
+                                .staged = Some(staged);
+                            save_unlocked(storage, r, next, lease, check)?;
+                            event("staged");
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+            event("unlinked");
+        }
+        let mut next = r.progress.clone();
+        next.next += 1;
+        next.pending = None;
+        save_unlocked(storage, r, next, lease, check)?;
+        event("advanced");
+    }
+    verify_unlocked(storage, r, &cancelled)?;
+    let mut next = r.progress.clone();
+    next.phase = Phase::Completed;
+    save_unlocked(storage, r, next, lease, check)?;
+    event("completed");
+    verify_unlocked(storage, r, &cancelled)?;
+    resolve_unlocked(storage, r, lease, check)
+}
 pub(crate) fn run(
     storage: &Storage,
     operation: &str,
@@ -625,6 +710,10 @@ fn run_inner(
         let db = crate::operation_observation::lock(&storage.connection)?;
         Receipt::load(&db, operation)?
     };
+    if r.saved.snapshot.directory_scope {
+        run_directory(storage, &mut r, lease, check, event)?;
+        return Ok(r);
+    }
     let cancelled = || check() || lease.cancelled();
     if r.completed() {
         verify_unlocked(storage, &r, &cancelled)?;

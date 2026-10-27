@@ -153,7 +153,7 @@ fn immutable_hash(row: &OperationRow) -> Result<String, String> {
 }
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
-        Err("削除履歴の移動準備を取り消しました。元の同意・対象は保持します".into())
+        Err("削除履歴の移動準備を取り消しました。元の削除要求・対象は保持します".into())
     } else {
         Ok(())
     }

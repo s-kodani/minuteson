@@ -16,6 +16,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Preview {
+    pub scope_mode: &'static str,
+    pub target_directory: std::path::PathBuf,
     pub confirmation_id: String,
     pub operation_id: String,
     pub meeting_id: String,
@@ -268,6 +270,12 @@ impl Prepared {
             .get_meeting(&m.meeting_id)?
             .map_or_else(|| format!("会議 {}", m.meeting_id), |meeting| meeting.title);
         let mut preview = Preview {
+            scope_mode: if m.directory_scope() {
+                "directory"
+            } else {
+                "manifest"
+            },
+            target_directory: storage.root().join("meetings").join(&m.meeting_id),
             confirmation_id: Uuid::new_v4().to_string(),
             operation_id: operation,
             meeting_id: m.meeting_id.clone(),
@@ -359,15 +367,30 @@ impl Prepared {
             Err(reason) => preview.resume_reason = Some(reason),
         }
         if let Target::Files(files) = &target {
-            preview.reconfirmation_allowed =
-                !preview.execute_allowed && renewal::Review::capture(storage, files, check).is_ok();
+            preview.reconfirmation_allowed = !m.directory_scope()
+                && !preview.execute_allowed
+                && renewal::Review::capture(storage, files, check).is_ok();
         }
         if let Target::Database(database) = &target {
-            preview.reconfirmation_allowed = !preview.execute_allowed
+            preview.reconfirmation_allowed = !m.directory_scope()
+                && !preview.execute_allowed
                 && renewal::Review::capture_database(storage, database, check).is_ok();
         }
         cancelled(check)?;
         Ok(Self { preview, target })
+    }
+    pub(crate) fn fresh_directory(
+        storage: &Storage,
+        meeting: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        authorize_review(storage, None)?;
+        Self::build(
+            storage,
+            Uuid::new_v4().to_string(),
+            Target::Fresh(Census::capture_directory(storage, meeting, check)?),
+            check,
+        )
     }
     pub(crate) fn fresh(
         storage: &Storage,
@@ -467,7 +490,12 @@ impl Prepared {
                 check,
             )?
         } else if matches!(self.target, Target::Fresh(_)) && !storage.data_write_blocked() {
-            let c = Census::capture(storage, &self.preview.meeting_id, check)?;
+            let capture = if self.target.fixed().0.directory_scope() {
+                Census::capture_directory
+            } else {
+                Census::capture
+            };
+            let c = capture(storage, &self.preview.meeting_id, check)?;
             Self::build(
                 storage,
                 self.preview.operation_id.clone(),
@@ -491,7 +519,7 @@ impl Prepared {
         let check = || check() || admission.cancelled();
         self.confirmation(confirmation)?;
         if !self.preview.reconfirmation_allowed {
-            return Err("この段階の残り範囲は再同意できません。元の記録と対象を保持します".into());
+            return Err("この段階の残り範囲は再確認できません。元の記録と対象を保持します".into());
         }
         let target = match &self.target {
             Target::Files(files) => {

@@ -82,6 +82,18 @@ pub(super) struct Proof {
     change_nanos: i64,
 }
 impl Proof {
+    // Folder scope binds the object, not the contents or mutable timestamps.
+    pub(super) fn directory_scope(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            size: 0,
+            links: 1,
+            modified_seconds: 0,
+            modified_nanos: 0,
+            change_seconds: 0,
+            change_nanos: 0,
+        }
+    }
     pub(super) fn matches_after_rename(&self, old: &Self) -> bool {
         self.identity == old.identity
             && self.size == old.size
@@ -362,10 +374,100 @@ impl Directory {
         )?;
         self.verify()
     }
+    pub(super) fn remove_reserved_tree(
+        &self,
+        leaf: &str,
+        expected: &Identity,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if !leaf.starts_with(".mon-delete-") {
+            return Err("削除用予約名ではありません".into());
+        }
+        name(leaf)?;
+        let _pin = win::directory(&self.path)?;
+        self.verify()?;
+        let path = self.path.join(leaf);
+        self.child(leaf)?
+            .ok_or("削除対象がありません")?
+            .verify_identity(expected)?;
+        remove_tree_handle(&path, Some(expected), self.identity.device, check, 0)?;
+        self.sync()
+    }
     pub(super) fn sync(&self) -> Result<(), String> {
         self.verify()?;
         win::sync_directory(&self.path)
     }
+}
+
+// Hold each directory against rename while traversing. Reparse points are
+// opened themselves, never traversed, and deleted through that exact handle.
+fn remove_tree_handle(
+    path: &Path,
+    expected: Option<&Identity>,
+    device: u64,
+    check: &impl Fn() -> bool,
+    depth: usize,
+) -> Result<(), String> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfoEx, GetFileInformationByHandle, SetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, FILE_DISPOSITION_INFO_EX,
+    };
+    if check() {
+        return Err("フォルダー削除を停止しました".into());
+    }
+    if depth > 128 {
+        return Err("削除対象のフォルダーが深すぎます".into());
+    }
+    let file = OpenOptions::new()
+        .access_mode(0x10000 | 0x80)
+        .share_mode(3)
+        .custom_flags(0x02000000 | 0x00200000)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    if u64::from(info.dwVolumeSerialNumber) != device {
+        return Err("別媒体のフォルダーは削除しません".into());
+    }
+    let reparse = info.dwFileAttributes & 0x400 != 0;
+    if let Some(expected) = expected {
+        if reparse
+            || Identity::read(&native_fs::metadata(&file).map_err(|e| e.to_string())?)? != *expected
+        {
+            return Err("削除対象の実体が変更されています".into());
+        }
+    }
+    if info.dwFileAttributes & 0x10 != 0 && !reparse {
+        for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
+            remove_tree_handle(
+                &entry.map_err(|e| e.to_string())?.path(),
+                None,
+                device,
+                check,
+                depth + 1,
+            )?;
+        }
+    }
+    if check() {
+        return Err("フォルダー削除を停止しました".into());
+    }
+    let disposition = FILE_DISPOSITION_INFO_EX {
+        Flags: 0x1 | 0x2 | 0x10,
+    };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfoEx,
+            &disposition as *const _ as *const _,
+            std::mem::size_of_val(&disposition) as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 // Captured when Storage opens, not when a destructive review starts. A later

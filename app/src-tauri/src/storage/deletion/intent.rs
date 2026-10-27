@@ -230,7 +230,7 @@ impl Intent {
         let mut header = manifest.clone();
         header.entries.clear();
         Ok(Self {
-            version: 1,
+            version: if manifest.directory_scope() { 2 } else { 1 },
             scope: scope.clone(),
             file_header: header,
             file_manifest_hash: hash(encode(manifest, 64 * 1024 * 1024)?.as_bytes()),
@@ -243,7 +243,12 @@ impl Intent {
         self.file_header.root.validate(true)?;
         self.file_header.database.validate(false)?;
         self.file_header.validate_roots()?;
-        if self.version != 1
+        if self.version
+            != if self.file_header.directory_scope() {
+                2
+            } else {
+                1
+            }
             || !self.file_header.entries.is_empty()
             || self.file_header.meeting_id != self.scope.meeting_id
             || self.file_header.database_scope_hash != self.scope.hash()?
@@ -281,6 +286,17 @@ impl Intent {
         }
         if hash(encode(&manifest, 64 * 1024 * 1024)?.as_bytes()) != self.file_manifest_hash {
             return Err("削除対象の全体manifestが確認記録と一致しません".into());
+        }
+        if manifest.directory_scope()
+            && (manifest.entries.len() > 1
+                || manifest.entries.iter().any(|e| {
+                    !e.directory
+                        || e.path != format!("meetings/{}", manifest.meeting_id)
+                        || e.proof.is_none()
+                        || e.registered.is_some()
+                }))
+        {
+            return Err("フォルダー削除の受付範囲が不正です".into());
         }
         Ok(manifest)
     }
@@ -477,7 +493,12 @@ impl Prepared {
         if super::fence::other_pending(db, Some(&self.operation))? {
             return Err("別の未完了保存領域操作があります".into());
         }
-        let current = Census::capture_locked(
+        let capture = if self.manifest.directory_scope() {
+            Census::capture_directory_locked
+        } else {
+            Census::capture_locked
+        };
+        let current = capture(
             storage,
             db,
             &self.intent.scope.meeting_id,
@@ -576,7 +597,7 @@ fn read_frame(
     }
     let intent: Intent = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     intent.validate(db)?;
-    if intent.file_header.version != 1
+    if !matches!(intent.file_header.version, 1 | 3)
         || !intent.file_header.reservation_roots.is_empty()
         || encode(&intent, MAX_INTENT)? != json
         || !match supersession {

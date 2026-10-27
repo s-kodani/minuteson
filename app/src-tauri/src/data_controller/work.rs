@@ -454,9 +454,11 @@ impl Work {
                     let lease =
                         admission.ok_or("モデル削除確認に必要な共有実行排他がありません")?;
                     let p = match target {
-                        ModelTarget::Fresh { package, review } => model_deletion::Prepared::fresh(
-                            storage, &root, &package, &review, lease, cancelled,
-                        )?,
+                        ModelTarget::Fresh { package, review } => {
+                            model_deletion::Prepared::fresh_directory(
+                                storage, &root, &package, &review, lease, cancelled,
+                            )?
+                        }
                         ModelTarget::Pending(id) => model_deletion::Prepared::pending(
                             storage, &root, &id, lease, cancelled,
                         )?,
@@ -523,7 +525,7 @@ impl Work {
                     let p = if pending {
                         deletion::Prepared::pending(storage, &id, cancelled)?
                     } else {
-                        deletion::Prepared::fresh(storage, &id, cancelled)?
+                        deletion::Prepared::fresh_directory(storage, &id, cancelled)?
                     };
                     Ok::<_, String>(Selection::Deletion(p))
                 }))

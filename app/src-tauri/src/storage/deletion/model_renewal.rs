@@ -95,7 +95,7 @@ impl Plan {
             if (&root.storage_root, &root.database)
                 == (&saved.snapshot.storage_root, &saved.snapshot.database)
             {
-                return Err("移動後のモデル再同意には現在の別実体を記録します".into());
+                return Err("移動後のモデル再確認には現在の別実体を記録します".into());
             }
         }
         if self.roots != roots
@@ -274,7 +274,7 @@ pub(in crate::storage::deletion::models) fn audit_source(json: &str) -> Result<S
         || !uuid::Uuid::parse_str(&record.source_operation)
             .is_ok_and(|id| id.to_string() == record.source_operation)
     {
-        return Err("モデル再同意の接続先が不正です".into());
+        return Err("モデル再確認の接続先が不正です".into());
     }
     Ok(record.source_operation)
 }
@@ -289,7 +289,7 @@ pub(super) fn audit_ids(
     let mut ids = Vec::new();
     while let Some(reference) = current {
         if ids.len() >= MAX_GENERATIONS as usize || ids.contains(&reference.operation_id) {
-            return Err("モデル再同意の世代・識別子が不正です".into());
+            return Err("モデル再確認の世代・識別子が不正です".into());
         }
         current = read_record(db, &reference, saved)?
             .0
@@ -335,7 +335,7 @@ fn read_record(
         || updated != created
         || consent != Some(created)
     {
-        return Err("モデル再同意の固定記録を検証できません".into());
+        return Err("モデル再確認の固定記録を検証できません".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     if record.version != 3
@@ -355,7 +355,7 @@ fn read_record(
                 .as_ref()
                 .map_or(1, |r| r.generation.saturating_add(1))
     {
-        return Err("モデル再同意と元の対象・世代の対応が不正です".into());
+        return Err("モデル再確認と元の対象・世代の対応が不正です".into());
     }
     let mut query = db.prepare("SELECT relative_path,kind,size_bytes,content_hash,identity_json,identity_hash FROM maintenance_paths WHERE operation_id=?1 ORDER BY relative_path LIMIT ?2").map_err(|e|e.to_string())?;
     let mut rows = query
@@ -374,7 +374,7 @@ fn read_record(
         let json: String = row.get(4).map_err(|e| e.to_string())?;
         let json_sha: String = row.get(5).map_err(|e| e.to_string())?;
         if json.len() > 1024 {
-            return Err("モデル再同意の分割記録が容量上限を超えています".into());
+            return Err("モデル再確認の分割記録が容量上限を超えています".into());
         }
         let part = intent::decode_chunk(&json)?;
         if count >= record.chunk_count
@@ -387,7 +387,7 @@ fn read_record(
             || (count + 1 < record.chunk_count && part.len() != intent::CHUNK)
             || bytes.len() + part.len() > record.snapshot_bytes
         {
-            return Err("モデル再同意の分割証拠・順序・容量が一致しません".into());
+            return Err("モデル再確認の分割証拠・順序・容量が一致しません".into());
         }
         bytes.extend(part);
         count += 1;
@@ -396,14 +396,14 @@ fn read_record(
         || bytes.len() != record.snapshot_bytes
         || intent::digest(&bytes) != record.snapshot_hash
     {
-        return Err("モデル再同意の対象証拠が欠落・変更されています".into());
+        return Err("モデル再確認の対象証拠が欠落・変更されています".into());
     }
     let plan: Plan = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if serde_json::to_vec(&plan).map_err(|e| e.to_string())? != bytes
         || plan.observations.iter().any(|o| !o.entry.present)
         || (!record.include_unregistered && plan.observations.iter().any(|o| !o.entry.registered))
     {
-        return Err("モデル再同意の対象・未登録物の方針が不正です".into());
+        return Err("モデル再確認の対象・未登録物の方針が不正です".into());
     }
     Ok((record, plan, created))
 }
@@ -421,7 +421,7 @@ pub(super) fn active_plan(
             || !seen.insert(reference.operation_id.clone())
             || chain.len() >= MAX_GENERATIONS as usize
         {
-            return Err("モデル再同意の世代・識別子が不正です".into());
+            return Err("モデル再確認の世代・識別子が不正です".into());
         }
         let (record, plan, consent) = read_record(db, &reference, saved)?;
         current = record.previous_progress.confirmation.clone();
@@ -436,14 +436,14 @@ pub(super) fn active_plan(
             || record.previous_progress.previously_completed != completed
             || consent < latest_consent
         {
-            return Err("モデル再同意の進捗・同意履歴の接続が不正です".into());
+            return Err("モデル再確認の進捗・受付履歴の接続が不正です".into());
         }
         record.previous_progress.validate(saved, &plan)?;
         if (next.current_root != plan.current_root
             && (next.current_root.is_none() || record.previous_progress.phase != Phase::Completed))
         {
             return Err(
-                "モデル再同意の保存先変更は完了済み範囲からの新しい同意に限定します".into(),
+                "モデル再確認の保存先変更は完了済み範囲からの新しい削除要求に限定します".into(),
             );
         }
         let roots = review_roots(&plan, &record.previous_progress, &saved.header.operation_id)?;
@@ -454,7 +454,7 @@ pub(super) fn active_plan(
         latest_consent = consent;
     }
     if previous != progress.confirmation || progress.previously_completed != completed {
-        return Err("モデル削除の進捗が固定した再同意と一致しません".into());
+        return Err("モデル削除の進捗が固定した再確認と一致しません".into());
     }
     progress.validate(saved, &plan)?;
     Ok(plan)
@@ -507,7 +507,7 @@ impl Review {
         self.receipt.metadata_review(storage, db)?;
         let current = storage.managed_anchor.identity()?;
         if self.plan.identity(&self.receipt.saved) != current {
-            return Err("モデル再同意の現在の保存先・DB実体が変わりました".into());
+            return Err("モデル再確認の現在の保存先・DB実体が変わりました".into());
         }
         let models = Directory::root(Path::new(&self.receipt.saved.header.models_root))?;
         models.verify_identity(&self.receipt.saved.snapshot.models_root)?;
@@ -596,7 +596,7 @@ fn accept_inner(
     if expected_hash != review.census_hash
         || (!include_unregistered && review.plan.observations.iter().any(|o| !o.entry.registered))
     {
-        return Err("モデル再同意の確認対象・未登録物への明示同意が一致しません".into());
+        return Err("モデル再確認の確認対象・未登録物への明示した削除要求が一致しません".into());
     }
     let cancelled = || check() || lease.cancelled();
     let old = &review.receipt;
@@ -606,11 +606,11 @@ fn accept_inner(
         .as_ref()
         .map_or(1, |r| r.generation + 1);
     if generation > MAX_GENERATIONS {
-        return Err("モデル再同意の世代が安全上限を超えています".into());
+        return Err("モデル再確認の世代が安全上限を超えています".into());
     }
     let bytes = serde_json::to_vec(&review.plan).map_err(|e| e.to_string())?;
     if bytes.len() > intent::MAX_BYTES {
-        return Err("モデル再同意の対象証拠が容量上限を超えています".into());
+        return Err("モデル再確認の対象証拠が容量上限を超えています".into());
     }
     let record = Record {
         version: 3,
@@ -649,14 +649,14 @@ fn accept_inner(
             .progress
             .confirmation
             .as_ref()
-            .ok_or("モデル再同意の再送記録がありません")?;
+            .ok_or("モデル再確認の再送記録がありません")?;
         let (record, plan, _) = read_record(&db, reference, &old.saved)?;
         if current.saved != old.saved
             || record.previous_progress != old.progress
             || plan != review.plan
             || record.include_unregistered != include_unregistered
         {
-            return Err("モデル再同意の再送が保存した同意と一致しません".into());
+            return Err("モデル再確認の再送が保存した削除要求と一致しません".into());
         }
         super::verify_remaining(storage, &db, &current, &cancelled)?;
         active(lease, check)?;
@@ -678,7 +678,7 @@ fn accept_inner(
             .any(|o| o.entry.relative_path == path)
             || (!path.contains('/') && models.optional_kind(&reserved)?.is_some())
         {
-            return Err("モデル再同意の新しい予約名が既に存在します".into());
+            return Err("モデル再確認の新しい予約名が既に存在します".into());
         }
     }
     // Completed sources retain their SQL completed state. The v3 residual
@@ -716,11 +716,11 @@ fn accept_inner(
     event("auditCompleted");
     review.verify(storage, &tx, &cancelled)?;
     if tx.execute("UPDATE maintenance_operations SET progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND kind='delete_assets' AND state=?4 AND progress_json=?5",params![old.saved.header.operation_id,next.encode()?,consent,old.progress.state(),old.progress.encode()?]).map_err(|e|e.to_string())?!=1 {
-        return Err("モデル再同意の切替対象が変更されています".into());
+        return Err("モデル再確認の切替対象が変更されています".into());
     }
     let saved = Receipt::load(&tx, &old.saved.header.operation_id)?;
     if saved.plan != review.plan {
-        return Err("モデル再同意の保存結果が一致しません".into());
+        return Err("モデル再確認の保存結果が一致しません".into());
     }
     event("beforeCommit");
     active(lease, check)?;

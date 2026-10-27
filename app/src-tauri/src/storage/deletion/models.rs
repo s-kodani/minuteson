@@ -36,6 +36,8 @@ struct Observation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    directory_scope: bool,
     record: PlacementRecord,
     placed: bool,
     storage_root: Identity,
@@ -52,7 +54,11 @@ impl Snapshot {
         self.storage_root.validate(true)?;
         self.database.validate(false)?;
         self.models_root.validate(true)?;
-        let registered = expected(&self.record);
+        let registered = if self.directory_scope {
+            BTreeMap::from([(String::new(), None)])
+        } else {
+            expected(&self.record)
+        };
         let mut paths = BTreeMap::new();
         if self.observations.is_empty() || self.observations.len() > MAX_ENTRIES {
             return Err("モデル削除の保存対象数が不正です".into());
@@ -352,12 +358,34 @@ fn capture(
     storage.require_data_writable()?;
     Ok(result)
 }
+fn capture_directory(
+    storage: &Storage,
+    root: &Path,
+    package: &str,
+    review: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Snapshot, String> {
+    storage.require_data_writable()?;
+    let snapshot = capture_mode(storage, root, package, review, check, true)?;
+    storage.require_data_writable()?;
+    Ok(snapshot)
+}
 fn capture_unlocked(
     storage: &Storage,
     root: &Path,
     package: &str,
     review: &str,
     check: &impl Fn() -> bool,
+) -> Result<Snapshot, String> {
+    capture_mode(storage, root, package, review, check, false)
+}
+fn capture_mode(
+    storage: &Storage,
+    root: &Path,
+    package: &str,
+    review: &str,
+    check: &impl Fn() -> bool,
+    directory_scope: bool,
 ) -> Result<Snapshot, String> {
     validate_root(storage, root, package)?;
     let metadata = || -> Result<_, String> {
@@ -375,8 +403,30 @@ fn capture_unlocked(
     let models = Directory::root(root)?;
     let models_root = models.proof()?.identity;
     let (storage_root, database) = storage.managed_anchor.identity()?;
-    let observations = inventory(&models, &record, check)?;
-    if inventory(&models, &record, check)? != observations
+    let inventory = || {
+        if directory_scope {
+            let proof = models
+                .child(package)?
+                .map(|dir| dir.proof().map(|p| p.directory_scope()))
+                .transpose()?;
+            Ok(vec![Observation {
+                entry: Entry {
+                    relative_path: String::new(),
+                    directory: true,
+                    registered: true,
+                    present: proof.is_some(),
+                    bytes: None,
+                    sha256: None,
+                    changed: false,
+                },
+                proof,
+            }])
+        } else {
+            inventory(&models, &record, check)
+        }
+    };
+    let observations = inventory()?;
+    if inventory()? != observations
         || metadata()? != ((record.clone(), placed), counts)
         || models.proof()?.identity != models_root
         || storage.managed_anchor.identity()? != (storage_root.clone(), database.clone())
@@ -384,6 +434,7 @@ fn capture_unlocked(
         return Err("モデル削除の対象・記録が検査中に変更されました".into());
     }
     let snapshot = Snapshot {
+        directory_scope,
         record,
         placed,
         storage_root,
@@ -430,6 +481,14 @@ impl Snapshot {
             .map(|o| (o.entry.relative_path.as_str(), o))
             .collect();
         match package {
+            Some(directory) if self.directory_scope => {
+                let expected = self
+                    .observations
+                    .first()
+                    .and_then(|o| o.proof.as_ref())
+                    .ok_or("確認時にモデルフォルダーがありません")?;
+                directory.verify_identity(&expected.identity)?;
+            }
             Some(directory) => verify_metadata_tree(&directory, "", &expected, check)?,
             None if self.observations.iter().all(|o| o.proof.is_none()) => {}
             None => return Err("確認したモデルが消失しました".into()),

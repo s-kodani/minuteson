@@ -45,13 +45,13 @@ test("UI labels distinguish retained unknowns, availability commit and restored-
   assert.match(audioDeletionDispositionLabel("unclassified"), /保持/u);
   assert.match(audioDeletionPhaseLabel("availability"), /利用不可/u);
   assert.match(audioDeletionPhaseLabel("awaiting_ack"), /完了確認待ち/u);
-  assert.match(audioDeletionStartupLabel("restored_audio_scope_reappeared"), /削除同意がありません/u);
+  assert.match(audioDeletionStartupLabel("restored_audio_scope_reappeared"), /削除要求がありません/u);
   for (const reason of ["restored_audio_receipt_invalid", "restored_audio_scope_uninspectable"]) assert.match(audioDeletionStartupLabel(reason), /保持/u);
 });
 test("restored baseline UI never publishes even with both display consents", () => {
   const p: AudioDeletionPreview = { ...preview(), phase: "restored_unavailable", pending: true, executeAllowed: false, resumeReason: "no consent", reconfirmationAllowed: true };
   assert.equal(audioDeletionNewScope(p), false);
-  assert.match(audioDeletionPhaseLabel(p.phase), /削除同意なし/u);
+  assert.match(audioDeletionPhaseLabel(p.phase), /削除要求なし/u);
   assert.throws(() => audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, p.confirmationId));
 });
 test("restored new consent binds a new ID and the exact current page independently of old history", () => {
@@ -68,5 +68,5 @@ test("remaining-scope UI resets both consents while preserving the native operat
   assert.equal(audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, p.confirmationId).action, "delete_including_unregistered");
   const refreshed = { ...p, confirmationId: id(8) };
   assert.throws(() => audioDeletionPublishRequest(ready(refreshed), refreshed.confirmationId, page(p), p.confirmationId, p.confirmationId));
-  assert.match(audioDeletionPhaseLabel("reconfirmation"), /現在の音声範囲/u);
+  assert.match(audioDeletionPhaseLabel("reconfirmation"), /残りの音声の確認待ち/u);
 });

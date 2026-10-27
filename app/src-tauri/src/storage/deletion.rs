@@ -9,6 +9,8 @@ pub(crate) mod automatic;
 #[cfg(any(unix, windows))]
 mod completion;
 pub(in crate::storage) mod database;
+#[cfg(any(unix, windows))]
+mod directory_scope;
 
 // Read-only native-image inspection; not a deletion or cutover capability.
 #[cfg(any(target_os = "macos", windows))]

@@ -333,7 +333,7 @@ fn verify_records(
             || row_hash(&row)? != expected.row_hash
             || paths(db, &row.1, cancelled)? != (expected.path_count, expected.paths_hash.clone())
         {
-            return Err("コピー先の削除同意・対象・進捗が元の履歴と一致しません".into());
+            return Err("コピー先の削除要求・対象・進捗が元の履歴と一致しません".into());
         }
     }
     if rows.next().map_err(|e| e.to_string())?.is_some() {

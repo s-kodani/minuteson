@@ -12,11 +12,12 @@ test("settings no longer expose interrupted/deleted data management or manual re
   assert.doesNotMatch(read("../src/data-operation.ts"), /get_partial_recording_items|get_partial_recording_results/);
 });
 
-test("normal meeting/audio deletion keeps consent modals without administrative panels", () => {
+test("normal deletion uses a simple directory confirmation and retains audio-only checks", () => {
   for (const file of ["meeting-deletion", "audio-deletion"]) {
     const source = read(`../src/${file}.tsx`);
     assert.match(source, /<CommonModal portal/);
-    assert.match(source, /type="checkbox" checked=\{c.understood\}/);
+    if (file === "audio-deletion") assert.match(source, /type="checkbox" checked=\{c.understood\}/);
+    else { assert.match(source, /<DirectoryDeletionConfirmation/); assert.doesNotMatch(source, /type="checkbox"/); }
     assert.match(source, /<IssueNotice/);
     assert.doesNotMatch(source, /<section|未完了.*削除の対象を確認|quietMaintenance|visible: boolean/);
   }

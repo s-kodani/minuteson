@@ -164,37 +164,19 @@ fn selected_model_body_controller_deletes_exact_copy_and_replays_receipt() {
     assert_eq!(f.model.operation_count(), 1);
 }
 #[test]
-fn model_body_controller_changes_require_reinspection_and_unregistered_consent() {
+fn directory_model_controller_includes_changed_and_unregistered_contents() {
     let f = Fixture::new();
     let ready = f.ready();
-    std::fs::write(f.model.path("extra"), b"unknown").unwrap();
-    let failed = f.run(&ready, Action::Publish);
-    assert!(failed.model_deletion_receipt.is_none());
-    assert!(f.model.path("extra").exists());
-    assert!(f
-        .controller
-        .begin_request(f.request(&failed, Action::Publish))
-        .is_err());
-    let refreshed = f.run(&failed, Action::Refresh);
-    assert_ne!(
-        ready
-            .model_deletion_preview
-            .as_ref()
-            .unwrap()
-            .confirmation_id,
-        refreshed
-            .model_deletion_preview
-            .as_ref()
-            .unwrap()
-            .confirmation_id
+    assert_eq!(
+        ready.model_deletion_preview.as_ref().unwrap().scope_mode,
+        "directory"
     );
-    assert!(f
-        .controller
-        .begin_request(f.request(&refreshed, Action::Publish))
-        .is_err());
-    let done = f.run(&refreshed, Action::DeleteIncludingUnregistered);
+    std::fs::write(f.model.path("extra"), b"unknown").unwrap();
+    std::fs::write(f.model.path("weights/model.bin"), b"changed model").unwrap();
+    let done = f.run(&ready, Action::Publish);
     assert!(done.model_deletion_receipt.unwrap().body_deleted);
-    assert!(!f.model.path("extra").exists());
+    assert!(!f.model.path("").exists());
+    assert_eq!(f.model.storage.list_meetings().unwrap().len(), 1);
 }
 #[test]
 fn model_body_controller_stop_before_removal_can_keep_and_partial_stop_can_resume() {
@@ -323,11 +305,7 @@ fn model_deletion_native_snapshots_and_pages_match_frontend_contract() {
     let pending = f.pending(&operation);
     record(&pending);
     std::fs::write(f.model.path("extra"), b"changed scope").unwrap();
-    let failed = f.run(&pending, Action::Publish);
-    record(&failed);
-    let reconfirmed = f.run(&failed, Action::ReviewRemaining);
-    record(&reconfirmed);
-    let done = f.run(&reconfirmed, Action::DeleteIncludingUnregistered);
+    let done = f.run(&pending, Action::Publish);
     assert_eq!(done.phase, "completed");
     record(&done);
     let pending = f.pending(&operation);

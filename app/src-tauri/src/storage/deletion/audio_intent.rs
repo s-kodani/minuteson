@@ -139,7 +139,7 @@ impl Prepared {
                     .iter()
                     .any(|e| e.disposition == Disposition::Unclassified))
         {
-            return Err("音声だけの削除の保存された同意・方針・対象が不正です".into());
+            return Err("音声だけの削除の保存された削除要求・方針・対象が不正です".into());
         }
         Ok(())
     }
@@ -327,7 +327,7 @@ fn read_frame(
         row;
     let header: Header = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let kept = state == "recovered";
-    let consent = consent.ok_or("音声削除の同意時刻がありません")?;
+    let consent = consent.ok_or("音声削除の受付時刻がありません")?;
     let meeting_valid = match supersession {
         None => meeting.as_deref() == Some(header.meeting_id.as_str()),
         Some(proof) => {

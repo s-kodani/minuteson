@@ -50,10 +50,13 @@ pub(super) struct Manifest {
     pub reservation_roots: Vec<String>,
 }
 impl Manifest {
+    pub(super) fn directory_scope(&self) -> bool {
+        self.version == 3
+    }
     pub(super) fn validate_roots(&self) -> Result<(), String> {
         if !matches!(
             (self.version, self.reservation_roots.is_empty()),
-            (1, true) | (2, false)
+            (1, true) | (2, false) | (3, true)
         ) || self.reservation_roots.len() > MAX_RESERVATION_ROOTS
             || self
                 .reservation_roots
@@ -512,6 +515,61 @@ fn inventory(
 }
 
 impl Census {
+    pub(super) fn capture_directory(
+        storage: &Storage,
+        meeting: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        let db = crate::operation_observation::lock(&storage.connection)?;
+        Self::capture_directory_locked(storage, &db, meeting, "", check)
+    }
+    pub(super) fn capture_directory_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        cancel(check)?;
+        storage.managed_anchor.verify_current_history()?;
+        let scope = Scope::capture(db, meeting, operation, check)?;
+        let (root, database) = storage.managed_anchor.identity()?;
+        let proof = storage
+            .managed_anchor
+            .directory_ref()?
+            .child("meetings")?
+            .map(|parent| parent.child(meeting))
+            .transpose()?
+            .flatten()
+            .map(|dir| dir.proof().map(|proof| proof.directory_scope()))
+            .transpose()?;
+        let entries = proof
+            .into_iter()
+            .map(|proof| Entry {
+                path: format!("meetings/{meeting}"),
+                directory: true,
+                proof: Some(proof),
+                sha256: None,
+                registered: None,
+                stage_hint: None,
+            })
+            .collect();
+        let result = Self {
+            manifest: Manifest {
+                version: 3,
+                database_scope_hash: scope.hash()?,
+                meeting_id: meeting.into(),
+                root,
+                database,
+                entries,
+                reservation_roots: vec![],
+            },
+            scope,
+        };
+        result.encode()?;
+        Ok(result)
+    }
+
     // A deleted meeting cannot be looked up as a fresh deletion scope. Require
     // its canonical compound receipt, prove all original rows absent, and keep
     // that original scope hash. Reappeared files have no resurrected ownership.
@@ -1075,7 +1133,12 @@ impl Census {
         storage: &Storage,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let current = Self::capture(storage, &self.scope.meeting_id, check)?;
+        let capture = if self.manifest.directory_scope() {
+            Self::capture_directory
+        } else {
+            Self::capture
+        };
+        let current = capture(storage, &self.scope.meeting_id, check)?;
         if current.scope != self.scope || current.manifest != self.manifest {
             return Err("確認後にDB・ファイル・実体が変更されています。再確認してください".into());
         }

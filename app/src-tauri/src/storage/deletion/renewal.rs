@@ -164,7 +164,7 @@ fn active_plan(
                     .map_or(1, |p| p.generation.saturating_add(1))
             || created < record.previous_progress.consent_at()
         {
-            return Err("再確認と元の削除記録・同意・進捗の対応が不正です".into());
+            return Err("再確認と元の削除記録・削除要求・進捗の対応が不正です".into());
         }
         current = record.previous_progress.confirmation.clone();
         chain.push((reference, record, created));
@@ -229,7 +229,7 @@ fn active_plan(
         || database_phase != progress.database_phase
         || latest_consent.is_some_and(|c| c != progress.consent_at())
     {
-        return Err("現在の削除計画が固定した再同意と一致しません".into());
+        return Err("現在の削除計画が固定した再確認と一致しません".into());
     }
     progress.validate(original, &manifest)?;
     extend_roots(
@@ -423,7 +423,7 @@ impl Review {
         }
         let current = source.census(storage, db, check)?;
         if current.scope() != self.census.scope() || current.manifest() != self.census.manifest() {
-            return Err("再同意後に残りの対象が変わりました。新しい一覧を確認してください".into());
+            return Err("再確認後に残りの対象が変わりました。新しい一覧を確認してください".into());
         }
         Ok(())
     }
@@ -532,10 +532,10 @@ fn accept_inner(
     // The audit has no meeting FK; it does not change the original DB scope.
     review.verify(storage, &tx, &source, &check)?;
     if tx.execute("UPDATE maintenance_operations SET progress_json=?2,error_code=NULL,updated_at=max(updated_at,?3) WHERE id=?1 AND kind='delete_meeting' AND state=?5 AND progress_json=?4",params![original.operation(),next.encode()?,consent,source.progress_json()?,source.state()]).map_err(|e| e.to_string())? != 1 {
-        return Err("再同意の切替対象が変更されています".into());
+        return Err("再確認の切替対象が変更されています".into());
     }
     if active_manifest(&tx, original, &next, &check)? != *review.manifest() {
-        return Err("再同意の保存結果が一致しません".into());
+        return Err("再確認の保存結果が一致しません".into());
     }
     storage.managed_anchor.verify()?;
     event("beforeReviewCommit");

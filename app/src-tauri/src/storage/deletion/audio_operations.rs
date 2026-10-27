@@ -108,7 +108,7 @@ impl Target {
             Self::Reconfirmation(r) => r.verify_live(storage, lease, check)?,
             Self::Restored(r) => {
                 r.verify_live(storage, lease, check)?;
-                return Err("復元元の利用不可記録には削除同意がありません。現在の音声を新しい操作で確認してください".into());
+                return Err("復元元の利用不可記録には削除要求がありません。現在の音声を新しい操作で確認してください".into());
             }
             Self::Kept(_) => return Err("この音声削除は未開始のまま保持・中止済みです".into()),
         }
@@ -488,7 +488,9 @@ impl Prepared {
         active(lease, check)?;
         self.confirmation(confirmation)?;
         if !self.preview.reconfirmation_allowed {
-            return Err("この音声削除段階では追加同意を開始できません。残りを保持します".into());
+            return Err(
+                "この音声削除段階では追加削除要求を開始できません。残りを保持します".into(),
+            );
         }
         let (operation, target) = match &self.target {
             Target::Files(r) if !r.completed() => (
@@ -509,7 +511,7 @@ impl Prepared {
                     check,
                 )?),
             ),
-            _ => return Err("この音声削除段階では追加同意を開始できません".into()),
+            _ => return Err("この音声削除段階では追加削除要求を開始できません".into()),
         };
         *self = Self::build(storage, operation, target, lease, check)?;
         Ok(())

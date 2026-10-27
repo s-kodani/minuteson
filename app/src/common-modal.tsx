@@ -32,6 +32,7 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
   dismissLabel?: "キャンセル" | "閉じる";
   dismissText?: string;
   externalContent?: boolean;
+  hideDismissButton?: boolean;
   nested?: boolean;
   // A row action must not inherit the hidden maintenance settings view.
   portal?: boolean;
@@ -46,7 +47,7 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
 // Let showModal/close expose actual modality; closed and queued dialogs must
 // not advertise an independent, permanent ARIA modal state to WebKit AX.
 // Controllers retain all command, identity, consent and unknown-result guards.
-export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, nested = false, portal = false, replacement = null, persistentReplacement, className = "", children, ...attributes }: Props) {
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, hideDismissButton = false, nested = false, portal = false, replacement = null, persistentReplacement, className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
   const ref = suppliedRef ?? ownRef;
   const confirmation = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
@@ -285,7 +286,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       // the in-flight guard. Platform cancel events still use the same handler.
       keyDown({ key:event.key,shiftKey:event.shiftKey,target:event.target,defaultPrevented:event.defaultPrevented,repeat:event.repeat,isComposing:event.nativeEvent.isComposing,keyCode:event.nativeEvent.keyCode,preventDefault:()=>event.preventDefault(),stopPropagation:()=>event.stopPropagation() });
     }}>
-    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary icon-button" aria-label={customDismissText ?? `確認を${label}`} title={customDismissText ?? label} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}><ActionIcon name="close" /></button></div>
+    {(!hideDismissButton || owned || replacement) && <div className="common-modal-dismiss-row"><button type="button" className="small-secondary icon-button" aria-label={customDismissText ?? `確認を${label}`} title={customDismissText ?? label} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}><ActionIcon name="close" /></button></div>}
     {owned && <ConfirmationBody value={owned} />}
     <div ref={baseBody} className="common-modal-body" hidden={!!owned || !!replacement}>{children}</div>
     {(replacement || persistentReplacement != null) && <div className="common-modal-replacement" hidden={!replacement || !!owned}>{persistentReplacement ?? replacement?.content}</div>}
