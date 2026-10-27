@@ -340,7 +340,9 @@ fn rollback_itself_can_be_interrupted_without_deleting_restored_data() {
     for fresh in &j.fresh {
         let path = f.root.join(&fresh.name);
         if exists(&path).unwrap() {
-            remove_owned(&path, &fresh.identity).unwrap();
+            let metadata = meta(&path).unwrap();
+            assert!(j.matches_fresh(fresh, &metadata), "{}", fresh.name);
+            remove_owned(&path, &Identity::read(&metadata).unwrap()).unwrap();
         }
     }
     let (i, entry) = j

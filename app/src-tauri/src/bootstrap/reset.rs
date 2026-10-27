@@ -363,6 +363,25 @@ struct Journal {
     committed: bool,
 }
 impl Journal {
+    fn matches_fresh(&self, fresh: &Fresh, metadata: &Metadata) -> bool {
+        let Ok(actual) = Identity::read(metadata) else {
+            return false;
+        };
+        if actual == fresh.identity {
+            return true;
+        }
+        // NTFS can give a renamed file the creation time of the previous
+        // destination. Its volume and file ID still belong to our reservation.
+        // Accept only that exact, journaled previous creation time.
+        #[cfg(windows)]
+        if actual.device == fresh.identity.device && actual.inode == fresh.identity.inode {
+            return self.entries.iter().any(|entry| {
+                self.source(entry) == self.meeting.path.join(&fresh.name)
+                    && actual.birth_ns == entry.identity.birth_ns
+            });
+        }
+        false
+    }
     fn path(&self) -> PathBuf {
         self.config.path.join(JOURNAL)
     }
@@ -897,6 +916,12 @@ pub(crate) fn execute(
         }
         checkpoint("prepared")?;
         progress("旧データを初期化用の作業領域へ移しています");
+        // Windows cannot rename a directory with an open child, even with
+        // delete sharing. Startup IPC/controllers are already drained and the
+        // exclusive root lease prevents another MON from starting a writer.
+        // Existing helpers own pre-opened lease handles and were rejected above.
+        #[cfg(windows)]
+        drop(writer_leases.take());
         for (i, e) in j.entries.iter().enumerate() {
             b.guard_directory()?;
             lease.verify(s.root())?;
@@ -1082,7 +1107,7 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
             && !j
                 .fresh
                 .iter()
-                .any(|f| f.name == name && meta(&path).is_ok_and(|m| f.identity.matches(&m)))
+                .any(|f| f.name == name && meta(&path).is_ok_and(|m| j.matches_fresh(f, &m)))
             && !j
                 .entries
                 .iter()
@@ -1104,7 +1129,7 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
             if exists(&old)?
                 && !j.fresh.iter().any(|f| {
                     old == j.meeting.path.join(&f.name)
-                        && meta(&old).is_ok_and(|m| f.identity.matches(&m))
+                        && meta(&old).is_ok_and(|m| j.matches_fresh(f, &m))
                 })
             {
                 return Err("初期化後に別データが作られています。上書きしません".into());
@@ -1116,8 +1141,9 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
     for f in &j.fresh {
         let p = j.meeting.path.join(&f.name);
         if exists(&p)? {
-            if f.identity.matches(&meta(&p)?) {
-                remove_owned(&p, &f.identity)?;
+            let metadata = meta(&p)?;
+            if j.matches_fresh(f, &metadata) {
+                remove_owned(&p, &Identity::read(&metadata)?)?;
             } else if !j
                 .entries
                 .iter()
