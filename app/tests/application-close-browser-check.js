@@ -22,7 +22,8 @@ async (page) => {
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
   const request = () => page.evaluate(() => window.closeFixture.request(true));
-  const dismissFailed = async name => { await modal(name).locator(".action-error").waitFor(); await modal(name).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal(name).waitFor({ state: "hidden" }); };
+  const failure = name => modal(name).locator(".toast-card").filter({ hasText: "処理を完了できませんでした。" }).first();
+  const dismissFailed = async name => { await failure(name).waitFor(); await modal(name).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal(name).waitFor({ state: "hidden" }); };
   let stage = "setup";
   try {
     stage = "start-decline"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await modal(startTitle).waitFor();
@@ -46,7 +47,7 @@ async (page) => {
     check(await count("start_recording") === 0 && await page.locator("#recording-title").inputValue() === "終了検査の会議", "save failure started or erased original meeting context");
     results.push("failed edit flush retains meeting context and does not call recording start");
 
-    stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await modal(startTitle).locator(".action-error").waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);
+    stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await failure(startTitle).waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);
     const newStart = page.getByRole("button", { name: "録音を開始", exact: true });
     check((await newStart.count() === 0 || await newStart.isDisabled()) && await page.evaluate(() => window.closeFixture.recording.phase === "preparing"), "lost response fabricated idle");
     results.push("lost accepted-start acknowledgement retains canonical preparing state without replay");
@@ -78,11 +79,11 @@ async (page) => {
 
     for (const command of ["import", "data"]) {
       stage = `close-lost-${command}`; await boot(); if (command === "import") await configureImport(true); else await configureData();
-      await page.evaluate(command => { window.closeFixture[command === "import" ? "cancelImportLost" : "cancelDataLost"] = true; }, command); await request(); await accept().click(); await modal(title).getByRole("alert").waitFor(); check(await accept().isDisabled() && await count(command === "import" ? "cancel_audio_import" : "cancel_data_operation") === 1 && await count("finish_main_close") === 0, "lost cancellation replayed or closed app"); await dismissFailed(title);
+      await page.evaluate(command => { window.closeFixture[command === "import" ? "cancelImportLost" : "cancelDataLost"] = true; }, command); await request(); await accept().click(); await failure(title).waitFor(); check(await accept().isDisabled() && await count(command === "import" ? "cancel_audio_import" : "cancel_data_operation") === 1 && await count("finish_main_close") === 0, "lost cancellation replayed or closed app"); await dismissFailed(title);
       if (command === "import") await page.evaluate(() => window.closeFixture.finishImport(false)); else await page.evaluate(() => window.closeFixture.finishData(false));
       check(await count("finish_main_close") === 0, "uncertain close automatically resumed after later termination"); results.push(`lost ${command} cancellation acknowledgement is retained without replay or automatic continuation`);
     }
-    stage = "close-ack-lost"; await boot(); await page.evaluate(() => { window.closeFixture.activity.analysisBusy = true; window.closeFixture.finishLost = true; }); await request(); await accept().click(); await modal(title).getByRole("alert").waitFor(); check(await accept().isDisabled() && await count("finish_main_close") === 1, "lost close replayed"); await dismissFailed(title); check(await count("finish_main_close") === 1, "dismiss repeated close");
+    stage = "close-ack-lost"; await boot(); await page.evaluate(() => { window.closeFixture.activity.analysisBusy = true; window.closeFixture.finishLost = true; }); await request(); await accept().click(); await failure(title).waitFor(); check(await accept().isDisabled() && await count("finish_main_close") === 1, "lost close replayed"); await dismissFailed(title); check(await count("finish_main_close") === 1, "dismiss repeated close");
     results.push("lost final-close acknowledgement leaves the failure visible without resending exit");
 
     stage = "close-read-failure"; await boot(); await page.evaluate(() => { window.closeFixture.failRead = true; }); await request(); await page.getByRole("alert").filter({ hasText: "終了できませんでした" }).waitFor(); check(await count("finish_main_close") === 0 && await page.getByRole("dialog").count() === 0, "unknown native read fabricated quiet close");

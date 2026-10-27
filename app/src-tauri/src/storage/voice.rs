@@ -1083,7 +1083,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
         let (m, _, _) = super::super::playback::tests::fixture(&s);
-        let manifest_hash=s.canonical_audio_plan(&m).unwrap().manifest_hash;
+        let manifest_hash = s.canonical_audio_plan(&m).unwrap().manifest_hash;
         let input = AnalysisInput {
             audio_manifest_hash: manifest_hash,
             profile_snapshot: serde_json::json!({}),
@@ -1461,7 +1461,11 @@ mod tests {
                 params![m, sample],
             )
             .unwrap();
-        let path = root.path().join("meetings").join(m).join("audio/meeting.wav");
+        let path = root
+            .path()
+            .join("meetings")
+            .join(m)
+            .join("audio/meeting.wav");
         let mut bytes = std::fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         std::fs::write(path, bytes).unwrap();

@@ -84,7 +84,10 @@ impl Publication {
     }
 }
 
-pub(in crate::storage) fn target(db: &Transaction<'_>, meeting: &str) -> Result<Option<Target>, String> {
+pub(in crate::storage) fn target(
+    db: &Transaction<'_>,
+    meeting: &str,
+) -> Result<Option<Target>, String> {
     let (lifecycle, head): (String, Option<String>) = db
         .query_row(
             "SELECT lifecycle,current_analysis_id FROM meetings WHERE id=?1",

@@ -339,7 +339,10 @@ fn adoption_keeps_old_names_readable_and_discard_separate_from_current_analysis_
         .create_analysis_candidate(
             &old.meeting_id,
             AnalysisInput {
-                audio_manifest_hash: storage.canonical_audio_plan(&old.meeting_id).unwrap().manifest_hash,
+                audio_manifest_hash: storage
+                    .canonical_audio_plan(&old.meeting_id)
+                    .unwrap()
+                    .manifest_hash,
                 profile_snapshot: serde_json::json!({}),
                 config: serde_json::json!({}),
                 speakers: vec![

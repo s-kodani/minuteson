@@ -12,6 +12,9 @@ import tempfile
 import unittest
 import wave
 
+if sys.platform != "darwin":
+    raise unittest.SkipTest("The packaged macOS Whisper runtime smoke test requires macOS")
+
 SPEC = importlib.util.spec_from_file_location("mon_whisper_runtime_native", Path(__file__).resolve().parents[1] / "tools/mon_whisper_runtime.py")
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)

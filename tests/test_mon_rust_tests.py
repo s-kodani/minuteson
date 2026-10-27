@@ -10,6 +10,9 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+if os.name == "nt":
+    raise unittest.SkipTest("The shared Rust test-cache runner requires POSIX file locks and descriptor-relative I/O")
+
 SPEC = importlib.util.spec_from_file_location(
     "mon_rust_tests", Path(__file__).resolve().parents[1] / "tools" / "mon_rust_tests.py")
 runner = importlib.util.module_from_spec(SPEC)

@@ -253,7 +253,7 @@ impl Storage {
         }
         let before = self.audio_import(id)?;
         if before.state == "ready" {
-            self.publish_single_wav(&before.meeting_id,cancelled,&|_,_|{})?;
+            self.publish_single_wav(&before.meeting_id, cancelled, &|_, _| {})?;
             return Ok(before);
         }
         if before.state != "converting"
@@ -374,7 +374,7 @@ impl Storage {
         let result = read(&tx, id)?;
         tx.commit().map_err(|e| e.to_string())?;
         drop(db);
-        self.publish_single_wav(&before.meeting_id,cancelled,&|_,_|{})?;
+        self.publish_single_wav(&before.meeting_id, cancelled, &|_, _| {})?;
         Ok(result)
     }
     fn checked_import_file(

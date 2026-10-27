@@ -352,8 +352,15 @@ pub(super) fn load_output(
         .get(output.index)
         .ok_or("再開保存区間の位置が不正です")?;
     let track = &parameters.source.tracks[run.track_index];
-    storage.verify_meeting_asset_cancellable(&spec.meeting_id,&output.wav_asset_id,&output.wav_hash,cancelled)?;
-    if output.wav_asset_id!=track.chunks[0].asset_id || output.wav_hash!=track.chunks[0].hash {return Err("話者解析の共通音声参照が一致しません".into());}
+    storage.verify_meeting_asset_cancellable(
+        &spec.meeting_id,
+        &output.wav_asset_id,
+        &output.wav_hash,
+        cancelled,
+    )?;
+    if output.wav_asset_id != track.chunks[0].asset_id || output.wav_hash != track.chunks[0].hash {
+        return Err("話者解析の共通音声参照が一致しません".into());
+    }
     let bytes = storage.read_analysis_result(
         &spec.meeting_id,
         &output.result_asset_id,
@@ -440,12 +447,19 @@ pub(super) fn process_observed(
             }
             let track = &parameters.source.tracks[run.track_index];
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-            let wave_path=storage.meeting_mix_path(&spec.meeting_id,track)?;
-            let input=crate::transcription::input::Input::new(&wave_path,run.first_frame,run.end_frame,&cancelled)?;
+            let wave_path = storage.meeting_mix_path(&spec.meeting_id, track)?;
+            let input = crate::transcription::input::Input::new(
+                &wave_path,
+                run.first_frame,
+                run.end_frame,
+                &cancelled,
+            )?;
             input.write(&directory)?;
-            let frames=input.frames();
-            if frames!=run_frames(&parameters,index)? {return Err("話者解析の入力範囲が一致しません".into());}
-            let native_duration=(frames*1_000_000/16000) as i64;
+            let frames = input.frames();
+            if frames != run_frames(&parameters, index)? {
+                return Err("話者解析の入力範囲が一致しません".into());
+            }
+            let native_duration = (frames * 1_000_000 / 16000) as i64;
             let observer = super::runtime::Observer::new(&job, index, runtime_progress);
             observer.emit(0, false);
             let Some(segments) = sherpa::run_track_observed(
@@ -501,7 +515,7 @@ pub(super) fn process_observed(
                 return Err("保存区間の話者結果が容量上限を超えています".into());
             }
             crate::restored_processing::write_new(&directory.join("result.json"), &bytes)?;
-            let wav=&track.chunks[0];
+            let wav = &track.chunks[0];
             let mut stdout_path = directory.join("stdout.log");
             if runtime != parameters.engine {
                 let bytes = crate::restored_processing::read_local(

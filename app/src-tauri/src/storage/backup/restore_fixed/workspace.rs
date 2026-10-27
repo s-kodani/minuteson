@@ -271,7 +271,7 @@ impl FixedWorkspace {
             let import_manifest: bool = row.get(5).map_err(|e| e.to_string())?;
             let foundation: bool = row.get(6).map_err(|e| e.to_string())?;
             if super::super::super::meeting_audio::superseded_asset(&source.database, &id)? {
-                fixed.absent_superseded_asset(&meeting,&id)?;
+                fixed.absent_superseded_asset(&meeting, &id)?;
                 // Historical input hashes remain in the database. Their bytes
                 // were retired only after the canonical WAV was committed.
                 let destination = crate::native_fs::join(self.stage.path(), &relative);

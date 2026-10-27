@@ -104,24 +104,61 @@ const LOCK: &str = ".final-flac.lock";
 
 /// Validate sealed capture evidence without producing an intermediate FLAC.
 /// The authoritative maps are used for the one final WAV instead.
-pub(super) fn canonical_maps(storage:&Storage,base:&Path,manifest:&CaptureManifest,prefixes:&[Prefix])
-    ->Result<(Vec<ClockSegment>,Vec<ClockSegment>,Vec<crate::audio::VerifiedAudio>),String> {
-    let active:Vec<_>=prefixes.iter().filter(|p|p.frames()>0).collect();
-    let origin=active.iter().map(|p|p.first_capture_nanoseconds()).collect::<Result<Vec<_>,_>>()?.into_iter().min().ok_or("保存音声がありません")?;
-    let mut mic=Vec::new();let mut system=Vec::new();let mut originals=Vec::new();
+pub(super) fn canonical_maps(
+    storage: &Storage,
+    base: &Path,
+    manifest: &CaptureManifest,
+    prefixes: &[Prefix],
+) -> Result<
+    (
+        Vec<ClockSegment>,
+        Vec<ClockSegment>,
+        Vec<crate::audio::VerifiedAudio>,
+    ),
+    String,
+> {
+    let active: Vec<_> = prefixes.iter().filter(|p| p.frames() > 0).collect();
+    let origin = active
+        .iter()
+        .map(|p| p.first_capture_nanoseconds())
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .min()
+        .ok_or("保存音声がありません")?;
+    let mut mic = Vec::new();
+    let mut system = Vec::new();
+    let mut originals = Vec::new();
     for prefix in active {
-        let track=match prefix.lane(){crate::recording_segments::Lane::Microphone=>&manifest.microphone,crate::recording_segments::Lane::System=>&manifest.system};
-        let (parts,original)=groups(prefix,origin,track,manifest.clock_mapping_source.as_deref()==Some("sealed_raw_v1"),
-            (manifest.backend=="wasapi"&&manifest.clock_mapping_source.is_none()).then_some((storage,base)))?;
-        if let Some(original)=original {originals.push(original);}
-        let target=match prefix.lane(){crate::recording_segments::Lane::Microphone=>&mut mic,crate::recording_segments::Lane::System=>&mut system};
-        let mut frames=0;
+        let track = match prefix.lane() {
+            crate::recording_segments::Lane::Microphone => &manifest.microphone,
+            crate::recording_segments::Lane::System => &manifest.system,
+        };
+        let (parts, original) = groups(
+            prefix,
+            origin,
+            track,
+            manifest.clock_mapping_source.as_deref() == Some("sealed_raw_v1"),
+            (manifest.backend == "wasapi" && manifest.clock_mapping_source.is_none())
+                .then_some((storage, base)),
+        )?;
+        if let Some(original) = original {
+            originals.push(original);
+        }
+        let target = match prefix.lane() {
+            crate::recording_segments::Lane::Microphone => &mut mic,
+            crate::recording_segments::Lane::System => &mut system,
+        };
+        let mut frames = 0;
         for part in parts {
-            for mut map in part.clock_segments {map.source_frame_start+=frames;map.source_frame_end+=frames;target.push(map);}
-            frames+=part.frames as i64;
+            for mut map in part.clock_segments {
+                map.source_frame_start += frames;
+                map.source_frame_end += frames;
+                target.push(map);
+            }
+            frames += part.frames as i64;
         }
     }
-    Ok((mic,system,originals))
+    Ok((mic, system, originals))
 }
 
 fn hash(bytes: &[u8]) -> String {

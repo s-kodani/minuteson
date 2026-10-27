@@ -190,15 +190,35 @@ fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static Kno
     if actual.hash == hash {
         Ok(actual)
     } else {
-        static PREVIOUS: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
-        let previous = PREVIOUS.get_or_init(|| {
-            let objects = crate::storage::legacy_audio_migration::deletion_schema()?.clone();
-            let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
-            let targets = TARGETS.iter().copied().filter(|(name,_)| objects.iter().any(|(kind,table,_,_)| kind=="table" && table==name)).collect();
-            Ok(KnownSchema { version:34, objects, hash, targets })
-        }).as_ref().map_err(Clone::clone)?;
-        if previous.hash == hash { Ok(previous) }
-        else { Err("削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into()) }
+        static PREVIOUS: std::sync::OnceLock<Result<KnownSchema, String>> =
+            std::sync::OnceLock::new();
+        let previous = PREVIOUS
+            .get_or_init(|| {
+                let objects = crate::storage::legacy_audio_migration::deletion_schema()?.clone();
+                let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
+                let targets = TARGETS
+                    .iter()
+                    .copied()
+                    .filter(|(name, _)| {
+                        objects
+                            .iter()
+                            .any(|(kind, table, _, _)| kind == "table" && table == name)
+                    })
+                    .collect();
+                Ok(KnownSchema {
+                    version: 34,
+                    objects,
+                    hash,
+                    targets,
+                })
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        if previous.hash == hash {
+            Ok(previous)
+        } else {
+            Err("削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into())
+        }
     }
 }
 fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {

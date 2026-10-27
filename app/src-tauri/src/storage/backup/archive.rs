@@ -177,7 +177,7 @@ impl Snapshot<'_> {
             let asset = &item.asset;
             let reason = if self.deleted_audio.contains_asset(asset) {
                 Some(OmittedReason::SourceAudioDeleted)
-            } else if super::super::meeting_audio::superseded_asset(&db,&asset.id)? {
+            } else if super::super::meeting_audio::superseded_asset(&db, &asset.id)? {
                 Some(OmittedReason::SupersededAudio)
             } else if portable::temporary_pcm(&db, asset)? {
                 Some(OmittedReason::RecreatablePcm)
@@ -731,11 +731,17 @@ fn validate_inventory(
                 || e.source_size != size as u64
                 || e.source_sha256 != hash
                 || state != "missing"
-                || (referenced && !matches!(e.reason,OmittedReason::SourceAudioDeleted|OmittedReason::SupersededAudio))
+                || (referenced
+                    && !matches!(
+                        e.reason,
+                        OmittedReason::SourceAudioDeleted | OmittedReason::SupersededAudio
+                    ))
                 || match e.reason {
                     OmittedReason::RecreatablePcm => media != "audio/wav",
                     OmittedReason::NativeLog => media != "text/plain",
-                    OmittedReason::SupersededAudio => !super::super::meeting_audio::superseded_asset(db,&id)?,
+                    OmittedReason::SupersededAudio => {
+                        !super::super::meeting_audio::superseded_asset(db, &id)?
+                    }
                     OmittedReason::SourceAudioDeleted => {
                         !deleted.contains(&meeting) || !deleted_audio::audio_media(&media)
                     }

@@ -1879,12 +1879,25 @@ async fn get_archived_recording_input_notice_rows(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let analysis = app.state::<AnalysisController>();
-        let visible = || input_status::notice_window_visible(window.is_visible().ok(), window.is_minimized().ok());
+        let visible = || {
+            input_status::notice_window_visible(
+                window.is_visible().ok(),
+                window.is_minimized().ok(),
+            )
+        };
         app.state::<input_status::archived::ArchivedInputs>()
             .selected(&app.state::<Storage>(), &analysis, targets, &visible)
             .map(NoticeReply::ready)
-            .or_else(|error| if error == input_status::archived::PAUSED { Ok(NoticeReply::paused()) } else { Err(error) })
-    }).await.map_err(|e| e.to_string())?
+            .or_else(|error| {
+                if error == input_status::archived::PAUSED {
+                    Ok(NoticeReply::paused())
+                } else {
+                    Err(error)
+                }
+            })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2352,7 +2365,6 @@ pub fn run() {
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(PlaybackPreparations::default())
-
         .manage(AnalysisController::default())
         .manage(ImportController::default())
         .manage(DataController::default())
@@ -2512,10 +2524,10 @@ pub fn run() {
                 startup_attention::show(app.handle());
                 return Ok(());
             }
-            let handle=app.handle().clone();
+            let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let migrated=(||->Result<(),String>{
-                    let storage=handle.state::<Storage>();
+                let migrated = (|| -> Result<(), String> {
+                    let storage = handle.state::<Storage>();
                     #[cfg(any(unix, windows))]
                     if !storage.data_write_blocked() {
                         data_controller::finish_interrupted_deletions(&handle)?;
@@ -2528,27 +2540,45 @@ pub fn run() {
                         // deferred startup work, including migration, resumes.
                         return handle.state::<startup_attention::Startup>().ready();
                     }
-                    let errors=std::sync::Mutex::new(Vec::new());
-                    storage.recover_recordings_observed(&|_|{},&|item| {
-                        if item.phase=="failed" {if let Some(error)=item.error {errors.lock().unwrap().push(error);}}
+                    let errors = std::sync::Mutex::new(Vec::new());
+                    storage.recover_recordings_observed(&|_| {}, &|item| {
+                        if item.phase == "failed" {
+                            if let Some(error) = item.error {
+                                errors.lock().unwrap().push(error);
+                            }
+                        }
                     })?;
-                    let errors=errors.into_inner().map_err(|_|"録音復旧結果を取得できません")?;
-                    if !errors.is_empty() {return Err(errors.join("\n"));}
+                    let errors = errors
+                        .into_inner()
+                        .map_err(|_| "録音復旧結果を取得できません")?;
+                    if !errors.is_empty() {
+                        return Err(errors.join("\n"));
+                    }
                     storage.finish_pending_meeting_audio()?;
-                    storage.migrate_single_wav(&|done,total,meeting| {
-                        let _=handle.state::<startup_attention::Startup>().migration_progress(done,total,meeting);
+                    storage.migrate_single_wav(&|done, total, meeting| {
+                        let _ = handle
+                            .state::<startup_attention::Startup>()
+                            .migration_progress(done, total, meeting);
                     })?;
                     handle.state::<startup_attention::Startup>().ready()?;
-                    internal_logs::phase("application",None,None,"ready",None);
+                    internal_logs::phase("application", None, None, "ready", None);
                     Ok(())
                 })();
-                if let Err(error)=migrated {
-                    let _=handle.state::<startup_attention::Startup>().block(startup_attention::Failure::new(
-                        startup_attention::Stage::AudioMigration,error,Some(&root),handle.path().app_config_dir().ok().as_deref()));
+                if let Err(error) = migrated {
+                    let _ = handle.state::<startup_attention::Startup>().block(
+                        startup_attention::Failure::new(
+                            startup_attention::Stage::AudioMigration,
+                            error,
+                            Some(&root),
+                            handle.path().app_config_dir().ok().as_deref(),
+                        ),
+                    );
                     startup_attention::show(&handle);
                     return;
                 }
-                if let Err(error)=AnalysisController::kick(&handle) {internal_logs::report_error("analysis",&error);}
+                if let Err(error) = AnalysisController::kick(&handle) {
+                    internal_logs::report_error("analysis", &error);
+                }
             });
             Ok(())
         })

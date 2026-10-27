@@ -238,13 +238,18 @@ impl Storage {
 
     /// Exact DB lookup only; never enumerate another recording or its files.
     pub(crate) fn closed_input_recording(
-        &self, meeting: &str, owner: &str,
+        &self,
+        meeting: &str,
+        owner: &str,
     ) -> Result<Option<ClosedInputRecording>, String> {
         self.verify_closed_input_storage()?;
         if !crate::input_levels::valid_owner(meeting) || !crate::input_levels::valid_owner(owner) {
             return Err("録音通知の対象が不正です".into());
         }
-        let db = self.connection.lock().map_err(|_| "DBロックを取得できません")?;
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
         let row = db.query_row(
             "SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND r.state IN ('saved','interrupted','failed')",
             params![owner,meeting], |r| Ok(ClosedInputRecording {
@@ -657,8 +662,8 @@ impl Storage {
             load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません")?
         };
         let _meeting_owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
-        if session.state=="saved" {
-            self.publish_single_wav(&session.meeting_id,&||false,&|_,_|{})?;
+        if session.state == "saved" {
+            self.publish_single_wav(&session.meeting_id, &|| false, &|_, _| {})?;
             return Ok(session);
         }
         if !matches!(
@@ -734,17 +739,27 @@ impl Storage {
         if mic_unreceived && unreceived {
             return Err("両方の入力が未取得の録音は完了できません".into());
         }
-        #[cfg(any(unix,windows))]
-        let raw_prefixes = if manifest.microphone.raw_segments.is_some() || manifest.system.raw_segments.is_some() {
-            Some(self.verify_completed_raw_prefixes(&base,&manifest,session_id)?)
-        } else {None};
-        #[cfg(any(unix,windows))]
-        let clock_originals = if let Some(prefixes)=&raw_prefixes {
-            let (mic,system,originals)=flac::canonical_maps(self,&base,&manifest,prefixes)?;
-            if !mic_unreceived {manifest.microphone.clock_segments=Some(mic);}
-            if !unreceived {manifest.system.clock_segments=Some(system);}
+        #[cfg(any(unix, windows))]
+        let raw_prefixes = if manifest.microphone.raw_segments.is_some()
+            || manifest.system.raw_segments.is_some()
+        {
+            Some(self.verify_completed_raw_prefixes(&base, &manifest, session_id)?)
+        } else {
+            None
+        };
+        #[cfg(any(unix, windows))]
+        let clock_originals = if let Some(prefixes) = &raw_prefixes {
+            let (mic, system, originals) = flac::canonical_maps(self, &base, &manifest, prefixes)?;
+            if !mic_unreceived {
+                manifest.microphone.clock_segments = Some(mic);
+            }
+            if !unreceived {
+                manifest.system.clock_segments = Some(system);
+            }
             originals
-        } else {Vec::new()};
+        } else {
+            Vec::new()
+        };
         let capture_clock = manifest.validated_capture_clock()?;
         let mic_timeline = if mic_unreceived {
             clock::CaptureTimeline {
@@ -935,10 +950,10 @@ impl Storage {
         self.read_capture_manifest(&manifest_file)?;
         transaction.commit().map_err(|error| error.to_string())?;
         drop(connection);
-        #[cfg(any(unix,windows))]
+        #[cfg(any(unix, windows))]
         drop(clock_originals);
-        self.publish_single_wav(&session.meeting_id,&||false,&|_,total| {
-            crate::operation_observation::stage("mixing_audio",Some(total),"frames");
+        self.publish_single_wav(&session.meeting_id, &|| false, &|_, total| {
+            crate::operation_observation::stage("mixing_audio", Some(total), "frames");
         })?;
         Ok(saved)
     }

@@ -5,8 +5,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::time::SystemTime;
 
 pub(crate) mod flac;
-pub(crate) mod wave;
 pub(crate) mod reuse;
+pub(crate) mod wave;
 
 pub const PREVIEW_FRAMES: u64 = 65_536;
 

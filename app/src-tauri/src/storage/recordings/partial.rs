@@ -485,10 +485,8 @@ impl Storage {
         tx.execute("UPDATE meetings SET lifecycle='recorded',duration_us=?1,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND lock_version=?4",
             params![reviewed.summary.duration_us,now,reviewed.session.meeting_id,reviewed.meeting_version]).map_err(|e|e.to_string())?;
         super::super::analysis_flows::ensure_flow(&tx, &reviewed.session.meeting_id)?;
-        let source = super::super::audio_publication::inputs::read(
-            &tx,
-            &reviewed.session.meeting_id,
-        )?;
+        let source =
+            super::super::audio_publication::inputs::read(&tx, &reviewed.session.meeting_id)?;
         super::super::transcription::known::read(&tx, &reviewed.session.meeting_id, &source)?;
         for prefix in &reviewed.prefixes {
             prefix.verify_at(&self.root.join(&reviewed.base), cancelled)?;
@@ -503,7 +501,7 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         drop(connection);
         drop(publication);
-        self.publish_single_wav(&reviewed.session.meeting_id,cancelled,&|_,_|{})?;
+        self.publish_single_wav(&reviewed.session.meeting_id, cancelled, &|_, _| {})?;
         Ok(result)
     }
 }

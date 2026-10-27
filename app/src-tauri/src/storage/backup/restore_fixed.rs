@@ -531,12 +531,21 @@ impl<'p, 's> FixedData<'p, 's> {
         Ok(())
     }
 
-    pub(super) fn absent_superseded_asset(&self,meeting:&str,id:&str)->Result<(),String> {
-        let source=self.ids.source();
-        if !super::super::meeting_audio::superseded_asset(&source.database,id)? {return Err("置換済み音声の検査済み履歴がありません".into());}
-        self.ids.get("file_assets",meeting,id)?;
-        let (size,hash):(i64,String)=source.database.query_row("SELECT size_bytes,content_hash FROM file_assets WHERE id=?1 AND meeting_id=?2",params![id,meeting],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
-        self.remember_asset(meeting,id,&hash,size,hash.clone())?;
+    pub(super) fn absent_superseded_asset(&self, meeting: &str, id: &str) -> Result<(), String> {
+        let source = self.ids.source();
+        if !super::super::meeting_audio::superseded_asset(&source.database, id)? {
+            return Err("置換済み音声の検査済み履歴がありません".into());
+        }
+        self.ids.get("file_assets", meeting, id)?;
+        let (size, hash): (i64, String) = source
+            .database
+            .query_row(
+                "SELECT size_bytes,content_hash FROM file_assets WHERE id=?1 AND meeting_id=?2",
+                params![id, meeting],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        self.remember_asset(meeting, id, &hash, size, hash.clone())?;
         Ok(())
     }
 
@@ -627,8 +636,8 @@ impl<'p, 's> FixedData<'p, 's> {
         } else {
             super::super::transcription::read_audio_plan(&source.database, meeting)?
         };
-        if plan!=expected && super::retired_audio::verifies(&source.database,meeting,&plan)? {
-            expected=plan.clone();
+        if plan != expected && super::retired_audio::verifies(&source.database, meeting, &plan)? {
+            expected = plan.clone();
         }
         if plan != expected {
             return Err("固定音声のトラック・区間・時刻・由来が元版と一致しません".into());
@@ -653,8 +662,9 @@ impl<'p, 's> FixedData<'p, 's> {
         for track in &mut plan.tracks {
             track.id = self.ids.get("audio_tracks", meeting, &track.id)?;
             for chunk in &mut track.chunks {
-                if super::super::meeting_audio::superseded_asset(&source.database,&chunk.asset_id)? {
-                    self.absent_superseded_asset(meeting,&chunk.asset_id)?;
+                if super::super::meeting_audio::superseded_asset(&source.database, &chunk.asset_id)?
+                {
+                    self.absent_superseded_asset(meeting, &chunk.asset_id)?;
                 }
                 let (size, hash) = self.asset_hash(meeting, &chunk.asset_id, &chunk.hash)?;
                 // Audio samples are not transformed. A changed waveform is never

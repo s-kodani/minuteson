@@ -74,9 +74,13 @@ pub(crate) struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     migration: Option<AudioMigration>,
 }
-#[derive(Clone,Debug,Serialize,PartialEq,Eq)]
-#[serde(rename_all="camelCase")]
-pub(crate) struct AudioMigration {completed:usize,total:usize,meeting_id:String}
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AudioMigration {
+    completed: usize,
+    total: usize,
+    meeting_id: String,
+}
 pub(crate) struct Startup(Mutex<Report>);
 impl Default for Startup {
     fn default() -> Self {
@@ -97,13 +101,27 @@ impl Default for Startup {
     }
 }
 impl Startup {
-    pub(crate) fn ready_for_work(&self)->bool {
-        self.snapshot().is_ok_and(|s|s.phase==Phase::Ready)
+    pub(crate) fn ready_for_work(&self) -> bool {
+        self.snapshot().is_ok_and(|s| s.phase == Phase::Ready)
     }
-    pub(crate) fn migration_progress(&self,completed:usize,total:usize,meeting:&str)->Result<(),String> {
-        let mut state=self.0.lock().map_err(|_|"起動診断のロックを取得できません")?;
-        if state.phase!=Phase::Starting || completed>total {return Err("音声移行の進捗が不正です".into());}
-        state.migration=Some(AudioMigration {completed,total,meeting_id:meeting.to_owned()});
+    pub(crate) fn migration_progress(
+        &self,
+        completed: usize,
+        total: usize,
+        meeting: &str,
+    ) -> Result<(), String> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| "起動診断のロックを取得できません")?;
+        if state.phase != Phase::Starting || completed > total {
+            return Err("音声移行の進捗が不正です".into());
+        }
+        state.migration = Some(AudioMigration {
+            completed,
+            total,
+            meeting_id: meeting.to_owned(),
+        });
         Ok(())
     }
     #[cfg(any(target_os = "macos", windows))]

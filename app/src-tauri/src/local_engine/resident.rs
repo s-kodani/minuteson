@@ -164,7 +164,7 @@ impl Worker {
         }
         bytes.push(b'\n');
         if !self.initialized {
-            self.requires_pcm_ranges=matches!(kind,"whisper"|"sherpa"|"embedding");
+            self.requires_pcm_ranges = matches!(kind, "whisper" | "sherpa" | "embedding");
             writeln!(self.input, "{}", json!({"protocol":1,"id":id,"op":"init"}))
                 .map_err(|e| e.to_string())?;
             self.initialized = true;
@@ -240,8 +240,8 @@ impl Worker {
             }
             match value["op"].as_str() {
                 Some("ready") => {
-                    if self.requires_pcm_ranges && value["message"]!="canonical_pcm_range_v1" {
-                        self.failed=true;
+                    if self.requires_pcm_ranges && value["message"] != "canonical_pcm_range_v1" {
+                        self.failed = true;
                         return Err("推論ランタイムが共通WAVの範囲読出しに未対応です。更新版のランタイムを選択してください".into());
                     }
                 }

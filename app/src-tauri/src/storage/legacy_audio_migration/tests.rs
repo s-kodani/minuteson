@@ -55,7 +55,9 @@ fn migration_preserves_published_text_and_restarts_unfinished_analysis_once() {
     };
     let old = storage.enqueue_job(spec("legacy-pending")).unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    storage.save_job_checkpoint(&old.id,0,0,serde_json::json!({"outputs":[]})).unwrap();
+    storage
+        .save_job_checkpoint(&old.id, 0, 0, serde_json::json!({"outputs":[]}))
+        .unwrap();
     storage.migrate_single_wav(&|_, _, _| {}).unwrap();
     assert_eq!(storage.get_job(&old.id).unwrap().state, "cancelled");
     assert!(storage.fixed_job_input(&old.id).unwrap().1.is_some());
@@ -114,17 +116,47 @@ fn only_the_known_previous_schema_is_admitted_by_the_bridge() {
 
 #[test]
 fn failed_active_audio_flow_restarts_with_new_input_without_resuming_old_plan() {
-    let (_temp,storage,meeting,_)=super::super::audio_publication::tests::fixture();
-    storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET audio_policy='legacy'",[]).unwrap();
+    let (_temp, storage, meeting, _) = super::super::audio_publication::tests::fixture();
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute("UPDATE recording_sessions SET audio_policy='legacy'", [])
+        .unwrap();
     storage.ensure_analysis_flow(&meeting).unwrap();
-    let original=storage.analysis_flow(&meeting).unwrap().unwrap();
-    let hash:String=storage.connection.lock().unwrap().query_row("SELECT audio_manifest_hash FROM recording_sessions WHERE meeting_id=?1",[&meeting],|r|r.get(0)).unwrap();
-    let job=storage.enqueue_job(JobSpec {meeting_id:meeting.clone(),kind:JobKind::Transcription,operation_id:"failed-legacy-operation".into(),input_analysis_id:None,input_hash:hash,profile_snapshot:serde_json::json!({}),parameters:serde_json::json!({"schemaVersion":4}),total_units:Some(1)}).unwrap();
-    storage.acquire_next_job().unwrap().unwrap();storage.finish_job(&job.id,0,"failed",Some("synthetic_failure")).unwrap();
+    let original = storage.analysis_flow(&meeting).unwrap().unwrap();
+    let hash: String = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT audio_manifest_hash FROM recording_sessions WHERE meeting_id=?1",
+            [&meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let job = storage
+        .enqueue_job(JobSpec {
+            meeting_id: meeting.clone(),
+            kind: JobKind::Transcription,
+            operation_id: "failed-legacy-operation".into(),
+            input_analysis_id: None,
+            input_hash: hash,
+            profile_snapshot: serde_json::json!({}),
+            parameters: serde_json::json!({"schemaVersion":4}),
+            total_units: Some(1),
+        })
+        .unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    storage
+        .finish_job(&job.id, 0, "failed", Some("synthetic_failure"))
+        .unwrap();
     storage.connection.lock().unwrap().execute("UPDATE analysis_flows SET stage='attention',transcription_job_id=?2 WHERE meeting_id=?1",params![meeting,job.id]).unwrap();
-    storage.migrate_single_wav(&|_,_,_|{}).unwrap();
-    let next=storage.analysis_flow(&meeting).unwrap().unwrap();assert_eq!(next.stage,"pending");assert_ne!(next.id,original.id);
-    assert_eq!(storage.get_job(&job.id).unwrap().state,"failed");
+    storage.migrate_single_wav(&|_, _, _| {}).unwrap();
+    let next = storage.analysis_flow(&meeting).unwrap().unwrap();
+    assert_eq!(next.stage, "pending");
+    assert_ne!(next.id, original.id);
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "failed");
 }
 
 #[test]

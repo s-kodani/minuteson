@@ -28,7 +28,8 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
         .register_ready_meeting_asset(&meeting, &manifest_path, "application/json")
         .unwrap();
     let audio = dir.join("meeting.wav");
-    let mut bytes=crate::audio::wave::header(320000).unwrap(); bytes.extend(vec![0;640000]);
+    let mut bytes = crate::audio::wave::header(320000).unwrap();
+    bytes.extend(vec![0; 640000]);
     std::fs::write(s.managed_path(&audio).unwrap(), bytes).unwrap();
     let asset = s
         .register_ready_meeting_asset(&meeting, &audio, "audio/wav")

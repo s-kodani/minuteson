@@ -76,10 +76,18 @@ impl PlaybackMissingRange {
         reason: &str,
         total_us: i64,
     ) -> Result<Self, String> {
-        Self::at_rate(kind,start,end,reason,total_us,meeting::MEETING_RATE)
+        Self::at_rate(kind, start, end, reason, total_us, meeting::MEETING_RATE)
     }
-    pub(crate) fn at_rate(kind:&str,start:i64,end:i64,reason:&str,total_us:i64,rate:u32)->Result<Self,String> {
-        if !matches!(rate,16000|48000) || !matches!(kind, "mic" | "system" | "imported" | "processed")
+    pub(crate) fn at_rate(
+        kind: &str,
+        start: i64,
+        end: i64,
+        reason: &str,
+        total_us: i64,
+        rate: u32,
+    ) -> Result<Self, String> {
+        if !matches!(rate, 16000 | 48000)
+            || !matches!(kind, "mic" | "system" | "imported" | "processed")
             || start < 0
             || end <= start
             || end > total_us
@@ -89,8 +97,8 @@ impl PlaybackMissingRange {
         {
             return Err("会議音声の欠損記録が不正です".into());
         }
-        let start_frame =
-            u64::try_from(start as u128 * u128::from(rate) / 1000000).map_err(|_| "欠損位置が範囲外です")?;
+        let start_frame = u64::try_from(start as u128 * u128::from(rate) / 1000000)
+            .map_err(|_| "欠損位置が範囲外です")?;
         let end_frame = crate::audio_clock::frame_at(end, rate)?;
         Ok(Self {
             track_kind: kind.into(),

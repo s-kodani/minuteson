@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -111,6 +112,7 @@ class ReportTests(unittest.TestCase):
             trials[-1]["model_fingerprint"] = "f" * 64
             self.assertFalse(mon_report.build_report(self.config, self.run)["m1_06_ready_for_decision"])
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_reviewed_recording_requires_analysis_file(self):
         config = mon_report.load_config(self.config)
         scenario = mon_report.expand_recording_matrix(config)[0]["id"]
@@ -235,6 +237,7 @@ class ReportTests(unittest.TestCase):
             (self.run / "recordings.json").write_text(json.dumps({"results": [result]}), encoding="utf-8")
             self.assertEqual(mon_report.build_report(self.config, self.run)["recordings"]["reviewed_fail"], 0)
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_windows_audio_analysis_rejects_changed_capture_manifest(self):
         microphone = self.run / "microphone-0000.wav"
         system = self.run / "system-0000.wav"
@@ -275,6 +278,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("manifest is missing or changed",
                       mon_report.validate_audio_analysis(analysis, scenario, config, "fail"))
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_short_failed_recording_can_be_reviewed_without_late_window(self):
         microphone = self.run / "microphone.caf"
         system = self.run / "system.caf"

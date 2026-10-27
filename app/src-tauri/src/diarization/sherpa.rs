@@ -442,9 +442,13 @@ fn run_track_inner(
         .map(StableFile::watch)
         .collect::<Result<_, _>>()?;
     let directory = directory.canonicalize().map_err(|e| e.to_string())?;
-    let input=crate::transcription::input::Input::load(&directory,cancelled)?;
-    if input.frames()>i32::MAX as u64 || ((input.frames()*1_000_000/16000) as i64-duration_us).abs()>100 {return Err("話者分離の入力範囲が不正です".into());}
-    let wav=input.proof.path.clone();
+    let input = crate::transcription::input::Input::load(&directory, cancelled)?;
+    if input.frames() > i32::MAX as u64
+        || ((input.frames() * 1_000_000 / 16000) as i64 - duration_us).abs() > 100
+    {
+        return Err("話者分離の入力範囲が不正です".into());
+    }
+    let wav = input.proof.path.clone();
     let stdout_path = directory.join("stdout.log");
     let stderr_path = directory.join("stderr.log");
     let stdout = OpenOptions::new()
@@ -520,8 +524,10 @@ fn run_track_inner(
             })
         ))
         .arg(&wav)
-        .arg("--mon-first-frame").arg(input.first_frame.to_string())
-        .arg("--mon-end-frame").arg(input.end_frame.to_string());
+        .arg("--mon-first-frame")
+        .arg(input.first_frame.to_string())
+        .arg("--mon-end-frame")
+        .arg(input.end_frame.to_string());
     if crate::local_engine::resident::enabled() {
         let libraries: Vec<_> = config
             .runtime_libraries

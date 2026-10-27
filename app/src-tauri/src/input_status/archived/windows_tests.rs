@@ -118,3 +118,105 @@ fn delayed_other_meeting_history_does_not_hold_the_cache_registry() {
         meeting
     );
 }
+
+#[test]
+fn selected_rows_only_read_exact_closed_windows_recordings() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("data")).unwrap();
+    let (meeting, owner, _) = fixture(&storage);
+    let (other, other_owner, other_output) = fixture(&storage);
+    let analysis = AnalysisController::default();
+    let archive = ArchivedInputs::default();
+    let target = |meeting: &str, owner: &str| Target {
+        meeting_id: meeting.into(),
+        session_id: owner.into(),
+    };
+    let page = serde_json::to_value(
+        archive
+            .selected(&storage, &analysis, vec![target(&meeting, &owner)], &|| {
+                true
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(page["recordings"].as_array().unwrap().len(), 1);
+    assert_eq!(page["recordings"][0]["sessionId"], owner);
+    assert!(page["recordings"][0]["batch"]["notices"]
+        .as_array()
+        .is_some_and(|notices| !notices.is_empty()));
+    assert_eq!(page["missingSessionIds"], json!([]));
+    assert!(!other_output.join("input-notices.json").exists());
+    let wrong = serde_json::to_value(
+        archive
+            .selected(&storage, &analysis, vec![target(&other, &owner)], &|| true)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wrong["recordings"], json!([]));
+    assert_eq!(wrong["missingSessionIds"], json!([owner]));
+
+    // A valid owner that returns to an active state must not be read as closed.
+    crate::storage::with_test_database(&storage, |db| {
+        db.execute(
+            "UPDATE recording_sessions SET state='recording' WHERE id=?1",
+            [&other_owner],
+        )
+        .unwrap();
+    });
+    let active = serde_json::to_value(
+        archive
+            .selected(
+                &storage,
+                &analysis,
+                vec![target(&other, &other_owner)],
+                &|| true,
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(active["recordings"], json!([]));
+    assert_eq!(active["missingSessionIds"], json!([other_owner]));
+    assert!(!other_output.join("input-notices.json").exists());
+}
+
+#[test]
+fn selected_windows_rows_respect_visibility_and_maintenance() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("data")).unwrap();
+    let (meeting, owner, _) = fixture(&storage);
+    let analysis = AnalysisController::default();
+    let archive = ArchivedInputs::default();
+    let targets = || {
+        vec![Target {
+            meeting_id: meeting.clone(),
+            session_id: owner.clone(),
+        }]
+    };
+    let hidden = serde_json::to_value(
+        archive
+            .selected(&storage, &analysis, targets(), &|| false)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(hidden["recordings"][0]["batch"]["notices"], json!([]));
+    let maintenance = analysis
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert_eq!(
+        archive
+            .selected(&storage, &analysis, targets(), &|| true)
+            .err()
+            .unwrap(),
+        PAUSED
+    );
+    drop(maintenance);
+    let visible = serde_json::to_value(
+        archive
+            .selected(&storage, &analysis, targets(), &|| true)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(visible["recordings"][0]["batch"]["notices"]
+        .as_array()
+        .is_some_and(|notices| !notices.is_empty()));
+}

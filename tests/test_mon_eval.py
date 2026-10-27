@@ -342,7 +342,7 @@ class BenchmarkTests(unittest.TestCase):
                 '[[devices]]\nid = "mac-16"\nstatus = "available"\nrequired = true\nplatform = "macos"\n'
                 'architecture = "arm64"\nmemory_gib = 16\ncpu = "Fixture CPU"\npower_source = "AC"\n'
                 '[[datasets]]\nid = "fixture"\nstatus = "available"\nconsent_confirmed = true\n'
-                f'duration_seconds = 10\nsha256 = "{mon_eval.sha256_file(source)}"\nterms_path = "{terms}"\n', encoding="utf-8",
+                f'duration_seconds = 10\nsha256 = "{mon_eval.sha256_file(source)}"\nterms_path = {json.dumps(str(terms))}\n', encoding="utf-8",
             )
             (run / "run.json").write_text(json.dumps({
                 "config_sha256": mon_eval.sha256_file(config),

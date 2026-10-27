@@ -33,8 +33,12 @@ impl FixedData<'_, '_> {
         // engine paths. Recomputing its full revision hash would be invalid.
         // Verify the consumed semantic input hash instead; the target uses the
         // normal full snapshot reader after dependency reconstruction.
-        let view =
-            crate::storage::analysis::read_stored_analysis_content(db, &spec.meeting_id, id, &hash)?;
+        let view = crate::storage::analysis::read_stored_analysis_content(
+            db,
+            &spec.meeting_id,
+            id,
+            &hash,
+        )?;
         if crate::storage::minutes_input::working_hash(db, &view, &title, created, started, None)?
             != working
         {

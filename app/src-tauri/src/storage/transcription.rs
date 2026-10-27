@@ -91,11 +91,30 @@ impl TrackPlan {
         {
             return Err("時刻補正のトラックと音声区間の形式が一致しません".into());
         }
-        let chunks=self.chunks.iter().map(|chunk|ClockChunk {frames:chunk.frames,start_us:chunk.start_us,end_us:chunk.end_us,segments:&chunk.clock_segments}).collect::<Vec<_>>();
-        let layout=if chunks.len()==1 && matches!(self.kind.as_str(),"mic"|"system") {
-            let c=&chunks[0];
-            ClockLayout::capture_track(ClockChunk {frames:c.frames,start_us:c.start_us,end_us:c.end_us,segments:c.segments},self.sample_rate)?
-        } else {ClockLayout::new(&chunks,self.sample_rate)?};
+        let chunks = self
+            .chunks
+            .iter()
+            .map(|chunk| ClockChunk {
+                frames: chunk.frames,
+                start_us: chunk.start_us,
+                end_us: chunk.end_us,
+                segments: &chunk.clock_segments,
+            })
+            .collect::<Vec<_>>();
+        let layout = if chunks.len() == 1 && matches!(self.kind.as_str(), "mic" | "system") {
+            let c = &chunks[0];
+            ClockLayout::capture_track(
+                ClockChunk {
+                    frames: c.frames,
+                    start_us: c.start_us,
+                    end_us: c.end_us,
+                    segments: c.segments,
+                },
+                self.sample_rate,
+            )?
+        } else {
+            ClockLayout::new(&chunks, self.sample_rate)?
+        };
         if self.start_us != layout.start_us || self.end_us != layout.end_us {
             return Err("保存トラックと取得時計の端点が一致しません".into());
         }
@@ -112,7 +131,7 @@ impl TrackPlan {
             }) {
                 return Err("時刻補正のトラックと音声区間の形式が一致しません".into());
             }
-            let layout=self.clock_layout()?;
+            let layout = self.clock_layout()?;
             let (first, last) = layout.range(self.start_us, self.end_us, self.sample_rate)?;
             Ok(last - first)
         } else {
@@ -147,7 +166,8 @@ pub(super) fn read_audio_plan(
     meeting_id: &str,
 ) -> Result<RecordedAudioPlan, String> {
     super::deletion::audio::require_source(transaction, meeting_id)?;
-    super::meeting_audio::read(transaction, meeting_id)?.ok_or("共通WAVの保存が完了していません".into())
+    super::meeting_audio::read(transaction, meeting_id)?
+        .ok_or("共通WAVの保存が完了していません".into())
 }
 
 /// Restore-only metadata, not playable input or permission to enqueue work.
@@ -170,7 +190,7 @@ pub(super) fn read_analysis_audio_plan(
     let mixed = if let Some(history) = historical {
         super::meeting_mix::read_historical(db, meeting, history)?
     } else {
-        super::deletion::audio::require_source(db,meeting)?;
+        super::deletion::audio::require_source(db, meeting)?;
         super::meeting_mix::read(db, meeting)?
     };
     if let Some(plan) = mixed {

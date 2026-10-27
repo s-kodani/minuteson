@@ -105,10 +105,15 @@ fn windows_clock_drift_uses_the_same_committed_raw_maps_and_finalizes() {
     assert_eq!(value["clockMappingSource"], "sealed_raw_v1");
     f.storage.finalize_recording(&f.session).unwrap();
     let plan = f.storage.recorded_audio_plan(&f.meeting).unwrap();
-    assert_eq!(plan.tracks.len(),1);
-    assert_eq!(plan.tracks[0].kind,"processed");
-    assert_eq!(plan.tracks[0].end_us,plan.tracks[0].chunks[0].frames*1000000/16000);
-    f.storage.verify_canonical_audio(&f.meeting,&||false).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].kind, "processed");
+    assert_eq!(
+        plan.tracks[0].end_us,
+        plan.tracks[0].chunks[0].frames * 1000000 / 16000
+    );
+    f.storage
+        .verify_canonical_audio(&f.meeting, &|| false)
+        .unwrap();
 }
 
 #[test]
@@ -126,10 +131,24 @@ fn windows_legacy_clock_drift_recovers_to_canonical_audio_and_retains_manifest()
         manifest
     );
     assert!(!f.directory.join("microphone.caf").exists());
-    f.storage.verify_canonical_audio(&f.meeting,&||false).unwrap();
-    let source:String=crate::storage::with_test_database(&f.storage,|db|db.query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&f.meeting],|r|r.get(0)).unwrap());
-    let source:crate::storage::RecordedAudioPlan=serde_json::from_str(&source).unwrap();
-    assert!(source.tracks.iter().all(|t|t.chunks.iter().map(|c|c.clock_segments.len()).sum::<usize>()>=2));
+    f.storage
+        .verify_canonical_audio(&f.meeting, &|| false)
+        .unwrap();
+    let source: String = crate::storage::with_test_database(&f.storage, |db| {
+        db.query_row(
+            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+            [&f.meeting],
+            |r| r.get(0),
+        )
+        .unwrap()
+    });
+    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&source).unwrap();
+    assert!(source.tracks.iter().all(|t| t
+        .chunks
+        .iter()
+        .map(|c| c.clock_segments.len())
+        .sum::<usize>()
+        >= 2));
     assert!(f.storage.recover_completed_recordings().unwrap().is_empty());
 }
 
@@ -273,7 +292,9 @@ fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
         .unwrap();
         assert_eq!(prefix.frames(), 500 * 479);
         prefix.verify_unchanged(&|| false).unwrap();
-        let groups = prefix.flac_groups(9_000_000_000_000).unwrap();
+        let groups = prefix
+            .flac_groups(prefix.first_capture_nanoseconds().unwrap())
+            .unwrap();
         assert_eq!(
             groups.iter().map(|group| group.frames).sum::<u64>(),
             500 * 479
@@ -802,10 +823,10 @@ fn windows_parity_independent_input_recovery_and_sealed_history() {
         assert_eq!(history[input]["events"][1]["status"]["sourceEpoch"], 2);
     }
     let (plan, known) = storage.recorded_analysis_input(&meeting).unwrap();
-    assert_eq!(plan.tracks.len(),1);
-    assert_eq!(plan.tracks[0].kind,"processed");
-    assert!(known.unwrap().gaps.iter().all(|g|g.track_index==0));
-    storage.verify_canonical_audio(&meeting,&||false).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].kind, "processed");
+    assert!(known.unwrap().gaps.iter().all(|g| g.track_index == 0));
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }
 #[test]
 fn windows_parity_missing_microphone_keeps_pc_audio() {
@@ -815,7 +836,7 @@ fn windows_parity_missing_microphone_keeps_pc_audio() {
     assert_eq!(plan.tracks[0].kind, "processed");
     assert!(!output.join("microphone.caf").exists());
     assert!(!output.join("system.caf").exists());
-    storage.verify_canonical_audio(&meeting,&||false).unwrap();
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }
 #[test]
 fn windows_model_directory_keeps_existing_bytes_and_rejects_links_and_parent_replacement() {

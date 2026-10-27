@@ -308,15 +308,16 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
     let mut audio = s
         .prepare_track_audio(&saved.meeting_id, &plan.tracks[0].id, 0, 4_000_000)
         .unwrap();
-    let pcm=audio.read_pcm(63999,1).unwrap();
-    assert!((f32::from_le_bytes(pcm[..4].try_into().unwrap())+0.125).abs()<0.001);
+    let pcm = audio.read_pcm(63999, 1).unwrap();
+    assert!((f32::from_le_bytes(pcm[..4].try_into().unwrap()) + 0.125).abs() < 0.001);
     assert_eq!(s.finalize_audio_import(&snapshot.id).unwrap(), saved);
     assert_eq!(count(&s, "file_assets", &saved.meeting_id), 4);
     assert!(s.cleanup_audio_import(&snapshot.id).is_err());
     assert!(s.fail_audio_import(&snapshot.id, "failed", "bad").is_err());
     assert!(!base.join("original.wav").exists());
     assert!(!base.join("audio.flac").exists());
-    s.verify_canonical_audio(&saved.meeting_id,&||false).unwrap();
+    s.verify_canonical_audio(&saved.meeting_id, &|| false)
+        .unwrap();
     assert!(s
         .load_current_analysis(&saved.meeting_id)
         .unwrap()

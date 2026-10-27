@@ -2,6 +2,7 @@ import array
 import importlib.util
 import json
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,7 @@ class AudioAnalysisTests(unittest.TestCase):
         similarity = mon_audio.best_correlation(first, second, 50)
         self.assertIsNone(similarity["lag_ms"])
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_recorded_wav_pair_reports_known_delay_and_drift(self):
         rng = random.Random(42)
         source = [rng.randint(-12000, 12000) for _ in range(12000)]
@@ -52,6 +54,7 @@ class AudioAnalysisTests(unittest.TestCase):
             self.assertAlmostEqual(result["estimated_drift_ms"], 0, delta=1)
             self.assertGreater(result["early_window"]["cross_track"]["correlation"], 0.95)
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_caf_pair_uses_the_same_analysis_path(self):
         rng = random.Random(43)
         source = [rng.randint(-12000, 12000) for _ in range(7000)]
@@ -83,6 +86,7 @@ class AudioAnalysisTests(unittest.TestCase):
             self.assertEqual(cli_result["source_manifest_sha256"], mon_audio.sha256_file(manifest))
             self.assertEqual(cli_result["microphone_files"], [str(mic.resolve())])
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_segmented_tracks_analyze_a_window_across_file_boundaries(self):
         rng = random.Random(84)
         source = [rng.randint(-12000, 12000) for _ in range(12000)]
@@ -115,6 +119,7 @@ class AudioAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "outside"):
                 mon_audio.paths_from_windows_manifest(manifest)
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "Audio analysis requires ffmpeg and ffprobe on PATH")
     def test_windows_qpc_offsets_align_tracks_before_correlation(self):
         rng = random.Random(85)
         source = [rng.randint(-12000, 12000) for _ in range(12000)]

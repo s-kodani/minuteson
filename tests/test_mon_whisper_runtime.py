@@ -9,6 +9,9 @@ import sys
 import unittest
 from unittest.mock import patch
 
+if sys.platform == "win32":
+    raise unittest.SkipTest("The macOS Whisper runtime builder requires POSIX file locks and permissions")
+
 SPEC = importlib.util.spec_from_file_location("mon_whisper_runtime", Path(__file__).resolve().parents[1] / "tools/mon_whisper_runtime.py")
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)

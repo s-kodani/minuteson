@@ -28,9 +28,11 @@ fn rows(db: &Connection, table: &str) -> Vec<Vec<Value>> {
 fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting,analysis,_)=super::playback::tests::fixture(&storage);
-    storage.create_transcript_draft(&meeting,&analysis).unwrap();
-    asset(&storage,&meeting,b"second asset");
+    let (meeting, analysis, _) = super::playback::tests::fixture(&storage);
+    storage
+        .create_transcript_draft(&meeting, &analysis)
+        .unwrap();
+    asset(&storage, &meeting, b"second asset");
     let body = super::super::current_minutes_fixture::save(&storage, &meeting, "# 保持する追記\n");
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     draft

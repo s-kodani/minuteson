@@ -308,20 +308,52 @@ fn swift_system_rebinding_retains_pcm_gap_and_continuous_microphone() {
 
 #[test]
 fn corrected_capture_finalization_binds_physical_frames_clock_maps_utc_and_pcm_readers() {
-    let root=tempfile::tempdir().unwrap();let storage=Storage::open(root.path().into()).unwrap();
-    let (meeting,session,output,value)=corrected(&storage);
-    let saved=storage.finalize_recording(&session).unwrap();
-    assert_eq!(saved.state,"saved");assert_eq!(saved.duration_us,1005100);assert_eq!(saved.started_at_utc_ms,Some(1234567890000));
-    let json:String=storage.connection.lock().unwrap().query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&meeting],|r|r.get(0)).unwrap();
-    let original:crate::storage::RecordedAudioPlan=serde_json::from_str(&json).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, value) = corrected(&storage);
+    let saved = storage.finalize_recording(&session).unwrap();
+    assert_eq!(saved.state, "saved");
+    assert_eq!(saved.duration_us, 1005100);
+    assert_eq!(saved.started_at_utc_ms, Some(1234567890000));
+    let json: String = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+            [&meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let original: crate::storage::RecordedAudioPlan = serde_json::from_str(&json).unwrap();
     for track in original.tracks {
-        let lane=if track.kind=="mic" {"microphone"}else{"system"};
-        assert_eq!(serde_json::to_value(&track.chunks[0].clock_segments).unwrap(),value[lane]["clockSegments"]);
-        assert_eq!(track.chunks[0].frames,48000);
+        let lane = if track.kind == "mic" {
+            "microphone"
+        } else {
+            "system"
+        };
+        assert_eq!(
+            serde_json::to_value(&track.chunks[0].clock_segments).unwrap(),
+            value[lane]["clockSegments"]
+        );
+        assert_eq!(track.chunks[0].frames, 48000);
     }
-    let plan=storage.verify_canonical_audio(&meeting,&||false).unwrap();assert_eq!(plan.tracks.len(),1);assert_eq!(plan.tracks[0].chunks[0].frames,16082);
-    assert!(!output.join("microphone.caf").exists());assert!(!output.join("system.caf").exists());
-    let started:i64=storage.connection.lock().unwrap().query_row("SELECT started_at_utc_ms FROM meetings WHERE id=?1",[meeting],|r|r.get(0)).unwrap();assert_eq!(started,1234567890000);
+    let plan = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].chunks[0].frames, 16082);
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
+    let started: i64 = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT started_at_utc_ms FROM meetings WHERE id=?1",
+            [meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(started, 1234567890000);
 }
 
 #[test]
@@ -435,13 +467,21 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
         (500000, 3500000, "capture_timestamp_gap", 0)
     );
     drop(db);
-    let plan=storage.verify_canonical_audio(&meeting,&||false).unwrap();
-    assert_eq!(plan.tracks.len(),1);
-    let mut full=storage.prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {meeting_id:meeting,mode:crate::storage::meeting_playback::MeetingPlaybackMode::Mixed,start_reference:None}).unwrap();
+    let plan = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    let mut full = storage
+        .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
+            meeting_id: meeting,
+            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Mixed,
+            start_reference: None,
+        })
+        .unwrap();
     assert!(full.missing_ranges.is_empty());
-    assert_eq!(full.total_frames,64000);
-    assert_eq!(full.read_analysis_pcm(16000,16000).unwrap(),vec![0;16000*4]);
-
+    assert_eq!(full.total_frames, 64000);
+    assert_eq!(
+        full.read_analysis_pcm(16000, 16000).unwrap(),
+        vec![0; 16000 * 4]
+    );
 }
 
 #[test]
@@ -493,10 +533,21 @@ fn corrected_capture_restart_uses_the_saved_shared_origin_and_retains_bad_clock_
         .unwrap();
     assert_eq!(saved.started_at_utc_ms, Some(1234567890000));
     assert_eq!(saved.duration_us, 1005100);
-    reopened.verify_canonical_audio(&meeting,&||false).unwrap();
-    let json:String=reopened.connection.lock().unwrap().query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[&meeting],|r|r.get(0)).unwrap();
-    let source:crate::storage::RecordedAudioPlan=serde_json::from_str(&json).unwrap();assert_eq!(source.tracks[0].chunks[0].clock_segments.len(),2);
-
+    reopened
+        .verify_canonical_audio(&meeting, &|| false)
+        .unwrap();
+    let json: String = reopened
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+            [&meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&json).unwrap();
+    assert_eq!(source.tracks[0].chunks[0].clock_segments.len(), 2);
 }
 
 #[test]
@@ -514,6 +565,19 @@ fn old_capture_manifest_is_rejected_without_inventing_maps() {
 
 #[test]
 fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playback() {
+    fn source_plan(storage: &Storage, meeting: &str) -> crate::storage::RecordedAudioPlan {
+        let json: String = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+                [meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
     let root = tempfile::tempdir().unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
@@ -521,6 +585,7 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
     let (meeting, session, _, value) = corrected(&storage);
     storage.finalize_recording(&session).unwrap();
     let original = storage.recorded_audio_plan(&meeting).unwrap();
+    let original_source = source_plan(&storage, &meeting);
     let archive = output.path().join("clock.monbackup");
     storage
         .create_backup_archive(&archive, &crate::test_support::never_cancelled)
@@ -542,6 +607,15 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
     assert_eq!(receipt.meeting_ids.len(), 1);
     assert_eq!(target.get_meeting(&neighbor.id).unwrap(), Some(neighbor));
     let restored = target.recorded_audio_plan(&receipt.meeting_ids[0]).unwrap();
+    let restored_source = source_plan(&target, &receipt.meeting_ids[0]);
+    assert_eq!(original_source.tracks.len(), 2);
+    // Retired input IDs belong to the immutable historical snapshot. The
+    // canonical playback plan below is the current, rebased source of audio.
+    assert_eq!(original_source, restored_source);
+    assert!(restored_source.tracks.iter().all(|track| track
+        .chunks
+        .iter()
+        .all(|chunk| !chunk.clock_segments.is_empty())));
     for (before, after) in original.tracks.iter().zip(&restored.tracks) {
         assert_ne!(before.id, after.id);
         assert_ne!(before.chunks[0].asset_id, after.chunks[0].asset_id);
@@ -567,14 +641,14 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
     let db = target.connection.lock().unwrap();
     let path: String = db
         .query_row(
-            "SELECT relative_path FROM file_assets WHERE id=?1",
-            params![restored.manifest_asset_id],
+            "SELECT f.relative_path FROM file_assets f JOIN recording_sessions r ON r.meeting_id=f.meeting_id AND r.audio_manifest_hash=f.content_hash WHERE r.meeting_id=?1",
+            params![receipt.meeting_ids[0]],
             |r| r.get(0),
         )
         .unwrap();
     let config: String = db
         .query_row(
-            "SELECT processing_config_json FROM audio_tracks WHERE meeting_id=?1 LIMIT 1",
+            "SELECT processing_config_json FROM audio_tracks WHERE meeting_id=?1 AND kind='mic'",
             params![receipt.meeting_ids[0]],
             |r| r.get(0),
         )

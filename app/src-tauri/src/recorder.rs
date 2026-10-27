@@ -1548,7 +1548,6 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.session_id = None;
                 snapshot.error_message = None;
             });
-
         }
         Err(error) => {
             publish(&app, |snapshot| {

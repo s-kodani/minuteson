@@ -3,11 +3,11 @@
 mod guard;
 mod recovery;
 pub(crate) use recovery::ReviewRange;
+pub(crate) mod input;
 mod restore;
 pub(crate) mod vad;
 #[cfg(test)]
 pub(crate) mod wave;
-pub(crate) mod input;
 pub(crate) mod whisper;
 mod windows_acceleration;
 pub(crate) use restore::restore_saved_results;
@@ -211,9 +211,11 @@ fn verify_saved_pcm(
     output: &UnitOutput,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let plan=storage.verify_canonical_audio(&spec.meeting_id,cancelled)?;
-    let chunk=&plan.tracks[0].chunks[0];
-    if chunk.asset_id!=output.wav_asset_id||chunk.hash!=output.wav_hash {return Err("完了解析の音声参照が一致しません".into());}
+    let plan = storage.verify_canonical_audio(&spec.meeting_id, cancelled)?;
+    let chunk = &plan.tracks[0].chunks[0];
+    if chunk.asset_id != output.wav_asset_id || chunk.hash != output.wav_hash {
+        return Err("完了解析の音声参照が一致しません".into());
+    }
     Ok(())
 }
 
@@ -765,10 +767,11 @@ pub(crate) fn process(
             }
             let unit = &parameters.units[index];
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-            let track=&parameters.source.tracks[unit.track_index];
-            let path=storage.meeting_mix_path(&spec.meeting_id,track)?;
-            input::Input::new(&path,unit.window_first,unit.window_end,&cancelled)?.write(&directory)?;
-            let duration=((unit.window_end-unit.window_first)*1_000_000/16000) as i64;
+            let track = &parameters.source.tracks[unit.track_index];
+            let path = storage.meeting_mix_path(&spec.meeting_id, track)?;
+            input::Input::new(&path, unit.window_first, unit.window_end, &cancelled)?
+                .write(&directory)?;
+            let duration = ((unit.window_end - unit.window_first) * 1_000_000 / 16000) as i64;
             managed::verify(
                 &spec.profile_snapshot,
                 Execution::Whisper(&parameters.engine),
@@ -903,7 +906,7 @@ pub(crate) fn process(
                 Execution::Whisper(&parameters.engine),
                 &cancelled,
             )?;
-            let wav=&parameters.source.tracks[unit.track_index].chunks[0];
+            let wav = &parameters.source.tracks[unit.track_index].chunks[0];
             let register_result = |path: &std::path::Path| -> Result<_, String> {
                 let mut result_path = path.to_owned();
                 if !recovered && runtime.model.path != parameters.engine.model.path {

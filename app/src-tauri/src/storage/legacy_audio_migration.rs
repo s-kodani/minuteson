@@ -9,8 +9,10 @@ pub(super) fn admits_schema(version: usize) -> bool {
 
 // Immutable deletion receipts keep their schema-34 fingerprints. Recognizing
 // that repository-owned schema is read-only provenance, never new consent.
-pub(in crate::storage) fn deletion_schema() -> Result<&'static Vec<(String, String, String, String)>, String> {
-    static SCHEMA: std::sync::OnceLock<Result<Vec<(String, String, String, String)>, String>> = std::sync::OnceLock::new();
+pub(in crate::storage) fn deletion_schema(
+) -> Result<&'static Vec<(String, String, String, String)>, String> {
+    static SCHEMA: std::sync::OnceLock<Result<Vec<(String, String, String, String)>, String>> =
+        std::sync::OnceLock::new();
     SCHEMA.get_or_init(|| {
         let db = Connection::open_in_memory().map_err(|e| e.to_string())?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e| e.to_string())?;

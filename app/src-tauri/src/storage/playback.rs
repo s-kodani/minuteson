@@ -19,7 +19,7 @@ struct Chunk {
 }
 
 #[cfg(test)]
-#[path="playback_tests.rs"]
+#[path = "playback_tests.rs"]
 pub(in crate::storage) mod tests;
 
 impl Storage {
@@ -125,11 +125,29 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        let plan=self.canonical_audio_plan(meeting_id)?;
-        let belongs: bool=self.connection.lock().map_err(|_|"DBロックを取得できません")?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM audio_tracks WHERE id=?1 AND meeting_id=?2)",params![track,meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if !belongs {return Err("登録元の音声トラックが会議にありません".into());}
-        self.prepare_track_audio_mode(meeting_id, &plan.tracks[0].id, start, end, cancelled, false, true)
+        let plan = self.canonical_audio_plan(meeting_id)?;
+        let belongs: bool = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM audio_tracks WHERE id=?1 AND meeting_id=?2)",
+                params![track, meeting_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !belongs {
+            return Err("登録元の音声トラックが会議にありません".into());
+        }
+        self.prepare_track_audio_mode(
+            meeting_id,
+            &plan.tracks[0].id,
+            start,
+            end,
+            cancelled,
+            false,
+            true,
+        )
     }
 
     pub(in crate::storage) fn prepare_meeting_track_audio_cancellable(
@@ -359,9 +377,22 @@ impl Storage {
     }
 }
 
-fn source_layout(chunks:&[crate::audio_clock::ClockChunk<'_>],rate:u32)->Result<crate::audio_clock::ClockLayout,String> {
-    if chunks.len()==1 && chunks[0].segments.len()>1024 {
-        let c=&chunks[0];
-        crate::audio_clock::ClockLayout::capture_track(crate::audio_clock::ClockChunk {frames:c.frames,start_us:c.start_us,end_us:c.end_us,segments:c.segments},rate)
-    } else {crate::audio_clock::ClockLayout::new(chunks,rate)}
+fn source_layout(
+    chunks: &[crate::audio_clock::ClockChunk<'_>],
+    rate: u32,
+) -> Result<crate::audio_clock::ClockLayout, String> {
+    if chunks.len() == 1 && chunks[0].segments.len() > 1024 {
+        let c = &chunks[0];
+        crate::audio_clock::ClockLayout::capture_track(
+            crate::audio_clock::ClockChunk {
+                frames: c.frames,
+                start_us: c.start_us,
+                end_us: c.end_us,
+                segments: c.segments,
+            },
+            rate,
+        )
+    } else {
+        crate::audio_clock::ClockLayout::new(chunks, rate)
+    }
 }

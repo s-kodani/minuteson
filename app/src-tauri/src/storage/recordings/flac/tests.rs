@@ -44,8 +44,6 @@ fn caf(frames: u64) -> Vec<u8> {
 }
 
 #[cfg(target_os = "macos")]
-
-
 #[test]
 fn unreceived_system_recording_rejects_conflicting_payload_unclosed_owner_and_failures() {
     for problem in [
@@ -420,15 +418,7 @@ fn remove_reviewed_audio(storage: &Storage, meeting: &str) -> usize {
     count
 }
 
-
 #[cfg(target_os = "macos")]
-
-
-
-
-
-
-
 #[test]
 fn raw_clock_mismatch_rejects_conversion_before_outputs_or_saved_rows_exist() {
     let fixture = Fixture::new(2, 2000, false);
@@ -444,13 +434,6 @@ fn raw_clock_mismatch_rejects_conversion_before_outputs_or_saved_rows_exist() {
     assert!(!fixture.base.join(PLAN).exists());
     fixture.assert_no_registration();
 }
-
-
-
-
-
-
-
 
 pub(crate) fn partial_fixture() -> Fixture {
     interrupt_fixture(Fixture::new(2, 2000, true))
@@ -551,7 +534,6 @@ fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fak
             track.chunks.iter().map(|chunk| chunk.frames).sum::<i64>(),
             34000
         );
-
     }
     assert!(known
         .gaps
@@ -589,7 +571,9 @@ fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fak
     drop(fixture.storage);
     let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
     assert!(reopened.recover_completed_recordings().unwrap().is_empty());
-    assert!(reopened.pending_capture_input_for_test(&result.meeting_id).is_ok());
+    assert!(reopened
+        .pending_capture_input_for_test(&result.meeting_id)
+        .is_ok());
     assert_eq!(
         load_session(&reopened.connection.lock().unwrap(), &result.id)
             .unwrap()
@@ -1100,12 +1084,26 @@ fn dense_raw_maps(fixture: &Fixture) {
     write(&manifest_path, &serde_json::to_vec(&manifest).unwrap());
 }
 
-fn assert_partial_whole_meeting_playback(storage:&Storage,meeting:&str,duration:i64) {
-    use crate::storage::meeting_playback::{MeetingPlaybackMode,MeetingPlaybackRequest};
-    let audio=storage.prepare_meeting_audio(&MeetingPlaybackRequest{meeting_id:meeting.into(),mode:MeetingPlaybackMode::Mixed,start_reference:None}).unwrap();
-    let store=crate::playback::PlaybackStore::default();let info=store.insert_meeting(audio).unwrap();
-    assert_eq!(info.end_us,duration);assert_eq!(info.sample_rate,16000);assert!(info.missing_ranges.is_empty());
-    assert!(store.read(&info.token,crate::audio_clock::frame_at(4_800_000,16000).unwrap()).is_ok());
+fn assert_partial_whole_meeting_playback(storage: &Storage, meeting: &str, duration: i64) {
+    use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
+    let audio = storage
+        .prepare_meeting_audio(&MeetingPlaybackRequest {
+            meeting_id: meeting.into(),
+            mode: MeetingPlaybackMode::Mixed,
+            start_reference: None,
+        })
+        .unwrap();
+    let store = crate::playback::PlaybackStore::default();
+    let info = store.insert_meeting(audio).unwrap();
+    assert_eq!(info.end_us, duration);
+    assert_eq!(info.sample_rate, 16000);
+    assert!(info.missing_ranges.is_empty());
+    assert!(store
+        .read(
+            &info.token,
+            crate::audio_clock::frame_at(4_800_000, 16000).unwrap()
+        )
+        .is_ok());
 }
 
 #[test]
@@ -1418,15 +1416,43 @@ fn partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh
 
 // Inspect retained capture provenance in recovery tests; normal readers use WAV.
 impl Storage {
-    fn pending_capture_input_for_test(&self,meeting:&str)->Result<(crate::storage::RecordedAudioPlan,Option<crate::storage::KnownInput>),String> {
-        let db=self.connection.lock().unwrap();
-        crate::storage::deletion::audio::require_source(&db,meeting)?;
+    fn pending_capture_input_for_test(
+        &self,
+        meeting: &str,
+    ) -> Result<
+        (
+            crate::storage::RecordedAudioPlan,
+            Option<crate::storage::KnownInput>,
+        ),
+        String,
+    > {
+        let db = self.connection.lock().unwrap();
+        crate::storage::deletion::audio::require_source(&db, meeting)?;
         let interrupted:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE meeting_id=?1 AND state='interrupted')",[meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if interrupted && !crate::storage::transcription::partial_recording_committed(&db,meeting)? {return Err("部分救出の元の確定記録が変更されています".into());}
-        let saved:Option<String>=db.query_row("SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",[meeting],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-        let source=if let Some(json)=saved {serde_json::from_str(&json).map_err(|e|e.to_string())?}else{crate::storage::audio_publication::inputs::read(&db,meeting)?};
-        let known=crate::storage::transcription::known::read(&db,meeting,&source)?;
-        Ok((source,Some(known)))
+        if interrupted && !crate::storage::transcription::partial_recording_committed(&db, meeting)?
+        {
+            return Err("部分救出の元の確定記録が変更されています".into());
+        }
+        let saved: Option<String> = db
+            .query_row(
+                "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+                [meeting],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let source = if let Some(json) = saved {
+            serde_json::from_str(&json).map_err(|e| e.to_string())?
+        } else {
+            crate::storage::audio_publication::inputs::read(&db, meeting)?
+        };
+        let known = crate::storage::transcription::known::read(&db, meeting, &source)?;
+        Ok((source, Some(known)))
     }
-    fn pending_capture_audio_for_test(&self,meeting:&str)->Result<crate::storage::RecordedAudioPlan,String> {self.pending_capture_input_for_test(meeting).map(|v|v.0)}
+    fn pending_capture_audio_for_test(
+        &self,
+        meeting: &str,
+    ) -> Result<crate::storage::RecordedAudioPlan, String> {
+        self.pending_capture_input_for_test(meeting).map(|v| v.0)
+    }
 }

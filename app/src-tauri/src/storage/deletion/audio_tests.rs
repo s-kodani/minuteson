@@ -301,7 +301,8 @@ fn audio_only_census_includes_processed_tracks_and_registered_audio_outside_prod
                 .strip_prefix(f.storage.root())
                 .unwrap()
                 .to_str()
-                .unwrap().replace('\\',"/")],
+                .unwrap()
+                .replace('\\', "/")],
             |r| r.get(0),
         )
         .unwrap();
@@ -637,7 +638,8 @@ fn audio_only_census_rejects_manifest_misclassification_instead_of_erasing_prove
                 .strip_prefix(f.storage.root())
                 .unwrap()
                 .to_str()
-                .unwrap().replace('\\',"/")],
+                .unwrap()
+                .replace('\\', "/")],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();

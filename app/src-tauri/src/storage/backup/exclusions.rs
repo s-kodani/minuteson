@@ -36,7 +36,7 @@ pub(super) fn retain(
             archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
             archive::OmittedReason::NativeLog => "native_log",
             archive::OmittedReason::SupersededAudio => {
-                if !super::super::meeting_audio::superseded_asset(db,&asset)? {
+                if !super::super::meeting_audio::superseded_asset(db, &asset)? {
                     return Err("置換済み原音声の除外証拠がありません".into());
                 }
                 continue;

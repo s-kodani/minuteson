@@ -134,9 +134,9 @@ pub(super) fn resolve(
         resolved.configure(&mut config)?;
         Ok(Some(resolved))
     })();
-    let probe=directory.join("input.wav");
+    let probe = directory.join("input.wav");
     crate::local_engine::verification::release(&probe)?;
-    std::fs::remove_file(&probe).map_err(|e|e.to_string())?;
+    std::fs::remove_file(&probe).map_err(|e| e.to_string())?;
     if cancelled() {
         return Ok(None);
     }

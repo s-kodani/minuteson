@@ -169,7 +169,11 @@ impl Directory {
         self.verify()?;
         Ok(child)
     }
-    pub(in crate::storage) fn optional(&self, leaf: &str, writable: bool) -> Result<Option<File>, String> {
+    pub(in crate::storage) fn optional(
+        &self,
+        leaf: &str,
+        writable: bool,
+    ) -> Result<Option<File>, String> {
         self.verify()?;
         let fd = unsafe {
             libc::openat(
@@ -209,7 +213,10 @@ impl Directory {
         Identity::file(&file)?;
         Ok(file)
     }
-    pub(in crate::storage) fn read_json(&self, leaf: &str) -> Result<Option<(Vec<u8>, Stamp)>, String> {
+    pub(in crate::storage) fn read_json(
+        &self,
+        leaf: &str,
+    ) -> Result<Option<(Vec<u8>, Stamp)>, String> {
         let Some(mut file) = self.optional(leaf, false)? else {
             return Ok(None);
         };
@@ -229,7 +236,12 @@ impl Directory {
         stamp.require(&self.required(leaf, false)?)?;
         Ok(Some((bytes, stamp)))
     }
-    pub(in crate::storage) fn rename(&self, from: &str, to: &str, exclusive: bool) -> Result<(), String> {
+    pub(in crate::storage) fn rename(
+        &self,
+        from: &str,
+        to: &str,
+        exclusive: bool,
+    ) -> Result<(), String> {
         self.verify()?;
         let from = name(from)?;
         let to = name(to)?;

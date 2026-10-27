@@ -264,7 +264,11 @@ impl ArchivedInputs {
         let (rows, next_cursor) = storage.closed_input_recordings(after)?;
         drop(discovery);
         let recordings = self.read_rows(storage, fallback, analysis, rows, visible)?;
-        Ok(Page { schema_version: 3, recordings, next_cursor })
+        Ok(Page {
+            schema_version: 3,
+            recordings,
+            next_cursor,
+        })
     }
     pub(crate) fn selected(
         &self,
@@ -274,13 +278,19 @@ impl ArchivedInputs {
         visible: &impl Fn() -> bool,
     ) -> Result<SelectedRows, String> {
         let mut ids = std::collections::BTreeSet::new();
-        if targets.is_empty() || targets.len() > 32 || targets.iter().any(|t|
-            !crate::input_levels::valid_owner(&t.meeting_id)
-            || !crate::input_levels::valid_owner(&t.session_id)
-            || !ids.insert(t.session_id.clone())) {
+        if targets.is_empty()
+            || targets.len() > 32
+            || targets.iter().any(|t| {
+                !crate::input_levels::valid_owner(&t.meeting_id)
+                    || !crate::input_levels::valid_owner(&t.session_id)
+                    || !ids.insert(t.session_id.clone())
+            })
+        {
             return Err("保存後通知の対象指定が不正です".into());
         }
-        let discovery = analysis.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?;
+        let discovery = analysis
+            .try_begin_scoped_notice_storage(None)?
+            .ok_or(PAUSED)?;
         let mut rows = Vec::new();
         let mut missing_session_ids = Vec::new();
         for target in targets {
@@ -292,7 +302,11 @@ impl ArchivedInputs {
         discovery.validate_active()?;
         drop(discovery);
         let recordings = self.read_rows(storage, None, Some(analysis), rows, visible)?;
-        Ok(SelectedRows { schema_version: 1, recordings, missing_session_ids })
+        Ok(SelectedRows {
+            schema_version: 1,
+            recordings,
+            missing_session_ids,
+        })
     }
     fn read_rows(
         &self,

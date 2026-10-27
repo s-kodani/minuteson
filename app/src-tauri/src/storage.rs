@@ -12,6 +12,7 @@ mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
 // Backup snapshot/archive core; additive restore and controller integration follow.
+mod audio_publication;
 #[allow(dead_code)]
 pub(crate) mod backup;
 mod capture_preferences;
@@ -32,18 +33,15 @@ pub(crate) mod imports;
 #[cfg(test)]
 mod initialization_tests;
 mod jobs;
+pub(crate) mod legacy_audio_migration;
 pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 pub(crate) mod markdown_generation_tests;
 pub(crate) mod meeting_access;
 #[cfg(test)]
 mod meeting_access_tests;
-pub(crate) mod meeting_mix;
 pub(crate) mod meeting_audio;
-mod audio_publication;
-#[cfg(any(unix,windows))]
-mod publication_files;
-pub(crate) mod legacy_audio_migration;
+pub(crate) mod meeting_mix;
 mod meeting_playback;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
@@ -55,6 +53,8 @@ mod model_placements;
 pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
+#[cfg(any(unix, windows))]
+mod publication_files;
 #[cfg(any(target_os = "macos", windows))]
 pub(crate) mod read_cache;
 mod recording_preparation;

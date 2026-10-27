@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -42,6 +43,7 @@ class BackupCorruptionFixturesTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 fixtures.corruption_copies(copies[name])
 
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "Private fixture generation requires POSIX no-follow opens and permissions")
     def test_generate_preserves_source_and_uses_private_non_overwriting_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -59,6 +61,7 @@ class BackupCorruptionFixturesTests(unittest.TestCase):
                 self.assertEqual(Path(entry["path"]).stat().st_mode & 0o777, 0o600)
                 self.assertEqual(entry["sha256"], hashlib.sha256(Path(entry["path"]).read_bytes()).hexdigest())
 
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "Private fixture generation requires POSIX no-follow opens and permissions")
     def test_reject_source_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

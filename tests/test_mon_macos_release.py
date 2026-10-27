@@ -20,6 +20,7 @@ IDENTITY = f"Developer ID Application: Test Team ({TEAM})"
 REQUEST = "a3a0c196-188e-4ec0-99d2-55be4cb4e327"
 
 
+@unittest.skipIf(os.name == "nt", "The macOS release fixtures require POSIX runtime packaging and permissions")
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

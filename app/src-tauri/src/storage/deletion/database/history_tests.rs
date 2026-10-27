@@ -49,7 +49,10 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
         );
         assert_eq!(trusted_history_schema(&db).is_ok(), current);
         assert_eq!(trusted_schema(&db).is_ok(), current);
-        assert_eq!(initialize_database(&mut db).is_ok(), current || version == 34);
+        assert_eq!(
+            initialize_database(&mut db).is_ok(),
+            current || version == 34
+        );
         if version == 34 {
             assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
         } else {
@@ -82,7 +85,9 @@ fn pre_audio_migration_receipt_is_readable_but_never_current_deletion_consent() 
     assert_eq!(known.targets.len() + 2, TARGETS.len());
     let mut scope = empty_scope();
     scope.schema_hash = hash;
-    scope.tables.retain(|t| known.targets.iter().any(|(name,_)| *name == t.name));
+    scope
+        .tables
+        .retain(|t| known.targets.iter().any(|(name, _)| *name == t.name));
     let original = scope.encode().unwrap();
     let mut db = database(MIGRATIONS.len());
     scope.validate_format(&db).unwrap();

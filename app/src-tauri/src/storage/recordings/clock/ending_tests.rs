@@ -7,12 +7,29 @@ use rusqlite::params;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-fn assert_whole_gap_playback(storage:&Storage,meeting:&str,end:i64) {
-    let store=PlaybackStore::default();
-    let info=store.insert_meeting(storage.prepare_meeting_audio(&MeetingPlaybackRequest {meeting_id:meeting.into(),mode:MeetingPlaybackMode::Mixed,start_reference:None}).unwrap()).unwrap();
-    assert_eq!((info.start_us,info.end_us,info.track_kind.as_str()),(0,end,"mixed"));
-    assert_eq!(info.total_frames,crate::audio_clock::frame_at(end,16000).unwrap());
-    assert!(info.missing_ranges.is_empty());assert!(store.read(&info.token,0).is_ok());
+fn assert_whole_gap_playback(storage: &Storage, meeting: &str, end: i64) {
+    let store = PlaybackStore::default();
+    let info = store
+        .insert_meeting(
+            storage
+                .prepare_meeting_audio(&MeetingPlaybackRequest {
+                    meeting_id: meeting.into(),
+                    mode: MeetingPlaybackMode::Mixed,
+                    start_reference: None,
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        (info.start_us, info.end_us, info.track_kind.as_str()),
+        (0, end, "mixed")
+    );
+    assert_eq!(
+        info.total_frames,
+        crate::audio_clock::frame_at(end, 16000).unwrap()
+    );
+    assert!(info.missing_ranges.is_empty());
+    assert!(store.read(&info.token, 0).is_ok());
 }
 
 fn ending(storage: &Storage) -> (String, String, PathBuf, Value) {
@@ -50,22 +67,38 @@ fn meeting_duration(storage: &Storage, meeting: &str) -> i64 {
 
 #[test]
 fn capture_ending_preserves_physical_pcm_boundary_gaps_actual_end_and_commit_time_on_restart() {
-    let root=tempfile::tempdir().unwrap();let storage=Storage::open(root.path().into()).unwrap();
-    let (meeting,session,output,_)=ending(&storage);let manifest=std::fs::read(output.join("manifest.json")).unwrap();
-    let saved=storage.finalize_recording(&session).unwrap();
-    assert_eq!(saved.duration_us,1100000);assert!(saved.ended_at_utc_ms.is_some());
-    assert_eq!(meeting_duration(&storage,&meeting),1100000);
-    let expected=gaps(&storage);assert_eq!(expected.len(),3);
-    assert_whole_gap_playback(&storage,&meeting,1100000);
-    let mut audio=storage.prepare_meeting_audio(&MeetingPlaybackRequest{meeting_id:meeting.clone(),mode:MeetingPlaybackMode::Mixed,start_reference:None}).unwrap();
-    assert_eq!(audio.read_analysis_pcm(16600,1000).unwrap(),vec![0;4000]);
-    assert_eq!(std::fs::read(output.join("manifest.json")).unwrap(),manifest);
-    assert!(!output.join("microphone.caf").exists());assert!(!output.join("system.caf").exists());
-    assert_eq!(storage.finalize_recording(&session).unwrap(),saved);
-    drop(storage);let reopened=Storage::open(root.path().into()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, _) = ending(&storage);
+    let manifest = std::fs::read(output.join("manifest.json")).unwrap();
+    let saved = storage.finalize_recording(&session).unwrap();
+    assert_eq!(saved.duration_us, 1100000);
+    assert!(saved.ended_at_utc_ms.is_some());
+    assert_eq!(meeting_duration(&storage, &meeting), 1100000);
+    let expected = gaps(&storage);
+    assert_eq!(expected.len(), 3);
+    assert_whole_gap_playback(&storage, &meeting, 1100000);
+    let mut audio = storage
+        .prepare_meeting_audio(&MeetingPlaybackRequest {
+            meeting_id: meeting.clone(),
+            mode: MeetingPlaybackMode::Mixed,
+            start_reference: None,
+        })
+        .unwrap();
+    assert_eq!(audio.read_analysis_pcm(16600, 1000).unwrap(), vec![0; 4000]);
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        manifest
+    );
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
+    assert_eq!(storage.finalize_recording(&session).unwrap(), saved);
+    drop(storage);
+    let reopened = Storage::open(root.path().into()).unwrap();
     assert!(reopened.recover_completed_recordings().unwrap().is_empty());
-    assert_eq!(reopened.finalize_recording(&session).unwrap(),saved);
-    assert_eq!(gaps(&reopened),expected);assert_whole_gap_playback(&reopened,&meeting,1100000);
+    assert_eq!(reopened.finalize_recording(&session).unwrap(), saved);
+    assert_eq!(gaps(&reopened), expected);
+    assert_whole_gap_playback(&reopened, &meeting, 1100000);
 }
 
 #[test]
@@ -197,7 +230,9 @@ fn capture_ending_interior_and_boundary_gaps_coexist_without_padding_known_runs(
             ),
         ]
     );
-    let mic=storage.canonical_audio_plan(&meeting).unwrap().tracks[0].id.clone();
+    let mic = storage.canonical_audio_plan(&meeting).unwrap().tracks[0]
+        .id
+        .clone();
     for (first, last) in [(0, 500010), (700010, 1200020)] {
         let mut audio = storage
             .prepare_track_audio(&meeting, &mic, first, last)

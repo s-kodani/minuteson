@@ -4,7 +4,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 thread_local! {static CACHE: RefCell<Option<Cache>>=const {RefCell::new(None)};}
 pub(crate) fn release_all() {
-    CACHE.with(|cache| {if let Some(cache)=cache.borrow_mut().as_mut() {cache.entries.clear();cache.bytes=0;}});
+    CACHE.with(|cache| {
+        if let Some(cache) = cache.borrow_mut().as_mut() {
+            cache.entries.clear();
+            cache.bytes = 0;
+        }
+    });
 }
 #[derive(Default)]
 struct Cache {
