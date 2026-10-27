@@ -16,7 +16,7 @@ export interface ToastInput {
   onClose?: () => void;
   onRendered?: () => void;
 }
-export interface Toast extends ToastInput { id: number; important: boolean; actionBusy?: boolean; resolution?: {state:"resolved"|"unconfirmed";message:string} }
+export interface Toast extends ToastInput { id: number; important: boolean; actionBusy?: boolean }
 interface Clock {
   now: () => number;
   start: (run: () => void, delay: number) => unknown;
@@ -59,15 +59,15 @@ export class ToastController {
     if(this.removedHistory.has(stamp))return;
     const identity=id??prior??++this.serial;
     this.historyIds.set(stamp,identity);
-    this.history.set(identity,{...input,id:identity,important:input.important??input.level==="error",resolution:this.history.get(identity)?.resolution});
+    this.history.set(identity,{...input,id:identity,important:input.important??input.level==="error"});
     while(this.history.size>512){const oldest=this.history.keys().next().value!;this.history.delete(oldest);for(const [key,value]of this.historyIds)if(value===oldest)this.historyIds.delete(key);}
   }
   record(input:ToastInput) {
     if(!input.message.trim())return;
     const stamp=JSON.stringify([input.key,signature(input)]), id=this.historyIds.get(stamp), old=id===undefined?null:this.history.get(id);
     if(this.removedHistory.has(stamp))return;
-    this.recordHistory(input,old?.resolution?.state==="resolved"?++this.serial:undefined);
-    if(!old||old.resolution?.state==="resolved"||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
+    this.recordHistory(input);
+    if(!old||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
   }
   get pendingCount() { return Math.max(0, this.entries.size - this.snapshot.length); }
   setVisibleLimit(limit: number) {
@@ -131,17 +131,17 @@ export class ToastController {
     // reported by another owner using the same operation identity.
     if (this.entries.get(key)?.toast.message === message) this.resolve(key);
   }
-  // Evidence of recovery is explicit. Dismissal, timeouts, navigation and
-  // unmounting only end presentation; none of them establish success.
-  settleHistory(key:string,message:string,state:"resolved"|"unconfirmed"="resolved") {
+  /** Source-confirmed recovery silently removes this owner's presentation and
+   * history. It is never a render receipt, dismissal, or user command. */
+  forget(key:string) {
     let changed=false;
+    this.acknowledged.delete(key);
+    const entry=this.entries.get(key);
+    if(entry){this.stop(entry);this.entries.delete(key);changed=true;}
     for(const [id,notice] of this.history){
-      if(notice.key!==key||notice.resolution?.state==="resolved"||notice.resolution?.state===state&&notice.resolution.message===message)continue;
-      this.history.set(id,{...notice,resolution:{state,message}});changed=true;
-    }
-    if(state==="resolved"){
-      const entry=this.entries.get(key);
-      if(entry){this.stop(entry);this.entries.delete(key);changed=true;}
+      if(notice.key!==key)continue;
+      this.history.delete(id);changed=true;
+      for(const [stamp,value]of this.historyIds)if(value===id)this.historyIds.delete(stamp);
     }
     if(changed)this.publish();
   }

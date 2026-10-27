@@ -28,7 +28,7 @@ export function RecorderInfoTrigger({ disabled = false, problem = "" }: { disabl
           if (typeof value !== "boolean") throw Error("説明画面の表示状態を確認できません");
           setOpen(value);
         }
-      } catch (cause) { if (!disposed && current === epoch.current) setError(String(cause)); }
+      } catch { /* Display-state polling retries without publishing an operation failure. */ }
     };
     void read();
     const timer = window.setInterval(() => void read(), 1000);
@@ -37,7 +37,7 @@ export function RecorderInfoTrigger({ disabled = false, problem = "" }: { disabl
       // Native code only requests restoration for explicit close, and never
       // while a stop confirmation is visible or the recorder itself is hidden.
       if (event.payload === true && document.hasFocus() && !disabled) button.current?.focus({ preventScroll: true });
-    }).then(value => { if (disposed) value(); else { stop = value; void read(); } }).catch(cause => { if (!disposed) setError(String(cause)); });
+    }).then(value => { if (disposed) value(); else { stop = value; void read(); } }).catch(() => {});
     return () => { disposed = true; ++epoch.current; window.clearInterval(timer); stop?.(); };
   }, [disabled]);
   const toggle = async () => {

@@ -6,9 +6,9 @@ import { usePublishJobReadStatus, usePublishProgress } from "./operation-progres
 import { IssueNotice, ToastNotice } from "./toast";
 import type { RecoverySnapshot as Snapshot } from "./recording-recovery-state";
 
-export function RecordingRecoveryNotifications({ snapshot, error }: { snapshot: Snapshot | null; error: string | null }) {
+export function RecordingRecoveryNotifications({ snapshot }: { snapshot: Snapshot | null; error: string | null }) {
   return <>
-    <IssueNotice scope="recording-recovery" type="read" label="録音回復の状態" message={error ? `回復状態を確認できません。表示は前回取得した状態です。${error}` : snapshot?.error} />
+    <IssueNotice scope="recording-recovery" type="failure" label="録音の回復" message={snapshot?.error} />
     {snapshot?.items.filter(item => item.phase === "failed" || item.phase === "succeeded").map(item =>
       <ToastNotice key={item.sessionId} scope={item.sessionId} type="recording-recovery-result"
         meetingId={item.meetingId} eventId={`${snapshot.runId}:${item.sessionId}:${item.phase}`}

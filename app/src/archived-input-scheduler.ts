@@ -18,6 +18,7 @@ export class ArchivedInputScheduler {
   private controller:ArchivedInputController;private clock:Clock;
   private read:(request:Request)=>Promise<unknown>;private changed:(reading:boolean,error:string)=>void;
   private readLog:(request:Request,error:unknown)=>void;
+  get restartRequired(){return this.clockError;}
   constructor(controller:ArchivedInputController,clock:Clock,read:(request:Request)=>Promise<unknown>,changed:(reading:boolean,error:string)=>void,readLog:(request:Request,error:unknown)=>void=()=>{}){
     this.controller=controller;this.clock=clock;this.read=read;this.changed=changed;
     this.readLog=readLog;

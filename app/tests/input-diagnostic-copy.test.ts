@@ -4,20 +4,23 @@ import {archivedDiagnosticMessage} from "../src/input-diagnostic-copy.ts";
 import {InputJournalNotices,journalMessage} from "../src/input-journal-state.ts";
 import type {ArchivedInputView} from "../src/archived-input-controller.ts";
 const base:ArchivedInputView={meetingId:"m",sessionId:"s",title:"会議",notices:[],reception:{microphone:"none",system:"none"},loss:{microphone:0,system:0},historyIssue:null,unavailable:false,deliveryUnavailable:false,historySaveIssue:null,checked:true,historySaveConfirmed:true};
-test("read-only diagnostic explains why it appears without asserting audio loss",()=>{
-  const message=archivedDiagnosticMessage({...base,unavailable:true});
-  assert.match(message,/読み取れなかったため表示/);
-  assert.match(message,/自動で再確認/);
-  assert.doesNotMatch(message,/欠損範囲|保存された音声で/);
-  assert.match(message,/保存失敗や音声の欠落が分かったわけではありません/);
+test("automatic diagnostics stay silent, including mixed read and delivery delays",()=>{
+  for(const historySaveIssue of [null,"unconfirmed","unavailable"] as const){
+    assert.equal(archivedDiagnosticMessage({...base,unavailable:true,deliveryUnavailable:true,historySaveIssue,reception:{microphone:"unconfirmed",system:"unconfirmed"}}),"");
+  }
   assert.equal(archivedDiagnosticMessage(base),"");
-  assert.match(archivedDiagnosticMessage({...base,historySaveIssue:"failed"}),/保存処理でエラー/);
 });
-test("five-second warning explains the delay and next step without a save-failure claim",()=>{
+
+test("confirmed history failures and losses retain an actionable audio-review notice",()=>{
+  for(const patch of [{historySaveIssue:"failed" as const},{historySaveIssue:"invalid" as const},{historyIssue:"missing" as const},{historyIssue:"invalid" as const},{loss:{microphone:2,system:0}}]){
+    const message=archivedDiagnosticMessage({...base,...patch,unavailable:true});
+    assert.match(message,/会議を開き、音声を再生して内容を確認/);
+    assert.doesNotMatch(message,/解消済み|自動で再確認/);
+  }
+});
+
+test("long journal delays never warn; confirmed failures retain their next action",()=>{
   const n=new InputJournalNotices();const v={state:"unknown" as const,problem:false};
-  n.read(v,"recording",0);assert.equal(n.read(v,"recording",4999),null);
-  const warning=n.read(v,"recording",5000)!;
-  assert.match(warning.message,/5秒以上/);assert.match(warning.message,/自動で再確認/);
-  assert.match(warning.message,/録音ファイルの保存失敗を意味するものではありません/);
+  for(const at of [0,4999,5000,60000])assert.equal(n.read(v,"recording",at),null);
   assert.match(journalMessage({state:"failed",problem:true}),/保存処理でエラーが発生したため/);
 });

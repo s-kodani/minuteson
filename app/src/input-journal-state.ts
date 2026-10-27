@@ -47,7 +47,6 @@ export type JournalNotice={message:string;level:"warning"|"error";eventId:string
 // Presentation hysteresis is independent of the one-second evidence expiry.
 // Hold one occurrence through short recoveries and changing diagnostic states.
 export class InputJournalNotices {
-  private unavailableSince:number|null=null;
   private confirmedSince:number|null=null;
   private active:JournalNotice|null=null;
   private failure:"failed"|"invalid"|null=null;
@@ -57,7 +56,7 @@ export class InputJournalNotices {
     if(!time(at)||this.lastAt!==null&&(at<this.lastAt||at-this.lastAt>1000))this.confirmedSince=null;
     this.lastAt=at;
     if(phase!=="recording"){
-      this.unavailableSince=null;this.confirmedSince=null;this.active=null;this.failure=null;
+      this.confirmedSince=null;this.active=null;this.failure=null;
       return null;
     }
     if(view.state==="failed"||view.state==="invalid"||view.problem){
@@ -68,17 +67,10 @@ export class InputJournalNotices {
         this.active={message:journalMessage({state:failure,problem:true}),level:"error",eventId:String(++this.sequence)};
       }
     }else if(view.state==="confirmed"&&time(at)){
-      this.unavailableSince=null;
       this.confirmedSince??=at;
       if(at-this.confirmedSince>=2000){this.active=null;this.failure=null;}
     }else{
       this.confirmedSince=null;
-      if(time(at)){
-        this.unavailableSince??=at;
-        if(!this.active&&at-this.unavailableSince>=5000){
-          this.active={message:"マイクやPCの音が途切れたかを調べるための記録について、保存結果を5秒以上確認できていないため表示しています。保存の完了待ち、または確認用の情報を読み取れない・更新されない状態です。自動で再確認します。この通知だけで録音ファイルの保存失敗を意味するものではありません。",level:"warning",eventId:String(++this.sequence)};
-        }
-      }
     }
     return this.active;
   }

@@ -8,7 +8,7 @@ import "../src/prototype-alignment.css";
 
 function Fixture() {
   const [error, setError] = useState(""), [open, setOpen] = useState(false), [history, setHistory] = useState(false);
-  return <div className="app-layout"><div className="main-column">
+  return <div className="app-layout"><aside className="sidebar" /><div className="main-column">
     <header className="topbar"><button onClick={() => setHistory(value => !value)}>通知履歴</button><ToastHost /></header>
     <main><h1>通知の回帰検証</h1><button onClick={() => setOpen(true)}>編集を開く</button>
       <NotificationList visible={history} />

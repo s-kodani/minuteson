@@ -53,7 +53,11 @@ pub(crate) fn initialize(app: &tauri::AppHandle) {
     }
     #[cfg(any(windows, target_os = "macos"))]
     if let Err(error) = tray::create(app) {
-        set_error(app, error);
+        crate::internal_logs::report_error("residency", &error);
+        *app.state::<Residency>()
+            .error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(error);
     }
     // Publish native identities before storage admission can take time. The
     // event loop need not have started for the external guard to see the icon.

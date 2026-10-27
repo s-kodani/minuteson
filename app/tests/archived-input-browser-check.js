@@ -70,12 +70,12 @@ async page=>{
     check(await page.locator(".toast-host .toast-card").filter({hasText:"終了済み録音の通知履歴を確認中です"}).count()===0,"background read exposed a pending toast");
     check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>["get_archived_recording_input_notices","get_archived_recording_input_notice_rows"].includes(c.command)).length)===before,"hung archive read caused overlapping request");
     await page.evaluate(()=>{const state=window.closeFixture.archived;state.holdRead=false;state.reads.splice(0).forEach(resolve=>resolve());state.failRead=true;});
-    await readWarning().waitFor();check(await card().count()===0,"late old page resurrected expired display");
-    results.push("hung page reads remain single-flight, stale delivery disappears, and failed reads expose retained warning");
+    await page.waitForTimeout(1200);check(await readWarning().count()===0,"automatic archive read notified");check(await card().count()===0,"late old page resurrected expired display");
+    results.push("hung page reads remain single-flight, stale delivery disappears, and failed reads remain silent");
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.failRead=false;f.archived.lost.render=false;f.archived.lost.receive=false;f.archived.hold.receive=true;});await seed({title:"受付保留の会議"});
     await page.waitForFunction(()=>window.closeFixture.archived.replies.length===1);await page.waitForTimeout(1200);
     check(await page.evaluate(()=>window.closeFixture.archived.replies.length)===1,"hung receive duplicated request");
-    await page.evaluate(()=>{window.closeFixture.archived.failRead=true;});await readWarning().waitFor();
+    await page.evaluate(()=>{window.closeFixture.archived.failRead=true;});await page.waitForTimeout(1200);check(await readWarning().count()===0,"automatic archive read notified");
     await release("receive");check(await card().count()===0,"failed source resurrected via old receipt");
     await page.evaluate(()=>{window.closeFixture.archived.failRead=false;});await card().waitFor();
     results.push("read failure preserves pending acknowledgement slots, with no duplicate hung receives or optimistic late display");
@@ -94,20 +94,20 @@ async page=>{
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
     await seed({title:"復元された点検会議",both:true,loss:2,historySaveIssue:"failed",deliveryUnavailable:true});
-    await openHistory();await history().getByText(/復元した会議の通知を表示する準備ができていません/).waitFor();
+    await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
     // The previous source can remain until the bounded cursor traversal wraps
     // and completes an authoritative new cycle. Wait for its normal removal;
     // never dismiss a card or delete a receipt to make this check pass.
     await page.waitForFunction(()=>[...document.querySelectorAll(".toast-host .toast-card")].every(e=>! /終了した録音.*(?:マイク|PC音声)/u.test(e.textContent??"")));
-    const imported=history().locator(".toast-card").filter({hasText:"復元した会議の通知を表示する準備ができていません"});
+    const imported=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
     let importedText=await imported.innerText();
     check(importedText.includes("接続記録の保存処理でエラーが発生しました")&&importedText.includes("マイクの接続通知を2件残せませんでした")&&importedText.includes("PC音声の接続通知を2件残せませんでした"),"imported diagnosis/loss did not reach production review UI");
     check(!importedText.includes("過去の接続状況を確認できません"),"readable imported diagnosis was labelled unreadable");
     const importedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
     check((await calls()).every(c=>c.sessionId!==importedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"immutable imported state started reception or rendering");
     results.push("imported diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
-    await reload();await openHistory();await history().getByText(/復元した会議の通知を表示する準備ができていません/).waitFor();
-    const reopened=history().locator(".toast-card").filter({hasText:"復元した会議の通知を表示する準備ができていません"});
+    await reload();await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
+    const reopened=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
     importedText=await reopened.innerText();
     check(importedText.includes("接続記録の保存処理でエラー")&&importedText.includes("接続通知を2件残せませんでした")&&(await calls()).every(c=>c.sessionId!==importedOwner),"reload removed immutable import issues or adopted receipt authority");
     results.push("imported failed persistence and retained loss survive WebView replacement without acknowledgement requests");

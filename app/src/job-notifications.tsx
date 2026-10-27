@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { IssueNotice, ToastNotice, toasts } from "./toast";
+import { ToastNotice, toasts } from "./toast";
 import { toastKey } from "./toast-state";
 import { JobNotificationTracker, jobFailureDetail, jobGroup, jobName, verifiedJobOutput, type JobNotice, type NotificationJob } from "./job-notification-state";
 import { usePublishJobReadStatus, usePublishProgress } from "./operation-progress";
@@ -72,8 +72,6 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   const [diarizationRuntime, setDiarizationRuntime] = useState(new Map<string, DiarizationRuntime>());
   const retried = new Set(progressJobs.map(job => job.retryOfJobId));
   usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? diarizationRuntimeProgress(job, { ...progress, startedAtMs:job.analysisOperation ? transcriptionAdmissions.flowStarts.get(job.analysisOperation.id)??job.analysisOperation.startedAtMs : progress.startedAtMs, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail }, diarizationRuntime.get(job.id)) : null; }));
-  const [readError, setReadError] = useState("");
-  const [listenerError, setListenerError] = useState("");
   const [workerError, setWorkerError] = useState("");
   const [reading, setReading] = useState(false);
   const guard = useRef({ locked, onOpen }); guard.current = { locked, onOpen };
@@ -136,8 +134,8 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
                 if (event) publish([event]);
               } catch (cause) { proofError ||= `「${job.meetingTitle}」の${jobName(job.kind)}の保存結果を確認できません: ${String(cause)}`; }
             }
-            if (!disposed) setReadError(proofError);
-          } catch (cause) { if (!disposed) { setReadError(String(cause)); setJobReadError(String(cause)); } }
+            if (!disposed) setJobReadError(proofError);
+          } catch (cause) { if (!disposed) setJobReadError(String(cause)); }
         } while (again && !disposed);
       })().finally(() => { inFlight = null; if (!disposed) setReading(false); });
       return inFlight;
@@ -146,7 +144,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 3000);
     for (const event of ["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "meetings-changed"]) {
-      void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
+      void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(() => { /* Periodic reads continue without event hints. */ });
     }
     void listen<unknown>("minutes-runtime-progress", event => {
       if (disposed) return;
@@ -160,7 +158,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
         if (next.size > 128) next.delete(next.keys().next().value!);
         return next;
       });
-    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => {});
     void listen<unknown>("diarization-runtime-progress", event => {
       if (disposed) return;
       setDiarizationRuntime(prior => {
@@ -172,10 +170,10 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
         if (next.size > 128) next.delete(next.keys().next().value!);
         return next;
       });
-    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => {});
     void listen<unknown>("analysis-worker-error", event => {
       if (!disposed) { setWorkerError(typeof event.payload === "string" && event.payload ? event.payload : "解析ワーカーから異常の通知がありました。再起動後にジョブ状態を確認してください。"); void refresh(); }
-    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => {});
     return () => { disposed = true; window.clearInterval(timer); stops.forEach(stop => stop()); refreshRef.current = async () => {}; };
   }, [tracker]);
 
@@ -185,8 +183,6 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
       message={`「${item.meetingTitle}」の議事録生成の受付を確認できません：${item.error}`} level="error" meetingId={item.meetingId}
       action={{ kind: "open", label: "会議を開く", disabled: locked, run: () => open(item.meetingId) }} />)}
     {[...notices].filter(([, event])=>event?.topic!=="issue").map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} meetingId={event?.job.meetingId} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
-    <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" action={{ kind: "retry", label: "状態を再読込", disabled: locked || reading, run: retryRead }} />
-    <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。` : ""} label="解析通知の受信" />
     <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? `解析ワーカー：${workerError}` : ""} level="error" important action={{kind:"retry",label:"状態を再読込",disabled:locked||reading,run:retryRead}} />
     {issues.map(job=><JobIssue key={job.id} job={job} locked={locked} onOpen={open} historical={![...notices.values()].some(event=>event?.topic==="issue"&&event.job.id===job.id)}/>)}
   </>;

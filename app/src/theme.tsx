@@ -60,6 +60,7 @@ export function ThemeSettingsPanel({ locked }: { locked: boolean }) {
     <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">カラーと明るさは別々に選べます。システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
     <label className="theme-choice" htmlFor={colorId}>カラー<select id={colorId} value={state.pendingPreferences?.colorTheme ?? state.snapshot?.payload.colorTheme ?? "monochrome"} disabled={locked || state.busy || state.uncertain || !state.snapshot || !isTauri()} onChange={event => { if (isColorTheme(event.target.value)) void controller.changeColor(event.target.value); }}><option value="monochrome">モノトーン</option><option value="purple">パープル</option></select></label>
     <ThemeSelection locked={locked} />
+    {state.error && !state.pendingPreferences && <p role="status">表示設定を確認中です。</p>}
     {state.pendingPreferences && !state.busy && <div className="analysis-actions">
       <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>テーマの保存を再試行</button>
     </div>}
@@ -72,7 +73,7 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
   const notice = state.notice;
   const retrySave = !state.uncertain && state.pendingPreferences;
   return <><ToastNotice scope="ui-preferences" type="result" message={notice?.message} level={notice?.level} eventId={notice ? String(notice.id) : undefined} onClose={() => { if (notice) controller.clearNotice(notice.id); }} />
-    <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
+    <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error && state.pendingPreferences ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
   </>;
 }
 export function ThemeReadNotice() {

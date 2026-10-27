@@ -73,11 +73,11 @@ export function RecordingInputStatus({owner,input,compact=false,indicator=false,
 export function RecordingMicrophoneStatus({owner,compact=false}:{owner:string|null;compact?:boolean}){return <RecordingInputStatus owner={owner} input="microphone" compact={compact}/>;}
 export function RecordingJournalNotice(){
   const view=useContext(Context),scope=view.owner??"recording-journal";
-  useEffect(()=>()=>{if(view.owner)toasts.settleHistory(toastKey(scope,"journal-save"),"録音中の確認は終了しました。接続記録の保存結果は、まだ再確認できていません。","unconfirmed");toasts.resolve(toastKey(scope,"journal-save"));},[scope]);
+  useEffect(()=>()=>toasts.resolve(toastKey(scope,"journal-save")),[scope]);
   const notice=view.owner?view.journal.notice:null;
   return <div className="recording-journal-diagnostic" hidden={!notice} data-journal-state={view.owner?view.journal.state:"inactive"}>
     <ToastNotice scope={scope} type="journal-save" message={notice?`録音状況の確認: ${notice.message}`:""} level={notice?.level??"warning"} eventId={notice?.eventId}
-      resolutionMessage={view.owner&&view.journal.state==="confirmed"&&!notice?"接続記録の保存を確認できました。録音中の確認待ちは解消しています。":undefined}/>
+      clearHistoryOnResolve={!!view.owner&&view.journal.state==="confirmed"&&!notice}/>
   </div>;
 }
 export function RecordingCompactInputs({owner}:{owner:string|null}){return <span className="mini-inputs"><RecordingInputStatus owner={owner} input="microphone" compact/><RecordingInputStatus owner={owner} input="system" compact/></span>;}

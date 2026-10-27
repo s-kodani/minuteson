@@ -35,9 +35,9 @@ async page => {
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-input-state") === "connected", "historical interruption became current disconnected status");
     results.push("held reception neither displays nor acknowledges a historical event; actual current input remains connected");
 
-    await page.evaluate(() => { const d = document.createElement("dialog"); d.id = "render-cover"; d.textContent = "合成表示遮蔽"; document.body.append(d); d.showModal(); });
+    await page.evaluate(() => { const d = document.createElement("dialog"); d.id = "render-cover"; d.textContent = "合成表示遮蔽";d.style.opacity="0"; document.body.append(d); d.showModal(); });
     await release("receive"); await page.waitForFunction(() => !!window.closeFixture.queueState.lanes.microphone[0].recipientId); await mic().waitFor({state:"attached"}); await page.waitForTimeout(400);
-    check(await calls("render_recording_input_notice") === 0, "modal-covered card acknowledged rendering");
+    check(await calls("render_recording_input_notice") === 0, "invisible modal card acknowledged rendering");
     await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "transparent ancestor acknowledged rendering");
     results.push("transparent ancestors prevent rendering confirmation despite an attached card");
@@ -80,7 +80,7 @@ async page => {
     const bounds=await page.locator(".mini-shell").evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,width:e.clientWidth,scrollWidth:e.scrollWidth,rows:[...e.children].map(child=>({class:child.className,height:child.getBoundingClientRect().height,top:child.getBoundingClientRect().top,width:child.getBoundingClientRect().width}))}));
     check(bounds.scrollHeight <= bounds.height + 1 && bounds.scrollWidth <= bounds.width + 1, `queued mini notice overflowed 360x116: ${JSON.stringify(bounds)}`);
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "loss metadata disappeared");
-    check(await page.locator('[data-input-kind="microphone"] > span').isVisible() && (await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "loss warning hidden by compact ellipsis");
+    check(await page.locator('[data-input-kind="microphone"]').isVisible() && (await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "loss status icon lost its explanation");
     results.push("independent input telemetry and retained loss indication fit the native mini geometry");
     check(await page.evaluate(()=>["microphone","system"].every(input=>window.closeFixture.queueState.lanes[input].length===2&&window.closeFixture.queueState.lanes[input].every(n=>!n.delivery.rendered&&!n.delivery.receiveId))),"mini changed pending interruption or recovery evidence");
     results.push("mini leaves both pending lanes and their render evidence untouched for main presentation");

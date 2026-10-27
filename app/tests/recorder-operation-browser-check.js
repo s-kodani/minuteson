@@ -80,16 +80,13 @@ async (page, capturePath = path => path) => {
     check(oldClose !== "accepted" && oldClear !== "accepted" && JSON.stringify(entries[0]) === JSON.stringify(current), "stale close/clear destroyed new error");
     results.push("stale toast close and stale producer resolution cannot dismiss or clear newer cause");
 
-    failSession = true; await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await info.getByText("合成録音状態の接続失敗", { exact: false }).waitFor();
-    check(entries[4].message && entries[0].message, "session error replaced independent window cause");
-    failSession = false; await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await info.getByText("合成録音状態の接続失敗", { exact: false }).waitFor({ state: "hidden" });
-    check(entries[4].message === null && entries[0].message, "session reconnection cleared another source");
-    results.push("session transport failure and authoritative reconnection affect only the session source");
-
-    failTheme = true; await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await info.getByText("合成表示設定の読込失敗", { exact: false }).waitFor();
-    failTheme = false; await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await info.getByText("合成表示設定の読込失敗", { exact: false }).waitFor({ state: "hidden" });
-    check(entries[2].message === null && entries[0].message, "theme successful read cleared unrelated operation");
+    failSession = true; await page.evaluate(() => window.dispatchEvent(new Event("focus")));await page.waitForTimeout(1200);
+    check(entries[4].message===null&&entries[0].message,"passive session read published an operation failure");
+    failSession=false;await page.evaluate(()=>window.dispatchEvent(new Event("focus")));await page.waitForTimeout(400);
+    failTheme=true;await page.evaluate(()=>window.dispatchEvent(new Event("focus")));await page.waitForTimeout(2700);
+    check(entries[2].message===null&&entries[0].message,"passive theme read published an operation failure");
+    failTheme=false;await page.evaluate(()=>window.dispatchEvent(new Event("focus")));await page.waitForTimeout(400);
+    results.push("automatic session/theme failures and recovery stay silent without clearing unrelated user failures");
     check(JSON.stringify(recording) === original && !calls.some(c => /^(start_recording|stop_recording|decide_recording_confirmation|save_|delete_)/u.test(c.command)), "notifications mutated recording or data");
     check(!calls.some(c => c.command === "show_recorder_info"), "periodic updates automatically opened/focused help");
     results.push("theme read recovery preserves unrelated attention; notifications never mutate or auto-open recording/help");

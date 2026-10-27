@@ -16,6 +16,7 @@ const recoverySeed=sessionStorage.getItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");s
 const queueSeed=sessionStorage.getItem("MON_INPUT_QUEUE_FIXTURE");sessionStorage.removeItem("MON_INPUT_QUEUE_FIXTURE");
 const archivedSeed=sessionStorage.getItem("MON_ARCHIVED_INPUT_FIXTURE");sessionStorage.removeItem("MON_ARCHIVED_INPUT_FIXTURE");
 const f = window.closeFixture = {
+  notificationHistory:()=>toasts.getHistorySnapshot(),
   recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
   failFlush: false, flushDelay: 0, flushes: 0, mutateDuringFlush: null,

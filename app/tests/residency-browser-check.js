@@ -15,14 +15,11 @@ async page=>{
     const monitor=()=>page.locator('.toast-card').filter({hasText:"常駐監視:"});
     const operation=()=>page.locator('.toast-card').filter({hasText:"常駐の操作:"});
     await page.evaluate(()=>window.emitResidencyFixture("residency-error","合成トレイ障害"));await operation().waitFor();
-    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));await monitor().waitFor();
-    const monitorId=await monitor().getAttribute("data-toast-id");
-    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));
-    check(await monitor().getAttribute("data-toast-id")===monitorId,"repeated monitor status duplicated its notification");
-    check(!(await monitor().innerText()).includes("会議の操作"),"monitor failure used the meeting operation label");
-    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status",null));await monitor().waitFor({state:"hidden"});
-    check(await operation().count()===1,"monitor recovery erased an unrelated tray failure");
-    results.push("monitor errors have their own label and recovery clears only the monitor diagnostic");
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));await page.waitForTimeout(300);
+    check(await monitor().count()===0,"internal residency monitor notified");
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status",null));
+    check(await operation().count()===1,"monitor recovery erased unrelated operation failure");
+    results.push("automatic residency monitor stays silent and preserves failed user operations");
     for(const platform of ["windows","macos"]){
       await boot(platform);await request(false);await page.waitForFunction(()=>window.closeFixture.hidden);
       check(await count("hide_main_to_background")===1&&await count("finish_main_close")===0,"quiet X exited instead of hiding");

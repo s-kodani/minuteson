@@ -7,7 +7,7 @@ import {useEffect,useRef,useState} from "react";
 import {ArchivedInputController,type ArchivedAttempt,type ArchivedInputView} from "./archived-input-controller";
 import {InputLevelClock} from "./input-level-state";
 import type {InputKind} from "./recording-input-state";
-import {IssueNotice,ToastNotice,toasts} from "./toast";
+import {ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
 import {archivedDiagnosticMessage} from "./input-diagnostic-copy";
 import {InputDiagnosticLog} from "./input-diagnostic-log";
@@ -15,7 +15,7 @@ import {InputDiagnosticLog} from "./input-diagnostic-log";
 const lanes:InputKind[]=["microphone","system"];
 const scope=(owner:string)=>`archived-input:${owner}`;
 function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInputView;locked:boolean;onOpen:(id:string)=>Promise<void>;onRendered:(owner:string,id:string,generation:number)=>void;onClose:(owner:string,input:InputKind)=>void}){
-  useEffect(()=>{if(view.historySaveConfirmed)toasts.settleHistory(toastKey(view.sessionId,"journal-save"),`終了した録音「${view.title}」の接続記録が保存されていることを確認しました。`);},[view.sessionId,view.title,view.historySaveConfirmed]);
+  useEffect(()=>{if(view.historySaveConfirmed)toasts.forget(toastKey(view.sessionId,"journal-save"));},[view.sessionId,view.historySaveConfirmed]);
   // ToastNotice normally outlives a view. This bounded historical owner must
   // explicitly resolve its presentation on eviction/deletion/unmount instead.
   useEffect(()=>()=>{for(const input of [...lanes,"diagnostic"])toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
@@ -33,8 +33,8 @@ function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInpu
 
 /** Closed recordings only: neither a current connection badge nor replay. */
 export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingIds?:string[];paused:boolean;locked:boolean;onOpen:(id:string)=>Promise<void>}){
-  const [views,setViews]=useState<ArchivedInputView[]>([]),[readError,setReadError]=useState(""),[listenerError,setListenerError]=useState(""),[windowError,setWindowError]=useState(""),[reading,setReading]=useState(false),[readConfirmed,setReadConfirmed]=useState(false);
-  const guard=useRef({paused,locked,onOpen,meetingIds}),refresh=useRef<()=>void>(()=>{}),syncProps=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
+  const [views,setViews]=useState<ArchivedInputView[]>([]),[restartRequired,setRestartRequired]=useState(false);
+  const guard=useRef({paused,locked,onOpen,meetingIds}),syncProps=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
   guard.current={paused,locked,onOpen,meetingIds};
   useEffect(()=>{
     if(!isTauri())return;
@@ -60,8 +60,8 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
     };
     const scheduler=new ArchivedInputScheduler(controller,{now,start:(run,delay)=>window.setTimeout(run,delay),stop:timer=>clearTimeout(timer as number)},
       request=>request.kind==="page"?invoke("get_archived_recording_input_notices",{afterSessionId:request.after}):invoke("get_archived_recording_input_notice_rows",{targets:request.targets}),
-      (reading,error)=>{if(!disposed){setReading(reading);setReadError(error);paint();}},
-      (request,error)=>{setReadConfirmed(error===null);diagnosticLog.report(request.kind==="page"?"archived-page":"archived-rows",null,error,request);});
+      ()=>{if(!disposed){setRestartRequired(scheduler.restartRequired);paint();}},
+      (request,error)=>diagnosticLog.report(request.kind==="page"?"archived-page":"archived-rows",null,error,request));
     const deliver=async(request:ArchivedAttempt)=>{
       if(disposed||blocked())return;
       const a=request.attempt,epoch=operationEpoch;
@@ -75,7 +75,6 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
         controller.complete(request,reply.value,now());paint();
       }catch{if(!disposed){controller.fail(request);paint();}}
     };
-    refresh.current=()=>scheduler.invalidate(true);
     syncProps.current=()=>{if(wasPaused!==guard.current.paused){operationEpoch++;wasPaused=guard.current.paused;}scheduler.setBlocked(blocked());paint();};
     actions.current={rendered:(owner,id,generation)=>{if(disposed||blocked())return;controller.rendered(owner,id,generation,now());paint();},close:(owner,input)=>{if(disposed)return;controller.dismiss(owner,input);paint();}};
     const nativeWindow=getCurrentWindow();
@@ -86,19 +85,18 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
         if(disposed||epoch!==visibilityEpoch)return;
         if(typeof visible!=="boolean"||typeof minimized!=="boolean")throw Error("画面状態の応答が不正です");
         if(nativeVisible!==(visible&&!minimized))operationEpoch++;
-        nativeVisible=visible&&!minimized;visibilityFailures=0;setWindowError("");diagnosticLog.report("archived-window",null,null);scheduler.setBlocked(blocked());
+        nativeVisible=visible&&!minimized;visibilityFailures=0;diagnosticLog.report("archived-window",null,null);scheduler.setBlocked(blocked());
         if(wake&&!blocked())scheduler.invalidate();paint();
       }catch(error){
         if(disposed||epoch!==visibilityEpoch)return;
         diagnosticLog.report("archived-window",null,error);
         nativeVisible=false;scheduler.setBlocked(true);paint();
-        setWindowError("通知を表示できる画面か確認できないため、接続記録の確認を一時的に待っています。自動で再確認します。");
         visibilityRetry=window.setTimeout(()=>void checkVisibility(),Math.min(60_000,1000*2**Math.min(6,visibilityFailures++)));
       }
     };
     const subscribe=async(promise:Promise<()=>void>)=>{
       try{const stop=await promise;if(disposed)stop();else stops.push(stop);}
-      catch(error){if(!disposed){diagnosticLog.report("archived-subscribe",null,error);setListenerError("接続記録の更新通知を受け取れません。60秒ごとに自動で確認します。録音ファイルの保存失敗を示す通知ではありません。");}}
+      catch(error){if(!disposed)diagnosticLog.report("archived-subscribe",null,error);}
     };
     const focus=()=>void checkVisibility(true),visibility=()=>{scheduler.setBlocked(blocked());paint();void checkVisibility(!document.hidden);};
     window.addEventListener("focus",focus);document.addEventListener("visibilitychange",visibility);
@@ -111,19 +109,18 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
     return()=>{
       disposed=true;visibilityEpoch++;scheduler.dispose();clearTimeout(painting);clearTimeout(visibilityRetry);stops.forEach(stop=>stop());
       window.removeEventListener("focus",focus);document.removeEventListener("visibilitychange",visibility);
-      refresh.current=()=>{};syncProps.current=()=>{};actions.current={rendered:()=>{},close:()=>{}};
-      for(const type of ["read","listen","pending"])toasts.resolve(toastKey("archived-input",type));
+      syncProps.current=()=>{};actions.current={rendered:()=>{},close:()=>{}};
+      toasts.resolve(toastKey("archived-input","restart"));
     };
   },[]);
   useEffect(()=>{syncProps.current();},[paused,meetingIds]);
   const open=async(id:string)=>{if(!guard.current.locked)await guard.current.onOpen(id);};
   return <>
     {views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>)}
-    <ToastNotice scope="archived-input" type="read" message={readError} level="warning" resolutionMessage={readConfirmed?"過去の録音の接続記録を再確認できました。読取りの問題は解消しています。":undefined} action={{kind:"retry",label:"もう一度確認",disabled:paused||reading,run:()=>refresh.current()}} />
-    <IssueNotice scope="archived-input" type="listen" message={listenerError||windowError} label="過去の録音の接続記録"/>
+    <ToastNotice scope="archived-input" type="restart" level="error" message={restartRequired?"時計が変更されたため、過去の録音の接続記録を確認できません。アプリを再起動して再確認してください。":""}/>
     {views.map(view=>{
       return <ToastNotice key={view.sessionId} scope={scope(view.sessionId)} type="diagnostic" level="warning" important historyOnly meetingId={view.meetingId}
-        message={archivedDiagnosticMessage(view)} resolutionMessage={view.checked?"接続記録と通知を読み取れました。確認できなかった状態は解消しています。":undefined}
+        message={archivedDiagnosticMessage(view)} clearHistoryOnResolve={view.checked&&view.historySaveConfirmed}
         action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>open(view.meetingId)}}/>;
     })}
   </>;

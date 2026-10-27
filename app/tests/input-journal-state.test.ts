@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {InputJournalSession,InputJournalNotices,checkedJournalReport,journalMessage,type JournalPersistence,type JournalView} from "../src/input-journal-state.ts";
-import {ToastController} from "../src/toast-state.ts";
 import {ArchivedInputController} from "../src/archived-input-controller.ts";
 import {checkedArchivedInputPage} from "../src/archived-input-state.ts";
 const owner="73500000-0000-4000-8000-000000000001",meeting="63500000-0000-4000-8000-000000000001";
@@ -27,44 +26,26 @@ test("failure survives absent/failed/stale reads and only fresh confirmation res
   s.accept(report(3,"confirmed",999,999),1004);assert.deepEqual(s.read(1004),{state:"confirmed",problem:false});
 });
 const view=(state:JournalView["state"],problem=false):JournalView=>({state,problem});
-test("preparation and one-to-three-second diagnostic delays do not notify; five seconds does",()=>{
-  const notices=new InputJournalNotices();
-  assert.equal(notices.read(view("unknown"),"preparing",0),null);
-  assert.equal(notices.read(view("unknown"),"preparing",10000),null);
-  for(const at of [10000,11000,12000,13000,14999])assert.equal(notices.read(view("stale"),"recording",at),null);
-  const warning=notices.read(view("stale"),"recording",15000)!;
-  assert.equal(warning.level,"warning");
-  assert.equal(notices.read(view("pending"),"recording",15500),warning);
-  assert.equal(notices.read(view("unknown"),"recording",16000),warning);
-});
-test("pending time starts with the pending result, even late in a recording",()=>{
-  const n=new InputJournalNotices();n.read(view("confirmed"),"recording",0);
-  assert.equal(n.read(view("pending"),"recording",60000),null);
-  assert.equal(n.read(view("pending"),"recording",64999),null);
-  assert.equal(n.read(view("pending"),"recording",65000)?.level,"warning");
-});
-test("short recoveries keep the same dismissed occurrence; two seconds of fresh reports resolve it",()=>{
-  const n=new InputJournalNotices(),toast=new ToastController({now:()=>0,start:()=>0,stop:()=>{}});
-  n.read(view("stale"),"recording",0);
-  const warning=n.read(view("stale"),"recording",5000)!;
-  toast.show({key:owner,...warning});toast.dismiss(owner,toast.getSnapshot()[0].id);
-  for(const [at,state] of [[5500,"confirmed"],[6000,"unknown"],[6500,"pending"],[7000,"stale"],[7500,"confirmed"],[8000,"confirmed"],[8500,"confirmed"],[9000,"confirmed"]] as const){
-    const next=n.read(view(state),"recording",at)!;
-    assert.equal(next,warning);toast.show({key:owner,...next});assert.equal(toast.getSnapshot().length,0);
+test("automatic journal delays stay silent at any age and during short recoveries",()=>{
+  const n=new InputJournalNotices();
+  for(const phase of ["preparing","recording","saved"]){
+    for(const state of ["unknown","pending","stale","confirmed"] as const){
+      for(const at of [0,1000,5000,60000,3600000])assert.equal(n.read(view(state),phase,at),null);
+    }
   }
-  assert.equal(n.read(view("confirmed"),"recording",9500),null);toast.resolve(owner);
-  n.read(view("unknown"),"recording",10000);
-  const next=n.read(view("unknown"),"recording",15000)!;
-  assert.notEqual(next.eventId,warning.eventId);toast.show({key:owner,...next});assert.equal(toast.getSnapshot().length,1);
 });
-test("stale confirmations and missing observations never establish stable recovery",()=>{
+
+test("confirmed writer failures need two seconds of fresh confirmation before silent removal",()=>{
   const n=new InputJournalNotices(),s=new InputJournalSession(owner);
-  n.read(view("unknown"),"recording",0);const warning=n.read(view("unknown"),"recording",5000);
-  s.accept(report(1,"confirmed",999,999),5500);
-  for(const at of [5500,6000,6500,7000,7500])assert.equal(n.read(s.read(at),"recording",at),warning);
-  n.read(view("confirmed"),"recording",8000);
-  assert.equal(n.read(view("confirmed"),"recording",12000),warning);
+  const failure=n.read(view("failed",true),"recording",0)!;
+  s.accept(report(1,"confirmed",999,999),500);
+  for(const at of [500,1000,1500,2000,2500])assert.equal(n.read(s.read(at),"recording",at),failure);
+  for(const at of [3000,3500,4000,4500])assert.equal(n.read(view("confirmed"),"recording",at),failure);
+  assert.equal(n.read(view("confirmed"),"recording",5000),null);
+  const recurring=n.read(view("failed",true),"recording",5500)!;
+  assert.notEqual(recurring.eventId,failure.eventId);
 });
+
 test("real failures notify immediately, survive missing reads, escalate invalidity and end with the owner",()=>{
   const n=new InputJournalNotices();
   const failed=n.read(view("failed",true),"recording",0)!;assert.equal(failed.level,"error");

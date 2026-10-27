@@ -55,7 +55,7 @@ import "./style.css";
 import "./prototype-alignment.css";
 import "./recorder-panel.css";
 import { RecorderInputs } from "./recorder-inputs";
-import { ThemeProvider, ThemeSettingsPanel, ThemeNotifications, useTheme } from "./theme";
+import { ThemeProvider, ThemeSettingsPanel, ThemeNotifications } from "./theme";
 import { WindowsDesktopFrame } from "./window-titlebar";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
@@ -135,12 +135,8 @@ function RecorderPanel() {
   const decision = useRecordingConfirmation("recorder");
   const action = useWindowAction();
   const closeAction = useWindowAction();
-  const theme = useTheme();
   useRecorderOperationPublisher("window_action", action.error, !action.busy, action.resolved);
   useRecorderOperationPublisher("confirmation", decision.error, !decision.requestBusy, decision.requestResolved && decision.connected);
-  useRecorderOperationPublisher("theme_read", theme.state.error, !theme.state.busy, !!theme.state.snapshot && !theme.state.error);
-  const sessionError = state.kind === "error" ? state.message : "";
-  useRecorderOperationPublisher("session_read", sessionError, true, state.kind === "ready");
   return (
     <main className="mini-shell" aria-label="録音ミニパネル">
       <div className="mini-row">
@@ -746,7 +742,7 @@ function MainWindow() {
         <RecordingJournalNotice/>
         <ThemeNotifications locked={writeLocked} />
         <IssueNotice scope="main" type="transcription-publication" label="文字起こしの保存" message={publication.error} />
-        <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage || (recordingDecision.snapshot?.phase === "failed" ? recordingDecision.snapshot.errorMessage : "") : state.kind === "error" ? state.message : ""} />
+        <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage || (recordingDecision.snapshot?.phase === "failed" ? recordingDecision.snapshot.errorMessage : "") : ""} />
 
         <header className="topbar"><nav className="screen-navigation" aria-label="画面の移動">{history.previous && <IconButton label="前の画面へ戻る" icon="previous" disabled={navigationLocked} onClick={() => void goBack()} />}{screen !== "meetings" && <><button type="button" className="breadcrumb-button" disabled={navigationLocked} onClick={() => void withSavedEdits(() => { setSelectedMeeting(null); setMeetingToolsOpen(false); setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button><span aria-hidden="true">/</span></>}<span aria-current="page">{detail ? "会議詳細" : screen === "recording" ? preparation ? "新しい録音" : "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : screen === "jobs" ? "ジョブ一覧" : screen === "logs" ? "内部ログ" : screen === "voices" ? "ボイス一覧" : screen === "prompts" ? "プロンプト" : "設定"}</span></nav><div className="topbar-actions"><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && screen!=="recording" && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={event => void stopRecording(event.currentTarget)}>録音を終了</button>}</div><NotificationPopover open={notificationsOpen} onOpenChange={setNotificationsOpen}><NotificationList visible={notificationsOpen} onOpen={openNotifiedMeeting} locked={navigationLocked}/></NotificationPopover></div><ToastHost docked={detail}/></header>
         <CommonOperationProgress onOpenJobs={showJobs} />

@@ -2,7 +2,7 @@ import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { IssueNotice, ToastNotice } from "./toast";
+import { ToastNotice } from "./toast";
 import { emptyOperations, mergeOperations, operationNames, relayOperation, type OperationSnapshot, type OperationSource } from "./recorder-operation-state";
 
 const bridge = { read: () => invoke("get_recorder_operation_notices"), publish: (source: OperationSource, expectedRevision: number, message: string | null) => invoke("publish_recorder_operation_notice", { source, expectedRevision, message }) };
@@ -58,13 +58,12 @@ export function RecorderOperationDetails() {
   </section>;
 }
 export function RecorderOperationNotifications() {
-  const state = useRecorderOperations(), [error, setError] = useState("");
+  const state = useRecorderOperations();
   const dismiss = async (source: OperationSource, expectedRevision: number, eventId: string) => {
-    try { state.accept(await invoke("dismiss_recorder_operation_notice", { source, expectedRevision, eventId })); setError(""); }
-    catch (cause) { setError(String(cause)); await state.refresh(); }
+    try { state.accept(await invoke("dismiss_recorder_operation_notice", { source, expectedRevision, eventId })); }
+    catch { await state.refresh(); }
   };
   return <>
-    {state.snapshot.entries.map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
-    <IssueNotice scope="recorder-operation" type="read" label="録音パネルの操作通知" message={state.error || error} />
+    {state.snapshot.entries.filter(e=>e.source!=="theme_read"&&e.source!=="session_read").map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
   </>;
 }

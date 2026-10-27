@@ -168,7 +168,7 @@ export function InternalLogs() {
     </div>
     <ToastNotice scope="internal-logs" type="clipboard" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     <ErrorNotice scope="internal-logs" type="InternalLogs-operation" active={!!(error)}>{error}{entries.length > 0 && " 前回取得したログを表示しています。"}</ErrorNotice>
-        <ErrorNotice scope="internal-logs" type="InternalLogs-storage" active={!!(pageStatus?.storageError)}>ログの保存・収集で問題が発生しました：{pageStatus?.storageError}</ErrorNotice>
+    {pageStatus?.storageError && <p role="status" className="internal-logs-notice">ログの保存・収集で問題が発生しました：{pageStatus.storageError}</p>}
     {!!pageStatus?.droppedEntries && <p role="status" className="internal-logs-notice">この起動中に保存失敗・過負荷により{pageStatus.droppedEntries}件のログを記録できませんでした。</p>}
     {(gap || pageStatus?.historyTruncated) && <p role="status" className="internal-logs-notice">保持期間または容量上限により、古いログの一部は残っていません。</p>}
     {trimmed && <p role="status" className="internal-logs-notice">画面の上限1,000件を超えたため、一部のログを表示から外しました。「最新ログを表示」で読み直せます。</p>}

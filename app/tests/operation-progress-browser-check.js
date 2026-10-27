@@ -193,7 +193,7 @@ async page => {
   check(await page.locator(".meeting-detail-content .operation-progress").count() === 0, "opening a job restores inline progress");
   await page.getByRole("button", { name: "ジョブ一覧", exact: true }).click();
   await page.evaluate(async () => { window.monBrowserFixture.notificationReadFail = true; await window.monBrowserFixture.emitNotification(); });
-  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"ジョブの状態を取得できません"}).waitFor();
+  await page.getByRole("status").filter({hasText:"ジョブの状態を確認中"}).waitFor();
   check(await jobs.locator("li").count() === 4, "failed read cleared retained work");
   await page.evaluate(async () => {
     const f = window.monBrowserFixture;

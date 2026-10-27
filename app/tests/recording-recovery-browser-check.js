@@ -23,10 +23,11 @@ async (page, capturePath, platform = "windows") => {
   await page.keyboard.press("Escape");
   results.push("native deletion blocks active work only");
   await page.evaluate(()=>{window.recordingRecoveryFixture.fail=true;});
-  await page.getByText(/回復状態を確認できません。表示は前回取得した状態です。/).first().waitFor();
+  await page.waitForTimeout(1200);
+  check(await page.locator(".toast-card").filter({hasText:"回復状態を確認できません"}).count()===0,"automatic recovery read notified");
   await common().getByText("録音を回復中",{exact:true}).waitFor();
   await page.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
-  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"ジョブの状態を取得できません"}).waitFor();
+  await page.getByRole("status").filter({hasText:"ジョブの状態を確認中"}).waitFor();
   check(await page.getByRole("heading",{name:"進行中のジョブはありません",exact:true}).count()===0,"failed read showed empty success");
   results.push("failed reads retain progress and suppress empty success");
   await page.evaluate(()=>{window.recordingRecoveryFixture.fail=false;});

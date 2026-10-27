@@ -54,7 +54,7 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     catch(cause){if(mounted.current)setError(`受付状態を確認してください。停止は自動再送していません: ${String(cause)}`);try{await refreshRef.current();if(current.current?.id===value.id&&current.current.phase==="confirming"&&current.current.preparing!==value.preparing)sent.current=null;}catch{}}
     finally{deciding.current=false;if(mounted.current)setDecisionBusy(false);}
   };
-  return {snapshot,connected,error:error||readError,request,decide,refresh,requestBusy,requestResolved,decisionBusy,visible:recordingDecisionVisible(snapshot),stopSent:sent.current===snapshot?.id};
+  return {snapshot,connected,error,readError,request,decide,refresh,requestBusy,requestResolved,decisionBusy,visible:recordingDecisionVisible(snapshot),stopSent:sent.current===snapshot?.id};
 }
 
 export function RecordingConfirmationWindow() {

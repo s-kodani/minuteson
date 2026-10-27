@@ -21,7 +21,8 @@ async (page, capturePath = path => path) => {
   await page.evaluate(() => { window.startupFixture.readFail = true; }); await reload().click();
   await page.getByRole("alert").filter({ hasText: "合成診断の読込失敗" }).waitFor();
   await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status","合成監視障害"));
-  await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).waitFor();
+  await page.waitForTimeout(300);
+  check(await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).count()===0,"internal monitor notified during startup");
   await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status",null));
   await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).waitFor({state:"hidden"});
   check(await page.getByRole("alert").filter({hasText:"合成診断の読込失敗"}).count()===1,"monitor recovery cleared a startup read error");

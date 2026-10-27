@@ -15,30 +15,25 @@ function setup() {
 }
 const notice = (key = "one", props: Partial<ToastInput> = {}): ToastInput => ({ key, level: "success", message: "保存しました", ...props });
 
-test("verified recovery updates dismissed and history-only warnings without creating a success toast",()=>{
-  const {c}=setup();
-  c.show(notice("journal-a",{level:"warning",eventId:"1"}));
-  const first=c.getSnapshot()[0];c.dismiss(first.key,first.id);
-  c.record(notice("archive-a",{level:"warning"}));
-  c.settleHistory("journal-a","保存を確認しました");c.settleHistory("archive-a","読取りが復旧しました");
-  assert.equal(c.getSnapshot().length,0);
-  assert(c.getHistorySnapshot().every(n=>n.resolution?.state==="resolved"));
-  const snapshot=c.getHistorySnapshot();c.settleHistory("journal-a","保存を確認しました");assert.equal(c.getHistorySnapshot(),snapshot);
-  c.record(notice("archive-a",{level:"warning"}));
-  assert.equal(c.getHistorySnapshot().length,3);
-  assert.equal(c.getHistorySnapshot()[0].resolution,undefined);
-  assert.equal(c.getHistorySnapshot().filter(n=>n.resolution?.state==="resolved").length,2);
+test("verified recovery silently forgets active, dismissed and history-only notices without receipts",()=>{
+  const {c,advance,jobs}=setup();let closed=0,rendered=0,acted=0;
+  c.show(notice("active",{onClose:()=>closed++,onRendered:()=>rendered++,action:{kind:"retry",label:"再試行",run:()=>{acted++;}}}));
+  c.show(notice("dismissed",{level:"warning",eventId:"1"}));
+  const first=c.getSnapshot().find(n=>n.key==="dismissed")!;c.dismiss(first.key,first.id);
+  c.record(notice("history",{level:"warning"}));
+  for(const key of ["active","dismissed","history"])c.forget(key);
+  assert.deepEqual(c.getSnapshot(),[]);assert.deepEqual(c.getHistorySnapshot(),[]);
+  const snapshot=c.getHistorySnapshot();c.forget("active");assert.equal(c.getHistorySnapshot(),snapshot);
+  advance(60000);assert.equal(jobs.size,0);assert.deepEqual([closed,rendered,acted],[0,0,0]);
+  c.show(notice("dismissed",{level:"warning",eventId:"2"}));
+  assert.equal(c.getSnapshot().length,1);assert.equal(c.getHistorySnapshot().length,1);
 });
 
-test("ending observation and dismissing never imply recovery or resolve another recording",()=>{
+test("ending observation preserves the failure until its owner confirms recovery",()=>{
   const {c}=setup();c.show(notice("a",{level:"warning"}));c.show(notice("b",{level:"warning"}));
-  c.settleHistory("a","録音中の確認は終了しました","unconfirmed");c.resolve("a");
-  assert.equal(c.getHistorySnapshot().find(n=>n.key==="a")?.resolution?.state,"unconfirmed");
-  assert.equal(c.getHistorySnapshot().find(n=>n.key==="b")?.resolution,undefined);
-  c.settleHistory("a","保存を確認しました");
-  c.settleHistory("a","後から終了通知が届きました","unconfirmed");
-  assert.equal(c.getHistorySnapshot().find(n=>n.key==="a")?.resolution?.state,"resolved");
-  assert.equal(c.getSnapshot()[0].key,"b");
+  c.resolve("a");assert.equal(c.getHistorySnapshot().length,2);
+  c.forget("a");assert.equal(c.getHistorySnapshot().length,1);
+  assert.equal(c.getHistorySnapshot()[0].key,"b");assert.equal(c.getSnapshot()[0].key,"b");
 });
 
 test("verified asynchronous recovery clears only its own matching problem", () => {

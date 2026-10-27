@@ -32,16 +32,15 @@ async page => {
 
   for(const mode of ["lost","foreign","hidden"]){
     await boot();await start();await dismiss();await page.evaluate(mode=>window.monBrowserFixture.notificationProofMode=mode,mode);
-    await update({state:"succeeded",outputAnalysisId:"unverified"});await alert("解析通知の読込・結果確認").waitFor();
+    await update({state:"succeeded",outputAnalysisId:"unverified"});await page.waitForTimeout(500);
     check(await status("処理が完了しました").count()===0,"unverified output announced completion");
-    await host().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
+    check(await alert("解析通知の読込・結果確認").count()===0,"automatic output verification notified");
     await openHistory();
-    const retained=history().locator(".toast-card").filter({hasText:"解析通知の読込・結果確認"});
-    check(await retained.count()===1,"dismissal lost the read failure history");
+    check(await history().locator(".toast-card").filter({hasText:"解析通知の読込・結果確認"}).count()===0,"automatic verification entered history");
     await closeHistory();
     await page.evaluate(async()=>{window.monBrowserFixture.notificationProofMode="valid";await window.monBrowserFixture.emitNotification();});
     await status("処理が完了しました").waitFor();await noWork();
-    results.push(mode+" proof holds completion; recovered read verifies the exact output while retaining menu history");
+    results.push(mode+" proof holds completion; recovered read verifies the exact output without diagnostic notification history");
   }
 
   await boot();await start();await dismiss();await update({state:"failed",errorCode:"engine_failed"});

@@ -141,7 +141,8 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     </div>
   </section>;
   return <>
-    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || refreshError || flow?.errorMessage} historyOnly={!error && !refreshError && flowHistoryOnly} />
+    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || flow?.errorMessage} historyOnly={!error && flowHistoryOnly} />
+    {refreshError && <p role="status">文字起こしの状態を確認中です。</p>}
     {renderTools ? renderTools(tools, null) : tools}
   </>;
 }
