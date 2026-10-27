@@ -4,7 +4,7 @@ import { validateAudioSummary, markdownIntervalRequest, validateMarkdownPlayback
 import { ChunkPlayer, type PlaybackClock, type PlaybackInfo } from "../src/playback.ts";
 const summary={schemaVersion:1 as const,durationUs:1000000,modes:["mixed" as const]};
 const request=markdownIntervalRequest("m",summary,{startUs:250001,endUs:300000});
-const info:PlaybackInfo={token:"interval",sampleRate:48000,channels:1,startUs:250001,endUs:300000,totalFrames:2399,trackKind:"mixed",alignment:"unverified"};
+const info:PlaybackInfo={token:"interval",sampleRate:16000,channels:1,startUs:250001,endUs:300000,totalFrames:799,trackKind:"mixed",alignment:"unverified"};
 test("Markdown intervals use the one canonical source",()=>{
   assert.equal(request.mode,"mixed");assert.doesNotThrow(()=>validateMarkdownPlayback(info,request));
   assert.deepEqual(validateAudioSummary(summary),summary);
@@ -16,10 +16,18 @@ test("unsafe summary modes and timelines are refused",()=>{
   assert.throws(()=>markdownIntervalRequest("m",summary,{startUs:0,endUs:1000001}));
 });
 test("a response must match the exact interval, frame count and source",()=>{
-  for(const patch of [{startUs:250000},{endUs:300001},{totalFrames:2400},{sampleRate:16000},{channels:2},{trackKind:"mic"},{alignment:"verified"}]) {
+  for(const patch of [{startUs:250000},{endUs:300001},{totalFrames:800},{totalFrames:2399},{sampleRate:48000},{channels:2},{trackKind:"mic"},{alignment:"verified"}]) {
     assert.throws(()=>validateMarkdownPlayback({...info,...patch},request));
   }
-  assert.throws(()=>validateMarkdownPlayback({...info,missingRanges:[{trackKind:"mic",startUs:250001,endUs:300000,startFrame:0,endFrame:2399,reasonCode:"missing"}]},request));
+  assert.throws(()=>validateMarkdownPlayback({...info,missingRanges:[{trackKind:"mic",startUs:250001,endUs:300000,startFrame:0,endFrame:799,reasonCode:"missing"}]},request));
+});
+
+test("interval boundaries round absolute endpoints at 16 kHz, including a single final frame",()=>{
+  for (const [startUs,endUs,totalFrames] of [[0,1000000,16000],[1,63,1],[999937,1000000,1]]) {
+    const interval=markdownIntervalRequest("m",summary,{startUs,endUs});
+    assert.doesNotThrow(()=>validateMarkdownPlayback({...info,startUs,endUs,totalFrames},interval));
+    assert.throws(()=>validateMarkdownPlayback({...info,startUs,endUs,totalFrames:totalFrames+1},interval));
+  }
 });
 test("interval playback starts at its first PCM frame even when that PCM is silence",async()=>{
   const reads:number[]=[];

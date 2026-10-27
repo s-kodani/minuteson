@@ -115,7 +115,9 @@ fn audio_deletion_availability_survives_reopen_and_is_independent_of_meeting_del
     assert_eq!(before[0].audio_deleted, Some(false));
     let lease = owner();
     let op = removed(&f, &lease);
-    assert!(finish(&f.storage, &op, &lease, &|| false).unwrap().completed());
+    assert!(finish(&f.storage, &op, &lease, &|| false)
+        .unwrap()
+        .completed());
     drop(lease);
     let after = f.storage.meeting_deletion_availability(&ids).unwrap();
     assert!(after[0].available);
@@ -129,7 +131,10 @@ fn audio_deletion_availability_survives_reopen_and_is_independent_of_meeting_del
         .connection
         .lock()
         .unwrap()
-        .execute("UPDATE file_assets SET state='ready' WHERE id=?1", [&f.asset])
+        .execute(
+            "UPDATE file_assets SET state='ready' WHERE id=?1",
+            [&f.asset],
+        )
         .unwrap();
     let unknown = f.storage.meeting_deletion_availability(&ids).unwrap();
     assert!(unknown[0].available);

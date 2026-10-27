@@ -2,6 +2,8 @@ import { validateMissingRanges, type PlaybackInfo } from "./playback.ts";
 import type { DraftUtteranceAudioRequest } from "./transcript-state.ts";
 
 export type MeetingPlaybackMode = "mixed";
+// Canonical meeting WAV and native playback use this rate on both platforms.
+export const MEETING_SAMPLE_RATE = 16000;
 export type MeetingPlaybackStartReference =
   | { kind: "utterance"; analysisId: string; utteranceId: string; expectedContentHash: string; startUs: number; endUs: number }
   | { kind: "draftUtterance"; request: DraftUtteranceAudioRequest }
@@ -37,9 +39,9 @@ export function meetingPlaybackLabel(mode: MeetingPlaybackMode): string {
 export function validateMeetingPlayback(info: PlaybackInfo, mode: MeetingPlaybackMode, restore: MeetingPlaybackRestore): void {
   validateMissingRanges(info);
   if (!info.token || info.startUs !== 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= 0
-    || info.sampleRate !== 48000 || info.channels !== 1 || info.trackKind !== mode
+    || info.sampleRate !== MEETING_SAMPLE_RATE || info.channels !== 1 || info.trackKind !== mode
     || !Number.isSafeInteger(info.totalFrames) || info.totalFrames < 1
-    || BigInt(info.totalFrames) !== (BigInt(info.endUs) * 48000n + 999999n) / 1000000n
+    || BigInt(info.totalFrames) !== (BigInt(info.endUs) * BigInt(MEETING_SAMPLE_RATE) + 999999n) / 1000000n
     || info.alignment !== "unverified") throw Error("会議全体の再生情報が保存音声と一致しません。");
   if (!Number.isSafeInteger(restore.frame) || restore.frame < 0 || restore.frame > info.totalFrames
     || ![0.75, 1, 1.25, 1.5, 2].includes(restore.rate)

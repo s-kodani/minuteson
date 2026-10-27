@@ -17,6 +17,7 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["canonical-playback", "canonical-playback-browser-fixture.tsx", "canonical-playback-browser-check.js"],
   ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
   ["internal-logs", null, "internal-logs-browser-check.js"],
   ["speaker-count", "browser-fixture.js", "speaker-count-browser-check.js"],

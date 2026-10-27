@@ -208,10 +208,10 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     try { startUs = meetingPlaybackStart(reference, durationUs); }
     catch (cause) { setError(String(cause)); return Promise.resolve(); }
     const current = player.snapshot();
-    const frame = Number(BigInt(startUs) * 48000n / 1000000n);
     const id = reference.kind === "utterance" ? reference.utteranceId : reference.kind === "draftUtterance" ? reference.request.utteranceId : `markdown:${reference.startUs}:${reference.endUs}`;
     return start("", id, { meetingId, mode, startReference:reference }, startUs,
-      { frame, rate:current.rate, playing:true, endUs:durationUs });
+      // startInner resolves absoluteStartUs using the prepared audio's rate.
+      { frame:0, rate:current.rate, playing:true, endUs:durationUs });
   };
 
   const snapshot = player.snapshot();

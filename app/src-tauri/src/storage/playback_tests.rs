@@ -98,6 +98,72 @@ fn canonical_playback_is_version_scoped_and_reads_the_requested_timeline() {
 }
 
 #[test]
+fn canonical_meeting_and_interval_playback_publish_16khz_pcm() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().into()).unwrap();
+    let (meeting, _, _) = fixture(&storage);
+    let store = PlaybackStore::default();
+    let full = store
+        .insert_meeting(
+            storage
+                .prepare_meeting_audio(&MeetingPlaybackRequest {
+                    meeting_id: meeting.clone(),
+                    mode: MeetingPlaybackMode::Mixed,
+                    start_reference: None,
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        (full.sample_rate, full.channels, full.total_frames),
+        (16000, 1, 16000)
+    );
+    assert_eq!((full.start_us, full.end_us), (0, 1000000));
+    assert_eq!(full.track_kind, "mixed");
+    assert_eq!(full.alignment, "unverified");
+    assert!(full.missing_ranges.is_empty());
+    // A reference near EOF must read at 0.75s, not at 36000 frames (48 kHz).
+    let pcm = store.read(&full.token, 12000).unwrap();
+    assert_eq!(u32::from_le_bytes(pcm[..4].try_into().unwrap()), 16000);
+    assert_eq!(u32::from_le_bytes(pcm[8..12].try_into().unwrap()), 4000);
+    assert!(pcm[12..]
+        .chunks_exact(4)
+        .all(|sample| f32::from_le_bytes(sample.try_into().unwrap()) == -0.5));
+    store.close(&full.token).unwrap();
+
+    for (start_us, end_us, frames, sample) in
+        [(250001, 300000, 799, 0.25), (999937, 1000000, 1, -0.5)]
+    {
+        let audio = storage
+            .prepare_meeting_interval_cancellable(
+                &MeetingIntervalRequest {
+                    meeting_id: meeting.clone(),
+                    mode: MeetingPlaybackMode::Mixed,
+                    start_us,
+                    end_us,
+                    expected_duration_us: 1000000,
+                },
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
+        let info = store.insert_interval(audio).unwrap();
+        assert_eq!(
+            (info.sample_rate, info.channels, info.total_frames),
+            (16000, 1, frames)
+        );
+        assert_eq!((info.start_us, info.end_us), (start_us, end_us));
+        assert_eq!(info.track_kind, "mixed");
+        let pcm = store.read(&info.token, 0).unwrap();
+        assert_eq!(pcm.len(), 12 + frames as usize * 4);
+        assert!(pcm[12..]
+            .chunks_exact(4)
+            .all(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()) == sample));
+        assert!(store.read(&info.token, frames).is_err());
+        store.close(&info.token).unwrap();
+    }
+}
+
+#[test]
 fn cancellation_and_revoked_utterance_never_publish_audio() {
     for revoke in [false, true] {
         let temp = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
 import { validateMissingRanges, type PlaybackInfo } from "./playback.ts";
-import type { MeetingPlaybackMode } from "./meeting-playback-state.ts";
+import { MEETING_SAMPLE_RATE, type MeetingPlaybackMode } from "./meeting-playback-state.ts";
 import type { MarkdownAudioInterval } from "./minutes-markdown-state.ts";
 
 export interface MeetingAudioSummary { schemaVersion: 1; durationUs: number; modes: MeetingPlaybackMode[] }
@@ -22,9 +22,9 @@ export function markdownIntervalRequest(meetingId: string, summary: MeetingAudio
   return { meetingId, mode, startUs: interval.startUs, endUs: interval.endUs, expectedDurationUs: summary.durationUs };
 }
 export function validateMarkdownPlayback(info: PlaybackInfo, request: MarkdownIntervalRequest): void {
-  const frame = (us: number) => (BigInt(us) * 48000n + 999999n) / 1000000n;
+  const frame = (us: number) => (BigInt(us) * BigInt(MEETING_SAMPLE_RATE) + 999999n) / 1000000n;
   if (!info.token || info.startUs !== request.startUs || info.endUs !== request.endUs
-    || info.sampleRate !== 48000 || info.channels !== 1 || info.trackKind !== request.mode || info.alignment !== "unverified"
+    || info.sampleRate !== MEETING_SAMPLE_RATE || info.channels !== 1 || info.trackKind !== request.mode || info.alignment !== "unverified"
     || !Number.isSafeInteger(info.totalFrames) || info.totalFrames < 1
     || BigInt(info.totalFrames) !== frame(request.endUs) - frame(request.startUs))
     throw Error("確認したMarkdown区間と再生する音声が一致しません。");
