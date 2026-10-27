@@ -8,6 +8,7 @@ import {ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
 import {InputJournalSession,InputJournalNotices,journalMessage,type JournalView,type JournalNotice} from "./input-journal-state";
 import "./recording-input-status.css";
+import {InputDiagnosticLog} from "./input-diagnostic-log";
 type View={owner:string|null;microphone:VisibleInput;system:VisibleInput;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:{microphone:number;system:number};journal:JournalView&{ready?:boolean;notice?:JournalNotice|null};dismiss:(input:InputKind)=>void;rendered:(id:string,generation:number)=>void};
 const unknown=()=>({microphone:{state:"unknown"} as VisibleInput,system:{state:"unknown"} as VisibleInput,notices:[] as InputNotice[]});
 const empty=()=>({owner:null,...unknown(),reception:{microphone:"none",system:"none"} as Record<InputKind,NoticeReception>,loss:{microphone:0,system:0},journal:{state:"unknown",problem:false} as JournalView,dismiss:(_input:InputKind)=>{},rendered:(_id:string,_generation:number)=>{}});
@@ -22,11 +23,13 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     // A failed session bridge disposes this controller even if its WebView
     // survives. Reopening it must not impersonate a previously accepted receiver.
     const queue=new RecordingInputQueue(owner,crypto.randomUUID(),windowLabel);
-    const journal=new InputJournalSession(owner),journalNotices=new InputJournalNotices();let journalInFlight=false;
+    const journal=new InputJournalSession(owner),journalNotices=new InputJournalNotices(),diagnosticLog=new InputDiagnosticLog();let journalInFlight=false;
     const now=()=>clock.read(performance.now(),Date.now());
     const journalView=(at:number)=>{
       const state=journal.read(at);
       const notice=journalNotices.read(state,phaseRef.current,at);
+      if(notice)diagnosticLog.report("live-journal-notice",owner,notice.message,{state:state.state});
+      else if(state.state==="confirmed")diagnosticLog.report("live-journal-notice",owner,null);
       return {...state,ready:!!notice,notice};
     };
     const paint=()=>{
@@ -47,8 +50,8 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
       catch{if(!disposed)failed=true;}finally{inFlight=false;paint();}
     };
     const pollJournal=async()=>{if(disposed||journalInFlight)return;journalInFlight=true;const at=now();
-      try{const value=await invoke("get_recording_input_history_status",{sessionId:owner});if(!disposed)journal.accept(value,at);}
-      catch{if(!disposed)journal.fail();}finally{journalInFlight=false;if(!disposed)paint();}
+      try{const value=await invoke("get_recording_input_history_status",{sessionId:owner});if(!disposed){journal.accept(value,at);diagnosticLog.report("live-journal",owner,null);}}
+      catch(error){if(!disposed){journal.fail();diagnosticLog.report("live-journal",owner,error,{command:"get_recording_input_history_status"});}}finally{journalInFlight=false;if(!disposed)paint();}
     };
     void poll();void pollJournal();const painting=window.setInterval(paint,100),polling=window.setInterval(()=>{void poll();void pollJournal();},500);
     return()=>{disposed=true;window.clearInterval(painting);window.clearInterval(polling);};
@@ -70,10 +73,11 @@ export function RecordingInputStatus({owner,input,compact=false,indicator=false,
 export function RecordingMicrophoneStatus({owner,compact=false}:{owner:string|null;compact?:boolean}){return <RecordingInputStatus owner={owner} input="microphone" compact={compact}/>;}
 export function RecordingJournalNotice(){
   const view=useContext(Context),scope=view.owner??"recording-journal";
-  useEffect(()=>()=>toasts.resolve(toastKey(scope,"journal-save")),[scope]);
+  useEffect(()=>()=>{if(view.owner)toasts.settleHistory(toastKey(scope,"journal-save"),"録音中の確認は終了しました。接続記録の保存結果は、まだ再確認できていません。","unconfirmed");toasts.resolve(toastKey(scope,"journal-save"));},[scope]);
   const notice=view.owner?view.journal.notice:null;
   return <div className="recording-journal-diagnostic" hidden={!notice} data-journal-state={view.owner?view.journal.state:"inactive"}>
-    <ToastNotice scope={scope} type="journal-save" message={notice?`入力履歴の保存: ${notice.message}`:""} level={notice?.level??"warning"} eventId={notice?.eventId}/>
+    <ToastNotice scope={scope} type="journal-save" message={notice?`録音状況の確認: ${notice.message}`:""} level={notice?.level??"warning"} eventId={notice?.eventId}
+      resolutionMessage={view.owner&&view.journal.state==="confirmed"&&!notice?"接続記録の保存を確認できました。録音中の確認待ちは解消しています。":undefined}/>
   </div>;
 }
 export function RecordingCompactInputs({owner}:{owner:string|null}){return <span className="mini-inputs"><RecordingInputStatus owner={owner} input="microphone" compact/><RecordingInputStatus owner={owner} input="system" compact/></span>;}

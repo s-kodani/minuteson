@@ -9,10 +9,13 @@ import {InputLevelClock} from "./input-level-state";
 import type {InputKind} from "./recording-input-state";
 import {IssueNotice,ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
+import {archivedDiagnosticMessage} from "./input-diagnostic-copy";
+import {InputDiagnosticLog} from "./input-diagnostic-log";
 
 const lanes:InputKind[]=["microphone","system"];
 const scope=(owner:string)=>`archived-input:${owner}`;
 function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInputView;locked:boolean;onOpen:(id:string)=>Promise<void>;onRendered:(owner:string,id:string,generation:number)=>void;onClose:(owner:string,input:InputKind)=>void}){
+  useEffect(()=>{if(view.historySaveConfirmed)toasts.settleHistory(toastKey(view.sessionId,"journal-save"),`終了した録音「${view.title}」の接続記録が保存されていることを確認しました。`);},[view.sessionId,view.title,view.historySaveConfirmed]);
   // ToastNotice normally outlives a view. This bounded historical owner must
   // explicitly resolve its presentation on eviction/deletion/unmount instead.
   useEffect(()=>()=>{for(const input of [...lanes,"diagnostic"])toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
@@ -30,13 +33,13 @@ function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInpu
 
 /** Closed recordings only: neither a current connection badge nor replay. */
 export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingIds?:string[];paused:boolean;locked:boolean;onOpen:(id:string)=>Promise<void>}){
-  const [views,setViews]=useState<ArchivedInputView[]>([]),[readError,setReadError]=useState(""),[listenerError,setListenerError]=useState(""),[windowError,setWindowError]=useState(""),[reading,setReading]=useState(false);
+  const [views,setViews]=useState<ArchivedInputView[]>([]),[readError,setReadError]=useState(""),[listenerError,setListenerError]=useState(""),[windowError,setWindowError]=useState(""),[reading,setReading]=useState(false),[readConfirmed,setReadConfirmed]=useState(false);
   const guard=useRef({paused,locked,onOpen,meetingIds}),refresh=useRef<()=>void>(()=>{}),syncProps=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
   guard.current={paused,locked,onOpen,meetingIds};
   useEffect(()=>{
     if(!isTauri())return;
     let disposed=false,nativeVisible=false,visibilityEpoch=0,painting=0,visibilityRetry=0,visibilityFailures=0;
-    const controller=new ArchivedInputController(crypto.randomUUID()),clock=new InputLevelClock(performance.now(),Date.now()),stops:(()=>void)[]=[];
+    const diagnosticLog=new InputDiagnosticLog(),controller=new ArchivedInputController(crypto.randomUUID(),(owner,error)=>diagnosticLog.report("archived-validation",owner,error)),clock=new InputLevelClock(performance.now(),Date.now()),stops:(()=>void)[]=[];
     controller.pause(true);
     let knownMeetings=new Set(guard.current.meetingIds??[]),operationEpoch=0,wasPaused=guard.current.paused;
     const now=()=>clock.read(performance.now(),Date.now());
@@ -57,7 +60,8 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
     };
     const scheduler=new ArchivedInputScheduler(controller,{now,start:(run,delay)=>window.setTimeout(run,delay),stop:timer=>clearTimeout(timer as number)},
       request=>request.kind==="page"?invoke("get_archived_recording_input_notices",{afterSessionId:request.after}):invoke("get_archived_recording_input_notice_rows",{targets:request.targets}),
-      (reading,error)=>{if(!disposed){setReading(reading);setReadError(error);paint();}});
+      (reading,error)=>{if(!disposed){setReading(reading);setReadError(error);paint();}},
+      (request,error)=>{setReadConfirmed(error===null);diagnosticLog.report(request.kind==="page"?"archived-page":"archived-rows",null,error,request);});
     const deliver=async(request:ArchivedAttempt)=>{
       if(disposed||blocked())return;
       const a=request.attempt,epoch=operationEpoch;
@@ -82,18 +86,19 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
         if(disposed||epoch!==visibilityEpoch)return;
         if(typeof visible!=="boolean"||typeof minimized!=="boolean")throw Error("画面状態の応答が不正です");
         if(nativeVisible!==(visible&&!minimized))operationEpoch++;
-        nativeVisible=visible&&!minimized;visibilityFailures=0;setWindowError("");scheduler.setBlocked(blocked());
+        nativeVisible=visible&&!minimized;visibilityFailures=0;setWindowError("");diagnosticLog.report("archived-window",null,null);scheduler.setBlocked(blocked());
         if(wake&&!blocked())scheduler.invalidate();paint();
-      }catch{
+      }catch(error){
         if(disposed||epoch!==visibilityEpoch)return;
+        diagnosticLog.report("archived-window",null,error);
         nativeVisible=false;scheduler.setBlocked(true);paint();
-        setWindowError("通知履歴を表示する画面の状態を確認できません。画面状態の再確認を継続しています。");
+        setWindowError("通知を表示できる画面か確認できないため、接続記録の確認を一時的に待っています。自動で再確認します。");
         visibilityRetry=window.setTimeout(()=>void checkVisibility(),Math.min(60_000,1000*2**Math.min(6,visibilityFailures++)));
       }
     };
     const subscribe=async(promise:Promise<()=>void>)=>{
       try{const stop=await promise;if(disposed)stop();else stops.push(stop);}
-      catch{if(!disposed)setListenerError("通知履歴の更新イベントを受信できません。60秒ごとの補完読込みは継続しています。");}
+      catch(error){if(!disposed){diagnosticLog.report("archived-subscribe",null,error);setListenerError("接続記録の更新通知を受け取れません。60秒ごとに自動で確認します。録音ファイルの保存失敗を示す通知ではありません。");}}
     };
     const focus=()=>void checkVisibility(true),visibility=()=>{scheduler.setBlocked(blocked());paint();void checkVisibility(!document.hidden);};
     window.addEventListener("focus",focus);document.addEventListener("visibilitychange",visibility);
@@ -114,20 +119,11 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
   const open=async(id:string)=>{if(!guard.current.locked)await guard.current.onOpen(id);};
   return <>
     {views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>)}
-    <IssueNotice scope="archived-input" type="read" message={readError} label="終了済み録音の通知読込" action={{kind:"retry",label:"通知履歴を再読込",disabled:paused||reading,run:()=>refresh.current()}} />
-    <IssueNotice scope="archived-input" type="listen" message={listenerError||windowError} label="終了済み録音の通知受信"/>
+    <ToastNotice scope="archived-input" type="read" message={readError} level="warning" resolutionMessage={readConfirmed?"過去の録音の接続記録を再確認できました。読取りの問題は解消しています。":undefined} action={{kind:"retry",label:"もう一度確認",disabled:paused||reading,run:()=>refresh.current()}} />
+    <IssueNotice scope="archived-input" type="listen" message={listenerError||windowError} label="過去の録音の接続記録"/>
     {views.map(view=>{
-      const diagnostics=[
-        view.unavailable?"通知履歴を読めません":"",
-        view.historyIssue==="missing"?"取得履歴がありません":view.historyIssue==="invalid"?"取得履歴を照合できません":"",
-        view.deliveryUnavailable?"復元した通知の受付を確認できません":"",
-        view.historySaveIssue?({failed:"取得履歴の書込みを確定できません",invalid:"取得履歴の保存を停止しました",unconfirmed:"停止時の取得履歴保存が未確定です",unavailable:"停止時の履歴保存診断を確認できません"}[view.historySaveIssue]):"",
-        view.loss.microphone>0?`マイク通知の保持不足 ${view.loss.microphone}件`:"",
-        view.loss.system>0?`PC音声通知の保持不足 ${view.loss.system}件`:"",
-        lanes.some(input=>view.reception[input]==="unconfirmed")?"通知処理の結果確認待ち":""
-      ].filter(Boolean).join(" / ");
       return <ToastNotice key={view.sessionId} scope={scope(view.sessionId)} type="diagnostic" level="warning" important historyOnly meetingId={view.meetingId}
-        message={diagnostics?`終了した録音「${view.title}」：${diagnostics}。保存された音声で欠損範囲を確認してください。`:""}
+        message={archivedDiagnosticMessage(view)} resolutionMessage={view.checked?"接続記録と通知を読み取れました。確認できなかった状態は解消しています。":undefined}
         action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>open(view.meetingId)}}/>;
     })}
   </>;

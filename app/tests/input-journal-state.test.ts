@@ -22,7 +22,7 @@ test("failure survives absent/failed/stale reads and only fresh confirmation res
   const s=new InputJournalSession(owner);s.accept(report(1,"failed"),0);assert.equal(s.read(0).problem,true);
   s.fail();assert.deepEqual(s.read(1),{state:"unknown",problem:true});
   s.accept(report(2),2);assert.equal(s.read(2).problem,true);
-  assert.match(journalMessage(s.read(2)),/以前の書込み失敗/u);
+  assert.match(journalMessage(s.read(2)),/以前の接続記録の保存エラー/u);
   assert.equal(s.read(1003).problem,true);
   s.accept(report(3,"confirmed",999,999),1004);assert.deepEqual(s.read(1004),{state:"confirmed",problem:false});
 });

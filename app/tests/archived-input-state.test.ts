@@ -16,6 +16,18 @@ const page=(recordings:ArchivedInputRow[]=[row()],nextCursor:string|null=null)=>
 const own=(request:ArchivedAttempt,rendered=false):InputNotice=>({...request.attempt.notice,recipientId:recipient,delivery:{...request.attempt.notice.delivery!,leaseAgeMs:0,receiveId:request.attempt.receiveId,rendered}});
 const receipt=(r:ArchivedAttempt,rendered=r.attempt.action!=="receive")=>({schemaVersion:2,ownerId:r.attempt.sessionId,noticeId:r.attempt.noticeId,target:"main",recipientId:recipient,delivery:own(r,rendered).delivery});
 const create=()=>new ArchivedInputController(recipient);
+
+test("recovery needs a valid read; final save confirmation is independent of a notification read failure",()=>{
+  const errors:unknown[]=[];const c=new ArchivedInputController(recipient,(_owner,error)=>errors.push(error));
+  c.acceptPage(page([row(null,"unavailable")]),null,0);
+  let view=c.paint(0).views[0];assert.equal(view.checked,false);assert.equal(view.historySaveConfirmed,true);
+  c.acceptPage(page([{...row(null,"unavailable"),historySaveIssue:"unavailable"}]),null,1);
+  assert.equal(c.paint(1).views[0].historySaveConfirmed,false);
+  c.acceptPage(page([row(batch([]))]),null,2);view=c.paint(2).views[0];assert.equal(view.checked,true);assert.equal(view.historySaveConfirmed,true);
+  c.pause(true);assert.equal(c.paint(3).views[0].checked,false);assert.equal(c.paint(3).views[0].historySaveConfirmed,false);
+  c.pause(false);c.acceptPage(page([row({...batch([]),historyIssue:"invalid"})]),null,4);
+  assert.equal(c.paint(4).views[0].checked,false);assert(errors.some(error=>error instanceof Error));
+});
 test("version 3 separates readable imported diagnosis from unavailable delivery without transferred claims",()=>{
   const diagnostic={...row(batch([],1)),issue:"deliveryUnavailable" as const,historySaveIssue:"failed" as const};
   diagnostic.batch!.noticeLoss={microphone:2,system:2};

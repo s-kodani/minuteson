@@ -5,7 +5,7 @@ import type {NoticeReception} from "./recording-input-queue.ts";
 
 type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean;watch:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
-export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;deliveryUnavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"]};
+export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;deliveryUnavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"];checked:boolean;historySaveConfirmed:boolean};
 
 /** Main WebView lifetime, independent of the selected meeting. One paginated
  * traversal, bounded owners and identity-fenced asynchronous acknowledgements. */
@@ -14,7 +14,8 @@ export class ArchivedInputController {
   private cursor:string|null=null;
   private paused=false;
   private recipientId:string;
-  constructor(recipientId:string){this.recipientId=recipientId;}
+  private readLog:(owner:string,error:unknown)=>void;
+  constructor(recipientId:string,readLog:(owner:string,error:unknown)=>void=()=>{}){this.recipientId=recipientId;this.readLog=readLog;}
   after(){return this.cursor;}
   restart(){this.cursor=null;}
   targets():ArchivedInputTarget[]{return [...this.entries.values()].filter(e=>e.watch||e.queue.hasPending()).map(e=>({meetingId:e.row.meetingId,sessionId:e.row.sessionId}));}
@@ -63,8 +64,8 @@ export class ArchivedInputController {
       // reported final writer failure has been resolved.
       entry.watch=row.issue==="unavailable"||row.batch!==null&&row.batch.notices.length>0;
       entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
-      try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";}
-      catch{entry.fresh=false;entry.error=true;}
+      try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";if(accepted)this.readLog(row.sessionId,null);}
+      catch(error){entry.fresh=false;entry.error=true;this.readLog(row.sessionId,error);}
     }
   }
   paint(at:number):{views:ArchivedInputView[];attempts:ArchivedAttempt[]}{
@@ -74,7 +75,10 @@ export class ArchivedInputController {
       for(const attempt of entry.queue.observe(raw,at))attempts.push({entry,meetingId:entry.row.meetingId,attempt});
       const queued=entry.queue.read(at),diagnostic=entry.session.diagnostics();
       views.push({meetingId:entry.row.meetingId,sessionId:entry.row.sessionId,title:entry.row.title,...queued,
-        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,deliveryUnavailable:entry.row.issue==="deliveryUnavailable",historySaveIssue:entry.row.historySaveIssue??null});
+        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,deliveryUnavailable:entry.row.issue==="deliveryUnavailable",historySaveIssue:entry.row.historySaveIssue??null,
+        checked:!this.paused&&entry.fresh&&!entry.error&&entry.row.issue===null,
+        // Final persistence is independent of a failed notification queue.
+        historySaveConfirmed:!this.paused&&entry.row.issue!=="paused"&&entry.row.historySaveIssue===null});
     }
     return {views,attempts};
   }

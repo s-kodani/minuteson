@@ -121,11 +121,43 @@ impl Entry {
             &self.directory,
             "input-events.json",
         ) {
-            Ok(None) => (None, Some("missing")),
-            Err(_) => (None, Some("invalid")),
+            Ok(None) => {
+                super::diagnostics::read_result(
+                    "archived-source/input-events.json",
+                    Some(owner),
+                    Some(&self.meeting),
+                    Some("file not found"),
+                );
+                (None, Some("missing"))
+            }
+            Err(error) => {
+                super::diagnostics::read_result(
+                    "archived-source/input-events.json",
+                    Some(owner),
+                    Some(&self.meeting),
+                    Some(&error),
+                );
+                (None, Some("invalid"))
+            }
             Ok(Some(_)) => match self.reader.read_record(owner) {
-                Ok(record) => (Some(record), None),
-                Err(_) => (None, Some("invalid")),
+                Ok(record) => {
+                    super::diagnostics::read_result(
+                        "archived-source/input-events.json",
+                        Some(owner),
+                        Some(&self.meeting),
+                        None,
+                    );
+                    (Some(record), None)
+                }
+                Err(error) => {
+                    super::diagnostics::read_result(
+                        "archived-source/input-events.json",
+                        Some(owner),
+                        Some(&self.meeting),
+                        Some(&error),
+                    );
+                    (None, Some("invalid"))
+                }
             },
         }
     }
@@ -342,8 +374,22 @@ impl ArchivedInputs {
                 .or(fallback)
                 .ok_or("通知履歴の所有がありません")?;
             let imported = match storage.closed_input_snapshot(&row.meeting_id, &row.session_id) {
-                Ok(imported) => imported,
-                Err(_) => {
+                Ok(imported) => {
+                    super::diagnostics::read_result(
+                        "archived-snapshot",
+                        Some(&row.session_id),
+                        Some(&row.meeting_id),
+                        None,
+                    );
+                    imported
+                }
+                Err(error) => {
+                    super::diagnostics::read_result(
+                        "archived-snapshot",
+                        Some(&row.session_id),
+                        Some(&row.meeting_id),
+                        Some(&error),
+                    );
                     recordings.push(Row {
                         meeting_id: row.meeting_id,
                         session_id: row.session_id,
@@ -366,8 +412,22 @@ impl ArchivedInputs {
                     lease,
                     visible,
                 ) {
-                    Ok(batch) => (batch, None),
-                    Err(_) => {
+                    Ok(batch) => {
+                        super::diagnostics::read_result(
+                            "archived-restored-delivery",
+                            Some(&row.session_id),
+                            Some(&row.meeting_id),
+                            None,
+                        );
+                        (batch, None)
+                    }
+                    Err(error) => {
+                        super::diagnostics::read_result(
+                            "archived-restored-delivery",
+                            Some(&row.session_id),
+                            Some(&row.meeting_id),
+                            Some(&error),
+                        );
                         let (batch, pending) = snapshot.retained_diagnostics(&row.session_id)?;
                         let issue = if pending {
                             "deliveryUnavailable"
@@ -377,8 +437,14 @@ impl ArchivedInputs {
                         (if pending { batch } else { None }, Some(issue.into()))
                     }
                 };
-                let history_save_issue = snapshot
-                    .history_save_issue()
+                let saved_history = snapshot.history_save_issue();
+                super::diagnostics::read_result(
+                    "archived-restored-final",
+                    Some(&row.session_id),
+                    Some(&row.meeting_id),
+                    saved_history.as_ref().err().map(String::as_str),
+                );
+                let history_save_issue = saved_history
                     .unwrap_or(Some("unavailable"))
                     .map(str::to_owned);
                 recordings.push(Row {
@@ -420,6 +486,12 @@ impl ArchivedInputs {
                 }
                 Ok::<_, String>((batch, observed_at))
             })();
+            super::diagnostics::read_result(
+                "archived-notices/input-notices.json",
+                Some(&row.session_id),
+                Some(&row.meeting_id),
+                result.as_ref().err().map(String::as_str),
+            );
             let (batch, issue, at) = match result {
                 Ok((batch, at)) => (batch, None, at),
                 Err(_) => (None, Some("unavailable".into()), Instant::now()),

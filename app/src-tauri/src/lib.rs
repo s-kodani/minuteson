@@ -1800,7 +1800,14 @@ async fn get_recording_input_history_status(
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        RecorderController::input_history_status(&app, &session_id)
+        let result = RecorderController::input_history_status(&app, &session_id);
+        input_status::diagnostics::read_result(
+            "live-journal/input-journal-status.json",
+            Some(&session_id),
+            None,
+            result.as_ref().err().map(String::as_str),
+        );
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2660,6 +2667,7 @@ pub fn run() {
                 get_recording_writes,
                 get_recording_input_status,
                 get_recording_input_history_status,
+                input_status::diagnostics::record_input_diagnostic_log,
                 get_archived_recording_input_notices,
                 get_archived_recording_input_notice_rows,
                 acknowledge_archived_recording_input_notice,

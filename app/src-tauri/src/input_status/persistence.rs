@@ -340,7 +340,14 @@ impl Reader {
 /// A bounded finish timeout remains unconfirmed even if the writer completes
 /// immediately afterwards. Current diagnostics explicitly distinguish unknown and confirmed states. Do not display arbitrary error strings or paths.
 pub(super) fn archived_issue(directory: &File, owner: &str) -> Option<&'static str> {
-    final_issue(directory, owner).unwrap_or(Some("unavailable"))
+    let result = final_issue(directory, owner);
+    super::diagnostics::read_result(
+        "archived-final/manifest.json+input-events.json",
+        Some(owner),
+        None,
+        result.as_ref().err().map(String::as_str),
+    );
+    result.unwrap_or(Some("unavailable"))
 }
 fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, String> {
     let Some((data, _)) = bytes(

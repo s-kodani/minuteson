@@ -14,7 +14,7 @@ const icons: Record<ToastLevel, string> = { success: "✓", info: "ⓘ", warning
 
 /** An event notification, not operation state. Clearing it never clears an error
  * or submits a command. Only the originating controller can resolve a problem. */
-export function ToastNotice({ scope, type, message, level = "success", important, onClose, onRendered, action, eventId, meetingId, historyOnly = false }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string; meetingId?: string; historyOnly?: boolean }) {
+export function ToastNotice({ scope, type, message, level = "success", important, onClose, onRendered, action, eventId, meetingId, historyOnly = false, resolutionMessage }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string; meetingId?: string; historyOnly?: boolean; resolutionMessage?:string }) {
   const key = toastKey(scope, type), latest = useRef({ onClose, onRendered, action });
   const priorKey = useRef(key);
   latest.current = { onClose, onRendered, action };
@@ -22,10 +22,10 @@ export function ToastNotice({ scope, type, message, level = "success", important
     let active = true;
     const run = async () => { const current = latest.current.action; if (active && current && !current.disabled) await current.run(); };
     if (message) (historyOnly ? toasts.record.bind(toasts) : toasts.show.bind(toasts))({ key, message, level, important, eventId, meetingId, onClose: () => { if (active) latest.current.onClose?.(); }, onRendered:()=>{if(active)latest.current.onRendered?.();}, action: action ? { ...action, run } : undefined });
-    else { toasts.resolve(key); if (priorKey.current !== key) toasts.resolve(priorKey.current); }
+    else { if(resolutionMessage)toasts.settleHistory(key,resolutionMessage);toasts.resolve(key); if (priorKey.current !== key) toasts.resolve(priorKey.current); }
     priorKey.current = key;
     return () => { active = false; toasts.detachAction(key, run); };
-  }, [key, message, level, important, eventId, action?.kind, action?.label, action?.disabled, meetingId, historyOnly]);
+  }, [key, message, level, important, eventId, action?.kind, action?.label, action?.disabled, meetingId, historyOnly, resolutionMessage]);
   return null;
 }
 
@@ -59,9 +59,10 @@ function NotificationHistoryRow({notice,active,onOpen,locked,restoreFocus}:{noti
     const timer=window.setInterval(check,250);check();return()=>clearInterval(timer);
   },[active,notice.key,notice.id]);
   const action=notice.action;
-  return <section ref={element} className={`toast-card toast-${notice.level}`} data-history-id={notice.id}>
-    <span className="toast-icon" aria-hidden="true">{icons[notice.level]}</span>
-    <div className="toast-body"><p><span className="toast-label">{labels[notice.level]}： </span>{notice.message}</p>
+  const resolved=notice.resolution?.state==="resolved",level=resolved?"success":notice.level;
+  return <section ref={element} className={`toast-card toast-${level}`} data-history-id={notice.id} data-resolution={notice.resolution?.state??"unresolved"}>
+    <span className="toast-icon" aria-hidden="true">{icons[level]}</span>
+    <div className="toast-body">{notice.resolution?<><p><strong>{resolved?"解消済み":"確認未完了"}：</strong>{notice.resolution.message}</p><details><summary>発生時の通知と表示理由</summary><p>{notice.message}</p></details></>:<p><span className="toast-label">{labels[notice.level]}： </span>{notice.message}</p>}
       {notice.meetingId&&onOpen?<button type="button" className="small-secondary" disabled={locked} onClick={()=>void onOpen(notice.meetingId!)}>会議を開く</button>:active&&action?<button type="button" className="small-secondary" disabled={action.disabled||notice.actionBusy} onClick={()=>void toasts.act(notice.key,notice.id,true).catch(cause=>toasts.show({key:toastKey(notice.key,"action-failed"),level:"error",message:String(cause)}))}>{notice.actionBusy?"実行中":action.label}</button>:null}
     </div>
     <button type="button" className="icon-button small-secondary" aria-label={`${labels[notice.level]}通知を削除`} title="通知を削除" disabled={notice.actionBusy} onClick={()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);restoreFocus();toasts.removeHistory(notice.id);}}><ActionIcon name="trash"/></button>

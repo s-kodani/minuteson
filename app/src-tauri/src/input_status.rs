@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) mod archived;
+pub(crate) mod diagnostics;
 mod history;
 #[cfg(test)]
 mod history_tests;

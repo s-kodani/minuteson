@@ -80,6 +80,7 @@ const suites = [
   ["archived-input-notices", null, "archived-input-browser-check.js"],
   ["archived-input-scheduling", null, "archived-input-pending-browser-check.js"],
   ["input-journal-save", null, "input-journal-browser-check.js"],
+  ["input-diagnostic-history", null, "input-diagnostic-history-browser-check.js"],
   ["capture-test", null, "capture-test-browser-check.js"],
   ["capture-test-recovery", null, "capture-test-recovery-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],

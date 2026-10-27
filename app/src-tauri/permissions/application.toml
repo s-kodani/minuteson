@@ -61,6 +61,7 @@ commands.allow = [
   "get_diarization_preferences",
   "get_downloaded_model_placement_result",
   "get_internal_logs",
+  "record_input_diagnostic_log",
   "get_meeting",
   "get_meeting_analysis_audio",
   "get_meeting_audio_summary",
@@ -150,6 +151,7 @@ commands.allow = [
 identifier = "recorder-commands"
 description = "Application commands for recorder only."
 commands.allow = [
+  "record_input_diagnostic_log",
   "close_recorder_info",
   "close_recording_input_notice",
   "decide_recording_confirmation",

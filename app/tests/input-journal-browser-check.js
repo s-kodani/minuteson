@@ -7,7 +7,7 @@ async (page,capturePath=path=>path)=>{
   });
   const state=async value=>page.waitForFunction(v=>document.querySelector("[data-journal-state]")?.dataset.journalState===v,value);
   const diagnostic=()=>page.locator('.recording-journal-diagnostic:not([hidden])');
-  const toast=()=>page.locator(".toast-card").filter({hasText:"入力履歴の保存:"});
+  const toast=()=>page.locator(".toast-card").filter({hasText:"録音状況の確認:"});
   const set=async(state,requestedRevision=1000,committedRevision=999)=>page.evaluate(p=>{window.closeFixture.journalStatus={...p,closed:false};}, {state,requestedRevision,committedRevision});
   const calls=command=>page.evaluate(command=>window.closeFixture.calls.filter(c=>c.command===command).length,command);
   try{
@@ -32,7 +32,7 @@ async (page,capturePath=path=>path)=>{
     results.push("preparation and a short initial diagnostic read failure do not create a false recording warning");
     results.push("only an owned recording reads writer diagnostics; confirmation does not create an audio-success toast");
     await set("pending");await state("pending");await diagnostic().waitFor({state:'attached'});await toast().waitFor();
-    check((await toast().innerText()).includes("音声の取得・保存結果とは別"),"pending journal implied audio failure/success");
+    check((await toast().innerText()).includes("録音ファイルの保存失敗を意味するものではありません"),"pending journal implied audio failure/success");
     await toast().getByRole("button",{name:"注意通知を閉じる",exact:true}).click();await page.waitForTimeout(650);
     check(await toast().count()===0&&await diagnostic().count()===1,"dismissal removed pending diagnostic or heartbeat redelivered it");
     results.push("queued writes are explicit, heartbeat does not redeliver a dismissed toast, and diagnostic remains");
@@ -53,7 +53,7 @@ async (page,capturePath=path=>path)=>{
     await page.evaluate(()=>window.closeFixture.failJournal=true);await state("unknown");
     check(await toast().getAttribute("data-toast-id")===id,"read failure replaced the unresolved writer failure");
     await page.evaluate(()=>window.closeFixture.failJournal=false);await set("confirmed",1001,1001);await state("confirmed");
-    await page.waitForFunction(()=>![...document.querySelectorAll('.toast-card')].some(e=>e.textContent.includes('入力履歴の保存:')));
+    await page.waitForFunction(()=>![...document.querySelectorAll('.toast-card')].some(e=>e.textContent.includes('録音状況の確認:')));
     check(await diagnostic().count()===0&&await toast().count()===0,"fresh writer confirmation did not resolve diagnostic");
     results.push("unreadable diagnostics retain previous failure; only fresh writer confirmation clears it");
     await page.evaluate(()=>window.closeFixture.holdJournal=true);await page.waitForFunction(()=>window.closeFixture.pendingJournal.length===1);const held=await calls("get_recording_input_history_status"),reads=await calls("get_recording_input_status");
@@ -69,10 +69,10 @@ async (page,capturePath=path=>path)=>{
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"停止時の保存診断",legacy:true,historySaveIssue:"unconfirmed"})];return f.recordChanged({phase:"idle"});});
     await page.getByRole('button',{name:'通知一覧',exact:true}).click();
     const history=()=>page.getByRole('dialog',{name:'通知一覧',exact:true});
-    const archived=history().locator('.toast-card').filter({hasText:'停止時の取得履歴保存が未確定'});await archived.waitFor();
-    check((await archived.innerText()).includes("停止時の取得履歴保存が未確定"),"missing delivery queue hid final writer uncertainty");
+    const archived=history().locator('.toast-card').filter({hasText:'録音終了時に接続記録の保存完了を確認できませんでした'});await archived.waitFor();
+    check((await archived.innerText()).includes("録音終了時に接続記録の保存完了を確認できませんでした"),"missing delivery queue hid final writer uncertainty");
     await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);
-    await page.getByRole('button',{name:'通知一覧',exact:true}).click();await archived.waitFor();check((await archived.innerText()).includes("停止時の取得履歴保存が未確定"),"restart lost final manifest diagnosis");
+    await page.getByRole('button',{name:'通知一覧',exact:true}).click();await archived.waitFor();check((await archived.innerText()).includes("録音終了時に接続記録の保存完了を確認できませんでした"),"restart lost final manifest diagnosis");
     results.push("final writer uncertainty persists across replacement WebView even without a notification queue");
     await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:227,height:101});
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID()}));

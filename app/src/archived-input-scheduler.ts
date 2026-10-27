@@ -17,8 +17,10 @@ export class ArchivedInputScheduler {
   private clockError=false;private scanError=false;private rowErrors=new Set<string>();
   private controller:ArchivedInputController;private clock:Clock;
   private read:(request:Request)=>Promise<unknown>;private changed:(reading:boolean,error:string)=>void;
-  constructor(controller:ArchivedInputController,clock:Clock,read:(request:Request)=>Promise<unknown>,changed:(reading:boolean,error:string)=>void){
+  private readLog:(request:Request,error:unknown)=>void;
+  constructor(controller:ArchivedInputController,clock:Clock,read:(request:Request)=>Promise<unknown>,changed:(reading:boolean,error:string)=>void,readLog:(request:Request,error:unknown)=>void=()=>{}){
     this.controller=controller;this.clock=clock;this.read=read;this.changed=changed;
+    this.readLog=readLog;
   }
   start(blocked:boolean){this.started=true;this.setBlocked(blocked);this.invalidate(true);}
   setBlocked(blocked:boolean){
@@ -41,7 +43,7 @@ export class ArchivedInputScheduler {
     this.schedule();
   }
   dispose(){this.disposed=true;this.epoch++;if(this.timer!==null)this.clock.stop(this.timer);this.timer=null;}
-  private error(){if(this.clockError)return "時計の変更により通知の受付期限を確認できません。アプリを再起動して通知履歴を確認してください。";return this.scanError||this.rowErrors.size?"終了済み録音の通知履歴を確認できません。保存された音声の成否を示す診断ではありません。":"";}
+  private error(){if(this.clockError)return "時計が変更されたため、過去の録音の接続記録を確認できません。アプリを再起動して再確認してください。";return this.scanError||this.rowErrors.size?"過去の録音の接続記録を確認できません。記録や通知を読み取れなかったため表示しています。自動で再確認します。録音ファイルの保存失敗を示す通知ではありません。":"";}
   private schedule(){
     if(this.timer!==null){this.clock.stop(this.timer);this.timer=null;}
     if(!this.started||this.disposed||this.blocked||this.running||this.clockError)return;
@@ -82,8 +84,10 @@ export class ArchivedInputScheduler {
           else {w.failures=0;w.due=now+(row?.issue==="paused"?1000:500);this.rowErrors.delete(t.sessionId);}
         }
       }
-    }catch{
+      this.readLog(request,null);
+    }catch(error){
       if(this.disposed||this.blocked||epoch!==this.epoch)return;
+      this.readLog(request,error);
       const now=this.clock.now();
       if(request.kind==="page"){
         this.controller.failedRead();this.scanning=false;this.scanError=true;this.scanFailures++;

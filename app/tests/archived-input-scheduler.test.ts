@@ -126,5 +126,5 @@ test("an invalid clock fails closed without creating a zero-delay timer loop",()
   const c=new ArchivedInputController(id(999));let timers=0,reads=0,error="";
   const s=new ArchivedInputScheduler(c,{now:()=>NaN,start:()=>{timers++;return 1;},stop:()=>{}},async()=>{reads++;return page([]);},(_reading,value)=>{error=value;});
   s.start(false);s.sync();s.invalidate(true);
-  assert.equal(timers,0);assert.equal(reads,0);assert.match(error,/時計の変更/);
+  assert.equal(timers,0);assert.equal(reads,0);assert.match(error,/時計が変更されたため/);
 });

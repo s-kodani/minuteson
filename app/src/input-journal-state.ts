@@ -40,8 +40,8 @@ export class InputJournalSession {
   }
 }
 export function journalMessage(view:JournalView):string {
-  const detail={unknown:"入力履歴の保存診断を確認できません",stale:"入力履歴の保存診断の更新を確認できません",pending:"入力履歴の書込み結果を確認中です",failed:"入力履歴の書込みを確定できません",invalid:"入力履歴の整合を確認できず、履歴の保存を停止しています",confirmed:""}[view.state];
-  return detail?`${detail}。${view.problem&&!["failed","invalid"].includes(view.state)?"以前の書込み失敗はまだ解決を確認できません。":""}音声の取得・保存結果とは別の診断です。保存後に音声と欠損範囲を確認してください。`:"";
+  const detail={unknown:"マイク・PC音声の接続記録について、保存結果を読み取れません",stale:"マイク・PC音声の接続記録について、新しい保存結果が届いていません",pending:"マイク・PC音声の接続記録を保存しています",failed:"マイク・PC音声の接続記録を保存できませんでした。保存処理でエラーが発生したため表示しています",invalid:"マイク・PC音声の接続記録に不整合が見つかり、記録の保存を停止しました",confirmed:""}[view.state];
+  return detail?`${detail}。${view.problem&&!["failed","invalid"].includes(view.state)?"以前の接続記録の保存エラーは、まだ解消を確認できていません。":""}録音ファイルの保存結果とは別の確認です。録音終了後に再確認します。警告が続く場合は会議を開き、音声を再生して確認してください。`:"";
 }
 export type JournalNotice={message:string;level:"warning"|"error";eventId:string};
 // Presentation hysteresis is independent of the one-second evidence expiry.
@@ -76,7 +76,7 @@ export class InputJournalNotices {
       if(time(at)){
         this.unavailableSince??=at;
         if(!this.active&&at-this.unavailableSince>=5000){
-          this.active={message:"入力履歴の保存状況を確認中です。音声の取得・保存結果とは別の診断です。",level:"warning",eventId:String(++this.sequence)};
+          this.active={message:"マイクやPCの音が途切れたかを調べるための記録について、保存結果を5秒以上確認できていないため表示しています。保存の完了待ち、または確認用の情報を読み取れない・更新されない状態です。自動で再確認します。この通知だけで録音ファイルの保存失敗を意味するものではありません。",level:"warning",eventId:String(++this.sequence)};
         }
       }
     }
