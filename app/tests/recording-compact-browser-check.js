@@ -51,9 +51,21 @@ async page=>{
   await testButton().click();
   const consent=page.getByRole('dialog',{name:'5秒の録音前テストを開始しますか？',exact:true});
   await consent.waitFor();check(await count('start_capture_test')===0,'test started before consent');
+  check(await page.locator('dialog[open]').count()===1&&await page.locator('.capture-test-dialog[open]').count()===0,'initial consent opened an empty test dialog underneath');
+  for(const dismiss of ['escape','close','backdrop']){
+    if(dismiss==='escape')await page.keyboard.press('Escape');
+    else if(dismiss==='close')await consent.getByRole('button',{name:'確認をキャンセル',exact:true}).click();
+    else await page.mouse.click(1,1);
+    await consent.waitFor({state:'hidden'});
+    check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'declining initial consent left another test dialog open or started capture');
+    await page.waitForFunction(()=>document.activeElement===document.querySelector('.capture-test-panel>button'));
+    await testButton().click();await consent.waitFor();
+  }
+  results.push('initial test opens only consent; Escape, close and backdrop return directly to its trigger without another modal or capture');
   await consent.getByRole('button',{name:'5秒テストを開始する',exact:true}).dblclick();
   await testDialog().waitFor();await testDialog().getByRole('button',{name:'テストを取り消す',exact:true}).waitFor();
-  check(await count('start_capture_test')===1,'test sent more than once');
+  check(await count('start_capture_test')===1&&await page.locator('dialog[open]').count()===1,'test sent more than once or opened duplicate progress dialogs');
+  check(await page.getByRole('alert').filter({hasText:'開始要求の受付結果が未確認'}).count()===0,'normal start published an uncertain-result error that obscures the dialog');
   await closeTest();await testDialog().waitFor({state:'hidden'});
   check(await testButton().innerText()==='テスト中…'&&await count('cancel_capture_test')===0,'closing cancelled test');
   check(await workspace().getByRole('button',{name:'録音を開始',exact:true}).isDisabled(),'hidden busy test allowed recording');
@@ -70,6 +82,11 @@ async page=>{
   await testButton().click();await testDialog().getByRole('button',{name:'PCのテスト音声を再生',exact:true}).waitFor();
   check(await count('start_capture_test')===1,'reopening result started test');
   await testDialog().getByRole('button',{name:'もう一度5秒録音して確認',exact:true}).click();
+  await consent.waitFor();
+  check(await page.locator('dialog[open]').count()===1&&await consent.evaluate(e=>e.classList.contains('capture-test-dialog')),'retest stacked a second dialog instead of using the existing boundary');
+  await page.keyboard.press('Escape');await testDialog().waitFor();
+  check(await count('start_capture_test')===1&&await testDialog().getByRole('button',{name:'PCのテスト音声を再生',exact:true}).isEnabled(),'declining retest lost results or started capture');
+  await testDialog().getByRole('button',{name:'もう一度5秒録音して確認',exact:true}).click();
   await consent.waitFor();await consent.getByRole('button',{name:'5秒テストを開始する',exact:true}).click();
   await testDialog().getByRole('button',{name:'テストを取り消す',exact:true}).waitFor();
   check(await count('start_capture_test')===2,'explicit retest did not start exactly once');
@@ -78,7 +95,7 @@ async page=>{
   await page.evaluate(()=>window.closeFixture.testChanged({phase:'cancelled',busy:false}));
   await testDialog().getByRole('button',{name:'テスト音声を破棄',exact:true}).click();
   await closeTest();await testDialog().waitFor({state:'hidden'});
-  results.push('test dialog owns consent; hide/reopen preserves run and results, stops playback, restores focus and never resends start; explicit retest/cancel/discard work');
+  results.push('test progress opens once after consent; hide/reopen preserves run and results, stops playback and restores focus; retest consent uses the same dialog and cancellation keeps results');
   await workspace().getByRole('button',{name:'録音を開始',exact:true}).click();
   const recordConsent=page.getByRole('dialog',{name:'選択した会議の録音を開始しますか？',exact:true});
   await recordConsent.getByRole('button',{name:'録音を開始する',exact:true}).click();
@@ -117,5 +134,29 @@ async page=>{
   await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
   await fits(false);await capture('new-360-warning');
   results.push('long title and unselected-app warning remain accessible in narrow preparation');
+  await page.setViewportSize({width:1280,height:720});
+  for(const uncertain of [false,true]){
+    await boot();
+    await page.evaluate(uncertain=>{
+      if(uncertain){window.closeFixture.testAbsentStart=true;window.closeFixture.testReconcileFailure=true;}
+      else window.closeFixture.testLost=true;
+    },uncertain);
+    await testButton().click();await consent.getByRole('button',{name:'5秒テストを開始する',exact:true}).click();
+    await page.getByRole('alert').filter({hasText:'処理を完了できませんでした'}).first().waitFor();
+    await page.keyboard.press('Escape');
+    await testDialog().waitFor();
+    check(await page.locator('dialog[open]').count()===1&&await count('start_capture_test')===1,'failed receipt duplicated the test dialog or resent capture');
+    check(await workspace().getByRole('button',{name:'録音を開始',exact:true}).isDisabled(),'unconfirmed capture enabled competing recording');
+    if(uncertain){
+      check(await testDialog().locator('.common-modal-body>button.secondary').isDisabled(),'unknown result allowed restart');
+      check(await page.evaluate(()=>window.closeFixture.notificationHistory().some(n=>n.message.includes('開始要求の受付結果が未確認'))),'unknown receipt no longer reports its unresolved state');
+    }else await testDialog().getByText('テストの入力を初期化しています',{exact:true}).waitFor();
+  }
+  results.push('lost and unknown start receipts still open one status dialog after failure, block competing capture and never resend start');
+  await boot();await page.evaluate(()=>window.closeFixture.captureInputs.microphonePermission='denied');
+  await testButton().click();
+  await page.getByRole('alert').filter({hasText:'選択したマイクまたは権限'}).first().waitFor();
+  check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'preflight failure left an empty test dialog or started capture');
+  results.push('failed input preflight reports the error without opening an empty modal or capturing');
   return {passed:results.length,results};
 }
