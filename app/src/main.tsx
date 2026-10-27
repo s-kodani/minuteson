@@ -269,7 +269,7 @@ function MainWindow() {
       setSelectedMeeting(current => current?.id === receipt.meetingId ? null : current);
       setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins();
     } });
-  const audioDeletion = useAudioDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow, withSavedEdits,
+  const audioDeletion = useAudioDeletion({ operation: dataOperation, availability: deletion.audioAvailability, locked: captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow, withSavedEdits,
     onProtectionChange: setAudioDeletionPending, onDeleted: async () => {
       // Audio availability changes, not document heads. Keep mounted editors and
       // their local buffers, including when recovery deliberately skipped writes.

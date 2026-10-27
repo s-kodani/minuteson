@@ -12,7 +12,7 @@ const bundle = await build({
   stdin: { contents: readFileSync(new URL("../src/directory-deletion-confirmation.tsx", import.meta.url), "utf8"), loader: "tsx", resolveDir: fileURLToPath(new URL("../src/", import.meta.url)) },
   bundle: true, write: false, platform: "node", format: "esm", jsx: "automatic",
 });
-const { DirectoryDeletionConfirmation } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+const { DirectoryDeletionConfirmation, deletionDirectoryLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 const props = { name: "長い会議名 <検証>", directory: "C:\\日本語の保存先\\meetings\\対象", titleId: "delete-title", heading: { current: null }, blocked: false, canDelete: true, onCancel() {}, onDelete() {} };
 
 test("meeting and model confirmations show the requested content and exactly two buttons", () => {
@@ -28,6 +28,24 @@ test("meeting and model confirmations show the requested content and exactly two
     assert.doesNotMatch(html, /disabled=""/u);
     const blocked = renderToStaticMarkup(DirectoryDeletionConfirmation({ ...props, kind, blocked: true }));
     assert.equal((blocked.match(/disabled=""/gu) ?? []).length, 2);
+  }
+});
+
+test("only Windows verbatim drive and UNC paths are simplified for presentation", () => {
+  const long = `C:\\日本語の保存先\\${"長いフォルダー\\".repeat(30)}meetings\\対象`;
+  for (const [path, expected] of [
+    [`\\\\?\\${long}`, long],
+    ["\\\\?\\UNC\\server\\共有\\会議", "\\\\server\\共有\\会議"],
+    ["\\\\?\\unc\\server\\共有", "\\\\server\\共有"],
+    [props.directory, props.directory],
+    ["\\\\server\\共有", "\\\\server\\共有"],
+    ["/Users/利用者/Library/Application Support/jp.mon.desktop/meetings/対象", "/Users/利用者/Library/Application Support/jp.mon.desktop/meetings/対象"],
+    ["/private/var/会議", "/private/var/会議"],
+    ["\\\\?\\Volume{unknown}\\folder", "\\\\?\\Volume{unknown}\\folder"],
+  ]) {
+    assert.equal(deletionDirectoryLabel(path), expected);
+    const html = renderToStaticMarkup(DirectoryDeletionConfirmation({ ...props, kind: "meeting", directory: path }));
+    assert.ok(html.includes(expected));
   }
 });
 

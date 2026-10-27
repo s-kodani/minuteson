@@ -25,9 +25,9 @@ async (page, capturePath, detailUI) => {
   await page.waitForFunction(() => !document.querySelector('[role="menuitem"][aria-label="既存会議を削除"]').disabled);
   check(await menu.locator('.meeting-row-menu-note').count() === 0, "idle retains stale disabled reason");
   await audio.click();
-  const dialog = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "音声だけの削除を確認", exact: true }) });
+  const dialog = page.getByRole("dialog", { name: "音声だけを削除", exact: true });
   await dialog.waitFor();
   check(await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'review_meeting_audio_deletion').length === 1 && !window.dataFixture.calls.some(c => c.command === 'start_data_operation')), "idle review bypassed confirmation");
-  await dialog.getByRole("button", { name: "音声を削除せず閉じる", exact: true }).click();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   return { passed: 4, results: ["actual AI blocker is visible and linked to both disabled actions", "disabled actions are neutral and transparent in dark mode", "pointer and keyboard cannot activate disabled deletion", "idle restores review and still requires deletion confirmation"] };
 }

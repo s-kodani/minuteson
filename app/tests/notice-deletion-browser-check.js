@@ -22,7 +22,7 @@ async (page,capturePath) => {
   await page.evaluate(()=>{window.audioDeletionFixture.admissionHold=false;window.audioDeletionFixture.admissionTimeout=false;});
   await row.locator('.meeting-row-actions > button').click();
   await remove.waitFor();await remove.click();
-  await page.getByRole('heading',{name:'音声だけの削除を確認',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'音声だけを削除',exact:true}).waitFor();
   check(await page.evaluate(()=>!window.dataFixture.calls.some(c=>c.command==='start_data_operation')),'review deleted data without consent');
   await page.screenshot({path:capturePath('notice-deletion-retry.png')});
   return {passed:5,results:['history polling does not disable review','native wait status is visible','timeout leaves no unknown request','timeout can retry','retry still requires explicit consent']};

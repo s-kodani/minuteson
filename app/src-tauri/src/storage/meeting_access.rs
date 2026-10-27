@@ -18,6 +18,7 @@ pub(crate) struct Blocker {
 pub(crate) struct Availability {
     pub meeting_id: String,
     pub available: bool,
+    pub audio_deleted: Option<bool>,
     pub blockers: Vec<Blocker>,
 }
 pub(crate) type Owners = Arc<Mutex<HashMap<String, HashMap<String, Blocker>>>>;
@@ -186,6 +187,13 @@ impl Storage {
                 Ok(Availability {
                     meeting_id: id.clone(),
                     available: blockers.is_empty(),
+                    // An unreadable audio receipt must disable audio deletion only;
+                    // whole-meeting deletion has its own independent admission.
+                    audio_deleted: if exists {
+                        super::deletion::audio::source_deleted(&db, id).ok()
+                    } else {
+                        None
+                    },
                     blockers,
                 })
             })

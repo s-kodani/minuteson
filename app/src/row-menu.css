@@ -3,5 +3,7 @@
 .meeting-row-menu button:hover:not(:disabled),.meeting-row-menu button:focus-visible { background:var(--raised); }
 .meeting-row-menu .deletion-trigger { color:var(--danger-text); }
 .meeting-row-menu button:disabled { background:transparent; color:var(--muted); opacity:.7; box-shadow:none; }
+.audio-deletion-menu-item { display:block; }
+.audio-deletion-menu-item button:disabled { pointer-events:none; }
 .meeting-row-menu-note { margin:6px 4px 2px; padding:8px 6px 2px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; line-height:1.6; overflow-wrap:anywhere; }
 .meeting-row-menu [role=status] { display:block; padding:8px 10px; font-size:12px; }

@@ -1120,7 +1120,9 @@ pub(in crate::storage) mod tests {
         let progress = notifications.borrow();
         assert_eq!(progress.first().unwrap().completed, 0);
         assert!(progress.len() >= 2);
-        assert!(progress.windows(2).all(|p| p[0].completed <= p[1].completed));
+        assert!(progress
+            .windows(2)
+            .all(|p| p[0].completed <= p[1].completed));
         let last = progress.last().unwrap();
         assert_eq!(last.completed, 16000);
         assert_eq!(last.total, Some(last.completed));

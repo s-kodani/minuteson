@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>音声削除の合成データ検証</title></head>
+<body><div id="root"></div><script type="module">
+  // Synthetic IPC only; never accesses real meetings, audio or preferences.
+  window.skipAudioDeletionFixtureMain = true;
+  await import("/tests/audio-deletion-browser-fixture.js");
+  const d = window.audioDeletionFixture;
+  const scenario = new URLSearchParams(location.search).get("scenario");
+  if (scenario === "deleted") d.deleted = 1;
+  if (scenario === "unknown") d.audioStateUnknown = true;
+  if (scenario === "unregistered") d.unknownCount = 1;
+  if (scenario === "page-failure") d.pageFail = true;
+  if (scenario === "recovery") {
+    d.pending("not_started");
+    Object.assign(window.dataFixture.snapshot, { token: crypto.randomUUID(), kind: "audio_deletion", phase: "ready", busy: false, retryAllowed: true, audioDeletionPreview: d.pendingPreview });
+  }
+  await import("/src/main.tsx");
+  const controls = document.createElement("aside");
+  controls.setAttribute("aria-label", "合成テスト制御");
+  const hold = document.createElement("button");
+  hold.textContent = "古い削除可否の応答を保留";
+  hold.onclick = () => { d.holdAudioAvailability = true; };
+  const release = document.createElement("button");
+  release.textContent = "古い削除可否の応答を返す";
+  release.onclick = () => { d.releaseAudioAvailability?.(); d.releaseAudioAvailability = null; };
+  const status = document.createElement("output");
+  status.id = "audio-test-status";
+  controls.append(hold, release, status);
+  document.body.append(controls);
+  setInterval(() => {
+    const calls = window.dataFixture.calls;
+    status.textContent = JSON.stringify({ deleted: d.deleted, paths: calls.filter(c => c.command === "get_audio_deletion_paths").length, actions: calls.filter(c => c.command === "start_data_operation").map(c => c.args.request.action), held: !!d.releaseAudioAvailability });
+  }, 50);
+</script></body>
+</html>

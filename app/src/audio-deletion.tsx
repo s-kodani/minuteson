@@ -9,19 +9,22 @@ import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
 import { assertAudioDeletionPage, type AudioDeletionPage, type AudioDeletionReceipt } from "./audio-deletion-operation-state";
-import { audioDeletionDispositionLabel, audioDeletionNewScope, audioDeletionPhaseLabel, audioDeletionPublishRequest } from "./audio-deletion-ui-state";
+import { audioDeletionDispositionLabel, audioDeletionNewScope, audioDeletionPhaseLabel, audioDeletionPublishRequest, audioDeletionSimpleReview, audioDeletionSimplePublishRequest } from "./audio-deletion-ui-state";
+import { AudioDeletionConfirmation } from "./audio-deletion-confirmation";
+import type { useMeetingDeletionAvailability } from "./meeting-deletion-availability";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
 import { deletionReviewReason } from "./deletion-review-reason";
 
-export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted, onProtectionChange }: {
+export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability }: {
   operation: DataOperation; locked: boolean;
+  availability: ReturnType<typeof useMeetingDeletionAvailability>;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onDeleted: (receipt: AudioDeletionReceipt) => Promise<void>;
   onProtectionChange: (protectedNow: boolean) => void;
 }) {
   const noticeWaiting=useDeletionNoticeWait();
-  const latest = useRef({ operation, locked, withSavedEdits, onDeleted, onProtectionChange }); latest.current = { operation, locked, withSavedEdits, onDeleted, onProtectionChange };
+  const latest = useRef({ operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability }); latest.current = { operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability };
   const running = useRef(false), [rpcBusy, setRpcBusy] = useState(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
@@ -38,6 +41,8 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const canReviewPending = isTauri() && operation.audioDeletionSupported && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
   const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
   const reviewUnavailableReason = canReviewNew ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.audioDeletionSupported, locked, protectedNow, sharedAvailable });
+  const meetingReviewReason = (id: string) => availability.audioDeletionReason(id) || reviewUnavailableReason;
+  const canReviewNewId = (id: string) => canReviewNew && !availability.audioDeletionReason(id);
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const understood = !!preview && understoodId === preview.confirmationId, includeUnknown = !!preview && includeUnknownId === preview.confirmationId;
   const run = async (action: () => Promise<void>) => {
@@ -53,7 +58,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   };
   const loadPage = async (offset = 0) => {
     const now = latest.current.operation.getSnapshot(), p = now?.kind === "audio_deletion" ? now.audioDeletionPreview : null;
-    if (!p || now?.busy) return;
+    if (!p || now?.busy || now?.audioDeletionReceipt || audioDeletionSimpleReview(p)) return;
     const epoch = ++pageEpoch.current; setPage(null); setPageError(""); setPageBusy(true);
     try {
       const value = await invoke<AudioDeletionPage>("get_audio_deletion_paths", { confirmationId: p.confirmationId, offset });
@@ -63,9 +68,10 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
     finally { if (epoch === pageEpoch.current) setPageBusy(false); }
   };
   const review = async (id: string, pendingReview: boolean) => {
-    if (!(pendingReview ? canReviewPending : canReviewNew)) return;
+    if (!(pendingReview ? canReviewPending : canReviewNewId(id))) return;
     const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
     await protect(async () => {
+      if (!pendingReview && latest.current.availability.audioDeletionReason(id)) return;
       await stopAllPlayback(); opener.current = active; setOpen(false); setToast("");
       choice.current = { id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 };
       try {
@@ -82,12 +88,14 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const submit = async (action: DataRequest["action"]) => {
     if (!canResolve || !preview) return;
     const confirmation = preview.confirmationId, token = s?.token, publishing = action === "publish";
-    if (publishing && (!open || !understood || !page || pageBusy || pageError)) return;
+    const simple = audioDeletionSimpleReview(preview);
+    if (publishing && (!open || (simple ? !!availability.audioDeletionReason(preview.meetingId) : !understood || !page || pageBusy || !!pageError))) return;
     await protect(async () => {
       await stopAllPlayback();
       const now = latest.current.operation.getSnapshot();
       if (!now || now.kind !== "audio_deletion" || now.token !== token || now.audioDeletionPreview?.confirmationId !== confirmation || !latest.current.operation.connected) throw Error("待機中に音声削除の確認が変更されました。新しい状態を確認してください。");
-      const request = publishing ? audioDeletionPublishRequest(now, confirmation, page, understoodId, includeUnknownId) : dataRequest(now, action);
+      if (publishing && simple && latest.current.availability.audioDeletionReason(preview.meetingId)) return;
+      const request = publishing ? simple ? audioDeletionSimplePublishRequest(now, confirmation) : audioDeletionPublishRequest(now, confirmation, page, understoodId, includeUnknownId) : dataRequest(now, action);
       await send(request, now.revision);
     });
   };
@@ -112,10 +120,10 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const quit = async () => { if (!protectedNow && !s?.busy) await run(async () => { await invoke("finish_main_close", { quit: true }); }); };
   useEffect(() => { latest.current.onProtectionChange(protectedNow); return () => { latest.current.onProtectionChange(false); }; }, [protectedNow]);
   useEffect(() => {
-    setUnderstoodId(null); setIncludeUnknownId(null); pageEpoch.current++; setPage(null); setPageError("");
-    if (preview && !s?.busy) void loadPage();
+    setUnderstoodId(null); setIncludeUnknownId(null); pageEpoch.current++; setPage(null); setPageError(""); setPageBusy(false);
+    if (preview && !s?.busy && !receipt && !audioDeletionSimpleReview(preview)) void loadPage();
     return () => { pageEpoch.current++; };
-  }, [preview?.confirmationId, s?.busy]);
+  }, [preview?.confirmationId, s?.busy, !!receipt]);
   useEffect(() => {
     if (!s || s.kind !== "audio_deletion") { setOpen(false); return; }
     if (s.busy || receipt) setOpen(false);
@@ -127,15 +135,27 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
     if (receipt && completed.current !== s.token) {
       completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
       setToast(receipt.audioDeleted ? "音声だけを削除しました。文字起こし・議事録・根拠テキストと履歴は保持しています。音声の再生・解析・再解析はできません。" : "音声削除を開始せず保持して中止しました。部分削除の復元ではありません。");
-      if (receipt.audioDeleted) void latest.current.onDeleted(receipt).catch(cause => setError(`音声削除は完了しています。会議一覧を再読込してください: ${String(cause)}`));
+      if (receipt.audioDeleted) {
+        latest.current.availability.markAudioDeleted(receipt.meetingId);
+        void latest.current.onDeleted(receipt).catch(cause => setError(`音声削除は完了しています。会議一覧を再読込してください: ${String(cause)}`));
+        void latest.current.availability.refresh();
+      }
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
   let canDelete = false;
-  if (canResolve && open && understood && page && !pageBusy && !pageError && s && preview) {
-    try { audioDeletionPublishRequest(s, preview.confirmationId, page, understoodId, includeUnknownId); canDelete = true; } catch { /* Fail closed on stale consent/page/phase. */ }
+  if (canResolve && open && s && preview) {
+    try {
+      if (audioDeletionSimpleReview(preview)) {
+        audioDeletionSimplePublishRequest(s, preview.confirmationId);
+        canDelete = !availability.audioDeletionReason(preview.meetingId);
+      } else if (understood && page && !pageBusy && !pageError) {
+        audioDeletionPublishRequest(s, preview.confirmationId, page, understoodId, includeUnknownId); canDelete = true;
+      }
+    } catch { /* Fail closed on stale confirmation/page/phase. */ }
   }
   return { reviewNew: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewNew, canReviewPending, canResolve,
+    canReviewNewId, meetingReviewReason,
     noticeWaiting, reviewUnavailableReason, protectedNow, rpcBusy, unknown, open, setOpen, error, toast, toastEvent, setToast, preview, receipt, listing, page, pageBusy, pageError, loadPage,
     understood, setUnderstood: (v: boolean) => setUnderstoodId(v ? preview?.confirmationId ?? null : null), includeUnknown, setIncludeUnknown: (v: boolean) => setIncludeUnknownId(v ? preview?.confirmationId ?? null : null),
     canDelete, submit, cancel, dismiss, retryUnknown, quit, dialog, heading, opener };
@@ -144,13 +164,16 @@ export type AudioDeletionControl = ReturnType<typeof useAudioDeletion>;
 
 export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { operation: DataOperation; control: AudioDeletionControl; meetingTitle?: string }) {
   const s = operation.snapshot, p = c.preview, active = s?.kind === "audio_deletion";
+  const simple = !!p && audioDeletionSimpleReview(p);
   const trackKind = (kind: string) => ({ mic: "マイク", system: "システム音声", imported: "取り込み音声", processed: "処理済み音声" } as Record<string, string>)[kind] ?? kind;
   const trackState = (state: string) => ({ ready: "保存済み", interrupted: "中断", failed: "失敗" } as Record<string, string>)[state] ?? state;
   return <>
     <ToastNotice scope="audio" type="deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     <IssueNotice scope={p?.meetingId ?? "deletion"} type="audio-deletion" label="音声削除" message={c.error || (active ? s?.errorMessage : "")} />
     {c.rpcBusy&&c.noticeWaiting&&<p role="status">通知履歴の処理完了を待っています</p>}
-    <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">
+    {simple && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
+    <CommonModal portal hideDismissButton={simple} ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">
+      {simple ? <AudioDeletionConfirmation name={meetingTitle ?? p.meetingId} heading={c.heading} blocked={c.protectedNow || !!s?.busy} canDelete={c.canDelete} onCancel={() => void c.dismiss()} onDelete={() => void c.submit("publish")} /> : <>
       <h2 id="audio-deletion-title" ref={c.heading} tabIndex={-1}>{p?.phase === "reconfirmation" ? p.reconfirmationSourceKind === "native_audio_pending" ? "残りの音声を確認" : "再出現した音声を確認" : "音声だけの削除を確認"}</h2>
       {p && <><h3 className="data-path">会議名（一覧表示）: {meetingTitle ?? "確認できません。会議IDを照合してください。"}</h3><p className="data-path">会議ID: {p.meetingId}<br />操作ID: {p.operationId}</p>
         <p>確認した管理音声だけを削除します。アプリ内では復元できません。音声の再生・解析・再解析と、根拠からの音声再生ができなくなります。文字起こし・議事録・下書き・根拠テキストと履歴は保持します。残ったテキストからの議事録生成は音声解析とは別です。</p><p>外部の原本・出力済み文書・バックアップは削除しません。媒体上の安全消去は保証しません。</p>
@@ -172,6 +195,7 @@ export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { op
       <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit("publish")}>{p?.phase === "restored_unavailable" ? "元の利用不可記録からは削除できません" : p?.phase === "reconfirmation" ? "確認した音声を削除" : p?.pending ? "照合して音声削除を続行" : "音声だけを削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>音声の残りを再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>音声を未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.protectedNow || !!s?.busy} data-dialog-cancel onClick={() => void c.dismiss()}>{p?.phase === "restored_unavailable" ? "閉じる（元の利用不可記録は残る）" : p?.pending ? "閉じる（音声削除の未完了記録は残る）" : "音声を削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
 
+      </>}
     </CommonModal>
   </>;
 }

@@ -107,6 +107,36 @@ fn phase(f: &Fixture, op: &str) -> String {
 }
 
 #[test]
+fn audio_deletion_availability_survives_reopen_and_is_independent_of_meeting_deletion() {
+    let mut f = Fixture::new();
+    let ids = [f.meeting.clone()];
+    let before = f.storage.meeting_deletion_availability(&ids).unwrap();
+    assert!(before[0].available);
+    assert_eq!(before[0].audio_deleted, Some(false));
+    let lease = owner();
+    let op = removed(&f, &lease);
+    assert!(finish(&f.storage, &op, &lease, &|| false).unwrap().completed());
+    drop(lease);
+    let after = f.storage.meeting_deletion_availability(&ids).unwrap();
+    assert!(after[0].available);
+    assert_eq!(after[0].audio_deleted, Some(true));
+    reopen(&mut f);
+    let after_reopen = f.storage.meeting_deletion_availability(&ids).unwrap();
+    assert!(after_reopen[0].available);
+    assert_eq!(after_reopen[0].audio_deleted, Some(true));
+    // Corrupt display evidence must never disable whole-meeting deletion.
+    f.storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute("UPDATE file_assets SET state='ready' WHERE id=?1", [&f.asset])
+        .unwrap();
+    let unknown = f.storage.meeting_deletion_availability(&ids).unwrap();
+    assert!(unknown[0].available);
+    assert_eq!(unknown[0].audio_deleted, None);
+}
+
+#[test]
 fn native_raw_audio_deletion_cold_restart_removes_pcm_but_keeps_documents_and_raw_proofs() {
     let mut f = Fixture::new();
     f.documents();

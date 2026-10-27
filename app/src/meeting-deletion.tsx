@@ -130,6 +130,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const targetUnavailableReason = preview && !preview.pending ? availability.error || availability.rows.get(preview.meetingId)?.blockers.map(b => b.reason).join(" ") || (!availability.rows.has(preview.meetingId) ? "削除できる状態か確認しています。" : null) : null;
   const canDelete = preview?.scopeMode === "directory" && canResolve && open && s?.phase === "ready" && !!preview.executeAllowed && !targetUnavailableReason;
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
+    audioAvailability: availability,
     canReviewMeetingId, meetingReviewReason, targetUnavailableReason, meetingBlockers: (id: string) => availability.rows.get(id)?.blockers ?? [], retryAvailability: availability.refresh,
     noticeWaiting, reviewUnavailableReason, rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast,
     canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };

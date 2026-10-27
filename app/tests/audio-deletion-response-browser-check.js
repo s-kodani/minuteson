@@ -2,8 +2,8 @@
 async (page, capturePath, detailUI) => {
   const check = (v, message) => { if (!v) throw Error(message); };
   const region = () => page.getByRole("region", { name: "音声だけの削除と中断対応", exact: true });
-  const trigger = () => page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true });
-  const ready = () => page.getByRole("dialog", { name: "音声だけの削除を確認", exact: true }).getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  const trigger = () => page.getByRole("menuitem", { name: "既存会議の音声だけを削除", exact: true });
+  const ready = () => page.getByRole("dialog", { name: "音声だけを削除", exact: true }).waitFor();
   await page.reload(); await detailUI.openMeetingRow(); await trigger().waitFor();
   await page.evaluate(() => { window.audioDeletionFixture.reviewLost = true; });
   await trigger().click(); await ready();
@@ -21,7 +21,7 @@ async (page, capturePath, detailUI) => {
   });
   await region().getByRole("button", { name: "同じ音声削除操作の結果を確認", exact: true }).click();
   check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "foreign meeting confirmed an unknown choice");
-  check(await page.getByRole("dialog", { name: "音声だけの削除を確認", exact: true }).count() === 0, "foreign meeting opened an executable consent");
+  check(await page.getByRole("dialog", { name: "音声だけを削除", exact: true }).count() === 0, "foreign meeting opened an executable consent");
   await page.evaluate(async () => {
     const f = window.dataFixture;
     f.suppressEvents = false;

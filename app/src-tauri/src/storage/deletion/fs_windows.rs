@@ -419,7 +419,9 @@ fn remove_tree_handle(
         return Err("削除対象のフォルダーが深すぎます".into());
     }
     let file = OpenOptions::new()
-        .access_mode(0x10000 | 0x80)
+        // native_fs::metadata also reads owner/DACL while verifying the root
+        // identity. GetSecurityInfo requires READ_CONTROL on this same handle.
+        .access_mode(0x10000 | 0x80 | 0x20000)
         .share_mode(3)
         .custom_flags(0x02000000 | 0x00200000)
         .open(path)

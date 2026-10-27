@@ -1,12 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { audioDeletionNewScope, audioDeletionPublishRequest, audioDeletionDispositionLabel, audioDeletionPhaseLabel, audioDeletionStartupLabel } from "../src/audio-deletion-ui-state.ts";
+import { audioDeletionNewScope, audioDeletionPublishRequest, audioDeletionDispositionLabel, audioDeletionPhaseLabel, audioDeletionStartupLabel, audioDeletionSimpleReview, audioDeletionSimplePublishRequest } from "../src/audio-deletion-ui-state.ts";
 import type { DataSnapshot } from "../src/data-operation-state.ts";
 import type { AudioDeletionPage, AudioDeletionPreview } from "../src/audio-deletion-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, reconfirmationSourceKind: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
 const ready = (p = preview()): DataSnapshot => ({ revision: 2, token: id(1), kind: "audio_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, audioDeletionPreview: p, audioDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 const page = (p: AudioDeletionPreview): AudioDeletionPage => ({ confirmationId: p.confirmationId, offset: 0, total: 2, nextOffset: null, entries: [{ relativePath: `meetings/${p.meetingId}/audio/track.caf`, assetId: id(7), disposition: "registered_audio", present: true, bytes: 4, sha256: "b".repeat(64), changed: false }, { relativePath: `meetings/${p.meetingId}/unknown`, assetId: null, disposition: "unclassified", present: true, bytes: 8, sha256: "c".repeat(64), changed: false }] });
+test("simple confirmation needs no page and includes classified unregistered audio using native IDs only", () => {
+  const p = preview();
+  assert.equal(audioDeletionSimpleReview(p), true);
+  assert.deepEqual(audioDeletionSimplePublishRequest(ready(p), p.confirmationId), { token: id(1), confirmationId: p.confirmationId, action: "publish" });
+  assert.deepEqual(audioDeletionSimplePublishRequest(ready({ ...p, unregisteredAudioFiles: 1 }), p.confirmationId), { token: id(1), confirmationId: p.confirmationId, action: "delete_including_unregistered" });
+  assert.throws(() => audioDeletionSimplePublishRequest(ready(p), id(6)));
+  for (const patch of [{ busy: true }, { phase: "attention", attentionRequired: true, retryAllowed: false }, { kind: "backup" }, { audioDeletionPreview: { ...p, executeAllowed: false, resumeReason: "changed" } }]) {
+    assert.throws(() => audioDeletionSimplePublishRequest({ ...ready(p), ...patch } as DataSnapshot, p.confirmationId));
+  }
+  for (const phase of ["not_started", "files", "restored_unavailable", "reconfirmation"] as const) {
+    const recovery = { ...p, phase, pending: true };
+    assert.equal(audioDeletionSimpleReview(recovery), false);
+    assert.throws(() => audioDeletionSimplePublishRequest(ready(recovery), p.confirmationId));
+  }
+});
 test("audio UI binds consent and a validated page to the current confirmation, sending IDs only", () => {
   const p = preview(), s = ready(p);
   assert.deepEqual(audioDeletionPublishRequest(s, p.confirmationId, page(p), p.confirmationId, null), { token: id(1), confirmationId: id(2), action: "publish" });

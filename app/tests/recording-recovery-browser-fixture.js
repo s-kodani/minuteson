@@ -22,7 +22,7 @@ mockIPC(async(command,args)=>{
   if(command==="get_application_close_activity")return {analysisBusy:false,modelPreparationBusy:false,recordingRecoveryBusy:r.snapshot.phase==="running"};
   if(command==="get_meeting_deletion_availability")return args.meetingIds.map(meetingId=>{
     const active=r.snapshot.items.some(i=>i.meetingId===meetingId&&i.phase==="running");
-    return {meetingId,available:!active,blockers:active?[{kind:"recording",reason:"音声保存中",jobId:null}]:[]};
+    return {meetingId,available:!active,audioDeleted:false,blockers:active?[{kind:"recording",reason:"音声保存中",jobId:null}]:[]};
   });
   if(command==="get_deletion_items")return {items:[],deletingMeetingIds:[],writeBlocked:false,restartRequired:false,reason:null};
   if(["get_model_deletion_items","get_audio_deletion_items"].includes(command))return {items:[],writeBlocked:false,restartRequired:false,reason:null};

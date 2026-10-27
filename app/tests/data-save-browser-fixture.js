@@ -21,7 +21,7 @@ export const dataSaveIPC = async (command, args) => {
     if (f.meetingAvailabilityFail) throw Error("合成削除可否の読込失敗");
     return args.meetingIds.map(meetingId => {
       const blockers = f.meetingBlockers?.[meetingId] ?? [];
-      return {meetingId,available:blockers.length===0,blockers:structuredClone(blockers)};
+      return {meetingId,available:blockers.length===0,audioDeleted:false,blockers:structuredClone(blockers)};
     });
   }
   // Read-only help starts hidden in fixtures that do not own its native window.

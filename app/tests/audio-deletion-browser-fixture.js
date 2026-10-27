@@ -31,6 +31,12 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
 d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
 export const audioDeletionIPC = async (command, args) => {
+  if (command === "get_meeting_deletion_availability") {
+    const rows = await dataSaveIPC(command, args);
+    for (const row of rows) if (row.meetingId === f.meetings[0].id) row.audioDeleted = d.audioStateUnknown ? null : d.deleted > 0;
+    if (d.holdAudioAvailability) { d.holdAudioAvailability = false; await new Promise(resolve => { d.releaseAudioAvailability = resolve; }); }
+    return rows;
+  }
   if (["get_audio_deletion_items", "review_meeting_audio_deletion", "review_pending_audio_deletion", "get_audio_deletion_paths"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "audio_deletion")) f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_deletion_items") return { items: [], deletingMeetingIds: [], writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? "音声削除のため書込停止" : null };
