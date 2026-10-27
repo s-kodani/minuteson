@@ -105,6 +105,19 @@ impl AnalysisController {
         .map(str::to_owned))
     }
 
+    /// Startup reset can replace a refused/restart-fenced database, while
+    /// retaining the same exclusion of active recording/import/model work.
+    pub(crate) fn begin_startup_reset_maintenance(
+        &self,
+        recording_active: bool,
+        import_blocked: bool,
+    ) -> Result<DataMaintenanceLease, String> {
+        self.begin_data_maintenance_inner(recording_active, import_blocked, &|| false, true, true)
+            .map_err(|_| {
+                "録音・取り込み・モデル処理などが終了するまで、データを初期化できません".to_owned()
+            })
+    }
+
     pub(crate) fn begin_data_maintenance(
         &self,
         recording_active: bool,

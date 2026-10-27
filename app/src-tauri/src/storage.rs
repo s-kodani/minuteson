@@ -187,6 +187,8 @@ pub struct Storage {
     native_models_root: PathBuf,
     #[cfg(any(target_os = "macos", windows))]
     flac_history: Option<std::sync::Arc<recordings::flac::relocation::Aliases>>,
+    #[cfg(any(target_os = "macos", windows))]
+    _reset_guard: std::sync::Arc<crate::bootstrap::reset::RootLease>,
 }
 
 #[cfg(test)]
@@ -259,6 +261,26 @@ impl Storage {
         result
     }
 
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn validate_startup_reset(&self) -> Result<(), String> {
+        let db = self.connection.lock().map_err(|_| "新DBを検証できません")?;
+        let check: String = db
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let empty: bool = db.query_row("SELECT (SELECT count(*) FROM meetings)=0 AND (SELECT count(*) FROM model_packages)=0", [], |r| r.get(0)).map_err(|e|e.to_string())?;
+        if check != "ok" || !empty {
+            return Err("新DBの初期化結果を確認できません".into());
+        }
+        Ok(())
+    }
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn open_for_reset(
+        root: PathBuf,
+        models: PathBuf,
+        guard: std::sync::Arc<crate::bootstrap::reset::RootLease>,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::open_inner(root, Some(models), None, None, None, Some(guard))
+    }
     // macOS production always supplies its separate native model location.
     #[cfg(any(test, not(target_os = "macos")))]
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
@@ -266,6 +288,8 @@ impl Storage {
         {
             Self::open_inner(
                 root,
+                None,
+                #[cfg(any(target_os = "macos", windows))]
                 None,
                 #[cfg(any(target_os = "macos", windows))]
                 None,
@@ -295,6 +319,8 @@ impl Storage {
             None,
             #[cfg(any(target_os = "macos", windows))]
             None,
+            #[cfg(any(target_os = "macos", windows))]
+            None,
         )
     }
 
@@ -311,6 +337,8 @@ impl Storage {
             history,
             flac_history,
             None,
+            #[cfg(any(target_os = "macos", windows))]
+            None,
         )
         .map_err(|e| e.to_string())?;
         admission.verify()?;
@@ -323,7 +351,8 @@ impl Storage {
         models: PathBuf,
         admission: &crate::bootstrap::recovery::Admission,
     ) -> Result<Self, String> {
-        Self::open_inner(root, Some(models), None, None, Some(admission)).map_err(|e| e.to_string())
+        Self::open_inner(root, Some(models), None, None, Some(admission), None)
+            .map_err(|e| e.to_string())
     }
 
     #[cfg(any(target_os = "macos", windows))]
@@ -391,15 +420,30 @@ impl Storage {
         #[cfg(any(target_os = "macos", windows))] recovery: Option<
             &crate::bootstrap::recovery::Admission,
         >,
+        #[cfg(any(target_os = "macos", windows))] reset_guard: Option<
+            std::sync::Arc<crate::bootstrap::reset::RootLease>,
+        >,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
         // Managed children still must match this canonical root exactly.
         let root = root.canonicalize()?;
+        #[cfg(any(target_os = "macos", windows))]
+        let resetting = reset_guard.is_some();
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let resetting = false;
         #[cfg(windows)]
         crate::windows_files::local_ntfs(&root)?;
         #[cfg(windows)]
         crate::windows_files::set_private(&root)?;
+        #[cfg(any(target_os = "macos", windows))]
+        let reset_guard = match reset_guard {
+            Some(guard) => {
+                guard.verify(&root)?;
+                guard
+            }
+            None => crate::bootstrap::reset::RootLease::acquire(&root, false)?,
+        };
         #[cfg(any(unix, windows))]
         let root_directory = deletion::fs::RootAnchor::directory(&root)?;
         #[cfg(any(target_os = "macos", windows))]
@@ -470,16 +514,27 @@ impl Storage {
             #[cfg(any(unix, windows))]
             {
                 #[cfg(any(target_os = "macos", windows))]
-                let registry = match recovery {
-                    Some(admission) => {
-                        backup::scratch::Registry::open_at(&root, &admission.scratch_root())?
-                    }
-                    None => backup::scratch::Registry::open(&root)?,
+                let registry = if resetting {
+                    None
+                } else {
+                    Some(match recovery {
+                        Some(admission) => {
+                            backup::scratch::Registry::open_at(&root, &admission.scratch_root())?
+                        }
+                        None => backup::scratch::Registry::open(&root)?,
+                    })
                 };
                 #[cfg(not(any(target_os = "macos", windows)))]
                 let registry = backup::scratch::Registry::open(&root)
                     .map_err(|e| format!("一時領域の初期化に失敗しました: {e}"))?;
-                scratch = Some(registry);
+                #[cfg(any(target_os = "macos", windows))]
+                {
+                    scratch = registry;
+                }
+                #[cfg(not(any(target_os = "macos", windows)))]
+                {
+                    scratch = Some(registry);
+                }
             }
             #[cfg(not(any(unix, windows)))]
             {
@@ -515,6 +570,8 @@ impl Storage {
             managed_anchor,
             #[cfg(any(unix, windows))]
             native_models_root,
+            #[cfg(any(target_os = "macos", windows))]
+            _reset_guard: reset_guard,
             #[cfg(any(target_os = "macos", windows))]
             flac_history,
         })

@@ -143,6 +143,12 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
             "fixed.sqlite3",
         )
         .unwrap(),
+        #[cfg(any(target_os = "macos", windows))]
+        _reset_guard: crate::bootstrap::reset::RootLease::acquire(
+            &work.stage.path().canonicalize().unwrap(),
+            false,
+        )
+        .unwrap(),
         scratch: None,
         recovery_hold: false,
         #[cfg(any(target_os = "macos", windows))]

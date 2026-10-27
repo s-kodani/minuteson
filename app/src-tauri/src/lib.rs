@@ -63,6 +63,7 @@ mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
 mod startup_instance;
+mod startup_reset;
 mod storage;
 mod transcription;
 mod voice;
@@ -2359,6 +2360,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
     builder
         .manage(startup_attention::Startup::default())
+        .manage(startup_reset::Reset::default())
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
         .manage(recording_recovery::Recovery::default())
@@ -2468,11 +2470,14 @@ pub fn run() {
                         let recovery = match selection.startup_recovery_view(&storage) {
                             Ok(recovery) => recovery,
                             Err(error) => {
+                                let selected_root = selection.root().to_owned();
+                                drop(storage);
+                                drop(selection);
                                 app.state::<startup_attention::Startup>().block(
                                     startup_attention::Failure::new(
                                         startup_attention::Stage::StorageAdmission,
                                         error,
-                                        Some(selection.root()),
+                                        Some(&selected_root),
                                         app.path().app_config_dir().ok().as_deref(),
                                     ),
                                 )?;
@@ -2598,10 +2603,28 @@ pub fn run() {
                 invoke.resolver.reject(error);
                 return true;
             }
+            if webview.state::<startup_reset::Reset>().busy()
+                && !matches!(
+                    invoke.message.command(),
+                    "get_startup_report"
+                        | "get_startup_reset_state"
+                        | "start_startup_reset"
+                        | "acknowledge_startup_activation"
+                )
+            {
+                invoke
+                    .resolver
+                    .reject("データを初期化しています。完了をお待ちください");
+                return true;
+            }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 internal_logs::get_internal_logs,
                 recording_recovery::get_recording_recovery,
                 startup_attention::get_startup_report,
+                startup_reset::get_startup_reset_preview,
+                startup_reset::choose_startup_reset_backup_directory,
+                startup_reset::start_startup_reset,
+                startup_reset::get_startup_reset_state,
                 startup_attention::quit_blocked_startup,
                 startup_instance::get_startup_instance,
                 startup_instance::acknowledge_startup_activation,
@@ -2766,6 +2789,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(windows)]
             windows_appearance::event(window, event);
+            if window.state::<startup_reset::Reset>().busy() {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                }
+                return;
+            }
             if window.state::<startup_attention::Startup>().blocked() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -2832,6 +2861,10 @@ pub fn run() {
                 }
             }
             if let RunEvent::ExitRequested { api, .. } = event {
+                if app.state::<startup_reset::Reset>().busy() {
+                    api.prevent_exit();
+                    return;
+                }
                 if app.state::<startup_attention::Startup>().blocked() {
                     return;
                 }

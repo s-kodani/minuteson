@@ -423,6 +423,15 @@ impl ImportController {
     pub(crate) fn recording_finished(app: &AppHandle) {
         Self::update(app, |s| s.snapshot.recording_blocked = false);
     }
+    /// Finish an already-running startup recovery without cancelling or
+    /// changing its data before the reset archive is made.
+    pub(crate) fn drain_for_startup_reset(&self) -> Result<(), String> {
+        self.state
+            .lock()
+            .map_err(|_| "取り込み状態を取得できません")?
+            .closing = true;
+        self.wait_idle(Duration::from_secs(15))
+    }
     pub(crate) fn shutdown(app: &AppHandle) -> Result<(), String> {
         Self::shutdown_inner(app, None)
     }

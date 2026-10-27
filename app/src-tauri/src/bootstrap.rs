@@ -40,6 +40,7 @@ pub(crate) mod movement;
 #[allow(dead_code)] // Native coordinator/UI and cutover integration follow.
 pub(crate) mod placement;
 pub(crate) mod recovery;
+pub(crate) mod reset;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -380,6 +381,12 @@ pub(crate) struct Bootstrap {
 
 impl Bootstrap {
     pub(crate) fn open(config: &Path, app_data: &Path) -> Result<Self, String> {
+        Self::open_mode(config, app_data, false)
+    }
+    fn open_for_reset(config: &Path, app_data: &Path) -> Result<Self, String> {
+        Self::open_mode(config, app_data, true)
+    }
+    fn open_mode(config: &Path, app_data: &Path, resetting: bool) -> Result<Self, String> {
         absolute(config)?;
         absolute(app_data)?;
         if let Ok(m) = crate::native_fs::symlink_metadata(config) {
@@ -466,7 +473,9 @@ impl Bootstrap {
             .get_mut()
             .map_err(|_| "起動設定ロックを取得できません")?
             .loaded = loaded.take();
-        result.recover_selection()?;
+        if !resetting {
+            result.recover_selection()?;
+        }
         loaded = result
             .state
             .get_mut()
@@ -475,7 +484,18 @@ impl Bootstrap {
             .take();
         let (selected, origin) = match &loaded {
             Some(l) => {
-                l.record.current.verify()?;
+                if resetting {
+                    if !l
+                        .record
+                        .current
+                        .directory
+                        .matches(&directory(&l.record.current.path)?)
+                    {
+                        return Err("会議保存先の実体が変更されています".into());
+                    }
+                } else {
+                    l.record.current.verify()?;
+                }
                 (l.record.current.path.clone(), l.record.origin.clone())
             }
             None => {
@@ -487,12 +507,21 @@ impl Bootstrap {
                 {
                     // No adoption or conversion of pre-bootstrap data. An
                     // unregistered object must not be mistaken for a fresh install.
-                    match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
-                    Ok(_) => return Err("旧形式の会議保存先は非対応です。初期開発の旧データを整理してから起動してください。自動移行は行いません".into()),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-                    Err(e) => return Err(e.to_string()),
-                }
-                    (app_data.join("data"), Origin::Default)
+                    let legacy = match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
+                        Ok(_) if !resetting => return Err("旧形式の会議保存先は非対応です。初期開発の旧データを整理してから起動してください。自動移行は行いません".into()),
+                        Ok(m) if regular(&m, false) => true,
+                        Ok(_) => return Err("旧DBの実体・リンクを確認できません。初期化先を推測しません".into()),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                        Err(e) => return Err(e.to_string()),
+                    };
+                    (
+                        if legacy {
+                            app_data.to_owned()
+                        } else {
+                            app_data.join("data")
+                        },
+                        Origin::Default,
+                    )
                 }
             }
         };
@@ -501,14 +530,20 @@ impl Bootstrap {
         }
         // Only the native default path may be created before initialization.
         // Configured roots were already verified, so a missing one never reaches here.
-        crate::native_fs::private_directories(&selected, true)?;
+        if resetting {
+            directory(&selected)?;
+        } else {
+            crate::native_fs::private_directories(&selected, true)?;
+        }
         let selected = selected.canonicalize().map_err(|e| e.to_string())?;
         local(&selected)?;
         if let Ok(m) = crate::native_fs::symlink_metadata(selected.join("meetings.sqlite3")) {
             if !regular(&m, false) {
                 return Err("会議DBのリンク・別実体を採用しません".into());
             }
-            Root::inspect(&selected)?;
+            if !resetting {
+                Root::inspect(&selected)?;
+            }
         }
         result.selected_identity = Identity::read(&directory(&selected)?)?;
         result.selected = selected;
@@ -519,7 +554,9 @@ impl Bootstrap {
             .map_err(|_| "起動設定ロックを取得できません")?
             .loaded = loaded;
         // Before Storage::open can migrate/recover/write the selected root.
-        result.admit_activation()?;
+        if !resetting {
+            result.admit_activation()?;
+        }
         Ok(result)
     }
     pub(crate) fn root(&self) -> &Path {

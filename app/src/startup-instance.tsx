@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { checkedStartupInstance, type StartupInstanceReport } from "./startup-instance-state";
 
-export function StartupInstanceRecovery() {
+export function StartupInstanceRecovery({ disabled = false }: { disabled?: boolean } = {}) {
   const [report, setReport] = useState<StartupInstanceReport | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [review, setReview] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState(false);
@@ -34,9 +34,9 @@ export function StartupInstanceRecovery() {
     <p>既存の画面を開くか、MONを再起動して復旧できます。</p>
     {report?.message && <p role="status">{report.message}</p>}
     <div className="analysis-actions">
-      <button type="button" disabled={busy} onClick={() => void run("open_existing_instance")}>もう一度開く</button>
-      {report?.canRestart && <button ref={opener} type="button" disabled={busy || uncertain} onClick={() => setReview(report.targetId)}>MONを再起動して復旧</button>}
-      <button type="button" disabled={busy || uncertain} onClick={() => void run("retry_startup")}>起動をやり直す</button>
+      <button type="button" disabled={busy || disabled} onClick={() => void run("open_existing_instance")}>もう一度開く</button>
+      {report?.canRestart && <button ref={opener} type="button" disabled={busy || disabled || uncertain} onClick={() => setReview(report.targetId)}>MONを再起動して復旧</button>}
+      <button type="button" disabled={busy || disabled || uncertain} onClick={() => void run("retry_startup")}>起動をやり直す</button>
     </div>
     {uncertain && <p role="status">終了・再起動の要求は再送していません。「もう一度開く」で現在のMONを確認してください。</p>}
     <ErrorNotice scope="startup-instance" type="StartupInstanceRecovery-operation" active={!!(error)}>{error}</ErrorNotice>

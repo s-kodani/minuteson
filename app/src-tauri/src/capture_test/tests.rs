@@ -986,3 +986,20 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
         original
     );
 }
+
+#[cfg(any(target_os = "macos", windows))]
+#[test]
+fn startup_reset_drains_the_collector_and_closes_its_registry() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let controller = super::CaptureTests::default();
+    {
+        let mut state = controller.lock().unwrap();
+        state.ownership.configure(&root).unwrap();
+        assert_eq!(state.ownership.reconcile().phase, "clear");
+    }
+    controller.release_for_startup_reset().unwrap();
+    assert!(controller.lock().unwrap().closing);
+    // Closing the registry releases its native OS lock and SQLite handles.
+    drop(super::journal::Registry::open(&root).unwrap());
+}

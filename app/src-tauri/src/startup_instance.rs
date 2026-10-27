@@ -97,6 +97,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle, config: &std::path::Path) -> Re
     Ok(proceed)
 }
 fn require_recovery(window: &WebviewWindow) -> Result<(), String> {
+    crate::startup_reset::check_idle(window.app_handle())?;
     if window.label() != "main"
         || !window
             .state::<crate::startup_attention::Startup>()
@@ -172,7 +173,10 @@ pub(crate) async fn recover_startup_instance(
 }
 #[tauri::command]
 pub(crate) fn retry_startup(window: WebviewWindow) -> Result<(), String> {
-    require_recovery(&window)?;
+    crate::startup_reset::check_idle(window.app_handle())?;
+    window
+        .state::<crate::startup_attention::Startup>()
+        .admit_command(window.label(), "retry_startup")?;
     #[cfg(windows)]
     {
         let state = window.state::<Instance>();

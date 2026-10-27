@@ -339,6 +339,15 @@ impl CaptureTests {
         });
         Ok(snapshot)
     }
+    pub(crate) fn release_for_startup_reset(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.current.is_some() {
+            return Err("録音前テストが実行中です。初期化を開始できません".into());
+        }
+        state.ownership.release_for_startup_reset()?;
+        state.closing = true;
+        Ok(())
+    }
     pub(crate) fn recovery_snapshot(&self) -> Result<recovery::Snapshot, String> {
         Ok(self.lock()?.ownership.snapshot())
     }

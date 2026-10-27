@@ -52,3 +52,26 @@ mod file_tests;
 mod intent_tests;
 #[cfg(test)]
 mod tests;
+
+/// Reset workspaces use the same handle-bound, no-link traversal as deletion.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn remove_reset_workspace(
+    path: &std::path::Path,
+    expected: (u64, u64, u64),
+) -> Result<(), String> {
+    let leaf = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or("初期化作業領域の名前が不正です")?;
+    if !leaf.starts_with(".mon-delete-reset-") {
+        return Err("初期化作業領域ではありません".into());
+    }
+    let parent = fs::Directory::root(path.parent().ok_or("作業領域の親がありません")?)?;
+    let child = parent.child(leaf)?.ok_or("初期化作業領域がありません")?;
+    let identity = child.proof()?.identity;
+    if identity.registered()? != expected {
+        return Err("初期化作業領域が差し替えられています".into());
+    }
+    drop(child);
+    parent.remove_reserved_tree(leaf, &identity, &|| false)
+}

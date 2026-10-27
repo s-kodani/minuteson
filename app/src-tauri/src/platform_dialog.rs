@@ -100,3 +100,20 @@ mod tests {
         );
     }
 }
+
+/// Directory selection is exposed only through an owned application command.
+pub(crate) async fn pick_directory(
+    window: &WebviewWindow,
+    title: &str,
+) -> Result<Option<PathBuf>, String> {
+    let (send, receiver) = mpsc::channel();
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
+        .pick_folder(move |value| {
+            let _ = send.send(value);
+        });
+    receive(receiver).await
+}

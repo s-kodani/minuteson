@@ -1,4 +1,5 @@
-//! Fail-closed guidance for storage admission failures, not a repair facility.
+//! Immutable diagnostics for storage admission failures. Reset uses separate
+//! native IPC and progress, without reopening storage through report reads.
 //! Reports only read process memory; they never reopen a rejected storage root.
 use serde::Serialize;
 use std::{path::Path, sync::Mutex};
@@ -73,6 +74,8 @@ pub(crate) struct Report {
     recovery: Option<Recovery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     migration: Option<AudioMigration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset: Option<crate::startup_reset::Availability>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +100,7 @@ impl Default for Startup {
             failure: None,
             recovery: None,
             migration: None,
+            reset: None,
         }))
     }
 }
@@ -196,7 +200,13 @@ impl Startup {
         }
         if matches!(
             command,
-            "open_existing_instance" | "recover_startup_instance" | "retry_startup"
+            "open_existing_instance"
+                | "recover_startup_instance"
+                | "retry_startup"
+                | "get_startup_reset_preview"
+                | "choose_startup_reset_backup_directory"
+                | "start_startup_reset"
+                | "get_startup_reset_state"
         ) {
             return if label == "main" && report.phase == Phase::Blocked {
                 Ok(())
@@ -281,6 +291,8 @@ pub(crate) fn admit_storage(
     config: &Path,
     root: &Path,
 ) -> Result<(crate::storage::Storage, crate::bootstrap::Bootstrap), Failure> {
+    crate::bootstrap::reset::recover(config, root)
+        .map_err(|e| Failure::new(Stage::StorageSelection, e, None, Some(config)))?;
     let selection = crate::bootstrap::Bootstrap::open(config, root)
         .map_err(|e| Failure::new(Stage::StorageSelection, e, None, Some(config)))?;
     let storage = selection.open_storage().map_err(|e| {
@@ -295,6 +307,10 @@ pub(crate) fn admit_storage(
 }
 
 pub(crate) fn show(app: &tauri::AppHandle) {
+    let availability = crate::startup_reset::availability(app);
+    if let Ok(mut report) = app.state::<Startup>().0.lock() {
+        report.reset = Some(availability);
+    }
     for label in ["recorder", "recorder-info", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
             if label == "recorder" {
@@ -324,6 +340,7 @@ pub(crate) fn quit_blocked_startup(
     startup: State<'_, Startup>,
 ) -> Result<(), String> {
     startup.admit_command(window.label(), "quit_blocked_startup")?;
+    crate::startup_reset::check_idle(window.app_handle())?;
     window.app_handle().exit(0);
     Ok(())
 }

@@ -70,6 +70,18 @@ impl Ownership {
         }
         Ok(())
     }
+    /// Called with CaptureTests' mutex held, after startup is blocked. The
+    /// collector cannot retain a registry reference or start another pass.
+    pub(super) fn release_for_startup_reset(&mut self) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            // The reset engine checks writer leases directly, without parsing
+            // old ownership schemas or collecting audio before archival.
+            self.registry = None;
+            self.root = None;
+        }
+        Ok(())
+    }
     pub(super) fn configure(&mut self, root: &Path) -> Result<(), String> {
         #[cfg(any(target_os = "macos", windows))]
         {
