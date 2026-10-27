@@ -83,6 +83,30 @@ pub(crate) fn stage(name: &str, total: Option<u64>, unit: &'static str) {
         }
     });
 }
+/// Report an absolute worker count without restarting an unchanged stage.
+pub(crate) fn report(name: &str, completed: u64, total: u64, unit: &'static str) {
+    let changed = CURRENT.with(|c| {
+        c.borrow().as_ref().is_some_and(|o| {
+            o.progress.stage != name || o.progress.total != Some(total) || o.progress.unit != unit
+        })
+    });
+    if changed {
+        stage(name, Some(total), unit);
+    }
+    CURRENT.with(|c| {
+        if let Some(o) = c.borrow_mut().as_mut() {
+            let previous = o.progress.completed;
+            o.progress.completed = completed;
+            // Always publish the final count, even for very short recordings.
+            if previous != completed
+                && (completed == total || o.notified.elapsed().as_millis() >= 250)
+            {
+                o.notified = Instant::now();
+                (o.callback)(o.progress.clone());
+            }
+        }
+    });
+}
 pub(crate) struct ConnectionGuard<'a> {
     guard: std::sync::MutexGuard<'a, rusqlite::Connection>,
     started: Instant,
@@ -165,4 +189,51 @@ pub(crate) fn absorb(bytes: u64, scans: u64) {
             o.scans = o.scans.saturating_add(scans);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[test]
+    fn absolute_progress_preserves_counts_and_throttles_until_final_frame() {
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let captured = notifications.clone();
+        let _scope = Scope::enter("recording_save", move |p| captured.borrow_mut().push(p));
+        report("mixing_audio", 0, 30, "frames");
+        report("mixing_audio", 10, 30, "frames");
+        assert_eq!(notifications.borrow().len(), 1);
+        CURRENT.with(|c| {
+            let mut current = c.borrow_mut();
+            let o = current.as_mut().unwrap();
+            assert_eq!(o.progress.completed, 10);
+            o.notified = Instant::now() - Duration::from_millis(250);
+        });
+        report("mixing_audio", 20, 30, "frames");
+        // Deterministically keep the final update inside the throttle window.
+        CURRENT.with(|c| c.borrow_mut().as_mut().unwrap().notified = Instant::now());
+        report("mixing_audio", 30, 30, "frames");
+        let counts: Vec<_> = notifications.borrow().iter().map(|p| p.completed).collect();
+        assert_eq!(counts, vec![0, 20, 30]);
+        assert!(notifications.borrow().iter().all(|p| p.total == Some(30)));
+    }
+
+    #[test]
+    fn absolute_progress_initializes_a_new_stage_once() {
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let captured = notifications.clone();
+        let _scope = Scope::enter("recording_save", move |p| captured.borrow_mut().push(p));
+        stage("checking_audio", None, "bytes");
+        report("mixing_audio", 0, 10, "frames");
+        report("mixing_audio", 10, 10, "frames");
+        report("mixing_audio", 10, 10, "frames");
+        assert_eq!(notifications.borrow().len(), 3);
+        assert_eq!(notifications.borrow()[2].completed, 10);
+        // A different total identifies a new measured stage.
+        report("mixing_audio", 0, 20, "frames");
+        assert_eq!(notifications.borrow()[3].completed, 0);
+        assert_eq!(notifications.borrow()[3].total, Some(20));
+    }
 }

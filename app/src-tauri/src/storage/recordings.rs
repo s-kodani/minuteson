@@ -952,8 +952,8 @@ impl Storage {
         drop(connection);
         #[cfg(any(unix, windows))]
         drop(clock_originals);
-        self.publish_single_wav(&session.meeting_id, &|| false, &|_, total| {
-            crate::operation_observation::stage("mixing_audio", Some(total), "frames");
+        self.publish_single_wav(&session.meeting_id, &|| false, &|completed, total| {
+            crate::operation_observation::report("mixing_audio", completed, total, "frames");
         })?;
         Ok(saved)
     }
@@ -1101,6 +1101,35 @@ fn load_session(connection: &Connection, id: &str) -> Result<Option<RecordingSes
 pub(in crate::storage) mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn recording_save_reports_generated_frames_before_publication_finishes() {
+        use std::{cell::RefCell, rc::Rc};
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, _, _) = saved_probe_fixture(&storage);
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let captured = notifications.clone();
+        let observations = crate::operation_observation::Scope::enter("recording_save", move |p| {
+            if p.stage == "mixing_audio" {
+                captured.borrow_mut().push(p);
+            }
+        });
+        let saved = storage.finalize_recording(&session).unwrap();
+        // Check before Scope::drop can flush an otherwise unreported count.
+        let progress = notifications.borrow();
+        assert_eq!(progress.first().unwrap().completed, 0);
+        assert!(progress.len() >= 2);
+        assert!(progress.windows(2).all(|p| p[0].completed <= p[1].completed));
+        let last = progress.last().unwrap();
+        assert_eq!(last.completed, 16000);
+        assert_eq!(last.total, Some(last.completed));
+        assert_eq!(last.unit, "frames");
+        assert_eq!(saved.state, "saved");
+        drop(progress);
+        drop(observations);
+        storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    }
 
     #[test]
     fn retained_input_history_is_bound_to_closed_database_session_and_survives_reopen() {

@@ -20,6 +20,19 @@ test("recording save is one indeterminate job until saving really finishes", () 
   assert.equal(recordingSaveProgress({ ...snapshot, sessionId: null }), null);
 });
 
+test("recording save shows measured WAV frames and stays active until saving finishes", () => {
+  const snapshot: RecordingSnapshot = { revision: 1, phase: "saving", sessionId: "session", meetingId: "meeting", elapsedMs: 1000, microphoneConnected: false, systemAudioConnected: false, errorMessage: null };
+  for (const completed of [0, 8192, 16000]) {
+    const saving = recordingSaveProgress({ ...snapshot, progress: { stage: "mixing_audio", completed, total: 16000, unit: "frames" } })!;
+    assert.equal(saving.label, "会議音声を生成中");
+    assert.equal(saving.detail, `${completed.toLocaleString("ja-JP")} / 16,000 フレーム`);
+    assert.equal(saving.state, "running");
+    assert.equal(saving.completed, null);
+    assert.equal(saving.total, null);
+  }
+  assert.equal(recordingSaveProgress({ ...snapshot, phase: "idle" }), null);
+});
+
 const importing: ImportSnapshot = { revision: 2, token: "audio", phase: "copying", busy: true, recordingBlocked: false, fileName: "会議.wav", completed: 50, sourceBytes: 200, requiredBytes: 1000, availableBytes: 2000, info: { schemaVersion: 1, detectedFormat: "wav", codec: "pcm", sampleRate: 16000, channels: 1, frames: 100, durationUs: 6250 }, saved: null, errorMessage: null };
 const job: NotificationJob = { id: "job-a", meetingId: "meeting-a", meetingTitle: "会議A", kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), operationId: "operation", retryOfJobId: null, attempt: 1, outputMinutesId: null, createdAt: 10, updatedAt: 20 };
 
