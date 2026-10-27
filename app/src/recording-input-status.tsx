@@ -4,11 +4,11 @@ import {useRecordingSession} from "./session";
 import {InputLevelClock} from "./input-level-state";
 import {RecordingInputSession,inputLabel,type InputKind,type VisibleInput,type InputNotice} from "./recording-input-state";
 import {RecordingInputQueue,type QueueAttempt,type NoticeReception} from "./recording-input-queue";
-import {ToastNotice,IssueNotice,toasts} from "./toast";
+import {ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
-import {InputJournalSession,journalMessage,journalNoticeReady,type JournalView} from "./input-journal-state";
+import {InputJournalSession,InputJournalNotices,journalMessage,type JournalView,type JournalNotice} from "./input-journal-state";
 import "./recording-input-status.css";
-type View={owner:string|null;microphone:VisibleInput;system:VisibleInput;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:{microphone:number;system:number};journal:JournalView&{ready?:boolean};dismiss:(input:InputKind)=>void;rendered:(id:string,generation:number)=>void};
+type View={owner:string|null;microphone:VisibleInput;system:VisibleInput;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:{microphone:number;system:number};journal:JournalView&{ready?:boolean;notice?:JournalNotice|null};dismiss:(input:InputKind)=>void;rendered:(id:string,generation:number)=>void};
 const unknown=()=>({microphone:{state:"unknown"} as VisibleInput,system:{state:"unknown"} as VisibleInput,notices:[] as InputNotice[]});
 const empty=()=>({owner:null,...unknown(),reception:{microphone:"none",system:"none"} as Record<InputKind,NoticeReception>,loss:{microphone:0,system:0},journal:{state:"unknown",problem:false} as JournalView,dismiss:(_input:InputKind)=>{},rendered:(_id:string,_generation:number)=>{}});
 const Context=createContext<View>(empty());
@@ -22,15 +22,12 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     // A failed session bridge disposes this controller even if its WebView
     // survives. Reopening it must not impersonate a previously accepted receiver.
     const queue=new RecordingInputQueue(owner,crypto.randomUUID(),windowLabel);
-    const journal=new InputJournalSession(owner);let journalInFlight=false;
+    const journal=new InputJournalSession(owner),journalNotices=new InputJournalNotices();let journalInFlight=false;
     const now=()=>clock.read(performance.now(),Date.now());
-    let recordingSince:number|null=null,journalUnavailableSince:number|null=null;
     const journalView=(at:number)=>{
-      const phase=phaseRef.current;
-      if(phase==="recording")recordingSince??=at;else recordingSince=null;
       const state=journal.read(at);
-      if(state.state==="unknown"||state.state==="stale")journalUnavailableSince??=at;else journalUnavailableSince=null;
-      return {...state,ready:journalNoticeReady(state,phase,recordingSince===null?0:at-recordingSince,journalUnavailableSince===null?0:at-journalUnavailableSince)};
+      const notice=journalNotices.read(state,phaseRef.current,at);
+      return {...state,ready:!!notice,notice};
     };
     const paint=()=>{
       if(disposed)return;const at=now(),raw=failed?unknown():session.read(at);
@@ -74,8 +71,9 @@ export function RecordingMicrophoneStatus({owner,compact=false}:{owner:string|nu
 export function RecordingJournalNotice(){
   const view=useContext(Context),scope=view.owner??"recording-journal";
   useEffect(()=>()=>toasts.resolve(toastKey(scope,"journal-save")),[scope]);
-  return <div className="recording-journal-diagnostic" hidden={!view.owner||!view.journal.ready||view.journal.state==="confirmed"} data-journal-state={view.owner&&view.journal.ready?view.journal.state:"inactive"}>
-    <IssueNotice scope={scope} type="journal-save" label="入力履歴の保存" message={view.owner&&view.journal.ready?journalMessage(view.journal):""}/>
+  const notice=view.owner?view.journal.notice:null;
+  return <div className="recording-journal-diagnostic" hidden={!notice} data-journal-state={view.owner?view.journal.state:"inactive"}>
+    <ToastNotice scope={scope} type="journal-save" message={notice?`入力履歴の保存: ${notice.message}`:""} level={notice?.level??"warning"} eventId={notice?.eventId}/>
   </div>;
 }
 export function RecordingCompactInputs({owner}:{owner:string|null}){return <span className="mini-inputs"><RecordingInputStatus owner={owner} input="microphone" compact/><RecordingInputStatus owner={owner} input="system" compact/></span>;}

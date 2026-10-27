@@ -17,6 +17,7 @@ pub(crate) mod windows;
 pub(crate) struct Residency {
     guid: Mutex<Option<String>>,
     error: Mutex<Option<String>>,
+    monitor_error: Mutex<Option<String>>,
     drain: AtomicBool,
     stopping: AtomicBool,
     menu_installed: AtomicBool,
@@ -143,6 +144,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle) {
                 let result: Result<bool, String> = Ok(false);
                 match result {
                     Ok(true) => {
+                        set_monitor_error(app, None);
                         monitor_error = false;
                         backstop.observe(
                             started.elapsed().as_millis() as u64,
@@ -153,7 +155,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle) {
                     }
                     Err(error) => {
                         if started.elapsed() >= std::time::Duration::from_secs(3) {
-                            set_error(app, error);
+                            set_monitor_error(app, Some(error));
                         }
                         if !monitor_error {
                             let handle = app.clone();
@@ -199,6 +201,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle) {
                         }
                     }
                     Ok(false) => {
+                        set_monitor_error(app, None);
                         monitor_error = false;
                         backstop.observe(
                             started.elapsed().as_millis() as u64,
@@ -218,6 +221,36 @@ fn set_error(app: &tauri::AppHandle, error: String) {
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
     let _ = app.emit_to("main", "residency-error", error);
+}
+fn set_monitor_error(app: &tauri::AppHandle, error: Option<String>) {
+    let state = app.state::<Residency>();
+    let mut current = state
+        .monitor_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let changed = *current != error;
+    *current = error.clone();
+    drop(current);
+    let context = crate::internal_logs::Context {
+        category: "residency".into(),
+        ..Default::default()
+    };
+    if changed {
+        match &error {
+            Some(message) => {
+                crate::internal_logs::transition(context, "monitor-unavailable", "warning", message)
+            }
+            None => crate::internal_logs::transition(
+                context,
+                "monitor-recovered",
+                "info",
+                "常駐監視との通信が復旧しました",
+            ),
+        }
+    }
+    // A busy/loading WebView may subscribe after a transition. Re-publish the
+    // current state each pulse; presenters deduplicate it, logs stay transition-only.
+    let _ = app.emit_to("main", "residency-monitor-status", error);
 }
 fn monitor_available() -> bool {
     #[cfg(windows)]

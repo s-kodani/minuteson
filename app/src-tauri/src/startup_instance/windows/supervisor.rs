@@ -12,10 +12,7 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
-use windows_sys::Win32::{
-    Foundation::ERROR_PIPE_CONNECTED,
-    System::{Pipes::*, Threading::CREATE_NO_WINDOW},
-};
+use windows_sys::Win32::System::{Pipes::*, Threading::CREATE_NO_WINDOW};
 const MODE: &str = "--mon-startup-supervisor";
 const REQUEST: &[u8] = b"MON_RESTART_AFTER_PARENT_EXIT_V1\n";
 static SUPERVISOR: OnceLock<Result<Mutex<Supervisor>, String>> = OnceLock::new();
@@ -41,29 +38,65 @@ pub(super) fn pulse(probe: &crate::residency::Probe) -> Result<bool, String> {
     {
         return Err("常駐監視が終了したため画面を復帰します".into());
     }
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&supervisor.endpoint)
-        .map_err(|e| e.to_string())?;
-    let mut pid = 0;
-    if unsafe { GetNamedPipeServerProcessId(file.as_raw_handle(), &mut pid) } == 0
-        || pid != supervisor.child.id()
-    {
-        return Err("常駐監視の接続先が変更されました".into());
-    }
+    exchange(&supervisor.endpoint, supervisor.child.id(), probe, |_| {})
+}
+fn transient(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(2 | 109 | 231 | 232 | 233))
+}
+fn exchange(
+    endpoint: &str,
+    expected_pid: u32,
+    probe: &crate::residency::Probe,
+    mut before_read: impl FnMut(&File),
+) -> Result<bool, String> {
+    let deadline = Instant::now() + Duration::from_secs(1);
     let payload = serde_json::to_string(probe).map_err(|e| e.to_string())?;
-    file.write_all(format!("MON_RESIDENCY_V1 {payload}\n").as_bytes())
-        .map_err(|e| e.to_string())?;
-    let response = pipe::line(&mut file, deadline)?;
-    *LAST_PULSE
-        .lock()
-        .map_err(|_| "常駐監視の状態を保持できません")? = Some(Instant::now());
-    match response.as_slice() {
-        b"DRAIN\n" => Ok(true),
-        b"OK\n" => Ok(false),
-        _ => Err("画面を復帰しています".into()),
+    loop {
+        let mut attempt = || -> Result<Vec<u8>, std::io::Error> {
+            let mut file = OpenOptions::new().read(true).write(true).open(endpoint)?;
+            let mut pid = 0;
+            if unsafe { GetNamedPipeServerProcessId(file.as_raw_handle(), &mut pid) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if pid != expected_pid {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "常駐監視の接続先が変更されました",
+                ));
+            }
+            file.write_all(format!("MON_RESIDENCY_V1 {payload}\n").as_bytes())?;
+            before_read(&file);
+            let response = pipe::line_io(&mut file, deadline)?;
+            file.write_all(pipe::RECEIVED)?;
+            Ok(response)
+        };
+        match attempt() {
+            Ok(response) => {
+                let drain = match response.as_slice() {
+                    b"DRAIN\n" => true,
+                    b"OK\n" => false,
+                    _ => return Err("画面を復帰しています".into()),
+                };
+                *LAST_PULSE
+                    .lock()
+                    .map_err(|_| "常駐監視の状態を保持できません")? = Some(Instant::now());
+                return Ok(drain);
+            }
+            Err(error) if transient(&error) && Instant::now() < deadline => {
+                std::thread::sleep(
+                    Duration::from_millis(20)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "常駐監視との通信を確認できません。画面を残します: {error}"
+                ))
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("常駐監視の応答がありません。画面を残します".into());
+        }
     }
 }
 struct Supervisor {
@@ -242,10 +275,7 @@ fn relay(mut file: File, parent: process::Target, mut successor: Command) -> Res
                 _ => {}
             }
         }
-        let connected = unsafe { ConnectNamedPipe(file.as_raw_handle(), std::ptr::null_mut()) }
-            != 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32);
-        if !connected {
+        if !pipe::connected(&file)? {
             std::thread::sleep(Duration::from_millis(20));
             continue;
         }
@@ -255,7 +285,7 @@ fn relay(mut file: File, parent: process::Target, mut successor: Command) -> Res
             && parent.identity().0 == client
             && !parent.exited();
         let request = if allowed {
-            pipe::line(&mut file, Instant::now() + Duration::from_millis(100)).ok()
+            pipe::line(&mut file, Instant::now() + Duration::from_millis(500)).ok()
         } else {
             None
         };
@@ -270,8 +300,7 @@ fn relay(mut file: File, parent: process::Target, mut successor: Command) -> Res
                     Action::Drain => b"DRAIN\n".as_slice(),
                     _ => b"RESTORE\n".as_slice(),
                 };
-                let _ = file.write_all(reply);
-                std::thread::sleep(Duration::from_millis(25));
+                let _ = pipe::reply(&mut file, reply);
             }
         } else if request.as_ref().is_some_and(|request| request == REQUEST) {
             file.write_all(b"MON_RESTART_ACCEPTED_V1\n")
@@ -342,4 +371,135 @@ pub(super) fn test_endpoint() -> String {
         .unwrap()
         .endpoint
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Private in-process endpoints exercise the real Win32 pipe lifecycle,
+    // never an installed MON or its storage. Relay peer authentication is also
+    // covered by the existing child-process startup_instance tests.
+    fn fixture(
+        count: usize,
+        mut respond: impl FnMut(&mut File, usize) + Send + 'static,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let endpoint = format!(r"\\.\pipe\mon-restart-test-{}", uuid::Uuid::new_v4());
+        let mut file = pipe::server(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            for index in 0..count {
+                let deadline = Instant::now() + Duration::from_secs(4);
+                while !pipe::connected(&file).unwrap() {
+                    assert!(Instant::now() < deadline, "client never connected");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let request = pipe::line(&mut file, deadline).unwrap();
+                assert!(request.starts_with(b"MON_RESIDENCY_V1 "));
+                respond(&mut file, index);
+                unsafe {
+                    DisconnectNamedPipe(file.as_raw_handle());
+                }
+            }
+        });
+        (endpoint, server)
+    }
+
+    #[test]
+    fn delayed_reader_keeps_buffered_reply_until_receipt() {
+        let (endpoint, server) = fixture(2, |file, _| pipe::reply(file, b"OK\n").unwrap());
+        assert!(
+            !exchange(&endpoint, std::process::id(), &Default::default(), |file| {
+                let deadline = Instant::now() + Duration::from_millis(500);
+                loop {
+                    let mut available = 0;
+                    assert_ne!(
+                        unsafe {
+                            PeekNamedPipe(
+                                file.as_raw_handle(),
+                                std::ptr::null_mut(),
+                                0,
+                                std::ptr::null_mut(),
+                                &mut available,
+                                std::ptr::null_mut(),
+                            )
+                        },
+                        0
+                    );
+                    if available > 0 {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            })
+            .unwrap()
+        );
+        assert!(!exchange(&endpoint, std::process::id(), &Default::default(), |_| {}).unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn dropped_connection_retries_only_the_idempotent_pulse() {
+        let (endpoint, server) = fixture(2, |file, index| {
+            if index == 1 {
+                pipe::reply(file, b"DRAIN\n").unwrap();
+            }
+        });
+        assert!(exchange(&endpoint, std::process::id(), &Default::default(), |_| {}).unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn absent_or_unresponsive_monitor_has_a_single_bounded_deadline() {
+        let endpoint = format!(r"\\.\pipe\mon-restart-absent-{}", uuid::Uuid::new_v4());
+        let started = Instant::now();
+        assert!(exchange(&endpoint, std::process::id(), &Default::default(), |_| {}).is_err());
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        let (endpoint, server) = fixture(1, |_, _| std::thread::sleep(Duration::from_millis(1200)));
+        let started = Instant::now();
+        assert!(exchange(&endpoint, std::process::id(), &Default::default(), |_| {}).is_err());
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_different_server_identity_is_not_retried() {
+        let endpoint = format!(r"\\.\pipe\mon-restart-peer-{}", uuid::Uuid::new_v4());
+        let _server = pipe::server(&endpoint).unwrap();
+        let started = Instant::now();
+        let error = exchange(
+            &endpoint,
+            std::process::id() + 1,
+            &Default::default(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.contains("接続先が変更"));
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn availability_and_abandoned_clients_are_not_accepted_connections() {
+        let endpoint = format!(r"\\.\pipe\mon-restart-abandoned-{}", uuid::Uuid::new_v4());
+        let server = pipe::server(&endpoint).unwrap();
+        assert!(!pipe::connected(&server).unwrap());
+        assert!(!pipe::connected(&server).unwrap());
+        let abandoned = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&endpoint)
+            .unwrap();
+        drop(abandoned);
+        assert!(!pipe::connected(&server).unwrap());
+        // Disconnect resets the instance; the next nonblocking connect makes
+        // it available again, without claiming that a new client exists.
+        assert!(!pipe::connected(&server).unwrap());
+        let _next = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&endpoint)
+            .unwrap();
+        assert!(pipe::connected(&server).unwrap());
+    }
 }

@@ -245,15 +245,7 @@ fn process_helper() {
         let mut file = pipe::server(&endpoint).unwrap();
         std::fs::write(root.join("ready"), b"ready").unwrap();
         loop {
-            let connected = unsafe {
-                ConnectNamedPipe(
-                    std::os::windows::io::AsRawHandle::as_raw_handle(&file),
-                    std::ptr::null_mut(),
-                )
-            } != 0
-                || std::io::Error::last_os_error().raw_os_error()
-                    == Some(ERROR_PIPE_CONNECTED as i32);
-            if !connected {
+            if !pipe::connected(&file).unwrap() {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
             }

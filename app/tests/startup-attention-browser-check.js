@@ -20,6 +20,11 @@ async (page, capturePath = path => path) => {
 
   await page.evaluate(() => { window.startupFixture.readFail = true; }); await reload().click();
   await page.getByRole("alert").filter({ hasText: "合成診断の読込失敗" }).waitFor();
+  await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status","合成監視障害"));
+  await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).waitFor();
+  await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status",null));
+  await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).waitFor({state:"hidden"});
+  check(await page.getByRole("alert").filter({hasText:"合成診断の読込失敗"}).count()===1,"monitor recovery cleared a startup read error");
   check(await page.getByLabel("保持した起動診断", { exact: true }).count() === 1 && await quit().isEnabled(), "read failure erased original blocked report");
   await page.evaluate(() => { window.startupFixture.readFail = false; window.startupFixture.report = { schemaVersion: 1, phase: "ready", failure: null }; }); await reload().click();
   await page.getByRole("alert").filter({ hasText: "確定済みの起動診断が変更" }).waitFor(); await noWorkspace();

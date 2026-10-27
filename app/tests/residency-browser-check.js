@@ -1,5 +1,9 @@
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
+  await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    await route.fulfill({response,body});
+  });
   const boot=async(platform="windows")=>{await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture&&!!document.querySelector(".meeting-table tbody tr"));};
   const count=command=>page.evaluate(command=>window.closeFixture.calls.filter(c=>c.command===command).length,command);
   const request=quit=>page.evaluate(quit=>window.closeFixture.request(quit),quit);
@@ -7,6 +11,18 @@ async page=>{
   const accept=()=>background().getByRole("button",{name:"継続して画面を閉じる",exact:true});
   const saving=phase=>page.evaluate(phase=>window.closeFixture.recordChanged({phase,sessionId:crypto.randomUUID(),meetingId:window.dataFixture.meetings[0].id}),phase);
   try{
+    await boot();
+    const monitor=()=>page.locator('.toast-card').filter({hasText:"常駐監視:"});
+    const operation=()=>page.locator('.toast-card').filter({hasText:"常駐の操作:"});
+    await page.evaluate(()=>window.emitResidencyFixture("residency-error","合成トレイ障害"));await operation().waitFor();
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));await monitor().waitFor();
+    const monitorId=await monitor().getAttribute("data-toast-id");
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));
+    check(await monitor().getAttribute("data-toast-id")===monitorId,"repeated monitor status duplicated its notification");
+    check(!(await monitor().innerText()).includes("会議の操作"),"monitor failure used the meeting operation label");
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status",null));await monitor().waitFor({state:"hidden"});
+    check(await operation().count()===1,"monitor recovery erased an unrelated tray failure");
+    results.push("monitor errors have their own label and recovery clears only the monitor diagnostic");
     for(const platform of ["windows","macos"]){
       await boot(platform);await request(false);await page.waitForFunction(()=>window.closeFixture.hidden);
       check(await count("hide_main_to_background")===1&&await count("finish_main_close")===0,"quiet X exited instead of hiding");
@@ -35,7 +51,7 @@ async page=>{
     await page.getByRole("alert").filter({hasText:"画面を開き直せません"}).waitFor();check(await count("hide_main_to_background")===0&&await count("finish_main_close")===0,"missing tray hid window");
     results.push("no return path preserves the window before native hide");
 
-    await boot();await saving("saving");await request(false);await accept().waitFor();await page.evaluate(()=>{window.closeFixture.hideFailure=true;});await accept().click();await background().locator(".action-error").waitFor();
+    await boot();await saving("saving");await request(false);await accept().waitFor();await page.evaluate(()=>{window.closeFixture.hideFailure=true;});await accept().click();await page.getByRole("alert").filter({hasText:"合成の常駐入口消失"}).waitFor();
     check(await count("hide_main_to_background")===1&&await count("finish_main_close")===0&&!await page.evaluate(()=>!!window.closeFixture.hidden),"last-hop tray loss exited or falsely hid app");
     results.push("tray loss between review and hide retains UI and exposes failure");
 
@@ -44,9 +60,9 @@ async page=>{
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"idle",sessionId:null,meetingId:null}));await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="finish_main_close"));
     check(await count("finish_main_close")===1,"tray quit failed checked exit");results.push("explicit quit keeps the actual save-success barrier");
 
-    await boot();await saving("saving");await request(false);await accept().waitFor();await page.evaluate(()=>{window.closeFixture.hideLost=true;});await accept().click();await background().locator(".action-error").waitFor();
+    await boot();await saving("saving");await request(false);await accept().waitFor();await page.evaluate(()=>{window.closeFixture.hideLost=true;});await accept().click();await page.getByRole("alert").filter({hasText:"合成の収納応答喪失"}).waitFor();
     check(await count("hide_main_to_background")===1&&await accept().isDisabled(),"lost hide response was replayable");
     results.push("unknown hide acknowledgement is visible and never automatically replayed");
     return{passed:results.length,results};
-  }finally{await page.goto("about:blank");}
+  }finally{await page.goto("about:blank");await page.context().unrouteAll();}
 }

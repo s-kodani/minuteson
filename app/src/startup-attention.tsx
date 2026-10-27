@@ -7,6 +7,7 @@ import { acceptStartupReport, startupStageLabels, type StartupReport } from "./s
 import { CommonModal } from "./common-modal";
 import { PlatformContext } from "./platform";
 import { StartupInstanceRecovery } from "./startup-instance";
+import { ResidencyNotifications } from "./residency-notifications";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
@@ -20,12 +21,6 @@ function useStartupReport() {
     finally { reading.current = false; if (active.current) setBusy(false); }
   };
   useEffect(() => { active.current = true; void read(); return () => { active.current = false; }; }, []);
-  useEffect(() => {
-    if (report?.platform !== "windows" && report?.platform !== "macos") return;
-    let disposed=false, stop:(()=>void)|undefined;
-    void listen<string>("residency-error",event=>{if(!disposed)setError(event.payload);}).then(unlisten=>{if(disposed)unlisten();else stop=unlisten;}).catch(()=>{});
-    return()=>{disposed=true;stop?.();};
-  },[report?.platform]);
   useEffect(() => {
     if (report?.platform !== "windows") return;
     let disposed = false, stop: (() => void) | undefined;
@@ -67,13 +62,14 @@ export function StartupGate({ children }: { children: ReactNode }) {
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
   </> : !state.error && (!state.report || state.report.phase === "starting")
-    ? <><ToastHost /><main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main></>
+    ? <><ToastHost /><ResidencyNotifications scope="startup"/><main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main></>
     : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
   const { report, error, busy, quitting, read, quit } = state, f = report?.failure;
   const normal = new URL(window.location.href); normal.searchParams.delete("window"); normal.hash = "";
   return <main className="startup-attention" aria-label="起動診断"><ToastHost />
+    <ResidencyNotifications scope="startup"/>
     <h1>{report?.platform === "windows" ? "MONの起動と復旧" : "保存先の起動確認"}</h1>
     <p>この画面では録音・取り込み・解析・編集・削除・保存先変更を開始しません。</p>
     <ErrorNotice scope="startup" type="desktop-connection" active={!isTauri()}>デスクトップ接続がありません。起動結果を確認できません。</ErrorNotice>

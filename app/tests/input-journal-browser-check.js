@@ -1,5 +1,5 @@
 // CLI-first production windows with synthetic IPC; no real capture or audio.
-async page=>{
+async (page,capturePath=path=>path)=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
@@ -25,26 +25,34 @@ async page=>{
     check(await diagnostic().count()===0&&await toast().count()===0,"one startup read failure displayed a journal warning");
     await page.evaluate(()=>window.closeFixture.failJournal=false);
     await state("confirmed");check(await diagnostic().count()===0&&await toast().count()===0,"confirmed journal created audio success/issue notice");
+    await page.evaluate(()=>window.closeFixture.holdJournal=true);await page.waitForFunction(()=>window.closeFixture.pendingJournal.length===1);
+    await page.waitForTimeout(3000);
+    check(await toast().count()===0,"three-second diagnostic delay created a warning");
+    await page.evaluate(()=>{const f=window.closeFixture;f.holdJournal=false;f.pendingJournal.splice(0).forEach(resolve=>resolve());});await state("confirmed");
     results.push("preparation and a short initial diagnostic read failure do not create a false recording warning");
     results.push("only an owned recording reads writer diagnostics; confirmation does not create an audio-success toast");
     await set("pending");await state("pending");await diagnostic().waitFor({state:'attached'});await toast().waitFor();
     check((await toast().innerText()).includes("音声の取得・保存結果とは別"),"pending journal implied audio failure/success");
-    await toast().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();await page.waitForTimeout(650);
+    await toast().getByRole("button",{name:"注意通知を閉じる",exact:true}).click();await page.waitForTimeout(650);
     check(await toast().count()===0&&await diagnostic().count()===1,"dismissal removed pending diagnostic or heartbeat redelivered it");
     results.push("queued writes are explicit, heartbeat does not redeliver a dismissed toast, and diagnostic remains");
-    await set("failed");await state("failed");await toast().waitFor();
+    await page.evaluate(()=>window.closeFixture.failJournal=true);await state("unknown");
+    await page.evaluate(()=>window.closeFixture.failJournal=false);await set("confirmed",1000,1000);await state("confirmed");await page.waitForTimeout(600);
+    await set("pending",1001,1000);await state("pending");await page.waitForTimeout(650);
+    check(await toast().count()===0&&await diagnostic().count()===1,"short recovery or changed diagnostic resurrected a dismissed warning");
+    results.push("three-second delays are quiet; short recovery and diagnostic changes retain the dismissed occurrence");
+    await set("failed",1001,1000);await state("failed");await toast().waitFor();
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-input-state")==="connected","history write failure changed live acquisition");
     const id=await toast().getAttribute("data-toast-id");await page.waitForTimeout(650);check(await toast().getAttribute("data-toast-id")===id,"failed diagnostic duplicated by heartbeat");
     results.push("writer failure remains distinct from connected input and is not duplicated by heartbeat");
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
       await page.setViewportSize({width,height:900});await page.waitForTimeout(150);
       check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`journal diagnostic overflow ${width} ${theme}`);
-      await page.screenshot({path:`journal-save-main-${theme}-${width}.png`});
+      await page.screenshot({path:capturePath(`journal-save-main-${theme}-${width}.png`)});
     }}results.push("failed journal fits 960/360px light/dark layouts without an inline diagnosis banner");
     await page.evaluate(()=>window.closeFixture.failJournal=true);await state("unknown");
-    const unread=toast().filter({hasText:"以前の書込み失敗"});await unread.waitFor();
-    check((await unread.innerText()).includes("以前の書込み失敗"),"read failure erased unresolved write problem");
-    await page.evaluate(()=>window.closeFixture.failJournal=false);await set("confirmed",1000,1000);await state("confirmed");
+    check(await toast().getAttribute("data-toast-id")===id,"read failure replaced the unresolved writer failure");
+    await page.evaluate(()=>window.closeFixture.failJournal=false);await set("confirmed",1001,1001);await state("confirmed");
     await page.waitForFunction(()=>![...document.querySelectorAll('.toast-card')].some(e=>e.textContent.includes('入力履歴の保存:')));
     check(await diagnostic().count()===0&&await toast().count()===0,"fresh writer confirmation did not resolve diagnostic");
     results.push("unreadable diagnostics retain previous failure; only fresh writer confirmation clears it");
@@ -71,7 +79,7 @@ async page=>{
     await set("failed",2,1);await page.waitForTimeout(400);
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});await page.waitForTimeout(150);
       check(await page.locator(".mini-shell").evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1),"mini history diagnostic overflowed native geometry");
-      await page.screenshot({path:`journal-save-mini-${theme}-227x101.png`});
+      await page.screenshot({path:capturePath(`journal-save-mini-${theme}-227x101.png`)});
     }
     check(await page.locator(".mini-journal-status").count()===0,"mini retained journal diagnostic text");
     results.push("mini remains icon-only at 227x101 in both themes even when journal persistence fails");

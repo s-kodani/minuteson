@@ -6,6 +6,7 @@ import { InternalLogs } from "./internal-logs";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import { usePlatform } from "./platform";
 import { checkedResidencyState } from "./residency-state";
+import { ResidencyNotifications } from "./residency-notifications";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { OptionsModal } from "./options-modal";
 import { SettingsModalScope } from "./settings-modal-scope";
@@ -415,12 +416,6 @@ function MainWindow() {
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
-    let disposed=false, stop:(()=>void)|undefined;
-    void listen<string>("residency-error", event=>{if(!disposed)setMeetingError(event.payload);}).then(unlisten=>{if(disposed)unlisten();else stop=unlisten;});
-    return()=>{disposed=true;stop?.();};
-  }, []);
-  useEffect(() => {
-    if (!isTauri()) return;
     void invoke<Meeting[]>("list_meetings").then(setMeetings).catch((error: unknown) => setMeetingError(String(error)));
     void loadOrigins();
     void invoke<boolean>("capture_available").then(setCaptureAvailable).catch(() => setCaptureAvailable(false));
@@ -741,6 +736,7 @@ function MainWindow() {
         </nav>
       </aside>
       <div className="main-column">
+        <ResidencyNotifications scope="main"/>
         <IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/>
         <IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/>
         <IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/>

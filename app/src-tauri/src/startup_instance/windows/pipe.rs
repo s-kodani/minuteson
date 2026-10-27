@@ -72,7 +72,37 @@ pub(super) fn server(name: &str) -> Result<File, String> {
     }
     Ok(unsafe { File::from_raw_handle(pipe) })
 }
+// PIPE_NOWAIT reports success when an instance becomes available, before a
+// client connects. Only ERROR_PIPE_CONNECTED establishes a usable connection.
+pub(super) fn connected(file: &File) -> Result<bool, String> {
+    if unsafe { ConnectNamedPipe(file.as_raw_handle(), std::ptr::null_mut()) } != 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error().map(|code| code as u32) {
+        Some(ERROR_PIPE_CONNECTED) => Ok(true),
+        Some(ERROR_PIPE_LISTENING) => Ok(false),
+        Some(ERROR_NO_DATA | ERROR_BROKEN_PIPE) => {
+            unsafe {
+                DisconnectNamedPipe(file.as_raw_handle());
+            }
+            Ok(false)
+        }
+        _ => Err(error.to_string()),
+    }
+}
+pub(super) const RECEIVED: &[u8] = b"MON_RECEIVED_V1\n";
+pub(super) fn reply(file: &mut File, bytes: &[u8]) -> Result<(), std::io::Error> {
+    file.write_all(bytes)?;
+    // Never FlushFileBuffers here: a suspended client could block the guard
+    // indefinitely. Keep unread replies alive until receipt/close or a deadline.
+    let _ = line_io(file, Instant::now() + Duration::from_secs(1));
+    Ok(())
+}
 pub(super) fn line(file: &mut File, deadline: Instant) -> Result<Vec<u8>, String> {
+    line_io(file, deadline).map_err(|error| error.to_string())
+}
+pub(super) fn line_io(file: &mut File, deadline: Instant) -> Result<Vec<u8>, std::io::Error> {
     let mut bytes = Vec::new();
     while Instant::now() < deadline {
         let mut available = 0;
@@ -87,14 +117,17 @@ pub(super) fn line(file: &mut File, deadline: Instant) -> Result<Vec<u8>, String
             )
         } == 0
         {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(std::io::Error::last_os_error());
         }
         if available > 0 {
             if bytes.len() + available as usize > 4096 {
-                return Err("起動連携の応答が上限外です".into());
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "起動連携の応答が上限外です",
+                ));
             }
             let mut part = vec![0u8; available as usize];
-            let count = file.read(&mut part).map_err(|e| e.to_string())?;
+            let count = file.read(&mut part)?;
             bytes.extend_from_slice(&part[..count]);
             if bytes.ends_with(b"\n") {
                 return Ok(bytes);
@@ -102,7 +135,10 @@ pub(super) fn line(file: &mut File, deadline: Instant) -> Result<Vec<u8>, String
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    Err("MONの画面表示の応答がありません".into())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "MONの画面表示の応答がありません",
+    ))
 }
 pub(super) fn activate(
     name: &str,
@@ -138,6 +174,7 @@ pub(super) fn activate(
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Ack>(&bytes).ok())
             .is_some_and(|ack| ack.version == 1 && ack.pid == pid && ack.shown);
+    let _ = file.write_all(RECEIVED);
     Ok((target, shown))
 }
 pub(super) fn serve(
@@ -150,10 +187,10 @@ pub(super) fn serve(
         .name("mon-startup-instance".into())
         .spawn(move || {
             while !stop.load(Ordering::SeqCst) {
-                let connected =
-                    unsafe { ConnectNamedPipe(file.as_raw_handle(), std::ptr::null_mut()) } != 0
-                        || std::io::Error::last_os_error().raw_os_error()
-                            == Some(ERROR_PIPE_CONNECTED as i32);
+                let connected = match connected(&file) {
+                    Ok(connected) => connected,
+                    Err(_) => return,
+                };
                 if !connected {
                     std::thread::sleep(Duration::from_millis(20));
                     continue;
@@ -213,14 +250,8 @@ pub(super) fn serve(
                         shown,
                     }) {
                         bytes.push(b'\n');
-                        let _ = file.write_all(&bytes);
+                        let _ = reply(&mut file, &bytes);
                     }
-                }
-                // Disconnect makes unread replies unavailable. Give the bounded
-                // client time to consume its small reply before dropping the pipe.
-                let deadline = Instant::now() + Duration::from_millis(300);
-                while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(20));
                 }
                 unsafe {
                     DisconnectNamedPipe(file.as_raw_handle());

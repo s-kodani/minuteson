@@ -43,12 +43,43 @@ export function journalMessage(view:JournalView):string {
   const detail={unknown:"入力履歴の保存診断を確認できません",stale:"入力履歴の保存診断の更新を確認できません",pending:"入力履歴の書込み結果を確認中です",failed:"入力履歴の書込みを確定できません",invalid:"入力履歴の整合を確認できず、履歴の保存を停止しています",confirmed:""}[view.state];
   return detail?`${detail}。${view.problem&&!["failed","invalid"].includes(view.state)?"以前の書込み失敗はまだ解決を確認できません。":""}音声の取得・保存結果とは別の診断です。保存後に音声と欠損範囲を確認してください。`:"";
 }
-// Preparing can precede creation of the helper's diagnostic file. A single
-// read racing its atomic replacement is also not a persistence failure.
-export function journalNoticeReady(view:JournalView,phase:string,recordingForMs:number,unavailableForMs:number):boolean {
-  if(phase!=="recording")return false;
-  if(view.state==="confirmed")return true;
-  if(view.state==="failed"||view.state==="invalid"||view.problem)return true;
-  if(view.state==="pending")return recordingForMs>=1000;
-  return recordingForMs>=1000&&unavailableForMs>=1000;
+export type JournalNotice={message:string;level:"warning"|"error";eventId:string};
+// Presentation hysteresis is independent of the one-second evidence expiry.
+// Hold one occurrence through short recoveries and changing diagnostic states.
+export class InputJournalNotices {
+  private unavailableSince:number|null=null;
+  private confirmedSince:number|null=null;
+  private active:JournalNotice|null=null;
+  private failure:"failed"|"invalid"|null=null;
+  private sequence=0;
+  private lastAt:number|null=null;
+  read(view:JournalView,phase:string,at:number):JournalNotice|null {
+    if(!time(at)||this.lastAt!==null&&(at<this.lastAt||at-this.lastAt>1000))this.confirmedSince=null;
+    this.lastAt=at;
+    if(phase!=="recording"){
+      this.unavailableSince=null;this.confirmedSince=null;this.active=null;this.failure=null;
+      return null;
+    }
+    if(view.state==="failed"||view.state==="invalid"||view.problem){
+      this.confirmedSince=null;
+      const failure=view.state==="invalid"?"invalid":"failed";
+      if(this.failure===null||failure==="invalid"&&this.failure!=="invalid"){
+        this.failure=failure;
+        this.active={message:journalMessage({state:failure,problem:true}),level:"error",eventId:String(++this.sequence)};
+      }
+    }else if(view.state==="confirmed"&&time(at)){
+      this.unavailableSince=null;
+      this.confirmedSince??=at;
+      if(at-this.confirmedSince>=2000){this.active=null;this.failure=null;}
+    }else{
+      this.confirmedSince=null;
+      if(time(at)){
+        this.unavailableSince??=at;
+        if(!this.active&&at-this.unavailableSince>=5000){
+          this.active={message:"入力履歴の保存状況を確認中です。音声の取得・保存結果とは別の診断です。",level:"warning",eventId:String(++this.sequence)};
+        }
+      }
+    }
+    return this.active;
+  }
 }

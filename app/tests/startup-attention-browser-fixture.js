@@ -8,6 +8,7 @@ const variant = new URLSearchParams(location.search).get("fixture") ?? "blocked"
 const report = { schemaVersion: 1, phase: "blocked", failure: { stage: "storage_admission", message: "一時領域台帳が不正です。<img src=x onerror=alert(1)>\n元の音声を保持します。", messageTruncated: false, meetingRoot: "/safe/会議保存先", configRoot: "/safe/起動設定" } };
 const f = window.startupFixture = { calls: [], report, readFail: variant === "read-fail", quitFail: false, delay: false, pendingRead: null, pendingQuit: null };
 f.activate = requestId => emit("startup-activate-requested", { requestId });
+f.emitResidency = (event,payload) => emit(event,payload);
 if (variant.startsWith("windows")) {
   f.report.platform = "windows";
   f.report.failure.message = "既存のMONから画面表示の応答がありません。ここから復旧できます。";
