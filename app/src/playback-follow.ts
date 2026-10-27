@@ -19,7 +19,9 @@ export interface FollowRow { id: string; sourceUtteranceId?: string; trackId?: s
 export function playingRows(rows: readonly FollowRow[], timeline: PlaybackTimeline | null, meetingId: string, analysisId: string | null, trackKinds: ReadonlyMap<string,string> | null = null): number[] {
   if(!timeline?.playing||timeline.meetingId!==meetingId||!Number.isSafeInteger(timeline.timeUs)||timeline.timeUs<0)return [];
   if(timeline.scope==="utterance"&&timeline.analysisId!==analysisId)return [];
-  const selected = timeline.trackKind === "both" ? ["mic","system"] : [timeline.trackKind];
+  // Canonical meeting audio combines the saved sources on the meeting timeline.
+  const selected = timeline.trackKind === "mixed" ? ["mic","system","imported","processed"]
+    : timeline.trackKind === "both" ? ["mic","system"] : [timeline.trackKind];
   if(timeline.scope==="meeting"&&selected.some(kind=>!["mic","system","imported","processed"].includes(kind)))return [];
   const matches:number[]=[];
   rows.forEach((row,index)=>{

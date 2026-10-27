@@ -24,7 +24,7 @@ test("whole-meeting emphasis respects the native source kind and highlights ever
     {id:"missing",startUs:0,endUs:2000000}];
   const kinds=new Map([...tracks,["import-id","imported"]]);
   const full={...timeline,scope:"meeting" as const,analysisId:null,utteranceId:null};
-  for(const [trackKind,expected] of [["mic",[0]],["system",[1]],["both",[0,1]],["imported",[2]],["processed",[]]] as const){
+  for(const [trackKind,expected] of [["mic",[0]],["system",[1]],["both",[0,1]],["imported",[2]],["processed",[]],["mixed",[0,1,2]]] as const){
     assert.deepEqual(playingRows(overlap,{...full,trackKind},"m","analysis",kinds),expected);
     assert.equal(emphasizedRow(overlap,{...full,trackKind},"m","analysis",kinds),expected[0]??null);
   }
@@ -52,8 +52,18 @@ test("shared timeline publishes changed state only; late old-owner release never
 test('mixed analysis utterances keep meeting time while listening to captured sources',()=>{
  const mixed=[{id:'mix-speech',trackId:'mixed-native-id',startUs:500000,endUs:1500000}];
  const kinds=new Map([['mixed-native-id','processed']]);
- for(const trackKind of ['mic','system','both','imported','processed']) {
+ for(const trackKind of ['mic','system','both','imported','processed','mixed']) {
   assert.deepEqual(playingRows(mixed,{...timeline,scope:'meeting',analysisId:null,utteranceId:null,trackKind},'m','analysis',kinds),[0]);
  }
  assert.deepEqual(playingRows(mixed,{...timeline,scope:'meeting',trackKind:'foreign'},'m','analysis',kinds),[]);
+});
+
+test('canonical mixed playback requires a known track and actual speech at the current time',()=>{
+ const full={...timeline,scope:'meeting' as const,analysisId:null,utteranceId:null,trackKind:'mixed'};
+ assert.deepEqual(playingRows(rows,full,'m','analysis',tracks),[0]);
+ assert.deepEqual(playingRows(rows,{...full,timeUs:3500000},'m','analysis',tracks),[1]);
+ for(const patch of [{timeUs:2500000},{timeUs:4000000},{meetingId:'other'},{playing:false}]) {
+  assert.deepEqual(playingRows(rows,{...full,...patch},'m','analysis',tracks),[]);
+ }
+ assert.deepEqual(playingRows(rows,full,'m','analysis',null),[]);
 });

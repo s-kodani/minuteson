@@ -6,7 +6,7 @@ async page => {
   await page.getByRole("button", {name:"再生設定",exact:true}).click();
   const modal = page.getByRole("dialog", {name:"再生設定",exact:true});
   await modal.waitFor();
-  check(await modal.getByRole("combobox").count() === 1, "playback settings must contain only track selection");
+  check(await modal.getByRole("combobox").count() === 0, "canonical playback must not expose removed track selection");
   check(await modal.getByRole("checkbox").count() === 0, "removed following control remains");
   await modal.getByRole("button", {name:"確認を閉じる",exact:true}).click();
   results.push("playback settings have no removed display controls");
@@ -49,16 +49,17 @@ async page => {
   const pending=editor.getByRole('textbox',{name:'00:00:00の発言',exact:true});await pending.fill('ジャンプ中も保持する本文');
   await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('発言0');
   const saved=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
-  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:'analysis',utteranceId:'synthetic-102',scope:'utterance',timeUs:102_500_000,playing:true,trackKind:'mic'});});
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:null,utteranceId:null,scope:'meeting',timeUs:102_500_000,playing:true,trackKind:'mixed'});});
   await page.waitForFunction(()=>!document.querySelector('.transcript-list-heading button')?.disabled);
   check(await editor.locator('[data-utterance-id="synthetic-102"]').count()===0,'timeline automatically cleared the filter');
   await jump.click();await editor.locator('[data-utterance-id="synthetic-102"]').waitFor();
   check(await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).inputValue()===''&&await editor.locator('[data-utterance-id]').count()===103,'explicit jump did not reveal all matching rows');
   const target=editor.locator('[data-utterance-id="synthetic-102"]');
+  await target.and(editor.locator('.utterance-playing')).waitFor();
   check(await target.evaluate(el=>{const r=el.getBoundingClientRect();return !el.classList.contains('utterance-group-fragment')&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;}),'jump did not scroll to the target');
   check(await pending.inputValue()==='ジャンプ中も保持する本文'&&await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length)===saved,'jump saved or lost pending input');
   results.push('heading-right jump reveals a filtered playback target without saving or losing pending text');
-  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:'analysis',utteranceId:'synthetic-50',scope:'utterance',timeUs:50_500_000,playing:false,trackKind:'mic'});});
+  await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:null,utteranceId:null,scope:'meeting',timeUs:50_500_000,playing:false,trackKind:'mixed'});});
   await jump.click();check(await editor.locator('[data-utterance-id="synthetic-50"]').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),'paused timeline cannot be jumped to');
   await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'foreign',meetingId:'another-meeting',analysisId:'analysis',utteranceId:'synthetic-50',scope:'utterance',timeUs:50_500_000,playing:true,trackKind:'mic'});});
   check(await jump.isDisabled(),'another meeting enabled jump');
