@@ -1,6 +1,6 @@
 /* Icon-only recorder: 227 x 101 logical px; retain the compact layout height. */
 :root[data-floating-window="windows"], :root[data-floating-window="windows"] body, :root[data-floating-window="windows"] #root { background:transparent; }
-main.mini-shell { font-size:9px; position:relative; display:flex; flex-direction:column; justify-content:center; padding:4.8px 7.2px 4.8px 3.6px; border-radius:9.6px; }
+main.mini-shell { font-size:9px; position:relative; display:flex; flex-direction:column; justify-content:center; padding:4.8px 7.2px 4.8px 3.6px; border-radius:12px; }
 .mini-shell .mini-row { display:flex; flex:none; align-items:center; gap:4.8px; width:100%; min-width:0; }
 .mini-shell .mini-drag { display:flex; align-items:center; justify-content:center; flex:none; align-self:stretch; width:14.4px; min-height:24px; color:var(--secondary-text); cursor:grab; user-select:none; border:0; }
 .mini-shell .mini-drag:active { cursor:grabbing; }
