@@ -9,7 +9,7 @@ export function StartupResetForm({ preview, archive, busy, accepted = false, sel
     <p id="startup-reset-description">会議・音声・文書・モデル・設定を初期化し、同じ保存先でMONを起動し直します。保存先の選択だけを引き継ぎます。</p>
     <p>モデル本体とダウンロード途中のモデルデータは、退避の有無にかかわらず削除されます。必要なモデルは初期化後に再ダウンロードしてください。</p>
     <dl><dt>対象の保存先</dt><dd style={{ overflowWrap: "anywhere" }}>{preview.meetingRoot}</dd></dl>
-    <fieldset disabled={disabled || accepted}><legend>旧データの退避</legend>
+    <fieldset className="startup-reset-options" disabled={disabled || accepted}><legend>旧データの退避</legend>
       <label><input type="radio" name="startup-reset-archive" checked={archive} onChange={() => onArchive(true)} />旧データを退避する</label>
       <label><input type="radio" name="startup-reset-archive" checked={!archive} onChange={() => onArchive(false)} />退避しない</label>
     </fieldset>
