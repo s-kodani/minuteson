@@ -5,6 +5,13 @@
 pub(crate) fn never_cancelled() -> bool {
     false
 }
+
+/// One second of canonical audio for protocol-only CLI tests.
+pub(crate) fn write_wave(path: &std::path::Path) {
+    let mut bytes = crate::audio::wave::header(16_000).unwrap();
+    bytes.resize(bytes.len() + 32_000, 0);
+    std::fs::write(path, bytes).unwrap();
+}
 /// Absolute fixture identity without assuming a Unix root on Windows.
 pub(crate) fn absolute(path: &str) -> String {
     if cfg!(windows) {

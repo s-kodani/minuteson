@@ -12,6 +12,15 @@ mod guard_tests;
 pub(crate) mod known_tests;
 
 pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
+    let (storage, meeting, config) = pending_fixture(root, seconds);
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
+    (storage, meeting, config)
+}
+
+/// Capture inputs before the explicit canonical-WAV publication boundary.
+pub(crate) fn pending_fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
     let storage = Storage::open(root.to_owned()).unwrap();
     let meeting = storage.create_meeting("解析結合テスト").unwrap();
     let relative = PathBuf::from("meetings").join(&meeting.id).join("audio");
@@ -46,7 +55,12 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
         .register_ready_meeting_asset(&meeting.id, &relative.join("mic.caf"), "audio/x-caf")
         .unwrap();
     let db = storage.connection.lock().unwrap();
-    db.execute("INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, audio_manifest_hash, created_at, updated_at) VALUES ('session', ?1, 'saved', 'system', '{}', 'start', ?2, 0, 0)", params![meeting.id, manifest.content_hash]).unwrap();
+    db.execute("INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, duration_us, audio_manifest_hash, created_at, updated_at) VALUES ('session', ?1, 'saved', 'system', '{}', 'start', ?3, ?2, 0, 0)", params![meeting.id, manifest.content_hash, seconds * 1_000_000]).unwrap();
+    db.execute(
+        "UPDATE meetings SET duration_us=?2 WHERE id=?1",
+        params![meeting.id, seconds * 1_000_000],
+    )
+    .unwrap();
     db.execute("INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES ('track', ?1, 'session', 'mic', 'caf', 16000, 1, 'ready', 0, 0)", params![meeting.id]).unwrap();
     db.execute("INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES ('chunk', ?1, 'track', ?2, 0, 0, ?3, ?4, 16000, 1, 'ready', 0)", params![meeting.id, audio.id, seconds * 1_000_000, seconds * 16_000]).unwrap();
     drop(db);
@@ -77,8 +91,12 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
 #[test]
 fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape() {
     let root = tempfile::tempdir().unwrap();
-    let (storage, meeting, config) = fixture(root.path(), 4);
-    let legacy = storage.recorded_audio_plan(&meeting).unwrap();
+    let (storage, meeting, config) = pending_fixture(root.path(), 4);
+    let legacy = crate::storage::audio_publication::inputs::read(
+        &storage.connection.lock().unwrap(),
+        &meeting,
+    )
+    .unwrap();
     let value = serde_json::to_value(&legacy).unwrap();
     assert!(value["tracks"][0]["chunks"][0]
         .get("clockSegments")
@@ -94,7 +112,23 @@ fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape
         .unwrap();
         db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES ('map','track','chunk',0,64000,0,4400000,?1)",params![r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
     }
-    let mapped = storage.recorded_audio_plan(&meeting).unwrap();
+    let mapped = crate::storage::audio_publication::inputs::read(
+        &storage.connection.lock().unwrap(),
+        &meeting,
+    )
+    .unwrap();
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE meetings SET duration_us=4400000 WHERE id=?1",
+            [&meeting],
+        )
+        .unwrap();
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
     assert_ne!(mapped, legacy);
     assert_eq!(mapped.tracks[0].total_frames().unwrap(), 70400);
     let job = enqueue(&storage, &meeting, "corrected", config, "standard").unwrap();
@@ -114,16 +148,21 @@ fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape
     .unwrap()
     .unwrap();
     assert!(storage
-        .prepare_track_audio(&meeting, "track", 0, 4400000)
+        .prepare_track_audio(
+            &meeting,
+            &storage.recorded_audio_plan(&meeting).unwrap().tracks[0].id,
+            0,
+            4400000
+        )
         .is_ok());
     assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
     assert!(!candidate.is_empty());
 }
 
 #[test]
-fn corrected_sealed_input_rejects_changed_piecewise_clock_even_with_same_frame_count() {
+fn corrected_sealed_input_ignores_retired_piecewise_clock_after_publication() {
     let root = tempfile::tempdir().unwrap();
-    let (storage, meeting, config) = fixture(root.path(), 4);
+    let (storage, meeting, config) = pending_fixture(root.path(), 4);
     {
         let db = storage.connection.lock().unwrap();
         for (id, first, last, start, end) in [
@@ -133,6 +172,9 @@ fn corrected_sealed_input_rejects_changed_piecewise_clock_even_with_same_frame_c
             db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track','chunk',?2,?3,?4,?5,?6)",params![id,first,last,start,end,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
         }
     }
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
     let job = enqueue(&storage, &meeting, "corrected-fixed", config, "standard").unwrap();
     let fixed = storage.fixed_job_input(&job.id).unwrap();
     {
@@ -149,16 +191,16 @@ fn corrected_sealed_input_rejects_changed_piecewise_clock_even_with_same_frame_c
         .unwrap();
     }
     storage.acquire_next_job().unwrap().unwrap();
-    let error = process(
+    let candidate = process(
         &storage,
         &job.id,
         &crate::test_support::never_cancelled,
         &|_| {},
     )
-    .err()
+    .unwrap()
     .unwrap();
-    assert!(error.contains("固定した録音入力"), "{error}");
-    assert_eq!(storage.fixed_job_input(&job.id).unwrap(), fixed);
+    assert!(!candidate.is_empty());
+    assert_eq!(storage.fixed_job_input(&job.id).unwrap().0, fixed.0);
     assert_eq!(
         storage.recorded_audio_plan(&meeting).unwrap().tracks[0]
             .total_frames()
@@ -488,14 +530,14 @@ fn retry_preflight_rejects_changed_files_and_checkpoint_without_new_job() {
             expected_spec_hash: source.spec_hash.clone(),
         };
         match change {
-            "source" => std::fs::write(
-                root.path()
-                    .join("meetings")
-                    .join(&meeting)
-                    .join("audio/mic.caf"),
-                b"changed",
-            )
-            .unwrap(),
+            "source" => {
+                let plan = storage.recorded_audio_plan(&meeting).unwrap();
+                std::fs::write(
+                    storage.meeting_mix_path(&meeting, &plan.tracks[0]).unwrap(),
+                    b"changed",
+                )
+                .unwrap();
+            }
             "model" => std::fs::write(root.path().join("model.bin"), b"changed").unwrap(),
             "result" => {
                 let cp = storage.fixed_job_input(&source.id).unwrap().1.unwrap();
@@ -655,11 +697,10 @@ fn changed_source_model_and_checkpointed_output_are_rejected() {
         )
         .unwrap();
         let path = match change {
-            "source" => directory
-                .path()
-                .join("meetings")
-                .join(&meeting)
-                .join("audio/mic.caf"),
+            "source" => {
+                let plan = storage.recorded_audio_plan(&meeting).unwrap();
+                storage.meeting_mix_path(&meeting, &plan.tracks[0]).unwrap()
+            }
             "model" => directory.path().join("model.bin"),
             "result" => {
                 let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
@@ -947,7 +988,7 @@ for line in sys.stdin:
  r=json.loads(line)
  if r['op']=='shutdown': break
  if r['op']=='init':
-  print(json.dumps({'protocol':1,'id':r['id'],'op':'ready'}),flush=True);continue
+  print(json.dumps({'protocol':1,'id':r['id'],'op':'ready','message':'canonical_pcm_range_v1'}),flush=True);continue
  args=r['args']; model=args[args.index('--model')+1]
  root=pathlib.Path(__file__).parent.parent.parent
  with (root/'calls').open('a') as f: f.write(str(os.getpid())+' '+r['directory']+'\n')

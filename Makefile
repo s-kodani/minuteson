@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := check
 
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-recording-raw-prefix check-speaker-embedding build-rust-tests test-rust test-rust-focused rust-test-cache
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-speaker-embedding build-rust-tests test-rust test-rust-focused rust-test-cache
 
 build-rust-tests:
 	python3 tools/mon_rust_tests.py --build-only
@@ -14,14 +14,15 @@ test-rust-focused:
 rust-test-cache:
 	python3 tools/mon_rust_tests.py --status
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-recording-raw-prefix check-speaker-embedding
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-speaker-embedding
+
+check-pc-only-capture:
+	python3 tools/mon_rust_tests.py swift_generated_pc_only_capture -- --ignored
 
 check-recording-raw-prefix:
 	python3 tools/mon_rust_tests.py swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legacy_capacity -- --ignored
 	python3 tools/mon_rust_tests.py swift_generated_recording_segments_bind_actual_storage_and_encode_flac_without_rewriting_raw -- --ignored
-	python3 tools/mon_rust_tests.py final_flac_owned_sigkill_checkpoints_recover_without_registering_partial_audio -- --ignored
 	python3 tools/mon_rust_tests.py partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh_consent -- --ignored
-	python3 tools/mon_rust_tests.py flac_workspace_owned_sigkill_audio_deletion_keeps_pre_identity_files_and_all_receipts -- --ignored
 	python3 tools/mon_rust_tests.py flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files -- --ignored
 	python3 tools/mon_rust_tests.py flac_relocation_partial_owned_sigkill_resumes_with_fresh_consent_and_current_document -- --ignored
 

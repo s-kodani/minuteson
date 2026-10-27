@@ -13,9 +13,9 @@ unsafe extern "C" {
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn LoadLibraryExW(path:*const u16,file:*mut c_void,flags:u32)->*mut c_void;
-    fn GetProcAddress(module:*mut c_void,name:*const c_char)->*mut c_void;
-    fn FreeLibrary(module:*mut c_void)->i32;
+    fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+    fn FreeLibrary(module: *mut c_void) -> i32;
 }
 struct Library(*mut c_void);
 impl Library {
@@ -23,11 +23,13 @@ impl Library {
         #[cfg(windows)]
         let pointer = {
             use std::os::windows::ffi::OsStrExt;
-            if !path.is_absolute(){return Err("fixed runtime must be absolute".into());}
-            let wide:Vec<u16>=path.as_os_str().encode_wide().chain(Some(0)).collect();
+            if !path.is_absolute() {
+                return Err("fixed runtime must be absolute".into());
+            }
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
             // Restrict dependencies to this DLL's directory and trusted system
             // directories. Never load dependencies from the current directory.
-            unsafe {LoadLibraryExW(wide.as_ptr(),std::ptr::null_mut(),0x100|0x1000)}
+            unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), 0x100 | 0x1000) }
         };
         #[cfg(unix)]
         let path = CString::new(path.to_str().ok_or("invalid library path")?)

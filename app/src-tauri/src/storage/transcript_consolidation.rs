@@ -392,7 +392,7 @@ mod tests {
             .create_analysis_candidate(
                 &meeting,
                 AnalysisInput {
-                    audio_manifest_hash: "a".repeat(64),
+                    audio_manifest_hash: s.recorded_audio_plan(&meeting).unwrap().manifest_hash,
                     profile_snapshot: serde_json::json!({}),
                     config: serde_json::json!({}),
                     speakers: vec![
@@ -667,7 +667,7 @@ mod tests {
         let audio = s
             .prepare_voice_sample_audio_cancellable("sample", &crate::test_support::never_cancelled)
             .unwrap();
-        assert_eq!(audio.total_frames(), 12000);
+        assert_eq!(audio.total_frames(), 4000); // 250 ms of the canonical 16 kHz WAV.
         assert_eq!(s.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM voice_matches WHERE analysis_revision_id=?1 AND person_id='person' AND state='confirmed'",[&next.id],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
     #[test]

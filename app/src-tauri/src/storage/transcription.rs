@@ -179,7 +179,8 @@ pub(super) fn read_historical_audio_plan(
     history: &super::backup::DeletedAudioHistory,
 ) -> Result<RecordedAudioPlan, String> {
     history.verify_meeting(transaction, meeting_id)?;
-    super::meeting_audio::read(transaction, meeting_id)?.ok_or("共通WAVの履歴がありません".into())
+    super::meeting_audio::read_historical(transaction, meeting_id)?
+        .ok_or("共通WAVの履歴がありません".into())
 }
 
 pub(super) fn read_analysis_audio_plan(

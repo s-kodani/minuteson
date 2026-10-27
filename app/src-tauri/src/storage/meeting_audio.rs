@@ -18,6 +18,21 @@ pub(in crate::storage) fn read(
     db: &Connection,
     meeting: &str,
 ) -> Result<Option<RecordedAudioPlan>, String> {
+    read_metadata(db, meeting, false)
+}
+
+pub(in crate::storage) fn read_historical(
+    db: &Connection,
+    meeting: &str,
+) -> Result<Option<RecordedAudioPlan>, String> {
+    read_metadata(db, meeting, true)
+}
+
+fn read_metadata(
+    db: &Connection,
+    meeting: &str,
+    historical: bool,
+) -> Result<Option<RecordedAudioPlan>, String> {
     type Row = (String, String, String, i64, String, String, i64, i64, i64);
     let row: Option<Row> = db.query_row(
         "SELECT a.track_id,a.manifest_asset_id,a.manifest_hash,a.frames,f.id,f.content_hash,f.size_bytes,c.end_us,c.frame_count
@@ -42,6 +57,32 @@ pub(in crate::storage) fn read(
     else {
         return Ok(None);
     };
+    // Publication already verified an interrupted prefix. Its session and
+    // manifest must remain consistent, but retired per-lane settings are no
+    // longer a dependency of the independently verified canonical WAV.
+    let valid: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM meeting_audio_commits a
+         JOIN meetings m ON m.id=a.meeting_id
+         JOIN audio_tracks t ON t.id=a.track_id AND t.meeting_id=a.meeting_id
+         JOIN audio_chunks c ON c.track_id=t.id AND c.meeting_id=a.meeting_id
+         JOIN file_assets f ON f.id=c.file_asset_id AND f.meeting_id=a.meeting_id
+         JOIN file_assets manifest ON manifest.id=a.manifest_asset_id AND manifest.meeting_id=a.meeting_id
+         WHERE a.meeting_id=?1 AND a.phase IN ('committed','cleaned')
+         AND (t.state='ready' OR (?2 AND t.state='failed')) AND (c.state='ready' OR (?2 AND c.state='missing')) AND (f.state='ready' OR (?2 AND f.state='missing'))
+         AND manifest.state='ready' AND manifest.media_type='application/json' AND manifest.content_hash=a.manifest_hash
+         AND ((m.source_type='recording' AND m.lifecycle='recorded' AND EXISTS(
+             SELECT 1 FROM recording_sessions r WHERE r.meeting_id=m.id AND r.audio_manifest_hash=a.manifest_hash
+             AND (r.state='saved' OR (r.state='interrupted' AND r.ended_at_utc_ms IS NULL
+                 AND r.duration_us>0 AND r.last_committed_us=r.duration_us AND m.duration_us=r.duration_us))))
+           OR (m.source_type='audio_import' AND m.lifecycle='imported' AND EXISTS(
+             SELECT 1 FROM audio_imports i JOIN audio_import_commits p ON p.import_id=i.id AND p.meeting_id=i.meeting_id
+             WHERE i.meeting_id=m.id AND i.state='ready' AND p.manifest_asset_id=a.manifest_asset_id AND p.manifest_hash=a.manifest_hash))))",
+        params![meeting, historical],
+        |r| r.get(0),
+    ).map_err(|e| e.to_string())?;
+    if !valid {
+        return Err("共通会議音声の状態・manifestまたは保存元の記録が不正です".into());
+    }
     let chunks: i64 = db
         .query_row(
             "SELECT count(*) FROM audio_chunks WHERE track_id=?1",

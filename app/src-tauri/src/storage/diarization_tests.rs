@@ -183,7 +183,7 @@ pub(in crate::storage) fn fixture(
     root: &Path,
     two: bool,
 ) -> (Storage, String, SherpaConfig, MinutesJobRequest) {
-    let (storage, meeting, _) = super::super::transcription::tests::fixture(root, 10);
+    let (storage, meeting, _) = super::super::transcription::tests::pending_fixture(root, 10);
     if two {
         let relative = PathBuf::from("meetings").join(&meeting).join("audio");
         std::fs::copy(
@@ -198,6 +198,9 @@ pub(in crate::storage) fn fixture(
         db.execute("INSERT INTO audio_tracks (id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) SELECT 'system-track',meeting_id,session_id,'system',format,sample_rate,channels,state,created_at,updated_at FROM audio_tracks WHERE id='track'",[]).unwrap();
         db.execute("INSERT INTO audio_chunks (id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'system-chunk',meeting_id,'system-track',?1,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE id='chunk'",params![asset.id]).unwrap();
     }
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
     let source = storage
         .ensure_meeting_mix(&meeting, &|| false, &|_, _| {})
         .unwrap();

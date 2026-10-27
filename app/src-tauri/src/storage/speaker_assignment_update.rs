@@ -360,7 +360,7 @@ mod tests {
             .create_analysis_candidate(
                 &meeting,
                 AnalysisInput {
-                    audio_manifest_hash: "a".repeat(64),
+                    audio_manifest_hash: s.recorded_audio_plan(&meeting).unwrap().manifest_hash,
                     profile_snapshot: serde_json::json!({}),
                     config: serde_json::json!({}),
                     speakers: vec![

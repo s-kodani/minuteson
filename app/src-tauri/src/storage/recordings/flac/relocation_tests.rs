@@ -22,14 +22,21 @@ fn control_temp() -> tempfile::TempDir {
     // Use an already canonical macOS parent; /var is commonly a symlink.
     tempfile::tempdir_in("/private/tmp").unwrap()
 }
+// These workspaces now belong to interrupted-prefix recovery. Normal stop
+// writes the canonical WAV directly and does not create a final-FLAC plan.
 fn failed() -> Fixture {
-    let f = Fixture::new(2, 2000, false);
-    f.fail_db();
-    assert!(f.storage.finalize_recording(&f.session.id).is_err());
-    f.allow_db();
-    f.storage.interrupt_recording(&f.session.id).unwrap();
+    let f = interrupt_fixture(Fixture::new(2, 2000, false));
+    f.reject_partial_commit(true);
+    let review = f.storage.review_partial_recording(&f.session.id).unwrap();
+    assert!(f.storage.recover_partial_recording(&review, true).is_err());
+    f.reject_partial_commit(false);
     f
 }
+fn resume(storage: &Storage, session: &str) -> crate::storage::recordings::RecordingSession {
+    let review = storage.review_partial_recording(session).unwrap();
+    storage.recover_partial_recording(&review, true).unwrap()
+}
+
 fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -> Storage {
     // Register the current fixture explicitly; production never adopts an
     // unregistered pre-bootstrap DB as a legacy default root.
@@ -104,7 +111,8 @@ fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -
     storage
 }
 fn first(f: &Fixture) -> (Directory, String, Checkpoint) {
-    let plan = f.plan();
+    let plan: Plan =
+        serde_json::from_slice(&std::fs::read(f.base.join(PARTIAL_PLAN)).unwrap()).unwrap();
     let track = &plan.tracks[0];
     let directory = f.directory(track);
     let name = format!(".{}.json", track.chunks[0]);
@@ -128,14 +136,21 @@ fn flac_relocation_normal_rollback_cold_resume_preserves_ids_pcm_and_original_re
     let source = f.storage.root().to_owned();
     let relative = f.base.strip_prefix(&source).unwrap().to_owned();
     let original = tree(f.base.parent().unwrap());
-    let plan = f.plan();
+    let plan: Plan =
+        serde_json::from_slice(&std::fs::read(f.base.join(PARTIAL_PLAN)).unwrap()).unwrap();
     let storage = move_storage(f.storage, &config, &source, &target);
-    let copied_plan = std::fs::read(target.join(&relative).join(PLAN)).unwrap();
-    assert_eq!(copied_plan, original[&f.base.join(PLAN)]);
-    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 8);
+    let copied_plan = std::fs::read(target.join(&relative).join(PARTIAL_PLAN)).unwrap();
+    assert_eq!(copied_plan, original[&f.base.join(PARTIAL_PLAN)]);
+    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
     assert_eq!(
-        storage.finalize_recording(&f.session.id).unwrap().state,
-        "saved"
+        storage
+            .recover_partial_recording(
+                &storage.review_partial_recording(&f.session.id).unwrap(),
+                true
+            )
+            .unwrap()
+            .state,
+        "interrupted"
     );
     let db = storage.connection.lock().unwrap();
     for track in &plan.tracks {
@@ -162,7 +177,7 @@ fn flac_relocation_normal_rollback_cold_resume_preserves_ids_pcm_and_original_re
     }
     drop(db);
     assert_eq!(
-        std::fs::read(target.join(&relative).join(PLAN)).unwrap(),
+        std::fs::read(target.join(&relative).join(PARTIAL_PLAN)).unwrap(),
         copied_plan
     );
     assert_eq!(tree(f.base.parent().unwrap()), original);
@@ -193,11 +208,16 @@ fn flac_relocation_twice_flattens_original_plan_and_checkpoint_identities() {
     let storage = move_storage(f.storage, &config, &source, &second);
     let second_tree = tree(second.join(&relative).parent().unwrap());
     let storage = move_storage(storage, &config, &source, &third);
-    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 8);
-    storage.finalize_recording(&f.session.id).unwrap();
+    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
+    storage
+        .recover_partial_recording(
+            &storage.review_partial_recording(&f.session.id).unwrap(),
+            true,
+        )
+        .unwrap();
     assert_eq!(
-        std::fs::read(third.join(&relative).join(PLAN)).unwrap(),
-        original[&f.base.join(PLAN)]
+        std::fs::read(third.join(&relative).join(PARTIAL_PLAN)).unwrap(),
+        original[&f.base.join(PARTIAL_PLAN)]
     );
     assert_eq!(tree(second.join(&relative).parent().unwrap()), second_tree);
     assert_eq!(tree(f.base.parent().unwrap()), original);
@@ -223,7 +243,7 @@ fn flac_relocation_reserved_unknown_stage_is_retained_and_not_adopted_on_resume(
     let target = control.path().join("target");
     let storage = move_storage(f.storage, &control.path().join("config"), &source, &target);
     let p = preview(&storage, &f.session.meeting_id);
-    assert_eq!(p.audio_files, 7);
+    assert_eq!(p.audio_files, 9);
     assert_eq!(
         p.entries
             .iter()
@@ -232,7 +252,12 @@ fn flac_relocation_reserved_unknown_stage_is_retained_and_not_adopted_on_resume(
             .disposition,
         Disposition::Unclassified
     );
-    storage.finalize_recording(&f.session.id).unwrap();
+    storage
+        .recover_partial_recording(
+            &storage.review_partial_recording(&f.session.id).unwrap(),
+            true,
+        )
+        .unwrap();
     assert_eq!(
         std::fs::read(target.join(&relative)).unwrap(),
         unknown_bytes
@@ -277,19 +302,22 @@ fn flac_relocation_allocated_stage_resumes_with_new_durable_local_identity() {
     let owned_identity =
         Identity::file(&copied.required(&checkpoint.staging_name, false).unwrap()).unwrap();
     assert_ne!(owned_identity, old_identity);
-    storage.finalize_recording(&f.session.id).unwrap();
+    storage
+        .recover_partial_recording(
+            &storage.review_partial_recording(&f.session.id).unwrap(),
+            true,
+        )
+        .unwrap();
     let updated: Checkpoint =
         serde_json::from_slice(&copied.read_json(&name).unwrap().unwrap().0).unwrap();
     assert_eq!(updated.staging_identity, Some(owned_identity.clone()));
-    assert_eq!(
-        Identity::file(
-            &copied
-                .required(&format!("{}.flac", checkpoint.chunk_id), false)
-                .unwrap()
-        )
-        .unwrap(),
-        owned_identity
-    );
+    assert!(copied
+        .optional(&format!("{}.flac", checkpoint.chunk_id), false)
+        .unwrap()
+        .is_none());
+    storage
+        .verify_canonical_audio(&f.session.meeting_id, &|| false)
+        .unwrap();
     assert_eq!(
         directory
             .required(&checkpoint.staging_name, false)
@@ -317,21 +345,32 @@ fn flac_relocation_plain_storage_open_does_not_adopt_copied_plan_or_audio() {
     let original = tree(&target.join("meetings"));
     drop(storage);
     let storage = Storage::open(target.clone()).unwrap();
-    assert!(storage.finalize_recording(&f.session.id).is_err());
-    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 6);
+    assert!(storage
+        .recover_partial_recording(
+            &storage.review_partial_recording(&f.session.id).unwrap(),
+            true
+        )
+        .is_err());
+    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 8);
     assert_eq!(tree(&target.join("meetings")), original);
     drop(storage);
     let bootstrap = Bootstrap::open(&config, &source).unwrap();
     let storage = bootstrap.open_storage().unwrap();
-    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 8);
-    storage.finalize_recording(&f.session.id).unwrap();
+    assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
+    storage
+        .recover_partial_recording(
+            &storage.review_partial_recording(&f.session.id).unwrap(),
+            true,
+        )
+        .unwrap();
 }
 
 #[test]
 fn flac_relocation_replaced_body_or_output_directory_is_retained_not_rebound() {
     for replace_directory in [false, true] {
         let f = failed();
-        let plan = f.plan();
+        let plan: Plan =
+            serde_json::from_slice(&std::fs::read(f.base.join(PARTIAL_PLAN)).unwrap()).unwrap();
         let control = control_temp();
         let source = f.storage.root().to_owned();
         let target = control.path().join("target");
@@ -360,9 +399,14 @@ fn flac_relocation_replaced_body_or_output_directory_is_retained_not_rebound() {
             write(&path, &bytes);
         }
         let before = tree(&target.join("meetings"));
-        assert!(storage.finalize_recording(&f.session.id).is_err());
+        assert!(storage
+            .recover_partial_recording(
+                &storage.review_partial_recording(&f.session.id).unwrap(),
+                true
+            )
+            .is_err());
         assert_eq!(tree(&target.join("meetings")), before);
-        assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 7);
+        assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 9);
         assert_eq!(tree(&target.join("meetings")), before);
     }
 }
@@ -453,8 +497,8 @@ fn flac_relocation_partial_fresh_consent_resumes_same_ids_and_current_result_aft
     let (audio, known) = storage
         .recorded_analysis_input(&f.session.meeting_id)
         .unwrap();
-    assert_eq!(audio.tracks.len(), 2);
-    assert_eq!(known.unwrap().runs.len(), 4);
+    assert_eq!(audio.tracks.len(), 1);
+    assert_eq!(known.unwrap().runs.len(), 1);
     assert_partial_whole_meeting_playback(&storage, &f.session.meeting_id, result.duration_us);
     let db = storage.connection.lock().unwrap();
     for track in &plan.tracks {
@@ -805,9 +849,10 @@ fn flac_relocation_crash_child() {
             .unwrap();
     let bootstrap = Bootstrap::open(&config, &legacy).unwrap();
     let storage = bootstrap.open_storage().unwrap();
-    storage
-        .finalize_recording(&std::env::var("MON_FINAL_FLAC_CRASH_OWNER").unwrap())
-        .unwrap();
+    resume(
+        &storage,
+        &std::env::var("MON_FINAL_FLAC_CRASH_OWNER").unwrap(),
+    );
     panic!("owned relocation child missed its crash boundary");
 }
 
@@ -992,13 +1037,19 @@ fn flac_relocation_partial_owned_sigkill_resumes_with_fresh_consent_and_current_
             Some(review.summary)
         );
         if let Some(identity) = copied_identity {
-            identity
-                .require(
-                    &copied_directory
-                        .required(&format!("{id}.flac"), false)
-                        .unwrap(),
-                )
-                .unwrap();
+            let receipt: Checkpoint = serde_json::from_slice(
+                &copied_directory
+                    .read_json(&checkpoint_name)
+                    .unwrap()
+                    .unwrap()
+                    .0,
+            )
+            .unwrap();
+            assert_eq!(receipt.staging_identity, Some(identity));
+            assert!(copied_directory
+                .optional(&format!("{id}.flac"), false)
+                .unwrap()
+                .is_none());
         } else if phase == "created-before-identity" {
             assert_eq!(
                 std::fs::read(copied_directory.path.join(&checkpoint.staging_name)).unwrap(),
@@ -1035,13 +1086,13 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
             storage,
             session,
             base,
-        } = Fixture::new(1, 2000, false);
+        } = interrupt_fixture(Fixture::new(1, 2000, false));
         let source = storage.root().to_owned();
         drop(storage);
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "storage::recordings::flac::tests::final_flac_crash_child",
+                "storage::recordings::flac::tests::partial_recovery_crash_child",
                 "--ignored",
                 "--nocapture",
             ])
@@ -1058,7 +1109,7 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
             String::from_utf8_lossy(&child.stderr)
         );
         let original = tree(base.parent().unwrap());
-        let plan_bytes = std::fs::read(base.join(PLAN)).unwrap();
+        let plan_bytes = std::fs::read(base.join(PARTIAL_PLAN)).unwrap();
         let plan: Plan = serde_json::from_slice(&plan_bytes).unwrap();
         let track = &plan.tracks[0];
         let id = &track.chunks[0];
@@ -1131,18 +1182,22 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
         }
         let bootstrap = Bootstrap::open(&config, &source).unwrap();
         let storage = bootstrap.open_storage().unwrap();
-        assert_eq!(
-            storage.recover_completed_recordings().unwrap(),
-            vec![session.id.clone()]
-        );
+        assert!(storage.recover_completed_recordings().unwrap().is_empty());
+        resume(&storage, &session.id);
         if let Some(identity) = copied_identity {
-            identity
-                .require(
-                    &copied_directory
-                        .required(&format!("{id}.flac"), false)
-                        .unwrap(),
-                )
-                .unwrap();
+            let receipt: Checkpoint = serde_json::from_slice(
+                &copied_directory
+                    .read_json(&checkpoint_name)
+                    .unwrap()
+                    .unwrap()
+                    .0,
+            )
+            .unwrap();
+            assert_eq!(receipt.staging_identity, Some(identity));
+            assert!(copied_directory
+                .optional(&format!("{id}.flac"), false)
+                .unwrap()
+                .is_none());
         } else if phase == "created-before-identity" {
             assert_eq!(
                 std::fs::read(copied_directory.path.join(checkpoint.staging_name)).unwrap(),
@@ -1150,7 +1205,12 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
             );
         }
         assert_eq!(
-            std::fs::read(target.join(base.strip_prefix(&source).unwrap()).join(PLAN)).unwrap(),
+            std::fs::read(
+                target
+                    .join(base.strip_prefix(&source).unwrap())
+                    .join(PARTIAL_PLAN)
+            )
+            .unwrap(),
             plan_bytes
         );
         assert_eq!(tree(base.parent().unwrap()), original);
@@ -1160,7 +1220,7 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
                 .unwrap()
                 .tracks
                 .len(),
-            2
+            1
         );
     }
 }

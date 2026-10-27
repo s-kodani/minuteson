@@ -261,10 +261,19 @@ class RustRunnerTests(unittest.TestCase):
                 runner.Cache(path, self.repository)
 
     def test_focused_ignored_execution_preserves_filters_exit_and_lock(self):
-        with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 101)) as run:
+        listed = subprocess.CompletedProcess([], 0, "case: test\n1 test, 0 benchmarks\n")
+        with patch.object(runner.subprocess, "run", side_effect=[listed, subprocess.CompletedProcess([], 101)]) as run:
             code = runner.run_units(Path("/test"), self.root, {}, 2, 2, "case", ["--ignored"], 42)
         self.assertEqual(code, 101)
         self.assertEqual(run.call_args.args[0], ["/test", "case", "--ignored", "--test-threads=2"])
+        self.assertEqual(run.call_args.kwargs["pass_fds"], (42,))
+
+    def test_focused_check_rejects_removed_or_misspelled_tests_without_executing(self):
+        listed = subprocess.CompletedProcess([], 0, "0 tests, 0 benchmarks\n")
+        with redirect_stdout(io.StringIO()), patch.object(runner.subprocess, "run", return_value=listed) as run:
+            self.assertEqual(runner.run_units(Path("/test"), self.root, {}, 1, 2, "removed", ["--ignored"], 42), 1)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["/test", "removed", "--ignored", "--list"])
         self.assertEqual(run.call_args.kwargs["pass_fds"], (42,))
 
     def test_normal_execution_dispatches_exact_inventory_without_ignored_override(self):

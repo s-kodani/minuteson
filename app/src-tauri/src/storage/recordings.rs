@@ -1467,12 +1467,33 @@ pub(in crate::storage) mod tests {
         use sha2::{Digest, Sha256};
         let owner = manifest["recordingOwnerId"].clone();
         for lane in ["microphone", "system"] {
-            let mut audio = std::fs::read(output.join(format!("{lane}.caf"))).unwrap();
-            // The general CAF fixture includes a free chunk. Native raw CAFs
-            // have the canonical 68-byte header, with identical PCM samples.
-            if audio.get(52..56) == Some(b"free".as_slice()) {
-                audio.drain(52..67);
+            let path = output.join(format!("{lane}.caf"));
+            let bytes = std::fs::read(&path).unwrap();
+            let mut source = crate::audio::VerifiedAudio::open(
+                File::open(path).unwrap(),
+                bytes.len() as u64,
+                &format!("{:x}", Sha256::digest(&bytes)),
+            )
+            .unwrap();
+            let format = source.format.clone();
+            let mut pcm = Vec::new();
+            let mut first = 0;
+            while first < format.frames {
+                let count = (format.frames - first).min(crate::audio::PREVIEW_FRAMES);
+                pcm.extend(source.read_frames(first, count).unwrap());
+                first += count;
             }
+            // AVAssetWriter may add packet/channel chunks. Seal exactly the
+            // verified PCM behind a native 68-byte CAF header, never those extras.
+            let mut audio = crate::audio::tests::caf_fixture(
+                format.sample_rate,
+                format.channels,
+                3,
+                32,
+                4,
+                &pcm,
+            );
+            audio.drain(52..67);
             let track = &manifest[lane];
             let start = track["clockSegments"][0]["timelineStartUs"]
                 .as_i64()

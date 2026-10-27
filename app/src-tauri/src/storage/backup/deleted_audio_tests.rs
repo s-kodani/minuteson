@@ -81,7 +81,7 @@ fn payloads(a: &VerifiedArchive) -> Vec<Vec<u8>> {
 }
 fn audio_path(storage: &Storage, meeting: &str) -> PathBuf {
     let db = storage.connection.lock().unwrap();
-    let path: String = db.query_row("SELECT relative_path FROM file_assets WHERE meeting_id=?1 AND media_type LIKE 'audio/%' ORDER BY id LIMIT 1", [meeting], |r|r.get(0)).unwrap();
+    let path: String = db.query_row("SELECT f.relative_path FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=?1", [meeting], |r|r.get(0)).unwrap();
     storage.root.join(path)
 }
 
@@ -175,6 +175,9 @@ fn deleted_audio_historical_recording_plan_keeps_caf_metadata_without_reopening_
         db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES(?1,?2,?3,'mic','caf',16000,1,'ready',0,0)",params![track,meeting,session]).unwrap();
         db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,2000000,32000,16000,1,'ready',0)",params![Uuid::new_v4().to_string(),meeting,track,audio.id]).unwrap();
     }
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
     let before = storage.recorded_audio_plan(&meeting).unwrap();
     deleted(&storage, &meeting);
     let output = tempfile::tempdir().unwrap();

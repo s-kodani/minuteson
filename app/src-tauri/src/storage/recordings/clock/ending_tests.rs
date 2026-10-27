@@ -65,6 +65,76 @@ fn meeting_duration(storage: &Storage, meeting: &str) -> i64 {
         .unwrap()
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "actual Swift PC-only fixture, no capture devices"]
+fn swift_generated_pc_only_capture_publishes_wave_without_inventing_microphone_audio() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = storage.create_meeting("PC-only synthetic capture").unwrap();
+    let session = storage
+        .prepare_recording(
+            &meeting.id,
+            &RecordingConfig {
+                mode: "system".into(),
+                backend: "screencapturekit".into(),
+                target_pids: vec![],
+                microphone_device_uid: None,
+                target_application_identity: None,
+            },
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+    storage.mark_recording_started(&session.id).unwrap();
+    let output = root
+        .path()
+        .join("meetings")
+        .join(&meeting.id)
+        .join("audio")
+        .join(&session.id);
+    std::fs::create_dir_all(&output).unwrap();
+    let generated = std::process::Command::new("swift")
+        .args(["test", "--package-path", concat!(env!("CARGO_MANIFEST_DIR"), "/../../probes/macos-capture"), "--disable-sandbox", "--filter", "CaptureClockFixtureTests/testPCOnlyRecordingExportsActualCAFEmptyMicrophoneProofAndAcquisitionClosures"])
+        .env("SWIFTPM_MODULECACHE_OVERRIDE", "/tmp/mon-swift-module-cache")
+        .env("CLANG_MODULE_CACHE_PATH", "/tmp/mon-clang-module-cache")
+        .env("MON_PC_ONLY_FIXTURE_DIR", &output).env("MON_PC_ONLY_FIXTURE_OWNER", &session.id)
+        .output().unwrap();
+    assert!(
+        generated.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&generated.stdout),
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let manifest = std::fs::read(output.join("manifest.json")).unwrap();
+    let saved = storage.finalize_recording(&session.id).unwrap();
+    assert_eq!(saved.state, "saved");
+    assert_eq!(saved.duration_us, 100000);
+    let db = storage.connection.lock().unwrap();
+    let source: String = db
+        .query_row(
+            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+            [&meeting.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&source).unwrap();
+    assert_eq!(source.tracks.len(), 1);
+    assert_eq!(source.tracks[0].kind, "system");
+    assert_eq!(source.tracks[0].chunks[0].frames, 480);
+    drop(db);
+    let plan = storage
+        .verify_canonical_audio(&meeting.id, &|| false)
+        .unwrap();
+    assert_eq!(plan.tracks[0].chunks[0].frames, 1600);
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        manifest
+    );
+    assert_eq!(storage.finalize_recording(&session.id).unwrap(), saved);
+}
+
 #[test]
 fn capture_ending_preserves_physical_pcm_boundary_gaps_actual_end_and_commit_time_on_restart() {
     let root = tempfile::tempdir().unwrap();
@@ -441,42 +511,34 @@ fn swift_generated_capture_ending_clock_recovery_preserves_sleep_gaps_and_actual
             ),
         ]
     );
-    // A whole-track analysis plan must not pretend the inner missing range is
-    // continuous PCM. Each verified saved run remains independently playable.
-    assert!(storage.recorded_audio_plan(&meeting.id).is_err());
-    let tracks = storage
-        .connection
-        .lock()
-        .unwrap()
-        .prepare("SELECT id,kind FROM audio_tracks WHERE meeting_id=?1 ORDER BY kind")
-        .unwrap()
-        .query_map([&meeting.id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
+    let plan = storage
+        .verify_canonical_audio(&meeting.id, &|| false)
         .unwrap();
-    assert_eq!(tracks.len(), 2);
-    for (track, kind) in tracks {
-        assert!(storage
-            .prepare_track_audio(&meeting.id, &track, 10_000, 10_040_000)
-            .is_err());
-        for (start, end, value) in [(0, 10_000, 0.25_f32), (10_040_000, 10_050_000, 0.5)] {
-            let mut audio = storage
-                .prepare_track_audio(&meeting.id, &track, start, end)
-                .unwrap();
-            assert_eq!(audio.total_frames(), 480);
-            let expected = if kind == "mic" { 0.125 } else { value };
-            for (index, sample) in audio.read_pcm(0, 480).unwrap().chunks_exact(4).enumerate() {
-                assert_eq!(
-                    f32::from_le_bytes(sample.try_into().unwrap()),
-                    if index % 2 == 0 { expected } else { -expected }
-                );
-            }
-        }
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].chunks[0].frames, 160800);
+    let mut audio = storage
+        .prepare_track_audio(&meeting.id, &plan.tracks[0].id, 0, 10_050_000)
+        .unwrap();
+    let mut pcm = Vec::new();
+    for first in (0..160800).step_by(crate::audio::PREVIEW_FRAMES as usize) {
+        pcm.extend(
+            audio
+                .read_pcm(first, (160800 - first).min(crate::audio::PREVIEW_FRAMES))
+                .unwrap(),
+        );
     }
+    // Balanced stereo downmixes to silence. The preserved capture gaps above
+    // remain provenance, while the canonical WAV covers the whole timeline.
+    assert!(pcm
+        .chunks_exact(4)
+        .all(|b| f32::from_le_bytes(b.try_into().unwrap()) == 0.0));
     assert_whole_gap_playback(&storage, &meeting.id, 10_050_000);
-    assert_eq!(originals(&output), before);
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        before[0]
+    );
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
     drop(storage);
     let reopened = Storage::open(root.path().into()).unwrap();
     assert_eq!(
@@ -487,7 +549,12 @@ fn swift_generated_capture_ending_clock_recovery_preserves_sleep_gaps_and_actual
     );
     assert_eq!(meeting_duration(&reopened, &meeting.id), 10_050_000);
     assert_whole_gap_playback(&reopened, &meeting.id, 10_050_000);
-    assert_eq!(originals(&output), before);
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        before[0]
+    );
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
 }
 
 #[cfg(target_os = "macos")]
@@ -562,28 +629,17 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
             ),
         ]
     );
-    for track in storage.recorded_audio_plan(&meeting.id).unwrap().tracks {
-        assert_eq!(track.chunks[0].frames, 480);
-        let mut audio = storage
-            .prepare_track_audio(&meeting.id, &track.id, track.start_us, track.end_us)
-            .unwrap();
-        assert_eq!(audio.total_frames(), 480);
-        let value = if track.kind == "mic" {
-            0.125_f32
-        } else {
-            0.25_f32
-        };
-        for (index, sample) in audio.read_pcm(0, 480).unwrap().chunks_exact(4).enumerate() {
-            assert_eq!(
-                f32::from_le_bytes(sample.try_into().unwrap()),
-                if index % 2 == 0 { value } else { value / 2.0 }
-            );
-        }
-        assert!(storage
-            .prepare_track_audio(&meeting.id, &track.id, track.end_us, 50000)
-            .is_err());
-    }
-    assert_eq!(originals(&output), before);
+    let plan = storage
+        .verify_canonical_audio(&meeting.id, &|| false)
+        .unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].chunks[0].frames, 800);
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        before[0]
+    );
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
     drop(storage);
     let reopened = Storage::open(root.path().into()).unwrap();
     assert_eq!(
@@ -592,34 +648,26 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
             .unwrap(),
         saved
     );
-    assert!(reopened.finalize_recording(&session.id).is_err());
+    assert_eq!(reopened.finalize_recording(&session.id).unwrap(), saved);
     assert_whole_gap_playback(&reopened, &meeting.id, 50000);
-    let store = PlaybackStore::default();
-    for (mode, first, count, value) in [
-        (MeetingPlaybackMode::Mixed, 0, 480, 0.09375_f32),
-        (MeetingPlaybackMode::Mixed, 240, 480, 0.1875),
-        (MeetingPlaybackMode::Mixed, 240, 240, 0.140625),
-    ] {
-        let info = store
-            .insert_meeting(
-                reopened
-                    .prepare_meeting_audio(&MeetingPlaybackRequest {
-                        start_reference: None,
-                        meeting_id: meeting.id.clone(),
-                        mode,
-                    })
-                    .unwrap(),
-            )
-            .unwrap();
-        let packet = store.read(&info.token, first).unwrap();
-        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), count);
-        // Stereo input is averaged to mono before constant two-input headroom.
-        // Unequal, same-sign channels ensure silence or a dropped channel fails.
-        assert_eq!(info.channels, 1);
-        assert_eq!(packet.len(), 12 + count as usize * 4);
-        for sample in packet[12..].chunks_exact(4) {
-            assert_eq!(f32::from_le_bytes(sample.try_into().unwrap()), value);
-        }
+    let plan = reopened.recorded_audio_plan(&meeting.id).unwrap();
+    let mut audio = reopened
+        .prepare_track_audio(&meeting.id, &plan.tracks[0].id, 0, 50000)
+        .unwrap();
+    let pcm = audio.read_pcm(0, 800).unwrap();
+    for (frame, sample) in pcm.chunks_exact(4).enumerate() {
+        let expected = match frame {
+            0..80 => 0.046875,
+            80..160 => 0.140625,
+            160..240 => 0.09375,
+            _ => 0.0,
+        };
+        assert_eq!(f32::from_le_bytes(sample.try_into().unwrap()), expected);
     }
-    assert_eq!(originals(&output), before);
+    assert_eq!(
+        std::fs::read(output.join("manifest.json")).unwrap(),
+        before[0]
+    );
+    assert!(!output.join("microphone.caf").exists());
+    assert!(!output.join("system.caf").exists());
 }

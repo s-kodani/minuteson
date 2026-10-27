@@ -98,9 +98,17 @@ pub(super) fn read_analysis_content(
     let mut view = read_stored_analysis_content(connection, meeting_id, id, content_hash)?;
     // Playback uses the current source; immutable snapshots retain their original
     // track IDs so retiring audio cannot change a saved working-content hash.
-    if let Some(audio) = super::meeting_audio::read(connection, meeting_id)? {
+    let canonical: Option<String> = connection
+        .query_row(
+            "SELECT track_id FROM meeting_audio_commits WHERE meeting_id=?1",
+            [meeting_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(track) = canonical {
         for utterance in &mut view.utterances {
-            utterance.track_id = audio.tracks[0].id.clone();
+            utterance.track_id = track.clone();
         }
     }
     Ok(view)

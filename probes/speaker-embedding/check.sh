@@ -29,4 +29,4 @@ env MON_EMBEDDING_HELPER="$mon_embedding_check/mon-speaker-embedding" \
 env MON_EMBEDDING_HELPER="$mon_embedding_check/mon-speaker-embedding" \
   MON_EMBEDDING_FAKE_LIBRARY="$mon_embedding_check/fake-sherpa.dylib" \
   python3 "$mon_embedding_source/../../tools/mon_rust_tests.py" \
-  diarization::known::tests::saved_run_worker_ -- --ignored
+  storage::speaker_completion::tests::feature_session_reuses_worker_vectors_and_checks_source_on_cache_hits

@@ -115,7 +115,7 @@ mod tests {
         {
             let dir = root.path().join(index.to_string());
             std::fs::create_dir(&dir).unwrap();
-            std::fs::write(dir.join("input.wav"), b"synthetic input").unwrap();
+            crate::test_support::write_wave(&dir.join("input.wav"));
             let capture = |p: &std::path::Path| Fingerprint::capture(p, &|| false).unwrap();
             let config = WhisperConfig {
                 executable: capture(&cli),

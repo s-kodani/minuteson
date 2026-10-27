@@ -1,4 +1,4 @@
-use super::analysis::{read_analysis_content, AnalysisSpeaker, AnalysisUtterance, AnalysisView};
+use super::analysis::{AnalysisSpeaker, AnalysisUtterance, AnalysisView};
 use super::drafts::{load_draft, merged_assignments, validate_payload, TranscriptDraftPayload};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
@@ -326,7 +326,10 @@ pub(super) fn current_working(
     if super::revisions::analysis_content_hash(tx, &id)? != hash {
         return Err("現在版の内容が変更されています".into());
     }
-    let view = read_analysis_content(tx, meeting, &id, &hash)?;
+    // A playback projection can remap a retired source track to the canonical
+    // WAV. Generation hashes must retain the immutable stored track identity,
+    // exactly as copy_snapshot and read_input do.
+    let view = super::analysis::read_stored_analysis_content(tx, meeting, &id, &hash)?;
     if view.utterances.len() > 100_000 || view.speakers.len() > 100 {
         return Err("生成入力の件数が大きすぎます".into());
     }

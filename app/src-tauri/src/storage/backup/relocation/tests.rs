@@ -165,13 +165,10 @@ fn native_image_preserves_wal_ids_all_tables_settings_and_unregistered_audio() {
 fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_conditions() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = minutes_fixture::meeting(&storage);
-    // Materialize the fixture's registered source, without rewriting provenance.
-    let relative = format!("meetings/{meeting}/audio/original.caf");
-    let path = storage.root.join(&relative);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, b"fixture audio").unwrap();
-    storage.connection.lock().unwrap().execute("UPDATE file_assets SET relative_path=?1,size_bytes=13,content_hash=?2 WHERE id='asset'", params![relative, digest(b"fixture audio")]).unwrap();
+    let (meeting, analysis, _) = crate::storage::playback::tests::fixture(&storage);
+    storage
+        .create_transcript_draft(&meeting, &analysis)
+        .unwrap();
     minutes_fixture::candidate(&storage, &meeting);
     minutes_fixture::save(&storage, &meeting, "# 移動後にも保持する編集\n");
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();

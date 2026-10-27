@@ -83,9 +83,20 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
     let saved = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved.duration_us, 42_000_000);
     fn verify(storage: &Storage, meeting: &str) {
-        let (source, known) = storage.recorded_analysis_input(meeting).unwrap();
-        known.unwrap().validate(&source).unwrap();
-        for track in source.tracks {
+        let source_json: String = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+                [meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let original: crate::storage::RecordedAudioPlan =
+            serde_json::from_str(&source_json).unwrap();
+        assert_eq!(original.tracks.len(), 2);
+        for track in &original.tracks {
             assert_eq!(
                 track
                     .chunks
@@ -94,21 +105,28 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
                     .sum::<usize>(),
                 2048
             );
-            assert!(track.chunks.iter().all(|c| c.clock_segments.len() <= 1024));
             assert_eq!(track.chunks.iter().map(|c| c.frames).sum::<i64>(), 983_040);
-            let mut audio = storage
-                .prepare_track_audio(meeting, &track.id, 0, 10_000)
-                .unwrap();
-            let pcm = audio.read_pcm(0, 480).unwrap();
-            for (index, sample) in pcm.chunks_exact(4).enumerate() {
-                assert_eq!(
-                    f32::from_le_bytes(sample.try_into().unwrap()),
-                    if index % 2 == 0 { 0.25 } else { -0.5 }
-                );
-            }
-            assert!(storage
-                .prepare_track_audio(meeting, &track.id, 0, 30_000)
-                .is_err());
+        }
+        let (source, known) = storage.recorded_analysis_input(meeting).unwrap();
+        known.unwrap().validate(&source).unwrap();
+        assert_eq!(source.tracks.len(), 1);
+        let track = &source.tracks[0];
+        assert_eq!(track.kind, "processed");
+        assert_eq!(track.chunks[0].frames, 672_000);
+        assert!(track.chunks[0].clock_segments.is_empty());
+        let mut audio = storage
+            .prepare_track_audio(meeting, &track.id, 0, 30_000)
+            .unwrap();
+        let pcm = audio.read_pcm(0, 480).unwrap();
+        for (index, sample) in pcm.chunks_exact(4).enumerate() {
+            assert_eq!(
+                f32::from_le_bytes(sample.try_into().unwrap()),
+                if (160..320).contains(&index) {
+                    0.0
+                } else {
+                    -0.125
+                }
+            );
         }
         use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
         let audio = storage
@@ -120,10 +138,10 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
             .unwrap();
         let store = crate::playback::PlaybackStore::default();
         let info = store.insert_meeting(audio).unwrap();
-        assert_eq!(info.missing_ranges.len(), 4096);
+        assert!(info.missing_ranges.is_empty());
         assert!(store.read(&info.token, 0).is_ok());
-        assert!(store.read(&info.token, 480).is_err());
-        assert!(store.read(&info.token, 960).is_ok());
+        assert!(store.read(&info.token, 160).is_ok());
+        assert!(store.read(&info.token, 320).is_ok());
         store.close(&info.token).unwrap();
     }
     verify(&storage, &meeting.id);

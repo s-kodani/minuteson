@@ -5,7 +5,12 @@ use std::os::unix::fs::PermissionsExt;
 mod regeneration;
 
 pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
-    let (s, m, w) = super::super::transcription::tests::fixture(root, 4);
+    let (s, m) = pending_fixture(root);
+    s.publish_single_wav(&m, &|| false, &|_, _| {}).unwrap();
+    (s, m)
+}
+fn pending_fixture(root: &Path) -> (Storage, String) {
+    let (s, m, w) = super::super::transcription::tests::pending_fixture(root, 4);
     let mut p = AnalysisPreferences::default();
     p.standard.executable_path = w.executable.path.to_str().unwrap().into();
     p.standard.model_path = w.model.path.to_str().unwrap().into();
@@ -618,7 +623,7 @@ fn initial_import_speaker_count_survives_reopen_and_reaches_diarization() {
 #[test]
 fn initial_recording_meeting_speaker_count_binds_the_mixed_source_after_reopen() {
     let root = tempfile::tempdir().unwrap();
-    let (s, m) = fixture(root.path());
+    let (s, m) = pending_fixture(root.path());
     let audio_dir = PathBuf::from("meetings").join(&m).join("audio");
     let system_path = audio_dir.join("system.caf");
     std::fs::copy(
@@ -639,6 +644,7 @@ fn initial_recording_meeting_speaker_count_binds_the_mixed_source_after_reopen()
         db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) SELECT 'system-track',meeting_id,session_id,'system',format,sample_rate,channels,state,created_at,updated_at FROM audio_tracks WHERE meeting_id=?1", params![m]).unwrap();
         db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'system-chunk',meeting_id,'system-track',?2,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE meeting_id=?1", params![m,system_asset.id]).unwrap();
     }
+    s.publish_single_wav(&m, &|| false, &|_, _| {}).unwrap();
     s.ensure_analysis_flow(&m).unwrap();
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();

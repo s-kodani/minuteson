@@ -395,7 +395,7 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
     let assets: Vec<(String, String)> = target.connection.lock().unwrap().prepare(
         "SELECT relative_path,content_hash FROM file_assets WHERE meeting_id=?1 AND state='ready' ORDER BY id"
     ).unwrap().query_map(params![new_meeting], |r| Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
-    assert_eq!(assets.len(), 3); // Actual registered synthetic CAFs and manifest.
+    assert_eq!(assets.len(), 2); // The canonical WAV and the capture manifest.
     for (relative, hash) in &assets {
         assert_eq!(
             digest_file(

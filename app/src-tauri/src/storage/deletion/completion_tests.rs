@@ -394,6 +394,10 @@ impl Fixture {
             "UPDATE file_assets SET relative_path=?2 WHERE meeting_id=?1 AND relative_path='meetings/test/audio.caf'",
             params![f.meeting,format!("meetings/{}/audio/fixture.caf",f.meeting)],
         ).unwrap(),1);
+        assert_eq!(db.execute(
+            "UPDATE file_assets SET relative_path=?2 WHERE meeting_id=?1 AND relative_path='meetings/test/manifest.json'",
+            params![f.meeting,format!("meetings/{}/manifest.json",f.meeting)],
+        ).unwrap(),1);
         db.execute(
             "UPDATE meetings SET title=?2 WHERE id=?1",
             params![f.meeting, marker],
@@ -463,7 +467,7 @@ impl Fixture {
         );
         assert!(self.f.storage.get_meeting(&self.f.other).unwrap().is_some());
         let db = self.f.storage.connection.lock().unwrap();
-        for (table, n) in [("app_settings", 2), ("model_packages", 1)] {
+        for (table, n) in [("app_settings", 1), ("model_packages", 1)] {
             assert_eq!(
                 db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
                     .get::<_, i64>(0))

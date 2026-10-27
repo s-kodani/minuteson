@@ -381,7 +381,7 @@ mod tests {
             };
             let unit = root.path().join("unit");
             std::fs::create_dir(&unit).unwrap();
-            std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
+            crate::test_support::write_wave(&unit.join("input.wav"));
             let segments = run_unit_with_suppression(
                 &config,
                 &unit,
@@ -673,7 +673,7 @@ mod tests {
         };
         let unit = directory.path().join("unit");
         std::fs::create_dir(&unit).unwrap();
-        std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
+        crate::test_support::write_wave(&unit.join("input.wav"));
         assert!(run_unit(
             &config,
             &unit,
@@ -710,7 +710,7 @@ mod tests {
             .unwrap();
         let unit = directory.path().join("unit");
         std::fs::create_dir(&unit).unwrap();
-        std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
+        crate::test_support::write_wave(&unit.join("input.wav"));
         assert!(run_unit(
             &config,
             &unit,
@@ -732,7 +732,7 @@ mod tests {
                 .path()
                 .join(if pause { "paused" } else { "timeout" });
             std::fs::create_dir(&unit).unwrap();
-            std::fs::write(unit.join("input.wav"), b"WAV").unwrap();
+            crate::test_support::write_wave(&unit.join("input.wav"));
             let started = Instant::now();
             let result = run_unit(
                 &config,

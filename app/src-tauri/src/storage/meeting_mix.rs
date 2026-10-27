@@ -11,7 +11,7 @@ pub(super) fn read_historical(
     history: &super::backup::DeletedAudioHistory,
 ) -> Result<Option<RecordedAudioPlan>, String> {
     history.verify_meeting(db, meeting)?;
-    read(db, meeting)
+    super::meeting_audio::read_historical(db, meeting)
 }
 impl Storage {
     pub(crate) fn ensure_meeting_mix(

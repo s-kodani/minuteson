@@ -234,13 +234,12 @@ fn model_rebinding_rejects_changed_review_state_cancelled_or_stale_trial_without
                 .unwrap();
             }
             "audio" => {
-                std::fs::remove_file(
-                    f.root
-                        .path()
-                        .join("meetings")
-                        .join(&f.meeting)
-                        .join("audio/mic.caf"),
-                )
+                std::fs::remove_file({
+                    let plan = f.storage.recorded_audio_plan(&f.meeting).unwrap();
+                    f.storage
+                        .meeting_mix_path(&f.meeting, &plan.tracks[0])
+                        .unwrap()
+                })
                 .unwrap();
             }
             _ => {}
@@ -431,48 +430,33 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(omitted_count >= 3);
+        assert_eq!(omitted_count, 1); // Native stdout only; canonical audio is retained.
         let destination = f.add(engine, true, false);
         let calls = calls_in(f.root.path()) + calls_in(f.app_data.path());
         if engine != Engine::Llama {
             let wav = cp["outputs"][0]["wavAssetId"].as_str().unwrap();
-            f.storage
-                .connection
-                .lock()
-                .unwrap()
-                .execute(
-                    "DELETE FROM restore_omitted_assets WHERE asset_id=?1",
-                    params![wav],
-                )
-                .unwrap();
-            assert!(
-                retry_preview(&f, &source, destination).is_err(),
-                "an unproved missing PCM cannot be skipped"
-            );
-            f.storage
-                .connection
-                .lock()
-                .unwrap()
-                .execute(
-                    "INSERT INTO restore_omitted_assets SELECT id,meeting_id,'recreatable_pcm',size_bytes,content_hash FROM file_assets WHERE id=?1",
-                    params![wav],
-                )
-                .unwrap();
-            let relative: String = f
-                .storage
-                .connection
-                .lock()
-                .unwrap()
+            let db = f.storage.connection.lock().unwrap();
+            let omitted: i64 = db
                 .query_row(
-                    "SELECT relative_path FROM file_assets WHERE id=?1",
-                    params![wav],
+                    "SELECT count(*) FROM restore_omitted_assets WHERE asset_id=?1",
+                    [wav],
                     |r| r.get(0),
                 )
                 .unwrap();
+            assert_eq!(omitted, 0, "canonical WAV is retained through restore");
+            let relative: String = db
+                .query_row(
+                    "SELECT relative_path FROM file_assets WHERE id=?1",
+                    [wav],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            drop(db);
             let path = f.storage.managed_path(Path::new(&relative)).unwrap();
-            std::fs::write(&path, b"unexpected cache occupant").unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::write(&path, b"changed canonical input").unwrap();
             assert!(retry_preview(&f, &source, destination).is_err());
-            std::fs::remove_file(path).unwrap();
+            std::fs::write(path, bytes).unwrap();
         }
         if engine == Engine::Sherpa {
             let log = cp["outputs"][0]["stdoutAssetId"].as_str().unwrap();

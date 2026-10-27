@@ -417,7 +417,14 @@ fn native_process_gets_literal_frozen_arguments_and_does_not_overwrite_outputs()
     assert!(args.contains(&"--embedding.provider=cpu"));
     assert!(args.contains(&"--min-duration-off=0.5"));
     let canonical_wav = unit.join("input.wav").canonicalize().unwrap();
-    assert_eq!(args.last(), Some(&canonical_wav.to_str().unwrap()));
+    let input_index = args
+        .iter()
+        .position(|arg| *arg == canonical_wav.to_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        &args[input_index + 1..],
+        &["--mon-first-frame", "0", "--mon-end-frame", "16000"]
+    );
     assert!(run_track(
         &config,
         Some(3),
@@ -523,16 +530,21 @@ fn nonzero_exit_and_excessive_logs_are_rejected() {
         let unit = directory.path().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir(&unit).unwrap();
         wav(&unit);
-        assert!(run_track(
+        // Check exit/log classification even when the full suite contends for
+        // I/O. The separate timeout test exercises its short deadline directly.
+        let error = run_track(
             &config,
             None,
             &unit,
             1_000_000,
-            Duration::from_secs(3),
-            &crate::test_support::never_cancelled
+            Duration::from_secs(15),
+            &crate::test_support::never_cancelled,
         )
-        .unwrap_err()
-        .contains(message));
+        .unwrap_err();
+        assert!(
+            error.contains(message),
+            "expected {message}, got {error}; fixture: {body}"
+        );
     }
 }
 

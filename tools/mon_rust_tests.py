@@ -338,6 +338,12 @@ def run_units(executable, cwd, environment, processes, threads, selected, extra,
     inherited = () if lock_fd is None else (lock_fd,)
     if selected is not None or extra:
         arguments = ([] if selected is None else [selected]) + extra
+        listed = subprocess.run([str(executable), *arguments, "--list"], cwd=cwd,
+                                env=environment, capture_output=True, text=True,
+                                timeout=30, check=True, pass_fds=inherited)
+        if not inventory(listed.stdout):
+            report("[rust-tests] No tests matched the requested filters; refusing an empty check")
+            return 1
         return subprocess.run([str(executable), *arguments, f"--test-threads={threads}"],
                               cwd=cwd, env=environment, pass_fds=inherited).returncode
     listed = subprocess.run([str(executable), "--list"], cwd=cwd, env=environment,

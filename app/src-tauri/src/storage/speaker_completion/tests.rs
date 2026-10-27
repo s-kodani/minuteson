@@ -660,7 +660,7 @@ else:
    with open(r['directory']+'/'+r['stdout'],'w') as f: json.dump(out(r['args']),f)
    with open(r['directory']+'/'+r['stderr'],'w') as f: f.write('')
    with open(os.path.dirname(os.path.dirname(os.path.dirname(sys.argv[0])))+'/calls','a') as f: f.write(str(os.getpid())+'\n')
-  print(json.dumps(dict(protocol=1,id=r['id'],op='ready' if r['op']=='init' else 'done')),flush=True)
+  print(json.dumps(dict(protocol=1,id=r['id'],op='ready' if r['op']=='init' else 'done',message='canonical_pcm_range_v1')),flush=True)
 "#;
     std::fs::write(&helper, script).unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();

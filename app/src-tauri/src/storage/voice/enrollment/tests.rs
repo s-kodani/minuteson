@@ -126,7 +126,7 @@ fn enrollment_respects_duration_coverage_gaps_unknown_and_overlapping_audio() {
     )
     .unwrap();
     tx.execute(
-        "UPDATE audio_chunks SET end_us=40000000 WHERE id='chunk-1'",
+        "UPDATE audio_chunks SET end_us=40000000 WHERE track_id='track'",
         [],
     )
     .unwrap();

@@ -65,7 +65,7 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         let app_data = tempfile::tempdir().unwrap();
         let (storage, meeting, engine) =
-            super::super::transcription::tests::fixture(root.path(), seconds);
+            super::super::transcription::tests::pending_fixture(root.path(), seconds);
         if two {
             let relative = PathBuf::from("meetings")
                 .join(&meeting)
@@ -80,6 +80,9 @@ impl Fixture {
             db.execute("INSERT INTO audio_tracks (id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES ('track2',?1,'session','system','caf',16000,1,'ready',0,0)",params![meeting]).unwrap();
             db.execute("INSERT INTO audio_chunks (id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'chunk2',meeting_id,'track2',?1,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE id='chunk'", params![audio.id]).unwrap();
         }
+        storage
+            .publish_single_wav(&meeting, &|| false, &|_, _| {})
+            .unwrap();
         let baseline = crate::transcription::enqueue(
             &storage,
             &meeting,

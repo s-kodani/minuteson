@@ -681,51 +681,37 @@ fn swift_generated_recording_segments_bind_actual_storage_and_encode_flac_withou
     let saved_session = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved_session.state, "saved");
     assert_eq!(std::fs::read(manifest).unwrap(), original);
-    assert_eq!(
-        std::fs::read(audio_root.join("raw-microphone-00000001.caf")).unwrap(),
-        first
-    );
+    assert!(!audio_root.join("raw-microphone-00000001.caf").exists());
     assert_eq!(
         std::fs::read(audio_root.join("raw-microphone.json")).unwrap(),
         pointer
     );
-    // The real Storage finalizer now publishes/admits its own FLAC, independently
-    // of the codec-only native-derived.flac above. Producer evidence stays raw.
+    assert!(!first.is_empty());
+    // Finalization retains capture geometry as provenance and publishes one
+    // canonical PCM16 WAV, without producing intermediate per-input FLACs.
     let (plan, known) = storage.recorded_analysis_input(&meeting.id).unwrap();
-    assert_eq!(plan.tracks.len(), 2);
-    if let Some(known) = known {
-        assert_eq!(known.runs.len(), 2);
-    }
-    let publication: Value =
-        serde_json::from_slice(&std::fs::read(audio_root.join("final-flac.json")).unwrap())
-            .unwrap();
-    for track in &plan.tracks {
-        assert_eq!(track.chunks.len(), 1);
-        assert_eq!(track.chunks[0].frames, 204000);
-        assert!(storage.verify_asset(&track.chunks[0].asset_id).unwrap());
-        let published_track = publication["tracks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|published| published["id"] == track.id)
-            .unwrap();
-        let chunk = published_track["chunks"][0].as_str().unwrap();
-        // Storage owns an exclusive DB connection. Use its admitted API and
-        // deterministic published UUID path, not a second SQLite connection.
-        let path = storage
-            .root()
-            .join("meetings")
-            .join(&meeting.id)
-            .join("audio")
-            .join(&track.id)
-            .join(format!("{chunk}.flac"));
-        let mut registered = VerifiedAudio::open(
-            File::open(path).unwrap(),
-            track.chunks[0].size as u64,
-            &track.chunks[0].hash,
-        )
-        .unwrap();
-        assert!(registered.is_flac());
-        assert_eq!(registered.read_frames(191999, 2).unwrap(), expected);
-    }
+    known.unwrap().validate(&plan).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    let track = &plan.tracks[0];
+    assert_eq!(track.kind, "processed");
+    assert_eq!(
+        track.chunks[0].frames,
+        saved_session.duration_us * 16000 / 1_000_000
+    );
+    assert!(storage.verify_asset(&track.chunks[0].asset_id).unwrap());
+    let path = storage.meeting_mix_path(&meeting.id, track).unwrap();
+    let mut registered = VerifiedAudio::open(
+        File::open(path).unwrap(),
+        track.chunks[0].size as u64,
+        &track.chunks[0].hash,
+    )
+    .unwrap();
+    assert!(!registered.is_flac());
+    assert_eq!(registered.format.sample_rate, 16000);
+    assert_eq!(registered.format.channels, 1);
+    let pcm = registered.read_frames(0, 160).unwrap();
+    assert!(pcm
+        .chunks_exact(4)
+        .all(|b| f32::from_le_bytes(b.try_into().unwrap()) == -0.125));
+    assert!(!audio_root.join("final-flac.json").exists());
 }

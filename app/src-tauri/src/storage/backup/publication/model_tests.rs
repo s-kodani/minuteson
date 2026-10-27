@@ -509,44 +509,32 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         assert!(target.acquire_local_inference_job().unwrap().is_none());
         {
             let mut db = target.connection.lock().unwrap();
-            let omitted: String = db
+            let assets = super::super::read_assets(&db).unwrap();
+            drop(db);
+            let canonical = target.recorded_audio_plan(&new_meeting).unwrap();
+            let source_id = &canonical.tracks[0].chunks[0].asset_id;
+            let source = assets.iter().find(|a| &a.id == source_id).unwrap();
+            let mut db = target.connection.lock().unwrap();
+            assert!(!portable::temporary_pcm(&db, source).unwrap());
+            let omitted: i64 = db
                 .query_row(
-                    "SELECT asset_id FROM restore_omitted_assets LIMIT 1",
-                    [],
+                    "SELECT count(*) FROM restore_omitted_assets WHERE asset_id=?1",
+                    [source_id],
                     |r| r.get(0),
                 )
                 .unwrap();
+            assert_eq!(omitted, 0);
             let tx = db.transaction().unwrap();
             tx.execute(
-                "DELETE FROM restore_omitted_assets WHERE asset_id=?1",
-                params![omitted],
+                "UPDATE file_assets SET state='missing' WHERE id=?1",
+                [source_id],
             )
             .unwrap();
             assert!(
                 super::super::read_assets(&tx).is_err(),
-                "missing cache without its saved exclusion must not be silently omitted"
+                "the sole meeting WAV is never an omitted cache"
             );
             tx.rollback().unwrap();
-            let assets = super::super::read_assets(&db).unwrap();
-            let cache = assets.iter().find(|a| a.id == omitted).unwrap();
-            assert!(portable::temporary_pcm(&db, cache).unwrap());
-            let mut changed = cache.clone();
-            changed.content_hash = "f".repeat(64);
-            assert!(!portable::temporary_pcm(&db, &changed).unwrap());
-            let mut original_audio = assets
-                .iter()
-                .find(|a| a.media_type == "audio/x-caf")
-                .unwrap()
-                .clone();
-            original_audio.state = "missing".into();
-            original_audio.media_type = "audio/wav".into();
-            assert!(!portable::temporary_pcm(&db, &original_audio).unwrap());
-            assert!(db
-                .execute(
-                    "UPDATE restore_omitted_assets SET reason='native_log' WHERE asset_id=?1",
-                    params![omitted]
-                )
-                .is_err());
         }
         assert_eq!(
             retained_files(&target.connection.lock().unwrap())
@@ -576,7 +564,7 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         )
         .unwrap();
         assert_eq!(source.manifest.file_references, original);
-        assert_eq!(source.manifest.tables.len(), 37);
+        assert_eq!(source.manifest.tables.len(), portable::TABLES.len());
         for table in crate::storage::model_metadata::TABLES {
             assert_eq!(
                 source
