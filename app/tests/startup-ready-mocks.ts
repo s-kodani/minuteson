@@ -7,6 +7,9 @@ export const mockIPC: typeof nativeMockIPC = (callback, options) => nativeMockIP
   // Window chrome may mount on Windows before the fixture's workspace providers.
   if (command === "plugin:window|title") return document.title;
   if (command === "plugin:window|is_maximized") return false;
+  const windowState=(window as Window & {monWindowState?:{visible:boolean;minimized:boolean}}).monWindowState;
+  if (command === "plugin:window|is_minimized") return windowState?.minimized??false;
+  if (command === "plugin:window|is_visible") return windowState?.visible??true;
   if (command === "get_recording_recovery" && !(window as Window & { recordingRecoveryFixture?: unknown }).recordingRecoveryFixture) return {runId:"fixture-idle",revision:0,phase:"completed",items:[],error:null};
   return callback(command, args);
 }, options);

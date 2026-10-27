@@ -298,3 +298,17 @@ fn interrupted_pcm_write_resumes_owned_output_and_never_retires_sources_early() 
     assert!(originals.iter().all(|p| !p.exists()));
     storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }
+
+#[test]
+fn single_wav_retirement_preserves_notification_companions_byte_for_byte() {
+    let (_temp,storage,meeting,paths)=fixture();
+    let directory=paths[0].parent().unwrap();
+    let events=directory.join("input-events.json");
+    let notices=directory.join("input-notices.json");
+    let evidence=b"retained producer history";let receipt=b"retained rendered receipt";
+    std::fs::write(&events,evidence).unwrap();std::fs::write(&notices,receipt).unwrap();
+    storage.publish_single_wav(&meeting,&||false,&|_,_|{}).unwrap();
+    assert_eq!(std::fs::read(events).unwrap(),evidence);
+    assert_eq!(std::fs::read(notices).unwrap(),receipt);
+    assert!(paths.iter().all(|p|!p.exists()));
+}

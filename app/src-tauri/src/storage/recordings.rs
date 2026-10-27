@@ -236,6 +236,26 @@ impl Storage {
         Ok((rows, next))
     }
 
+    /// Exact DB lookup only; never enumerate another recording or its files.
+    pub(crate) fn closed_input_recording(
+        &self, meeting: &str, owner: &str,
+    ) -> Result<Option<ClosedInputRecording>, String> {
+        self.verify_closed_input_storage()?;
+        if !crate::input_levels::valid_owner(meeting) || !crate::input_levels::valid_owner(owner) {
+            return Err("録音通知の対象が不正です".into());
+        }
+        let db = self.connection.lock().map_err(|_| "DBロックを取得できません")?;
+        let row = db.query_row(
+            "SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND r.state IN ('saved','interrupted','failed')",
+            params![owner,meeting], |r| Ok(ClosedInputRecording {
+                session_id:r.get(0)?, meeting_id:r.get(1)?, title:r.get::<_,String>(2)?.chars().take(120).collect(),
+            }),
+        ).optional().map_err(|e| e.to_string())?;
+        drop(db);
+        self.verify_closed_input_storage()?;
+        Ok(row)
+    }
+
     /// Authorize companion-file writes only for a closed DB-owned recording.
     /// Return an anchored descriptor; release SQLite before file I/O/fsync.
     pub(crate) fn closed_input_directory(

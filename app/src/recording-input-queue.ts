@@ -18,6 +18,7 @@ export class RecordingInputQueue{
     if(!validInputOwner(sessionId)||!validInputOwner(recipientId)||!["main","recorder"].includes(target))throw Error("通知キューの所有が不正です。");
     this.sessionId=sessionId;this.recipientId=recipientId;this.target=target;
   }
+  hasPending(){return [...this.heads.values()].some(h=>h.pending.size>0||h.active&&!h.closed&&h.failed.size>0);}
   private at(at:number){if(!Number.isFinite(at)||at<0||at>Number.MAX_SAFE_INTEGER||at<this.lastAt)this.invalid=true;this.lastAt=at;if(this.invalid)this.heads.clear();return !this.invalid;}
   observe(notices:InputNotice[],at:number):QueueAttempt[]{
     if(!this.at(at))return [];const attempts:QueueAttempt[]=[];

@@ -18,12 +18,22 @@ function expire(row){for(const lane of Object.values(row.lanes))while(lane.lengt
 export function reopenArchived(rows){for(const row of rows){row.closed={};for(const lane of Object.values(row.lanes)){
   while(lane[0]?.delivery.rendered)lane.shift();if(lane.length){lane[0].delivery.generation++;lane[0].recipientId=null;lane[0].claimedAt=null;lane[0].delivery.receiveId=null;}
 }row.revision++;}return rows;}
+function projectRow(row){expire(row);return {meetingId:row.meetingId,sessionId:row.sessionId,title:row.title,
+  batch:row.legacy||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:row.deliveryUnavailable?[]:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":row.deliveryUnavailable?"deliveryUnavailable":null,historySaveIssue:row.historySaveIssue??null};}
+export async function archivedRows(f,{targets}){
+  const state=f.archived;
+  if(!Array.isArray(targets)||targets.length<1||targets.length>32||new Set(targets.map(t=>t.sessionId)).size!==targets.length||targets.some(t=>!valid(t.meetingId)||!valid(t.sessionId)))throw Error("模擬対象不正");
+  if(state.failRead)throw Error("模擬対象読込み失敗");
+  const recordings=[],missingSessionIds=[];
+  for(const t of targets){const row=state.rows.find(r=>r.meetingId===t.meetingId&&r.sessionId===t.sessionId);if(row)recordings.push(projectRow(row));else missingSessionIds.push(t.sessionId);}
+  const result={schemaVersion:1,recordings,missingSessionIds};
+  if(state.holdRead)await new Promise(resolve=>state.reads.push(resolve));return clone(result);
+}
 export async function archivedPage(f,{afterSessionId}){
   const state=f.archived;if(afterSessionId!==null&&!valid(afterSessionId))throw Error("模擬続き位置不正");
   if(state.failRead)throw Error("模擬保存後通知読込み失敗");
   const rows=state.rows.filter(r=>afterSessionId===null||r.sessionId>afterSessionId).sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
-  const recordings=rows.slice(0,32).map(row=>{expire(row);return {meetingId:row.meetingId,sessionId:row.sessionId,title:row.title,
-    batch:row.legacy||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:row.deliveryUnavailable?[]:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":row.deliveryUnavailable?"deliveryUnavailable":null,historySaveIssue:row.historySaveIssue??null};});
+  const recordings=rows.slice(0,32).map(projectRow);
   const result={schemaVersion:3,recordings,nextCursor:rows.length>32?recordings.at(-1).sessionId:null};
   if(state.holdRead)await new Promise(resolve=>state.reads.push(resolve));return clone(result);
 }

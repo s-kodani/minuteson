@@ -1,9 +1,9 @@
-import {ArchivedInputSession,checkedArchivedInputPage,type ArchivedInputRow} from "./archived-input-state.ts";
+import {ArchivedInputSession,checkedArchivedInputPage,checkedArchivedInputRows,type ArchivedInputTarget,type ArchivedInputRow} from "./archived-input-state.ts";
 import {RecordingInputQueue,type QueueAttempt} from "./recording-input-queue.ts";
 import type {InputKind,InputNotice,NoticeLoss} from "./recording-input-state.ts";
 import type {NoticeReception} from "./recording-input-queue.ts";
 
-type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean};
+type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean;watch:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
 export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;deliveryUnavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"]};
 
@@ -16,6 +16,19 @@ export class ArchivedInputController {
   private recipientId:string;
   constructor(recipientId:string){this.recipientId=recipientId;}
   after(){return this.cursor;}
+  restart(){this.cursor=null;}
+  targets():ArchivedInputTarget[]{return [...this.entries.values()].filter(e=>e.watch||e.queue.hasPending()).map(e=>({meetingId:e.row.meetingId,sessionId:e.row.sessionId}));}
+  unavailable(id:string){return this.entries.get(id)?.error===true;}
+  needsPaint(){return [...this.entries.values()].some(e=>e.fresh&&e.watch||e.queue.hasPending());}
+  deferTargets(targets:ArchivedInputTarget[]){for(const t of targets){const e=this.entries.get(t.sessionId);if(e)e.fresh=false;}}
+  failedTargets(targets:ArchivedInputTarget[]){for(const t of targets){const e=this.entries.get(t.sessionId);if(e){e.fresh=false;e.error=true;}}}
+  acceptRows(value:unknown,targets:ArchivedInputTarget[],requestedAt:number){
+    const rows=checkedArchivedInputRows(value,targets);if(this.paused)return;
+    for(const id of rows.missingSessionIds)this.entries.delete(id);
+    this.acceptRecordings(rows.recordings,requestedAt,false);
+    return rows;
+  }
+  removeMeetings(ids:Set<string>){for(const [id,e]of this.entries)if(ids.has(e.row.meetingId))this.entries.delete(id);}
   retainMeetings(ids:Set<string>){for(const [id,entry]of this.entries)if(!ids.has(entry.row.meetingId))this.entries.delete(id);}
   defer(request?:ArchivedAttempt){if(request){const entry=this.entries.get(request.attempt.sessionId);if(entry===request.entry){entry.queue.defer(request.attempt);entry.fresh=false;}}else for(const entry of this.entries.values())entry.fresh=false;}
   pause(paused:boolean){
@@ -28,27 +41,31 @@ export class ArchivedInputController {
     const page=checkedArchivedInputPage(value,after);
     if(this.paused)return;
     if(after===null)for(const entry of this.entries.values())entry.seen=false;
-    for(const row of page.recordings){
-      let entry=this.entries.get(row.sessionId);
-      if(row.issue==="paused"){if(entry){entry.seen=true;entry.fresh=false;entry.error=false;}continue;}
-      if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue; // Legacy: no new local/disk ledger.
-      if(!entry){
-        if(this.entries.size===128)this.entries.delete(this.entries.keys().next().value!);
-        entry={row,session:new ArchivedInputSession(row.sessionId),queue:new RecordingInputQueue(row.sessionId,this.recipientId,"main"),fresh:false,seen:true,error:false};
-      }
-      // LRU order follows actual page use, never the UUID's magnitude.
-      this.entries.delete(row.sessionId);this.entries.set(row.sessionId,entry);entry.seen=true;
-      if(entry.row.meetingId!==row.meetingId){entry.fresh=false;entry.error=true;continue;}
-      // An old API's absent field is unknown, not evidence that a previously
-      // reported final writer failure has been resolved.
-      entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
-      try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";}
-      catch{entry.fresh=false;entry.error=true;}
-    }
+    this.acceptRecordings(page.recordings,requestedAt,true);
     this.cursor=page.nextCursor;
     // Only a complete authoritative traversal may forget absent owners. A
     // failed page keeps receipts and floors for a later traversal/readback.
     if(this.cursor===null)for(const [id,entry]of this.entries)if(!entry.seen)this.entries.delete(id);
+  }
+  private acceptRecordings(rows:ArchivedInputRow[],requestedAt:number,discovery:boolean){
+    for(const row of rows){
+      let entry=this.entries.get(row.sessionId);
+      if(row.issue==="paused"){if(entry){if(discovery)entry.seen=true;entry.fresh=false;entry.error=false;}continue;}
+      if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue; // Legacy: no new local/disk ledger.
+      if(!entry){
+        if(this.entries.size===128)this.entries.delete(this.entries.keys().next().value!);
+        entry={row,session:new ArchivedInputSession(row.sessionId),queue:new RecordingInputQueue(row.sessionId,this.recipientId,"main"),fresh:false,seen:true,error:false,watch:false};
+      }
+      // LRU order follows actual page use, never the UUID's magnitude.
+      this.entries.delete(row.sessionId);this.entries.set(row.sessionId,entry);if(discovery)entry.seen=true;
+      if(entry.row.meetingId!==row.meetingId){entry.fresh=false;entry.error=true;continue;}
+      // An old API's absent field is unknown, not evidence that a previously
+      // reported final writer failure has been resolved.
+      entry.watch=row.issue==="unavailable"||row.batch!==null&&row.batch.notices.length>0;
+      entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
+      try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";}
+      catch{entry.fresh=false;entry.error=true;}
+    }
   }
   paint(at:number):{views:ArchivedInputView[];attempts:ArchivedAttempt[]}{
     const views:ArchivedInputView[]=[],attempts:ArchivedAttempt[]=[];

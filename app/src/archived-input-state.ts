@@ -4,6 +4,23 @@ export type ArchivedInputBatch={schemaVersion:1;ownerId:string;revision:number;n
 export type HistorySaveIssue=null|"failed"|"invalid"|"unconfirmed"|"unavailable";
 export type ArchivedInputRow={meetingId:string;sessionId:string;title:string;batch:ArchivedInputBatch|null;issue:null|"unavailable"|"deliveryUnavailable"|"paused";historySaveIssue:HistorySaveIssue};
 export type ArchivedInputPage={schemaVersion:3;recordings:ArchivedInputRow[];nextCursor:string|null};
+export type ArchivedInputTarget={meetingId:string;sessionId:string};
+export type ArchivedInputRows={schemaVersion:1;recordings:ArchivedInputRow[];missingSessionIds:string[]};
+export function checkedArchivedInputRows(value:unknown,targets:ArchivedInputTarget[]):ArchivedInputRows {
+  const r=object(value,["schemaVersion","recordings","missingSessionIds"]);
+  const expected=new Map(targets.map(t=>[t.sessionId,t.meetingId])),seen=new Set<string>();
+  if(targets.length<1||targets.length>32||expected.size!==targets.length||targets.some(t=>!validInputOwner(t.sessionId)||!validInputOwner(t.meetingId))||
+    r.schemaVersion!==1||!Array.isArray(r.recordings)||!Array.isArray(r.missingSessionIds)||r.recordings.length+r.missingSessionIds.length!==targets.length)throw Error("保存後通知の対象応答が不正です。");
+  const recordings=r.recordings.map(value=>{
+    const row=checkedArchivedInputPage({schemaVersion:3,recordings:[value],nextCursor:null},null).recordings[0];
+    if(expected.get(row.sessionId)!==row.meetingId||seen.has(row.sessionId))throw Error("保存後通知の対象が一致しません。");
+    seen.add(row.sessionId);return row;
+  });
+  const missingSessionIds=r.missingSessionIds.map(id=>{
+    if(typeof id!=="string"||!expected.has(id)||seen.has(id))throw Error("保存後通知の欠落対象が不正です。");seen.add(id);return id;
+  });
+  return {schemaVersion:1,recordings,missingSessionIds};
+}
 const integer=(v:unknown,min=0):v is number=>typeof v==="number"&&Number.isSafeInteger(v)&&v>=min;
 const time=(v:number)=>Number.isFinite(v)&&v>=0&&v<=Number.MAX_SAFE_INTEGER;
 function object(v:unknown,keys:string[]):Record<string,unknown>{

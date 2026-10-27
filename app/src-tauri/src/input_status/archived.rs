@@ -54,6 +54,20 @@ struct Row {
     history_save_issue: Option<String>,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct Target {
+    pub(crate) meeting_id: String,
+    pub(crate) session_id: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SelectedRows {
+    schema_version: u8,
+    recordings: Vec<Row>,
+    missing_session_ids: Vec<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Acknowledge {
@@ -249,6 +263,45 @@ impl ArchivedInputs {
         };
         let (rows, next_cursor) = storage.closed_input_recordings(after)?;
         drop(discovery);
+        let recordings = self.read_rows(storage, fallback, analysis, rows, visible)?;
+        Ok(Page { schema_version: 3, recordings, next_cursor })
+    }
+    pub(crate) fn selected(
+        &self,
+        storage: &Storage,
+        analysis: &AnalysisController,
+        targets: Vec<Target>,
+        visible: &impl Fn() -> bool,
+    ) -> Result<SelectedRows, String> {
+        let mut ids = std::collections::BTreeSet::new();
+        if targets.is_empty() || targets.len() > 32 || targets.iter().any(|t|
+            !crate::input_levels::valid_owner(&t.meeting_id)
+            || !crate::input_levels::valid_owner(&t.session_id)
+            || !ids.insert(t.session_id.clone())) {
+            return Err("保存後通知の対象指定が不正です".into());
+        }
+        let discovery = analysis.try_begin_scoped_notice_storage(None)?.ok_or(PAUSED)?;
+        let mut rows = Vec::new();
+        let mut missing_session_ids = Vec::new();
+        for target in targets {
+            match storage.closed_input_recording(&target.meeting_id, &target.session_id)? {
+                Some(row) => rows.push(row),
+                None => missing_session_ids.push(target.session_id),
+            }
+        }
+        discovery.validate_active()?;
+        drop(discovery);
+        let recordings = self.read_rows(storage, None, Some(analysis), rows, visible)?;
+        Ok(SelectedRows { schema_version: 1, recordings, missing_session_ids })
+    }
+    fn read_rows(
+        &self,
+        storage: &Storage,
+        fallback: Option<&NoticeStorageLease>,
+        analysis: Option<&AnalysisController>,
+        rows: Vec<crate::storage::recordings::ClosedInputRecording>,
+        visible: &impl Fn() -> bool,
+    ) -> Result<Vec<Row>, String> {
         let mut recordings = Vec::with_capacity(rows.len());
         let mut batch_times = Vec::with_capacity(rows.len());
         for row in rows {
@@ -385,11 +438,7 @@ impl ArchivedInputs {
                 }
             }
         }
-        Ok(Page {
-            schema_version: 3,
-            recordings,
-            next_cursor,
-        })
+        Ok(recordings)
     }
     pub(crate) fn acknowledge(
         &self,

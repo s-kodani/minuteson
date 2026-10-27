@@ -3,7 +3,7 @@ import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 import { registerPendingEdits } from "../src/draft-save.ts";
 import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";
-import {archivedFixture,archivedPage,archivedAction,newArchivedRow,reopenArchived} from "./archived-input-browser-fixture.js";
+import {archivedFixture,archivedPage,archivedRows,archivedAction,newArchivedRow,reopenArchived} from "./archived-input-browser-fixture.js";
 import { toasts } from "../src/toast";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
@@ -66,6 +66,7 @@ registerPendingEdits(async () => {
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: clone(args) });
   if(command==="get_archived_recording_input_notices")return archivedPage(f,args);
+  if(command==="get_archived_recording_input_notice_rows")return archivedRows(f,args);
   if(command==="acknowledge_archived_recording_input_notice")return archivedAction(f,args.request);
   if(command==="get_meeting_analysis_audio"&&f.archived.rows.some(row=>row.meetingId===args.meetingId))return {tracks:[]};
   if(command==="get_ui_preferences")return clone(f.uiPreferences);

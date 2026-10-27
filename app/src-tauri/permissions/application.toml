@@ -43,6 +43,7 @@ commands.allow = [
   "get_analysis_versions",
   "get_application_close_activity",
   "get_archived_recording_input_notices",
+  "get_archived_recording_input_notice_rows",
   "get_audio_deletion_items",
   "get_audio_deletion_paths",
   "get_audio_import",

@@ -73,12 +73,26 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertFalse(self.grants("unknown"))
         self.assertEqual(self.grants("recording-confirmation"), {
             "get_ui_preferences", "get_recording_confirmation", "decide_recording_confirmation",
+            "get_recorder_operation_notices", "publish_recorder_operation_notice",
         })
         self.assertEqual(self.grants("recorder-info"), {
             "get_ui_preferences", "get_recorder_operation_notices", "close_recorder_info",
+            "publish_recorder_operation_notice",
         })
         self.assertTrue({"request_recording_confirmation", "get_recording_input_status",
                          "open_main_window", "hide_recorder_panel"} <= self.grants("recorder"))
+
+    def test_archived_target_reads_are_main_only_and_keep_native_admission(self):
+        command = "get_archived_recording_input_notice_rows"
+        self.assertIn(command, self.grants("main"))
+        for window in ["recorder", "recorder-info", "recording-confirmation", "startup-attention"]:
+            self.assertNotIn(command, self.grants(window))
+        source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
+        body = source.split("async fn " + command, 1)[1].split("#[tauri::command]", 1)[0]
+        self.assertIn('window.label() != "main"', body)
+        self.assertIn("spawn_blocking", body)
+        self.assertIn("ArchivedInputs", body)
+        self.assertIn(".selected(", body)
 
     def test_capabilities_do_not_grant_generic_shell_file_or_remote_access(self):
         for name in self.base["app"]["security"]["capabilities"]:

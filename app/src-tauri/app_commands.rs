@@ -55,6 +55,7 @@ pub const COMMANDS: &[&str] = &[
     "get_recording_input_status",
     "get_recording_input_history_status",
     "get_archived_recording_input_notices",
+    "get_archived_recording_input_notice_rows",
     "acknowledge_archived_recording_input_notice",
     "receive_recording_input_notice",
     "render_recording_input_notice",

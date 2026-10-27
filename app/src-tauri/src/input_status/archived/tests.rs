@@ -504,3 +504,51 @@ fn replaced_root_with_no_rows_cannot_return_a_false_empty_success() {
     fs::remove_dir(&root).unwrap();
     fs::rename(&moved, &root).unwrap();
 }
+
+fn targets(values: &[(&str, &str)]) -> Vec<Target> {
+    values.iter().map(|(meeting, session)| Target { meeting_id:(*meeting).into(), session_id:(*session).into() }).collect()
+}
+
+#[test]
+fn selected_rows_only_open_exact_closed_database_targets() {
+    let temp=tempfile::tempdir().unwrap();
+    let storage=Storage::open(temp.path().into()).unwrap();
+    let (meeting, owner, output)=fixture(&storage,true);
+    history(&output,&owner);
+    let (other, other_owner, other_output)=fixture(&storage,true);
+    history(&other_output,&other_owner);
+    let (live, live_owner, _)=fixture(&storage,false);
+    let missing=Uuid::new_v4().to_string();
+    let analysis=AnalysisController::default();
+    let controller=ArchivedInputs::default();
+    let value=serde_json::to_value(controller.selected(&storage,&analysis,
+        targets(&[(&meeting,&owner),(&live,&live_owner),(&other,&missing)]),&||true).unwrap()).unwrap();
+    assert_eq!(value["schemaVersion"],1);
+    assert_eq!(value["recordings"].as_array().unwrap().len(),1);
+    assert_eq!(value["recordings"][0]["sessionId"],owner);
+    assert_eq!(value["missingSessionIds"],json!([live_owner,missing]));
+    assert!(!other_output.join("input-notices.json").exists());
+    let wrong=serde_json::to_value(controller.selected(&storage,&analysis,targets(&[(&other,&owner)]),&||true).unwrap()).unwrap();
+    assert_eq!(wrong["recordings"],json!([]));
+    assert_eq!(wrong["missingSessionIds"],json!([owner]));
+}
+
+#[test]
+fn selected_rows_validate_bounds_and_obey_maintenance_and_visibility() {
+    let temp=tempfile::tempdir().unwrap();
+    let storage=Storage::open(temp.path().into()).unwrap();
+    let (meeting,owner,output)=fixture(&storage,true);history(&output,&owner);
+    let analysis=AnalysisController::default();let controller=ArchivedInputs::default();
+    assert!(controller.selected(&storage,&analysis,vec![],&||true).is_err());
+    assert!(controller.selected(&storage,&analysis,targets(&[(&meeting,&owner),(&meeting,&owner)]),&||true).is_err());
+    assert!(controller.selected(&storage,&analysis,targets(&[("bad",&owner)]),&||true).is_err());
+    let many:Vec<Target>=(0..33).map(|_|Target{meeting_id:meeting.clone(),session_id:Uuid::new_v4().to_string()}).collect();
+    assert!(controller.selected(&storage,&analysis,many,&||true).is_err());
+    let hidden=serde_json::to_value(controller.selected(&storage,&analysis,targets(&[(&meeting,&owner)]),&||false).unwrap()).unwrap();
+    assert_eq!(hidden["recordings"][0]["batch"]["notices"],json!([]));
+    let lease=analysis.begin_data_maintenance(false,false,&||false).unwrap();
+    assert_eq!(controller.selected(&storage,&analysis,targets(&[(&meeting,&owner)]),&||true).err().unwrap(),PAUSED);
+    drop(lease);
+    let visible=serde_json::to_value(controller.selected(&storage,&analysis,targets(&[(&meeting,&owner)]),&||true).unwrap()).unwrap();
+    assert_eq!(visible["recordings"][0]["batch"]["notices"].as_array().unwrap().len(),1);
+}

@@ -24,8 +24,9 @@ async page=>{
     check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"held receipt invented rendering");
     check(await page.locator('[data-input-kind]').count()===0,"closed history became current input badge");
     results.push("closed recordings claim independent microphone/system events without inventing current input state or rendering");
+    await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";});
     await release("receive");await card().waitFor({state:"attached"});await page.waitForTimeout(350);
-    check((await calls()).every(c=>c.action==="receive"),"modal-covered archive toast was rendered");
+    check((await calls()).every(c=>c.action==="receive"),"transparent modal presenter was rendered");
     await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";document.querySelector("#archive-cover").close();});await page.waitForTimeout(350);
     check((await calls()).every(c=>c.action==="receive"),"transparent archive toast was rendered");
     // The host uses display:contents, so translating it does not move cards.
@@ -63,11 +64,11 @@ async page=>{
     await card().getByRole("button",{name:"注意通知を閉じる",exact:true}).click();await card().filter({hasText:"復帰していました"}).waitFor();
     check(await page.evaluate(()=>Object.values(window.closeFixture.archived.rows[0].closed).length)===1,"lost rendered receipt could not reconcile closure");
     results.push("lost receive/render replies are reconciled by exact native readback, not local completion assumptions");
-    await page.evaluate(()=>{window.closeFixture.archived.holdRead=true;});await page.waitForFunction(()=>window.closeFixture.archived.reads.length===1);
-    const before=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_archived_recording_input_notices").length);
+    await page.evaluate(()=>{window.closeFixture.archived.holdRead=true;return window.closeFixture.recordChanged({phase:"idle"});});await page.waitForFunction(()=>window.closeFixture.archived.reads.length===1);
+    const before=await page.evaluate(()=>window.closeFixture.calls.filter(c=>["get_archived_recording_input_notices","get_archived_recording_input_notice_rows"].includes(c.command)).length);
     await page.waitForTimeout(1800);check(await card().count()===0,"stale archived read kept presentation");
-    check(await page.locator(".toast-host .toast-card").filter({hasText:"終了済み録音の通知履歴を確認中です"}).count()===1,"hung page read did not expose its waiting state");
-    check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_archived_recording_input_notices").length)===before,"hung archive read caused overlapping request");
+    check(await page.locator(".toast-host .toast-card").filter({hasText:"終了済み録音の通知履歴を確認中です"}).count()===0,"background read exposed a pending toast");
+    check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>["get_archived_recording_input_notices","get_archived_recording_input_notice_rows"].includes(c.command)).length)===before,"hung archive read caused overlapping request");
     await page.evaluate(()=>{const state=window.closeFixture.archived;state.holdRead=false;state.reads.splice(0).forEach(resolve=>resolve());state.failRead=true;});
     await readWarning().waitFor();check(await card().count()===0,"late old page resurrected expired display");
     results.push("hung page reads remain single-flight, stale delivery disappears, and failed reads expose retained warning");
@@ -85,11 +86,11 @@ async page=>{
 
     await page.evaluate(()=>{const f=window.closeFixture,uid=i=>`${i.toString(16).padStart(8,"0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
       f.archived.rows=Array.from({length:40},(_,i)=>f.newArchivedRow({sessionId:uid(i+1),title:`旧形式${i+1}`,legacy:true}));f.archived.rows.push(f.newArchivedRow({sessionId:uid(50),title:"二ページ目の会議",loss:3}));
-    });await page.waitForFunction(()=>window.closeFixture.archived.rows.at(-1).lanes.microphone[0].delivery.rendered);
+    });await page.evaluate(()=>window.closeFixture.recordChanged({phase:"idle"}));await page.waitForFunction(()=>window.closeFixture.archived.rows.at(-1).lanes.microphone[0].delivery.rendered);
     await card().filter({hasText:"二ページ目の会議"}).waitFor();
     check(await page.evaluate(()=>window.closeFixture.calls.some(c=>c.command==="get_archived_recording_input_notices"&&c.args.afterSessionId!==null)),"archive never traversed next page");
     results.push("32-row cursor traversal reaches later recordings, and legacy rows do not create notifications");
-    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows.unshift(f.newArchivedRow({sessionId:"00000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa",title:"後から終了した会議"}));});
+    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows.unshift(f.newArchivedRow({sessionId:"00000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa",title:"後から終了した会議"}));return f.recordChanged({phase:"idle"});});
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
     await seed({title:"復元された点検会議",both:true,loss:2,historySaveIssue:"failed",deliveryUnavailable:true});

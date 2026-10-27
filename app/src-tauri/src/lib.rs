@@ -1869,6 +1869,25 @@ async fn get_archived_recording_input_notices(
 }
 
 #[tauri::command]
+async fn get_archived_recording_input_notice_rows(
+    window: WebviewWindow,
+    targets: Vec<input_status::archived::Target>,
+) -> Result<NoticeReply<input_status::archived::SelectedRows>, String> {
+    if window.label() != "main" {
+        return Err("保存後通知はメイン画面から確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let analysis = app.state::<AnalysisController>();
+        let visible = || input_status::notice_window_visible(window.is_visible().ok(), window.is_minimized().ok());
+        app.state::<input_status::archived::ArchivedInputs>()
+            .selected(&app.state::<Storage>(), &analysis, targets, &visible)
+            .map(NoticeReply::ready)
+            .or_else(|error| if error == input_status::archived::PAUSED { Ok(NoticeReply::paused()) } else { Err(error) })
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn acknowledge_archived_recording_input_notice(
     window: WebviewWindow,
     request: input_status::archived::Acknowledge,
@@ -2612,6 +2631,7 @@ pub fn run() {
                 get_recording_input_status,
                 get_recording_input_history_status,
                 get_archived_recording_input_notices,
+                get_archived_recording_input_notice_rows,
                 acknowledge_archived_recording_input_notice,
                 receive_recording_input_notice,
                 render_recording_input_notice,
