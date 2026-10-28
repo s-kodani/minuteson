@@ -11,6 +11,7 @@ import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
 import { IdentificationBadge } from "./speaker-identification";
 import { WorkspacePanel } from "./workspace-panel";
+import { TranscriptSplit } from "./transcript-split";
 import { useMeetingAudio } from "./meeting-audio";
 import { playingRows, playbackTimeline } from "./playback-follow";
 import { usePlaybackHighlights } from "./playback-highlights";
@@ -279,8 +280,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
   return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集">
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
     {!loading && !analysis && !error && <p className="transcript-state">文字起こしはまだありません。</p>}
-    {analysis && <div className="transcript-split">
-      <WorkspacePanel content={speakerMount} label="話者一覧" active={visible} query="(max-width: 760px)" />
+    {analysis && <TranscriptSplit active={visible} speakers={<WorkspacePanel content={speakerMount} label="話者一覧" active={visible} query="(max-width: 760px)" />}>
       {createPortal(<>
         <div className="speaker-heading"><h3>話者</h3><IconButton label="話者を追加" icon="plus" disabled={!editable || speakers.length >= 100} onClick={event => { addOpener.current = event.currentTarget; setNewName(""); setAdding(true); }} /></div>
         <button type="button" className="small-secondary speaker-merge-trigger" disabled={!editable||!!snapshot.error||speakers.length<2} onClick={event=>{
@@ -304,7 +304,6 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
           await audio.start(analysis.id,`voice-preview:${window.trackId}:${window.startUs}`,{meetingId,mode,startUs:window.startUs,endUs:window.endUs,expectedDurationUs:audio.durationUs});
         }} />
       </>, speakerMount)}
-      <div className="transcript-main">
         {!!analysis.reviewRanges?.length && <section className="recognition-review" aria-label="文字起こしの要確認区間">
           <p role="status">完了・要確認あり（{analysis.reviewRanges.length}区間）{!analysis.utterances.length && "。認識できた本文はありません。"}</p>
           <ul>{analysis.reviewRanges.map((range,index)=><li key={`${range.trackId}:${range.startUs}:${index}`}>
@@ -338,8 +337,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, on
           </div>
         </article>)}</div>
         {!filtered.length && <p>条件に一致する発言はありません。</p>}
-      </div>
-    </div>}
+    </TranscriptSplit>}
     <IssueNotice scope={meetingId} type="transcript-consolidation" label="発言の統合" message={consolidationError}/>
     {consolidationError&&<button type="button" className="small-secondary" disabled={disabled} onClick={()=>setConsolidationRetry(value=>value+1)}>発言統合を再試行</button>}
     <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存" message={snapshot.error || error} action={snapshot.error ? { kind: "retry", label: "文字起こし保存を再試行", disabled, run: retry } : undefined} />

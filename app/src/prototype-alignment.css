@@ -267,7 +267,7 @@ button:disabled { opacity:.5; }
 .meeting-detail-content:has(>.archived-input-notices details[open])>.workspace-tab-panel { flex:1 0 min(480px,60dvh); }
 .meeting-detail-content .transcript-card { padding:0; gap:0; }
 .meeting-detail-content .transcript-split { gap:0; }
-.speaker-panel-body { padding:24px 20px; border-right:1px solid var(--border); background:var(--surface); }
+.speaker-panel-body { padding:24px 20px; background:var(--surface); }
 .transcript-main { position:relative; padding:24px 32px; gap:12px; }
 .transcript-main>.transcript-actions:first-child { justify-content:flex-end; gap:8px 12px; }
 .transcript-heading-actions { display:flex; align-items:center; min-width:0; max-width:100%; }
@@ -287,9 +287,15 @@ button:disabled { opacity:.5; }
 .speaker-panel-body .speaker-avatar,.utterance-meta .speaker-avatar { display:grid; place-items:center; width:29px; height:29px; border-radius:9px; background:var(--speaker-light-bg); color:var(--speaker-light-fg); font-size:12px; font-weight:500; flex:none; }
 :root[data-theme=dark] .speaker-avatar { background:var(--speaker-dark-bg); color:var(--speaker-dark-fg); }
 @media(min-width:761px) {
-  .meeting-detail-content .transcript-split { grid-template-columns:216px minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+  .meeting-detail-content .transcript-split { grid-template-columns:var(--speaker-panel-width,216px) 1px minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
 }
+.transcript-divider { position:relative; min-height:0; background:var(--border); cursor:col-resize; touch-action:none; outline:none; z-index:1; }
+.transcript-divider::before { content:""; position:absolute; inset:0 -5px; }
+.transcript-divider::after { content:""; position:absolute; inset:0 -1px; background:var(--focus); opacity:0; pointer-events:none; }
+.transcript-divider:hover::after,.transcript-divider:focus-visible::after,.transcript-split[data-resizing]>.transcript-divider::after { opacity:1; }
+.transcript-split[data-resizing],.transcript-split[data-resizing] * { cursor:col-resize!important; user-select:none!important; }
 @media(max-width:760px) {
+  .transcript-divider { display:none; }
   .transcript-main { padding:16px; }
   .meeting-playback-dock { flex-wrap:wrap; }
   .meeting-playback-dock .audio-controls { flex-wrap:wrap; }

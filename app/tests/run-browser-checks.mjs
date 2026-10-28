@@ -89,6 +89,8 @@ const suites = [
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],
+  ["transcript-resize", "browser-fixture.js", "transcript-resize-browser-check.js"],
+  ["transcript-width-persistence", "browser-fixture.js", "transcript-width-persistence-browser-check.js"],
   ["fixed-player", "browser-fixture.js", "fixed-player-browser-check.js"],
   ["meeting-audio", "browser-fixture.js", "meeting-audio-browser-check.js"],
   ["meeting-missing", "browser-fixture.js", "meeting-missing-browser-check.js"],
