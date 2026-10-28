@@ -185,6 +185,25 @@ pub fn run_unit(
     run_unit_with_suppression(config, directory, duration_us, timeout, false, cancelled)
 }
 
+// Package compatibility checks execute the package's upstream CLI directly.
+// It reads a complete WAV and does not understand MON's worker range flags.
+pub(crate) fn run_standalone_unit(
+    config: &WhisperConfig,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<Segment>>, String> {
+    run(
+        config,
+        directory,
+        duration_us,
+        timeout,
+        Invocation::Standalone,
+        cancelled,
+    )
+}
+
 // Suppress non-speech tokens during decoding, never delete recognized words.
 // The caller fixes this choice in the job, rather than changing old replays.
 pub(crate) fn run_unit_with_suppression(
@@ -193,6 +212,31 @@ pub(crate) fn run_unit_with_suppression(
     duration_us: i64,
     timeout: Duration,
     suppress_non_speech: bool,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<Segment>>, String> {
+    run(
+        config,
+        directory,
+        duration_us,
+        timeout,
+        Invocation::Worker {
+            suppress_non_speech,
+        },
+        cancelled,
+    )
+}
+
+enum Invocation {
+    Standalone,
+    Worker { suppress_non_speech: bool },
+}
+
+fn run(
+    config: &WhisperConfig,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    invocation: Invocation,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Vec<Segment>>, String> {
     if cancelled() {
@@ -212,6 +256,13 @@ pub(crate) fn run_unit_with_suppression(
         || ((input.frames() * 1_000_000 / 16000) as i64 - duration_us).abs() > 100
     {
         return Err("文字起こし入力範囲が不正です".into());
+    }
+    if matches!(invocation, Invocation::Standalone) {
+        let mut file = File::open(&input.proof.path).map_err(|e| e.to_string())?;
+        let layout = crate::audio::wave::inspect(&mut file, input.proof.size)?;
+        if input.first_frame != 0 || input.end_frame != layout.frames {
+            return Err("通常版Whisper CLIの動作確認には音声ファイル全体が必要です".into());
+        }
     }
     let input_proof = input.proof.clone();
     let wav = input.proof.path.clone();
@@ -252,17 +303,23 @@ pub(crate) fn run_unit_with_suppression(
         .arg(&config.model.path)
         .arg("--file")
         .arg(wav)
-        .arg("--mon-first-frame")
-        .arg(input.first_frame.to_string())
-        .arg("--mon-end-frame")
-        .arg(input.end_frame.to_string())
         .args(["--language", "ja", "--output-json", "--output-file"])
         .arg(output_base)
         .arg("--threads")
         .arg(config.threads.to_string())
         .args(["--beam-size", "5"]);
-    if suppress_non_speech {
-        command.arg("--suppress-nst");
+    if let Invocation::Worker {
+        suppress_non_speech,
+    } = invocation
+    {
+        command
+            .arg("--mon-first-frame")
+            .arg(input.first_frame.to_string())
+            .arg("--mon-end-frame")
+            .arg(input.end_frame.to_string());
+        if suppress_non_speech {
+            command.arg("--suppress-nst");
+        }
     }
     if !config.use_gpu {
         command.arg("--no-gpu");
@@ -558,6 +615,92 @@ mod tests {
             &crate::test_support::never_cancelled
         )
         .is_err());
+    }
+
+    #[test]
+    fn standalone_cli_rejects_partial_input_before_launching_or_creating_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let model = root.path().join("model.bin");
+        std::fs::write(&model, b"unused synthetic model").unwrap();
+        let proof = Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap();
+        let config = WhisperConfig {
+            executable: proof.clone(),
+            model: proof,
+            vad_model: None,
+            vad_options: None,
+            threads: 1,
+            use_gpu: false,
+            prompt: String::new(),
+        };
+        let wav = root.path().join("source.wav");
+        crate::test_support::write_wave(&wav);
+        for (index, (first, end)) in [(0, 8000), (8000, 16000)].into_iter().enumerate() {
+            let unit = root.path().join(index.to_string());
+            std::fs::create_dir(&unit).unwrap();
+            super::super::input::Input::new(
+                &wav,
+                first,
+                end,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap()
+            .write(&unit)
+            .unwrap();
+            let error = run_standalone_unit(
+                &config,
+                &unit,
+                500_000,
+                Duration::from_secs(1),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap_err();
+            assert!(error.contains("音声ファイル全体"), "{error}");
+            assert!(!unit.join("stdout.log").exists());
+            assert!(!unit.join("stderr.log").exists());
+            assert!(!unit.join("result.json").exists());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires MON_WHISPER_CLI, MON_WHISPER_MODEL and MON_WHISPER_VAD_MODEL"]
+    fn real_standalone_whisper_cli_checks_model_with_vad_and_writes_silence_json() {
+        let proof = |name| {
+            Fingerprint::capture(
+                &PathBuf::from(std::env::var_os(name).unwrap()),
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap()
+        };
+        let config = WhisperConfig {
+            executable: proof("MON_WHISPER_CLI"),
+            model: proof("MON_WHISPER_MODEL"),
+            vad_model: Some(proof("MON_WHISPER_VAD_MODEL")),
+            vad_options: Some(Default::default()),
+            threads: 1,
+            use_gpu: false,
+            prompt: String::new(),
+        };
+        let root = tempfile::tempdir().unwrap();
+        let unit = root.path().join("model-check-standalone");
+        std::fs::create_dir(&unit).unwrap();
+        let frames = 160_000;
+        let mut wav = crate::audio::wave::header(frames).unwrap();
+        wav.resize(wav.len() + frames as usize * 2, 0);
+        std::fs::write(unit.join("input.wav"), wav).unwrap();
+        let result = run_standalone_unit(
+            &config,
+            &unit,
+            10_000_000,
+            Duration::from_secs(180),
+            &crate::test_support::never_cancelled,
+        );
+        let log_bytes = std::fs::read(unit.join("stderr.log")).unwrap();
+        let log = String::from_utf8_lossy(&log_bytes);
+        assert!(result.is_ok(), "{result:?}\n{log}");
+        assert!(result.unwrap().unwrap().is_empty());
+        assert!(unit.join("result.json").is_file());
+        assert!(log.contains("VAD is enabled"));
+        assert!(!log.contains("unknown argument"));
     }
 
     #[test]

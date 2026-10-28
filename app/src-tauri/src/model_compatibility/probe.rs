@@ -189,7 +189,7 @@ fn run(
                 prompt: String::new(),
             };
             config.verify(cancelled)?;
-            crate::transcription::whisper::run_unit(
+            crate::transcription::whisper::run_standalone_unit(
                 &config,
                 directory.path(),
                 10_000_000,
