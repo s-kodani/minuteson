@@ -69,6 +69,8 @@ const suites = [
   ["recorder-info", null, "recorder-info-browser-check.js"],
   ["recorder-operations", null, "recorder-operation-browser-check.js"],
   ["startup-attention", null, "startup-attention-browser-check.js"],
+  ["startup-instance", "startup-attention-browser-fixture.js", "startup-instance-browser-check.js"],
+  ["recording-compact", null, "recording-compact-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["microphone-input", null, "microphone-input-browser-check.js"],
   ["capture-scope", "capture-scope-browser-fixture.tsx", "capture-scope-browser-check.js"],

@@ -12,6 +12,7 @@ async page=>{
   const start=()=>page.locator(".capture-test-dialog[open] .common-modal-body:not([hidden]) > button.secondary, .capture-test-panel > button").filter({hasText:/^(?:もう一度)?5秒録音して確認$/u}).last();
   const modal=()=>page.getByRole("dialog",{name:"5秒の録音前テストを開始しますか？",exact:true});
   const accept=()=>modal().getByRole("button",{name:"5秒テストを開始する",exact:true});
+  const failedConfirmation=()=>page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first();
   const mic=()=>page.locator('[aria-label="録音するマイク"]');
   const normal=()=>page.locator(".recording-primary-actions > button");
   const beginNormal=async()=>{await hide();await normal().click();};
@@ -69,26 +70,26 @@ async page=>{
     results.push("cancellation remains busy until native termination; terminal cancelled ownership is explicitly discarded before reuse");
 
     await boot();await page.evaluate(()=>window.closeFixture.testLost=true);await start().click();await accept().click();
-    await modal().locator(".action-error[role=alert]:visible").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
+    await failedConfirmation().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByText("テストの入力を初期化しています",{exact:true}).waitFor();
     check(await count("start_capture_test")===1&&await normal().isDisabled(),"lost accepted reply replayed or enabled capture");
     const firstPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,firstPoll);check(await count("start_capture_test")===1,"read replayed start");
     results.push("lost accepted start reply is reconciled by read-only ownership polling, never by resubmitting capture");
 
     await boot();await page.evaluate(()=>{window.closeFixture.testAbsentStart=true;window.closeFixture.testReconcileFailure=true;});await start().click();await accept().click();
-    await modal().locator(".action-error[role=alert]:visible").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
-    await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
+    await failedConfirmation().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
+    await page.waitForFunction(()=>window.closeFixture.notificationHistory().some(n=>n.message.includes("開始要求の受付結果が未確認")));
     const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);
     check(await count("start_capture_test")===1&&await start().isDisabled()&&await normal().isDisabled(),"unknown absence allowed replay");
     results.push("missing result after an uncertain start stays unknown and blocks new recording without guessing that audio stopped");
 
-    await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);await start().click();await accept().click();await modal().locator(".action-error[role=alert]:visible").waitFor();
+    await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);await start().click();await accept().click();await failedConfirmation().waitFor();
     check(await count("start_capture_test")===0,"failed draft save started test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("failed pending-edit save prevents test admission and retains existing meetings/input");
 
     await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardFailure=true);await discard().click();
     await page.getByRole("alert").filter({hasText:"模擬テスト回収未完了"}).first().waitFor();
-    await beginNormal();const n=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await n.locator(".action-error[role=alert]").waitFor();
+    await beginNormal();const n=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await failedConfirmation().waitFor();
     check(await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"failed discard saved normal meeting or started capture");await n.getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("failed private-audio collection prevents normal recording and meeting creation even after a second confirmation");
 
@@ -144,7 +145,7 @@ async page=>{
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
     await application.selectOption(await application.locator('option').nth(1).getAttribute("value"));
     await returnToTest();
-    await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await modal().locator(".action-error[role=alert]:visible").waitFor();
+    await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await failedConfirmation().waitFor();
     check(await count("start_capture_test")===0,"restarted app accepted test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("application restart during edit flushing rejects test before admission without falling back to whole-system capture");
 
@@ -153,7 +154,7 @@ async page=>{
     results.push("fresh denied microphone permission prevents test admission without choosing another device");
 
     for(const property of ["losePrepare","loseReceipt"]){
-      await boot();await begin();await ready();await page.evaluate(property=>window.closeFixture.testPlayback[property]=true,property);await play("マイク").click();await panel().getByRole("alert").filter({hasText:"音声を再生できません"}).waitFor();await released();
+      await boot();await begin();await ready();await page.evaluate(property=>window.closeFixture.testPlayback[property]=true,property);await play("マイク").click();await page.getByRole("alert").filter({hasText:"音声を再生できません"}).first().waitFor();await released();
       check(await count("read_playback_chunk")===0&&await count("cancel_playback_preparation")>=1,"lost playback reply produced audio or leaked reservation");
       await discard().click();await idle();results.push(`${property}: lost private playback reply releases reservation/token without scheduling PCM`);
     }

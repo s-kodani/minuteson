@@ -434,6 +434,9 @@ mod tests {
     }
     #[test]
     fn windows_parity_test_lease_survives_parent_handles_and_recovers_after_helper_exit() {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
         let temp = tempfile::tempdir().unwrap();
         let registry = Registry::open(temp.path()).unwrap();
         let request = crate::capture_test::tests::request();
@@ -445,10 +448,12 @@ mod tests {
             .canonicalize()
             .unwrap();
         let mut launch = crate::capture_test::owned_command(&helper, &directory, &request).unwrap();
+        // Exercise the inherited lease before the helper writes audio or
+        // metadata. Killing a running helper can leave an atomic-write staging
+        // file, which recovery correctly retains as an unknown payload.
         launch
             .arg("--synthetic")
-            .arg("--synthetic-startup-delay-ms")
-            .arg("2000");
+            .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
         let mut child = launch.spawn().unwrap();
         drop(launch);
         drop(directory);

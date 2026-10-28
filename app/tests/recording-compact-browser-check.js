@@ -158,5 +158,13 @@ async page=>{
   await page.getByRole('alert').filter({hasText:'選択したマイクまたは権限'}).first().waitFor();
   check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'preflight failure left an empty test dialog or started capture');
   results.push('failed input preflight reports the error without opening an empty modal or capturing');
+  await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);
+  await testButton().click();await consent.getByRole('button',{name:'5秒テストを開始する',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'模擬編集保存失敗'}).first().waitFor();
+  await page.keyboard.press('Escape');await consent.waitFor({state:'hidden'});
+  check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'failed edit save opened an empty result dialog or captured');
+  await testButton().click();await consent.waitFor();
+  check(await count('start_capture_test')===0,'failed edit save prevented explicit consent retry');
+  results.push('failed edit save returns to the initial trigger without an empty result dialog and permits a new explicit confirmation');
   return {passed:results.length,results};
 }

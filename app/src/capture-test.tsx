@@ -40,7 +40,8 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
     requesting.current=true;
     try{
       const outcome=await onStart(source);
-      if(outcome==="completed"||outcome==="unconfirmed")setOpen(true);
+      const result=control.client.getSnapshot();
+      if(outcome==="completed"||outcome==="unconfirmed"&&!!(result.snapshot||result.pending||result.error))setOpen(true);
     }finally{requesting.current=false;}
   };
   const hasResult=!!run||!!control.pending||!!control.error;
