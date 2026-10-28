@@ -29,7 +29,8 @@ impl Fixture {
         std::fs::create_dir(source_path.join("weights")).unwrap();
         std::fs::write(source_path.join("cli"), b"synthetic; do not execute").unwrap();
         std::fs::write(source_path.join("weights/model.bin"), vec![b'm'; 150000]).unwrap();
-        let manifest = PackageManifest { backend: None,
+        let manifest = PackageManifest {
+            backend: None,
             schema_version: 1,
             engine: Engine::Whisper,
             engine_version: "test".into(),

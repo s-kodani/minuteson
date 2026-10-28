@@ -660,8 +660,13 @@ fn get_asr_preferences(window: WebviewWindow) -> Result<storage::PreferencesSnap
 
 #[tauri::command]
 fn get_asr_backends(window: WebviewWindow) -> Result<Vec<transcription::asr::Descriptor>, String> {
-    if window.label() != "main" { return Err("メイン画面で操作してください".into()); }
-    Ok(transcription::asr::registry().iter().map(|a| a.descriptor()).collect())
+    if window.label() != "main" {
+        return Err("メイン画面で操作してください".into());
+    }
+    Ok(transcription::asr::registry()
+        .iter()
+        .map(|a| a.descriptor())
+        .collect())
 }
 
 #[tauri::command]

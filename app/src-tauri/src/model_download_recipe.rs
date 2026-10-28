@@ -188,8 +188,15 @@ impl Recipe {
                     return Err("同梱実行ファイルの識別子・版・対象・構成が不正です".into());
                 }
             } else if source.url == crate::model_asr_catalog::URI {
-                if self.manifest.engine != crate::model_inspection::Engine::Asr || self.manifest.target != Target::MacosAarch64
-                    || source.archive.is_none() || !matches!(file.role,crate::model_inspection::Role::Executable|crate::model_inspection::Role::Notice) {
+                if self.manifest.engine != crate::model_inspection::Engine::Asr
+                    || self.manifest.target != Target::MacosAarch64
+                    || source.archive.is_none()
+                    || !matches!(
+                        file.role,
+                        crate::model_inspection::Role::Executable
+                            | crate::model_inspection::Role::Notice
+                    )
+                {
                     return Err("ASR同梱素材の対象・構成が不正です".into());
                 }
             } else if source.url == BUNDLED_WINDOWS {

@@ -27,7 +27,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Value) {
     )
     .unwrap();
     std::fs::write(root.join("whisper-runtime.tar"), &bytes).unwrap();
-    let asr=root.parent().unwrap().join("inference-runtime");
+    let asr = root.parent().unwrap().join("inference-runtime");
     std::fs::create_dir(&asr).unwrap();
     std::fs::write(asr.join("asr-index.json"),serde_json::to_vec(&json!({"schemaVersion":1,"archiveBytes":10240,"archiveSha256":hash(b"asr archive"),"files":[
         {"relativePath":"bin/mon-transducer-worker","role":"executable","expectedSize":16,"expectedHash":hash(b"asr worker")},

@@ -2,7 +2,7 @@ use super::*;
 use crate::audio::tests::caf_fixture;
 use crate::transcription::{
     enqueue, process,
-    whisper::{Fingerprint, AsrConfig},
+    whisper::{AsrConfig, Fingerprint},
     RetryRequest,
 };
 use std::os::unix::fs::PermissionsExt;
@@ -76,7 +76,8 @@ pub(crate) fn pending_fixture(root: &Path, seconds: i64) -> (Storage, String, As
     )
     .unwrap();
     std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let config = AsrConfig { backend: None,
+    let config = AsrConfig {
+        backend: None,
         executable: Fingerprint::capture(&cli_path, &crate::test_support::never_cancelled).unwrap(),
         model: Fingerprint::capture(&model_path, &crate::test_support::never_cancelled).unwrap(),
         vad_model: None,

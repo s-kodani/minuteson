@@ -91,8 +91,12 @@ pub(super) fn validate(payload: &AnalysisPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
         if let Some(backend) = &engine.backend {
             backend.validate()?;
-            let descriptor=crate::transcription::asr::find(&backend.id)?.descriptor();
-            if engine.use_gpu && !descriptor.supports_gpu || engine.vad_options.is_some_and(|v| v.samples_overlap_ms!=0 && !descriptor.supports_vad_overlap) {
+            let descriptor = crate::transcription::asr::find(&backend.id)?.descriptor();
+            if engine.use_gpu && !descriptor.supports_gpu
+                || engine
+                    .vad_options
+                    .is_some_and(|v| v.samples_overlap_ms != 0 && !descriptor.supports_vad_overlap)
+            {
                 return Err("文字起こしバックエンドが対応していない設定です".into());
             }
         }

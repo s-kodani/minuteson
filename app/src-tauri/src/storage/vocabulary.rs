@@ -235,7 +235,13 @@ pub(super) fn compile_method(
         }
         match method {
             "transducer-hotwords-v1" => {
-                prompt.push_str(&entries.iter().map(|e| e.entry.term.as_str()).collect::<Vec<_>>().join("\n"));
+                prompt.push_str(
+                    &entries
+                        .iter()
+                        .map(|e| e.entry.term.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
             }
             "whisper-vocabulary-v2" => {
                 for (index, item) in entries.iter().enumerate() {
@@ -389,11 +395,23 @@ impl Storage {
         expected: Option<VocabularyStamp>,
         build: impl FnOnce(VocabularySnapshot) -> Result<JobSpec, String>,
     ) -> Result<JobSnapshot, String> {
-        self.enqueue_with_vocabulary_method(meeting, operation, extra, expected, "whisper-vocabulary-v2", build)
+        self.enqueue_with_vocabulary_method(
+            meeting,
+            operation,
+            extra,
+            expected,
+            "whisper-vocabulary-v2",
+            build,
+        )
     }
     pub(crate) fn enqueue_with_vocabulary_method(
-        &self, meeting: &str, operation: &str, extra: &str, expected: Option<VocabularyStamp>,
-        method: &str, build: impl FnOnce(VocabularySnapshot) -> Result<JobSpec, String>,
+        &self,
+        meeting: &str,
+        operation: &str,
+        extra: &str,
+        expected: Option<VocabularyStamp>,
+        method: &str,
+        build: impl FnOnce(VocabularySnapshot) -> Result<JobSpec, String>,
     ) -> Result<JobSnapshot, String> {
         let mut db = self
             .connection

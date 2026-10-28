@@ -273,7 +273,8 @@ impl Storage {
                     serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
                 let compatibility =
                     super::model_checks::latest(&db, &id)?.map(|check| check.summary);
-                Ok(CatalogEntry { backend_id:record.manifest.backend.as_ref().map(|b|b.id.clone()),
+                Ok(CatalogEntry {
+                    backend_id: record.manifest.backend.as_ref().map(|b| b.id.clone()),
                     package_id: id,
                     source_type: record.source_type().into(),
                     download: record.download.as_ref().map(|origin| {

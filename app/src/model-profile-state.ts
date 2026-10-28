@@ -107,14 +107,15 @@ export function assertApplicationPreview(preview: ModelApplicationPreview, entry
   assertProfileView(current);
   const tuning = diarizationThreads !== undefined || diarizationClusterThresholdMilli !== undefined;
   if (tuning && !current.components.some(component => component.engine === "sherpa-onnx" && component.packageId === entry.packageId && component.checkOperationId === preview.checkOperationId && component.settingsMatch && component.compatibilityCurrent)) fail();
-  if (preview.before.engine === "whisper.cpp" && preview.after.engine === "whisper.cpp"
+  const backendChanged = ["whisper.cpp", "asr"].includes(preview.after.engine)
+    && ((preview.before.settings as EnginePreferences).backend?.id ?? "whisper.cpp") !== ((preview.after.settings as EnginePreferences).backend?.id ?? "whisper.cpp");
+  if ((preview.before.engine === "whisper.cpp" || preview.before.engine === "asr") && !backendChanged
     && preview.before.settings.vadOptions !== undefined && whisperVadOptions === undefined
-    && !sameOptionalVad(preview.before.settings.vadOptions, preview.after.settings.vadOptions)) fail();
+    && !sameOptionalVad(preview.before.settings.vadOptions, (preview.after.settings as EnginePreferences).vadOptions)) fail();
   const hasVad = ["whisper.cpp", "asr"].includes(entry.engine) && entry.modelFiles?.some(f => f.role === "vad");
   for (const change of applicationChanges(preview)) {
     if (change.key === "backend") continue;
-    if (change.key === "vadOptions" && preview.after.engine === "asr" && "backend" in preview.after.settings
-      && JSON.stringify((preview.before.settings as EnginePreferences).backend) !== JSON.stringify(preview.after.settings.backend)) {
+    if (change.key === "vadOptions" && backendChanged) {
       checkedVadOptions(change.after); continue;
     }
     if (change.key === "useGpu" && preview.after.engine === "asr" && change.after === false) continue;

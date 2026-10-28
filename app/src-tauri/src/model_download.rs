@@ -294,8 +294,17 @@ pub(crate) fn download_with_bundle_reuse(
     }
     let mut bundle = crate::model_bundled_runtime::Bundle::open(bundle_root)?;
     bundle.prepare(bundle_root, recipe, cancelled)?;
-    let asr_root=bundle_root.parent().ok_or("ASR素材の場所がありません")?.join("inference-runtime");
-    if recipe.sources.iter().any(|s|s.url==crate::model_asr_catalog::URI) {crate::model_asr_catalog::validate(&asr_root,recipe)?;}
+    let asr_root = bundle_root
+        .parent()
+        .ok_or("ASR素材の場所がありません")?
+        .join("inference-runtime");
+    if recipe
+        .sources
+        .iter()
+        .any(|s| s.url == crate::model_asr_catalog::URI)
+    {
+        crate::model_asr_catalog::validate(&asr_root, recipe)?;
+    }
     let candidates = reusable
         .map(|(root, entries)| reuse::candidates(root, entries, recipe))
         .unwrap_or_default();
@@ -310,7 +319,7 @@ pub(crate) fn download_with_bundle_reuse(
             if url == crate::model_download_recipe::BUNDLED_WHISPER {
                 bundle.fetch(url, size, hash, output, cancelled)
             } else if url == crate::model_asr_catalog::URI {
-                crate::model_asr_catalog::fetch(&asr_root,size,hash,output,cancelled)
+                crate::model_asr_catalog::fetch(&asr_root, size, hash, output, cancelled)
             } else if let Some(candidate) = candidates.iter().find(|c| c.url == url) {
                 candidate.copy(size, hash, output, cancelled, report)
             } else {
@@ -355,7 +364,9 @@ pub(crate) fn download_platform(
     }
     #[cfg(windows)]
     {
-        let candidates=reusable.map(|(root,entries)|reuse::candidates(root,entries,recipe)).unwrap_or_default();
+        let candidates = reusable
+            .map(|(root, entries)| reuse::candidates(root, entries, recipe))
+            .unwrap_or_default();
         crate::windows_runtime::validate_recipe(bundle_root, recipe)?;
         stage(
             staging_root,
@@ -367,8 +378,8 @@ pub(crate) fn download_platform(
             &mut |url, size, hash, output, cancelled, report| {
                 if url == crate::model_download_recipe::BUNDLED_WINDOWS {
                     crate::windows_runtime::fetch(bundle_root, size, hash, output, cancelled)
-                } else if let Some(candidate)=candidates.iter().find(|c|c.url==url) {
-                    candidate.copy(size,hash,output,cancelled,report)
+                } else if let Some(candidate) = candidates.iter().find(|c| c.url == url) {
+                    candidate.copy(size, hash, output, cancelled, report)
                 } else {
                     transport::fetch(url, size, hash, output, cancelled, report)
                 }

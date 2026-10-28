@@ -105,13 +105,42 @@ impl Settings {
                 } else {
                     None
                 };
-                let previous_backend=p.backend.as_ref().map(|b|b.id.clone());
-                p.backend = record.manifest.backend.as_ref().map(|b| crate::transcription::asr::BackendPreferences {
-                    id: b.id.clone(), files: b.files.iter().map(|(k,v)| (k.clone(), directory.join(v).to_string_lossy().into_owned())).collect()
+                let previous_backend = p.backend.as_ref().map(|b| b.id.clone());
+                p.backend = record.manifest.backend.as_ref().map(|b| {
+                    crate::transcription::asr::BackendPreferences {
+                        id: b.id.clone(),
+                        files: b
+                            .files
+                            .iter()
+                            .map(|(k, v)| {
+                                (k.clone(), directory.join(v).to_string_lossy().into_owned())
+                            })
+                            .collect(),
+                    }
                 });
-                let backend_id=p.backend.as_ref().map(|b|b.id.clone());
-                if previous_backend!=backend_id {p.vad_options=Some(crate::transcription::asr::find(backend_id.as_deref().unwrap_or(crate::transcription::asr::WHISPER))?.descriptor().default_vad);}
-                if let Some(backend)=&p.backend { if !crate::transcription::asr::find(&backend.id)?.descriptor().supports_gpu {p.use_gpu=false;} Self::Asr(p) } else { Self::Whisper(p) }
+                let backend_id = p.backend.as_ref().map(|b| b.id.clone());
+                if previous_backend != backend_id {
+                    p.vad_options = Some(
+                        crate::transcription::asr::find(
+                            backend_id
+                                .as_deref()
+                                .unwrap_or(crate::transcription::asr::WHISPER),
+                        )?
+                        .descriptor()
+                        .default_vad,
+                    );
+                }
+                if let Some(backend) = &p.backend {
+                    if !crate::transcription::asr::find(&backend.id)?
+                        .descriptor()
+                        .supports_gpu
+                    {
+                        p.use_gpu = false;
+                    }
+                    Self::Asr(p)
+                } else {
+                    Self::Whisper(p)
+                }
             }
             Self::Sherpa(before) => {
                 let mut p = before.clone();
@@ -343,8 +372,19 @@ fn settings(db: &Connection, name: ProfileName, engine: Engine) -> Result<(Setti
         Engine::Whisper | Engine::Asr => {
             let p = super::preferences::load(db)?;
             (
-                if engine == Engine::Asr { Settings::Asr(if high { p.payload.high_accuracy } else { p.payload.standard }) }
-                else { Settings::Whisper(if high { p.payload.high_accuracy } else { p.payload.standard }) },
+                if engine == Engine::Asr {
+                    Settings::Asr(if high {
+                        p.payload.high_accuracy
+                    } else {
+                        p.payload.standard
+                    })
+                } else {
+                    Settings::Whisper(if high {
+                        p.payload.high_accuracy
+                    } else {
+                        p.payload.standard
+                    })
+                },
                 p.lock_version,
             )
         }

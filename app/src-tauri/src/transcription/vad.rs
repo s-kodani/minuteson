@@ -117,7 +117,8 @@ mod tests {
             std::fs::create_dir(&dir).unwrap();
             crate::test_support::write_wave(&dir.join("input.wav"));
             let capture = |p: &std::path::Path| Fingerprint::capture(p, &|| false).unwrap();
-            let config = AsrConfig { backend: None,
+            let config = AsrConfig {
+                backend: None,
                 executable: capture(&cli),
                 model: capture(&model),
                 vad_model: Some(capture(&vad)),
@@ -201,7 +202,8 @@ mod real_tests {
                 let dir = results.join(format!("{name}-{enabled}"));
                 std::fs::create_dir(&dir).unwrap();
                 std::fs::copy(&wav, dir.join("input.wav")).unwrap();
-                let config = AsrConfig { backend: None,
+                let config = AsrConfig {
+                    backend: None,
                     executable: cli.clone(),
                     model: model.clone(),
                     vad_model: Some(vad.clone()),

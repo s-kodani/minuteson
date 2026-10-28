@@ -41,7 +41,13 @@ impl Snapshot {
             }
             return Ok(());
         }
-        let asr_binary=crate::transcription::asr::worker_binary(&self.engine).map(|n| if cfg!(windows) {format!("{n}.exe")} else {n.to_owned()});
+        let asr_binary = crate::transcription::asr::worker_binary(&self.engine).map(|n| {
+            if cfg!(windows) {
+                format!("{n}.exe")
+            } else {
+                n.to_owned()
+            }
+        });
         let name = match self.engine.as_str() {
             #[cfg(windows)]
             "whisper" => "mon-whisper-worker.exe",
@@ -383,7 +389,9 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
     let snapshot = Snapshot {
         protocol: 1,
         engine: engine.into(),
-        name: crate::transcription::asr::worker_binary(engine).map(str::to_owned).unwrap_or_else(||format!("mon-{engine}-worker")),
+        name: crate::transcription::asr::worker_binary(engine)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("mon-{engine}-worker")),
         bytes: SYNTHETIC.len() as u64,
         sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
         gpu: None,

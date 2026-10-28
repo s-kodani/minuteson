@@ -89,15 +89,46 @@ impl Configuration {
                 use_gpu,
                 backend,
                 vad_options,
-            } => { let settings=preferences::EnginePreferences {
-                threads,
-                use_gpu,
-                backend: backend.as_ref().map(|id|crate::transcription::asr::BackendPreferences {
-                    id:id.clone(),files:crate::transcription::asr::find(id).map(|a|a.descriptor().slots.iter().map(|slot|(slot.to_string(),format!("/portable-model/{slot}"))).collect()).unwrap_or_default()
-                }),
-                vad_options,
-                ..Default::default()
-            }; if backend.is_some(){Settings::Asr(settings)}else{Settings::Whisper(settings)} },
+            } => {
+                let settings = preferences::EnginePreferences {
+                    threads,
+                    use_gpu,
+                    backend: backend.as_ref().map(|id| {
+                        crate::transcription::asr::BackendPreferences {
+                            id: id.clone(),
+                            files: crate::transcription::asr::find(id)
+                                .map(|a| {
+                                    a.descriptor()
+                                        .slots
+                                        .iter()
+                                        .map(|slot| {
+                                            let root = if cfg!(windows) {
+                                                r"C:\portable-model"
+                                            } else {
+                                                "/portable-model"
+                                            };
+                                            (
+                                                slot.to_string(),
+                                                Path::new(root)
+                                                    .join(slot)
+                                                    .to_string_lossy()
+                                                    .into_owned(),
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        }
+                    }),
+                    vad_options,
+                    ..Default::default()
+                };
+                if backend.is_some() {
+                    Settings::Asr(settings)
+                } else {
+                    Settings::Whisper(settings)
+                }
+            }
             Self::Sherpa {
                 threads,
                 cluster_threshold_milli,
@@ -131,6 +162,42 @@ impl Configuration {
                 ..Default::default()
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod asr_portable_tests {
+    use super::*;
+
+    #[test]
+    fn portable_asr_configuration_validates_without_serializing_host_paths() {
+        let config = Configuration::Whisper {
+            threads: 4,
+            use_gpu: false,
+            backend: Some(crate::transcription::asr::TRANSDUCER.into()),
+            vad_options: Some(
+                crate::transcription::asr::find(crate::transcription::asr::TRANSDUCER)
+                    .unwrap()
+                    .descriptor()
+                    .default_vad,
+            ),
+        };
+        let settings = config.settings();
+        settings.validate().unwrap();
+        assert_eq!(settings.engine(), Engine::Asr);
+        assert_eq!(Configuration::from_settings(&settings), config);
+        let encoded = serde_json::to_string(&config).unwrap();
+        assert!(!encoded.contains("portable-model"));
+        assert_eq!(
+            serde_json::from_str::<Configuration>(&encoded).unwrap(),
+            config
+        );
+
+        let mut invalid = settings;
+        if let Settings::Asr(ref mut value) = invalid {
+            value.use_gpu = true;
+        }
+        assert!(invalid.validate().is_err());
     }
 }
 

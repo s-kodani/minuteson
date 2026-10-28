@@ -63,7 +63,16 @@ impl Execution<'_> {
                 let mut files = vec![(Role::Executable, &e.executable), (Role::Asr, &e.model)];
                 files.extend(e.vad_model.iter().map(|f| (Role::Vad, f)));
                 if let Some(backend) = &e.backend {
-                    files.extend(backend.files.iter().map(|(k,f)| (if k == "library" { Role::RuntimeLibrary } else { Role::AsrAsset }, f)));
+                    files.extend(backend.files.iter().map(|(k, f)| {
+                        (
+                            if k == "library" {
+                                Role::RuntimeLibrary
+                            } else {
+                                Role::AsrAsset
+                            },
+                            f,
+                        )
+                    }));
                 }
                 files
             }
@@ -91,15 +100,35 @@ impl Execution<'_> {
                 .ok_or("モデルパスが不正です".into())
         };
         Ok(match self {
-            Self::Asr(e) => { let preferences = preferences::EnginePreferences {
-                executable_path: path(&e.executable)?,
-                model_path: path(&e.model)?,
-                vad_model_path: e.vad_model.as_ref().map(path).transpose()?,
-                vad_options: e.vad_options,
-                threads: e.threads,
-                use_gpu: e.use_gpu,
-                backend: e.backend.as_ref().map(|b| -> Result<_,String> { Ok(crate::transcription::asr::BackendPreferences { id: b.id.clone(), files: b.files.iter().map(|(k,f)| Ok((k.clone(), path(f)?))).collect::<Result<_,String>>()? }) }).transpose()?,
-            }; if e.backend.is_some() { Settings::Asr(preferences) } else { Settings::Whisper(preferences) } },
+            Self::Asr(e) => {
+                let preferences = preferences::EnginePreferences {
+                    executable_path: path(&e.executable)?,
+                    model_path: path(&e.model)?,
+                    vad_model_path: e.vad_model.as_ref().map(path).transpose()?,
+                    vad_options: e.vad_options,
+                    threads: e.threads,
+                    use_gpu: e.use_gpu,
+                    backend: e
+                        .backend
+                        .as_ref()
+                        .map(|b| -> Result<_, String> {
+                            Ok(crate::transcription::asr::BackendPreferences {
+                                id: b.id.clone(),
+                                files: b
+                                    .files
+                                    .iter()
+                                    .map(|(k, f)| Ok((k.clone(), path(f)?)))
+                                    .collect::<Result<_, String>>()?,
+                            })
+                        })
+                        .transpose()?,
+                };
+                if e.backend.is_some() {
+                    Settings::Asr(preferences)
+                } else {
+                    Settings::Whisper(preferences)
+                }
+            }
             Self::Sherpa(e) => {
                 Settings::Sherpa(diarization_preferences::DiarizationEnginePreferences {
                     executable_path: path(&e.executable)?,
@@ -200,7 +229,8 @@ impl Snapshot {
                 // Whisper/llama runtime libraries are verified as part of the whole
                 // package even though their CLI configs have no library argument.
                 f.role != Role::Notice
-                    && (f.role != Role::RuntimeLibrary || matches!(execution.engine(), Engine::Sherpa | Engine::Asr))
+                    && (f.role != Role::RuntimeLibrary
+                        || matches!(execution.engine(), Engine::Sherpa | Engine::Asr))
             })
             .collect::<Vec<_>>();
         if proofs.len() != declared.len() {
@@ -517,10 +547,7 @@ fn flow_selection(
         profile,
     )?;
     let (fixed, snapshot) = match execution {
-        Execution::Asr(_) => (
-            Execution::Asr(&plan.whisper),
-            plan.whisper_managed.clone(),
-        ),
+        Execution::Asr(_) => (Execution::Asr(&plan.whisper), plan.whisper_managed.clone()),
         Execution::Sherpa(_) => (Execution::Sherpa(&plan.sherpa), plan.sherpa_managed.clone()),
         _ => unreachable!(),
     };
@@ -762,8 +789,7 @@ pub(in crate::storage) fn gate_plan(
     value: &Value,
 ) -> Result<(), String> {
     let plan = crate::analysis_flow::saved_plan(value.clone(), profile)?;
-    if current(db, profile, &Execution::Asr(&plan.whisper))?.map(|(s, _)| s)
-        != plan.whisper_managed
+    if current(db, profile, &Execution::Asr(&plan.whisper))?.map(|(s, _)| s) != plan.whisper_managed
         || current(db, profile, &Execution::Sherpa(&plan.sherpa))?.map(|(s, _)| s)
             != plan.sherpa_managed
     {

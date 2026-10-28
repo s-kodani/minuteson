@@ -12,7 +12,8 @@ fn whisper(f: &Fixture) -> AsrConfig {
     let capture = |s: &str| {
         Fingerprint::capture(Path::new(s), &crate::test_support::never_cancelled).unwrap()
     };
-    AsrConfig { backend: None,
+    AsrConfig {
+        backend: None,
         executable: capture(&p.executable_path),
         model: capture(&p.model_path),
         vad_model: p.vad_model_path.as_deref().map(capture),

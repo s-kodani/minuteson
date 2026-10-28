@@ -117,7 +117,11 @@ pub(crate) fn prepare(
         threads: w.threads,
         use_gpu: w.use_gpu,
         prompt: String::new(),
-        backend: w.backend.as_ref().map(|b| b.capture(cancelled)).transpose()?,
+        backend: w
+            .backend
+            .as_ref()
+            .map(|b| b.capture(cancelled))
+            .transpose()?,
     };
     let sherpa = SherpaConfig {
         executable: capture(&d.executable_path)?,

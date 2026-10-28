@@ -919,7 +919,8 @@ fn recording_cancellation_keeps_lease_through_real_partial_copy_and_db_finalizat
     )
     .unwrap();
     std::fs::write(source.path().join("model.bin"), vec![b'm'; 200_000]).unwrap();
-    let manifest = PackageManifest { backend: None,
+    let manifest = PackageManifest {
+        backend: None,
         schema_version: 1,
         engine: Engine::Whisper,
         engine_version: "fixture".into(),

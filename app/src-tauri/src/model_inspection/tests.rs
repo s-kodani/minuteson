@@ -87,7 +87,8 @@ fn fixture(engine: Engine) -> (tempfile::TempDir, PackageManifest) {
             }
         })
         .collect();
-    let manifest = PackageManifest { backend: None,
+    let manifest = PackageManifest {
+        backend: None,
         schema_version: 1,
         engine,
         engine_version: "fixture-version".into(),

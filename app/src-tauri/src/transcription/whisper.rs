@@ -383,7 +383,8 @@ mod tests {
             )
             .unwrap();
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let config = AsrConfig { backend: None,
+            let config = AsrConfig {
+                backend: None,
                 executable: Fingerprint::capture(
                     &executable,
                     &crate::test_support::never_cancelled,
@@ -583,7 +584,8 @@ mod tests {
         let model = root.path().join("model.bin");
         std::fs::write(&model, b"unused synthetic model").unwrap();
         let proof = Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap();
-        let config = AsrConfig { backend: None,
+        let config = AsrConfig {
+            backend: None,
             executable: proof.clone(),
             model: proof,
             vad_model: None,
@@ -631,7 +633,8 @@ mod tests {
             )
             .unwrap()
         };
-        let config = AsrConfig { backend: None,
+        let config = AsrConfig {
+            backend: None,
             executable: proof("MON_WHISPER_CLI"),
             model: proof("MON_WHISPER_MODEL"),
             vad_model: Some(proof("MON_WHISPER_VAD_MODEL")),
@@ -695,7 +698,8 @@ mod tests {
                 frames,
             }],
         };
-        let config = AsrConfig { backend: None,
+        let config = AsrConfig {
+            backend: None,
             executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
@@ -764,7 +768,8 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let config = AsrConfig { backend: None,
+        let config = AsrConfig {
+            backend: None,
             executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
                 .unwrap(),
             model: proof,
@@ -798,7 +803,8 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let model = directory.path().join("model.bin");
         std::fs::write(&model, b"model").unwrap();
-        let mut config = AsrConfig { backend: None,
+        let mut config = AsrConfig {
+            backend: None,
             executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
                 .unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),

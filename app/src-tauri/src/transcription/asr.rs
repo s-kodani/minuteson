@@ -513,7 +513,10 @@ mod tests {
             .descriptor()
             .slots
             .iter()
-            .map(|s| (s.to_string(), format!("/models/{s}")))
+            .map(|s| {
+                let path = std::env::current_dir().unwrap().join("models").join(s);
+                (s.to_string(), path.to_string_lossy().into_owned())
+            })
             .collect();
         b.validate().unwrap();
         b.files.insert("extra".into(), "/models/extra".into());
@@ -523,10 +526,27 @@ mod tests {
     #[ignore = "requires MON_ASR_ASSETS and built native transducer worker"]
     fn native_asr_models_reuse_one_resident_session_and_parse_real_japanese_audio() {
         let assets = std::fs::canonicalize(std::env::var("MON_ASR_ASSETS").unwrap()).unwrap();
+        let worker_name = if cfg!(windows) {
+            "mon-transducer-worker.exe"
+        } else {
+            "mon-transducer-worker"
+        };
+        let package = if cfg!(windows) {
+            "../../.cache/windows-runtime/package/workers"
+        } else {
+            "../../.cache/inference-runtime/package"
+        };
         let exe = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.cache/inference-runtime/package/mon-transducer-worker")
+            .join(package)
+            .join(worker_name)
             .canonicalize()
             .unwrap();
+        #[cfg(windows)]
+        let library = crate::windows_runtime::resources()
+            .unwrap()
+            .join("sherpa/sherpa-onnx-c-api.dll");
+        #[cfg(not(windows))]
+        let library = assets.join("libsherpa-onnx-c-api.dylib");
         let fingerprint = |path: &Path| Fingerprint::capture(path, &|| false).unwrap();
         let binary = fingerprint(&exe);
         let audio = assets.join("japanese-voiced-test.wav");
@@ -540,7 +560,7 @@ mod tests {
             let snapshot = crate::local_engine::resident::Snapshot {
                 protocol: 1,
                 engine: "asr-transducer".into(),
-                name: "mon-transducer-worker".into(),
+                name: worker_name.into(),
                 bytes: binary.size,
                 sha256: binary.sha256.clone(),
                 gpu: None,
@@ -554,12 +574,16 @@ mod tests {
             c.backend.as_mut().unwrap().files = [
                 ("decoder", "decoder-epoch-99-avg-1.onnx".to_owned()),
                 ("joiner", format!("joiner-epoch-99-avg-1{suffix}.onnx")),
-                ("library", "libsherpa-onnx-c-api.dylib".to_owned()),
                 ("tokens", "tokens.txt".to_owned()),
             ]
             .into_iter()
             .map(|(k, p)| (k.to_owned(), fingerprint(&assets.join(p))))
             .collect();
+            c.backend
+                .as_mut()
+                .unwrap()
+                .files
+                .insert("library".into(), fingerprint(&library));
             c.verify(&|| false).unwrap();
             snapshot.resolve(&root_path).unwrap();
             let scope =

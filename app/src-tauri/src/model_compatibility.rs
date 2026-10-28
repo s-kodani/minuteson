@@ -72,7 +72,9 @@ fn hash(value: &str) -> bool {
 pub(crate) fn settings(engine: Engine) -> serde_json::Value {
     use serde_json::json;
     match engine {
-        Engine::Asr => { json!({"protocol":"asr-result-v1","threads":1,"provider":"cpu","input":"synthetic-silence-16k-mono-pcm16-10s"}) }
+        Engine::Asr => {
+            json!({"protocol":"asr-result-v1","threads":1,"provider":"cpu","input":"synthetic-silence-16k-mono-pcm16-10s"})
+        }
         Engine::Whisper => {
             json!({"protocol":"whisper-cli-json-v1","threads":1,"useGpu":false,"language":"ja","translate":false,"beamSize":5,"input":"synthetic-silence-16k-mono-pcm16-10s","prompt":""})
         }

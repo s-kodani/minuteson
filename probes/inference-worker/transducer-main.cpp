@@ -1,6 +1,14 @@
+#ifdef _WIN32
+// Keep Windows min/max macros out of the C++ range calculations below.
+#define NOMINMAX
+#endif
 #include "worker.hpp"
 #include "pcm-input.hpp"
 #include "sherpa-api.hpp"
+#ifdef _WIN32
+// worker.hpp maps the POSIX descriptor API; this file closes a C++ stream.
+#undef close
+#endif
 #include <set>
 #include <sstream>
 

@@ -121,3 +121,30 @@ test("VAD options bind the request and readback without accepting changes to oth
   assert.throws(()=>assertApplicationPreview(p,{...e,engine:"llama.cpp"},"standard",empty,undefined,undefined,options));
   assert.doesNotThrow(()=>assertAppliedPreferences({lockVersion:6,payload:{standard:p.after.settings,highAccuracy:before.settings}},p));
 });
+
+test("switching ASR backends accepts destination VAD defaults in both directions", () => {
+  const whisperVad = { enabled:true,thresholdMilli:600,minSpeechDurationMs:300,minSilenceDurationMs:100,maxSpeechDurationS:30,speechPadMs:30,samplesOverlapMs:100 };
+  const transducerVad = { ...whisperVad, thresholdMilli:500,minSpeechDurationMs:250,minSilenceDurationMs:500,speechPadMs:200,samplesOverlapMs:0 };
+  const backend = { id:"sherpa-onnx-transducer", files:{decoder:"C:/models/decoder.onnx",joiner:"C:/models/joiner.onnx",library:"C:/models/sherpa-onnx-c-api.dll",tokens:"C:/models/tokens.txt"} };
+  const whisperSettings = { ...after.settings, useGpu:false,vadModelPath:"C:/models/whisper-vad.bin",vadOptions:whisperVad };
+  const transducerSettings = { ...after.settings, modelPath:"C:/models/encoder.onnx",vadModelPath:"C:/models/silero_vad.onnx",vadOptions:transducerVad,useGpu:false,backend };
+  for (const engine of ["whisper.cpp", "asr"] as const) {
+    const p: ModelApplicationPreview = { ...preview,
+      before:{engine,settings:engine === "asr" ? {...whisperSettings,useGpu:true} : transducerSettings},
+      after:{engine,settings:engine === "asr" ? transducerSettings : whisperSettings},
+    };
+    const e = { ...entry, engine,modelFiles:[{role:"vad",size:1,sha256:"a".repeat(64)}] };
+    assert.doesNotThrow(() => assertApplicationPreview(p,e,"standard",empty), engine);
+    assert.doesNotThrow(() => assertAppliedPreferences({lockVersion:6,payload:{standard:p.after.settings,highAccuracy:p.before.settings}},p));
+  }
+});
+
+test("changing weights within one ASR backend preserves customized VAD settings", () => {
+  const vadOptions = { enabled:true,thresholdMilli:750,minSpeechDurationMs:450,minSilenceDurationMs:700,maxSpeechDurationS:30,speechPadMs:200,samplesOverlapMs:0 };
+  const backend = { id:"sherpa-onnx-transducer", files:{decoder:"C:/models/decoder.onnx",joiner:"C:/models/joiner.onnx",library:"C:/models/sherpa-onnx-c-api.dll",tokens:"C:/models/tokens.txt"} };
+  const settings = { ...after.settings, useGpu:false,vadModelPath:"C:/models/silero_vad.onnx",vadOptions,backend };
+  const p: ModelApplicationPreview = { ...preview,before:{engine:"asr",settings},after:{engine:"asr",settings:{...settings,modelPath:"C:/new/encoder.onnx",backend:{...backend,files:{...backend.files,joiner:"C:/new/joiner.onnx"}}}} };
+  const e = { ...entry,engine:"asr",modelFiles:[{role:"vad",size:1,sha256:"a".repeat(64)}] };
+  assert.doesNotThrow(() => assertApplicationPreview(p,e,"standard",empty));
+  assert.throws(() => assertApplicationPreview({...p,after:{engine:"asr",settings:{...p.after.settings,vadOptions:{...vadOptions,thresholdMilli:500}}}},e,"standard",empty));
+});

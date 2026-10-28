@@ -12,7 +12,8 @@ fn fixture(seconds: u64) -> (tempfile::TempDir, whisper::AsrConfig) {
         size: 1,
         sha256: "a".repeat(64),
     };
-    let config = whisper::AsrConfig { backend: None,
+    let config = whisper::AsrConfig {
+        backend: None,
         executable: proof.clone(),
         model: proof,
         vad_model: None,
@@ -217,7 +218,8 @@ fn private_meeting_transcription_reaches_the_last_unit() {
     };
     let _resident_scope =
         crate::local_engine::resident::Scope::enter(&output, Some(&snapshot)).unwrap();
-    let config = whisper::AsrConfig { backend: None,
+    let config = whisper::AsrConfig {
+        backend: None,
         executable: snapshot.resolve(&output).unwrap(),
         model: Fingerprint::capture(&model, &|| false).unwrap(),
         vad_model: Some(Fingerprint::capture(&vad, &|| false).unwrap()),

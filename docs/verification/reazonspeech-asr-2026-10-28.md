@@ -29,3 +29,5 @@ The Japanese input was generated locally using the installed Kyoko voice, conver
 ## Limits
 
 Windows native compilation and execution were not available on this Mac. Windows validation covers the packaging transformation and shared sources, not a Windows runtime result. Historical job/backup compatibility and cross-OS data migration were outside this change's scope.
+
+Subsequent Windows compilation, real-model execution, fixes and regression checks are recorded in [the Windows verification](reazonspeech-windows-2026-10-29.md).

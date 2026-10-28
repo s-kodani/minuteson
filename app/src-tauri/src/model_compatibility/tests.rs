@@ -63,7 +63,8 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
         expected_size: None,
         expected_hash: None,
     }));
-    let manifest = PackageManifest { backend: None,
+    let manifest = PackageManifest {
+        backend: None,
         schema_version: 1,
         engine,
         engine_version: "fixture declaration".into(),

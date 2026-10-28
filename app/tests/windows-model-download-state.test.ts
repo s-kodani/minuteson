@@ -59,9 +59,9 @@ test("all Windows model choices from the native IPC pass the production frontend
 }, async () => {
   const native = JSON.parse(readFileSync(process.env.MON_WINDOWS_MODEL_OPTIONS!, "utf8"));
   const choices = await assertOfficialModelOptions(native);
-  assert.equal(choices.length, 14);
+  assert.equal(choices.length, 16);
   assert.deepEqual(choices.map(o => o.review.manifest.engine).reduce((counts, engine) => {
     counts[engine] = (counts[engine] ?? 0) + 1; return counts;
-  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 6 });
+  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 6, "asr": 2 });
   for (const choice of choices) assert.ok(choice.review.bundledBytes! > 0);
 });

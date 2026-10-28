@@ -17,7 +17,8 @@ pub(super) fn candidates(
 ) -> Vec<Candidate> {
     let mut result = vec![];
     for (file, source) in recipe.manifest.files.iter().zip(&recipe.sources) {
-        if !matches!(file.role, Role::Asr | Role::AsrAsset | Role::Vad) || source.archive.is_some() {
+        if !matches!(file.role, Role::Asr | Role::AsrAsset | Role::Vad) || source.archive.is_some()
+        {
             continue;
         }
         if let Some(entry) = entries.iter().find(|entry| {
@@ -88,30 +89,82 @@ mod tests {
     use super::*;
     #[test]
     fn asr_model_acquisition_reuses_weights_when_only_the_runtime_recipe_changes() {
-        let temp=tempfile::tempdir().unwrap();let root=temp.path().canonicalize().unwrap();
-        let models=root.join("models");std::fs::create_dir(&models).unwrap();
-        let id=uuid::Uuid::new_v4().to_string();let package=models.join(&id);
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let models = root.join("models");
+        std::fs::create_dir(&models).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let package = models.join(&id);
         std::fs::create_dir_all(package.join("models")).unwrap();
-        let weights=b"existing GGML bytes kept across adapter updates";
-        let engine=b"new runtime bytes";
-        let sha=|bytes:&[u8]|format!("{:x}",Sha256::digest(bytes));
-        std::fs::write(package.join("models/model.bin"),weights).unwrap();
+        let weights = b"existing GGML bytes kept across adapter updates";
+        let engine = b"new runtime bytes";
+        let sha = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        std::fs::write(package.join("models/model.bin"), weights).unwrap();
         let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{
             "schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"Whisper test","modelVersion":"unchanged","quantization":null,"target":"macos_aarch64","licenseRef":"test",
             "files":[{"relativePath":"bin/engine","role":"executable","expectedSize":engine.len(),"expectedHash":sha(engine)},
                      {"relativePath":"models/model.bin","role":"asr","expectedSize":weights.len(),"expectedHash":sha(weights)}]},
             "sources":[{"relativePath":"bin/engine","url":"https://runtime.invalid/engine"},{"relativePath":"models/model.bin","url":"https://weights.invalid/model"}]})).unwrap();
-        let entry=CatalogEntry { backend_id:None, package_id:id,source_type:"download".into(),download:None,model_name:"Whisper test".into(),model_version:"unchanged".into(),quantization:None,
-            model_files:vec![crate::model_placement::ModelFileIdentity{role:Role::Asr,size:weights.len() as u64,sha256:sha(weights)}],engine:"whisper.cpp".into(),engine_version:"old runtime".into(),total_bytes:weights.len() as u64,
-            placement_recorded:true,body_removed:false,ready:false,review_hash:"a".repeat(64),compatibility:None };
-        let found=candidates(&models,&[entry],&recipe);assert_eq!(found.len(),1);
-        let receipt=super::super::stage(&root.join("downloads"),&uuid::Uuid::new_v4().to_string(),&recipe,&recipe.hash().unwrap(),&||false,&mut|_,_|{},
-            &mut|url,size,hash,out,cancelled,progress| {
-                if let Some(existing)=found.iter().find(|f|f.url==url){existing.copy(size,hash,out,cancelled,progress)}
-                else {assert_eq!(url,"https://runtime.invalid/engine","model network fetch must never happen");out.write_all(engine).map_err(|e|e.to_string())?;progress(engine.len() as u64);Ok(())}
-            }).unwrap();
-        assert_eq!(receipt.report.files.iter().find(|f|f.role==Role::Asr).unwrap().actual_hash,sha(weights));
-        assert_eq!(std::fs::read(package.join("models/model.bin")).unwrap(),weights);
+        let entry = CatalogEntry {
+            backend_id: None,
+            package_id: id,
+            source_type: "download".into(),
+            download: None,
+            model_name: "Whisper test".into(),
+            model_version: "unchanged".into(),
+            quantization: None,
+            model_files: vec![crate::model_placement::ModelFileIdentity {
+                role: Role::Asr,
+                size: weights.len() as u64,
+                sha256: sha(weights),
+            }],
+            engine: "whisper.cpp".into(),
+            engine_version: "old runtime".into(),
+            total_bytes: weights.len() as u64,
+            placement_recorded: true,
+            body_removed: false,
+            ready: false,
+            review_hash: "a".repeat(64),
+            compatibility: None,
+        };
+        let found = candidates(&models, &[entry], &recipe);
+        assert_eq!(found.len(), 1);
+        let receipt = super::super::stage(
+            &root.join("downloads"),
+            &uuid::Uuid::new_v4().to_string(),
+            &recipe,
+            &recipe.hash().unwrap(),
+            &|| false,
+            &mut |_, _| {},
+            &mut |url, size, hash, out, cancelled, progress| {
+                if let Some(existing) = found.iter().find(|f| f.url == url) {
+                    existing.copy(size, hash, out, cancelled, progress)
+                } else {
+                    assert_eq!(
+                        url, "https://runtime.invalid/engine",
+                        "model network fetch must never happen"
+                    );
+                    out.write_all(engine).map_err(|e| e.to_string())?;
+                    progress(engine.len() as u64);
+                    Ok(())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            receipt
+                .report
+                .files
+                .iter()
+                .find(|f| f.role == Role::Asr)
+                .unwrap()
+                .actual_hash,
+            sha(weights)
+        );
+        assert_eq!(
+            std::fs::read(package.join("models/model.bin")).unwrap(),
+            weights
+        );
     }
     #[test]
     fn reused_bytes_are_copied_only_after_recorded_identity_and_hash_checks() {
@@ -125,7 +178,8 @@ mod tests {
         std::fs::write(&path, data).unwrap();
         let hash = format!("{:x}", Sha256::digest(data));
         let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"test","modelVersion":"fixed","quantization":null,"target":"macos_aarch64","licenseRef":"test","files":[{"relativePath":"models/model.bin","role":"asr","expectedSize":data.len(),"expectedHash":hash}]},"sources":[{"relativePath":"models/model.bin","url":"https://example.com/model"}]})).unwrap();
-        let mut entry = CatalogEntry { backend_id:None,
+        let mut entry = CatalogEntry {
+            backend_id: None,
             package_id: id,
             source_type: "download".into(),
             download: None,

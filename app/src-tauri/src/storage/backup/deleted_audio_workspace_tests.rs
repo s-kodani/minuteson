@@ -264,7 +264,8 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
     )
     .unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let engine = crate::transcription::asr::AsrConfig { backend: None,
+    let engine = crate::transcription::asr::AsrConfig {
+        backend: None,
         executable: crate::local_engine::Fingerprint::capture(
             &cli,
             &crate::test_support::never_cancelled,

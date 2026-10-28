@@ -1,9 +1,9 @@
 //! Local ASR execution through registered adapters. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
 pub(crate) mod asr;
-mod transducer;
 mod guard;
 mod recovery;
+mod transducer;
 pub(crate) use recovery::ReviewRange;
 pub(crate) mod input;
 mod restore;
@@ -25,8 +25,8 @@ use crate::storage::KnownInput;
 use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
 };
-use serde::{Deserialize, Serialize};
 use asr::AsrConfig;
+use serde::{Deserialize, Serialize};
 
 fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
     let current = storage.recorded_analysis_input(&spec.meeting_id)?;
@@ -90,7 +90,8 @@ pub(crate) struct StartRequest {
 #[cfg(test)]
 impl StartRequest {
     pub fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
-        let engine = AsrConfig { backend: None,
+        let engine = AsrConfig {
+            backend: None,
             executable: whisper::Fingerprint::capture(
                 &self.executable_path,
                 &crate::test_support::never_cancelled,
@@ -342,7 +343,14 @@ fn checked_output(
     duration: i64,
 ) -> Result<Vec<whisper::Segment>, String> {
     if parameters.recognition_policy == Some(RecognitionPolicy::AdapterV1) {
-        if rejected.is_some() || output.recognition.as_ref().is_none_or(|a| a.rejected.is_some() || !a.reasons.is_empty()) { return Err("ASR採用記録が不正です".into()); }
+        if rejected.is_some()
+            || output
+                .recognition
+                .as_ref()
+                .is_none_or(|a| a.rejected.is_some() || !a.reasons.is_empty())
+        {
+            return Err("ASR採用記録が不正です".into());
+        }
         return asr::adapter(&parameters.engine)?.parse_result(bytes, &parameters.engine, duration);
     }
     if parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3)
@@ -495,7 +503,11 @@ fn decode_parameters(
         || parameters.optimization_version != Some(crate::current_formats::OPTIMIZATION)
         || !matches!(
             parameters.recognition_policy,
-            Some(RecognitionPolicy::GuardedVocabularyV2 | RecognitionPolicy::AdaptiveRecoveryV3 | RecognitionPolicy::AdapterV1)
+            Some(
+                RecognitionPolicy::GuardedVocabularyV2
+                    | RecognitionPolicy::AdaptiveRecoveryV3
+                    | RecognitionPolicy::AdapterV1
+            )
         )
         || spec.kind != JobKind::Transcription
         || parameters.schema_version != crate::current_formats::TRANSCRIPTION
@@ -515,17 +527,16 @@ fn decode_parameters(
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
     }
     if parameters.recognition_policy.is_some()
-        && parameters
-            .vocabulary
-            .as_ref()
-            .is_none_or(|v| v.method != asr::adapter(&parameters.engine).map(|a| a.descriptor().vocabulary_method).unwrap_or(""))
+        && parameters.vocabulary.as_ref().is_none_or(|v| {
+            v.method
+                != asr::adapter(&parameters.engine)
+                    .map(|a| a.descriptor().vocabulary_method)
+                    .unwrap_or("")
+        })
     {
         return Err("新しい認識ポリシーと用語方式が一致しません".into());
     }
-    managed::validate(
-        &spec.profile_snapshot,
-        Execution::Asr(&parameters.engine),
-    )?;
+    managed::validate(&spec.profile_snapshot, Execution::Asr(&parameters.engine))?;
     Ok(parameters)
 }
 
@@ -636,12 +647,8 @@ pub(crate) fn enqueue_with_stamp(
         return Err("解析プロファイルが不正です".into());
     }
     engine.verify(&|| false)?;
-    let selected = storage.job_model_selection(
-        meeting_id,
-        operation_id,
-        profile,
-        Execution::Asr(&engine),
-    )?;
+    let selected =
+        storage.job_model_selection(meeting_id, operation_id, profile, Execution::Asr(&engine))?;
     storage.ensure_meeting_mix(meeting_id, &|| false, &|_, _| {})?;
     let (source, known_input) = storage.recorded_analysis_input(meeting_id)?;
     if source.tracks.len() != 1 || source.tracks[0].kind != "processed" {
@@ -650,8 +657,12 @@ pub(crate) fn enqueue_with_stamp(
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
     let units = planned_units(&source, known_input.as_ref())?;
     let total = units.len() as i64;
-    let resident_runtime =
-        crate::local_engine::resident::prepare_job(storage, meeting_id, operation_id, asr::adapter(&engine)?.descriptor().worker)?;
+    let resident_runtime = crate::local_engine::resident::prepare_job(
+        storage,
+        meeting_id,
+        operation_id,
+        asr::adapter(&engine)?.descriptor().worker,
+    )?;
     let optimization_version =
         storage.optimization_version_for_operation(meeting_id, operation_id)?;
     let extra = engine.prompt.clone();
@@ -809,7 +820,12 @@ pub(crate) fn process(
                         .is_some_and(|file| {
                             let mut log = String::new();
                             file.take(65536).read_to_string(&mut log).is_ok()
-                                && log.contains(&format!("mon_model_load: {}=1", asr::adapter(&runtime).map(|a| a.descriptor().worker).unwrap_or("unknown")))
+                                && log.contains(&format!(
+                                    "mon_model_load: {}=1",
+                                    asr::adapter(&runtime)
+                                        .map(|a| a.descriptor().worker)
+                                        .unwrap_or("unknown")
+                                ))
                         });
                     if ready {
                         loading.set(false);
@@ -921,7 +937,12 @@ pub(crate) fn process(
                 if !recovered && runtime.model.path != parameters.engine.model.path {
                     let bytes =
                         crate::restored_processing::read_local(path, 8 * 1024 * 1024, &cancelled)?;
-                    let normalized = asr::adapter(&runtime)?.logical_output(&bytes, &runtime, &parameters.engine, duration)?;
+                    let normalized = asr::adapter(&runtime)?.logical_output(
+                        &bytes,
+                        &runtime,
+                        &parameters.engine,
+                        duration,
+                    )?;
                     result_path = path.with_file_name("logical-result.json");
                     crate::restored_processing::write_new(&result_path, &normalized)?;
                 }
@@ -1148,7 +1169,8 @@ mod recognition_policy_tests {
 
     #[test]
     fn gpu_policy_is_optional_versioned_and_preserves_base_configuration() {
-        let base = AsrConfig { backend: None,
+        let base = AsrConfig {
+            backend: None,
             executable: whisper::Fingerprint {
                 path: "/cli".into(),
                 size: 1,

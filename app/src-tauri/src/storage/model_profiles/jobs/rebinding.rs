@@ -237,7 +237,9 @@ impl Binding {
                     None
                 };
                 if let Some(backend) = &mut c.backend {
-                    for file in backend.files.values_mut() { *file = proofs.next().ok_or("ASR補助モデルが不足しています")?; }
+                    for file in backend.files.values_mut() {
+                        *file = proofs.next().ok_or("ASR補助モデルが不足しています")?;
+                    }
                 }
                 Resolved::Asr(c)
             }

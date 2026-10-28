@@ -1,6 +1,6 @@
 //! Versioned quality gate. Normalization is for comparison only; accepted
 //! engine text and timestamps are never edited by this module.
-use super::whisper::{self, Segment, AsrConfig};
+use super::whisper::{self, AsrConfig, Segment};
 use crate::storage::VocabularySnapshot;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

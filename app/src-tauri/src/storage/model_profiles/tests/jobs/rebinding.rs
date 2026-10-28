@@ -616,8 +616,7 @@ fn check_execution<T>(spec: &JobSpec, run: impl FnOnce(Execution<'_>) -> T) -> T
             panic!("not a rebinding fixture")
         }
         JobKind::Transcription => {
-            let e: AsrConfig =
-                serde_json::from_value(spec.parameters["engine"].clone()).unwrap();
+            let e: AsrConfig = serde_json::from_value(spec.parameters["engine"].clone()).unwrap();
             run(Execution::Asr(&e))
         }
         JobKind::Diarization => {

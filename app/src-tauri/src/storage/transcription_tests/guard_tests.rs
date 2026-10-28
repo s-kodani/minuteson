@@ -1,11 +1,7 @@
 use super::*;
 use serde_json::json;
 
-fn engine(
-    root: &Path,
-    seconds: i64,
-    fail_plain: bool,
-) -> (Storage, String, AsrConfig, PathBuf) {
+fn engine(root: &Path, seconds: i64, fail_plain: bool) -> (Storage, String, AsrConfig, PathBuf) {
     let (storage, meeting, mut config) = fixture(root, seconds);
     let calls = root.join("calls.jsonl");
     let model = &config.model.path;
