@@ -1,4 +1,3 @@
-import { ErrorNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import {invoke} from "@tauri-apps/api/core";
 import {useEffect,useRef,useState} from "react";
@@ -78,7 +77,7 @@ export function CaptureTestAudio({run,locked}:{run:CaptureTestSnapshot;locked:bo
         {snapshot.info&&<span>{(snapshot.frame/snapshot.info.sampleRate).toFixed(1)} / {(snapshot.info.totalFrames/snapshot.info.sampleRate).toFixed(1)}秒</span>}
       </div>
       {snapshot.buffering&&<p role="status">音声を読み込んでいます。</p>}
-      <ErrorNotice scope="capture-test-audio" type="CaptureTestAudio-operation" active={!!((error||snapshot.error))}>音声を再生できません: {error||snapshot.error}</ErrorNotice>
+      {(error||snapshot.error)&&<p role="alert" className="capture-test-error">音声を再生できません: {error||snapshot.error}</p>}
     </div>}
   </div>;
 }

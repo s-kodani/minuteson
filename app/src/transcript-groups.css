@@ -4,3 +4,9 @@
 .speaker-identification summary {cursor:pointer;width:fit-content}
 .speaker-identification.needs-review summary {color:var(--text);font-weight:600;border-inline-start:3px solid #b7791f;padding-inline-start:6px}
 .speaker-identification p {margin:6px 0;line-height:1.6}
+
+/* Shared action sizing with the minutes header. */
+.transcript-primary-heading { padding:8px; }
+.transcript-primary-heading h2 { margin:0; }
+.transcript-copy-host,.transcript-generation-host { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.transcript-copy-status { font-size:12px; overflow-wrap:anywhere; }

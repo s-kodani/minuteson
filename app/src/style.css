@@ -419,3 +419,5 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .minutes-prompt-settings p { color: var(--muted); font-size: 13px; line-height: 1.7; }
 
 .common-operation-progress .progress-jobs-link { pointer-events:auto; margin-top:6px; background:var(--raised); }
+
+.capture-test-error,.confirmation-error { color:var(--danger-text); overflow-wrap:anywhere; }

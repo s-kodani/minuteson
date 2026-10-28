@@ -11,14 +11,18 @@ async page => {
   };
   const dialog=()=>page.getByRole('dialog',{name:'会議管理・録音・解析操作',exact:true});
   const reopen=async()=>{await dialog().waitFor({state:'hidden'});await page.getByRole('button',{name:'会議管理・録音・解析操作',exact:true}).click();};
+  const generate=async label=>{
+    if(await dialog().isVisible())await dialog().locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
+    await page.getByRole('tabpanel',{name:'文字起こし',exact:true}).getByRole('button',{name:label,exact:true}).click();
+  };
   await boot();
   const select=page.getByRole('combobox',{name:'会議全体の話者数',exact:true});
   check(await select.inputValue()==='','new view was not automatic');
-  await select.selectOption('5');await dialog().getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
+  await select.selectOption('5');await generate('文字起こしを再生成');
   await page.getByRole('button',{name:'確認をキャンセル',exact:true}).click();
   check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(c=>c.command==='regenerate_transcription')),'cancel started work');results.push('optional count defaults to auto and cancel performs no generation');
-  await dialog().getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
-  await page.getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
+  await generate('文字起こしを再生成');
+  await page.getByRole('dialog',{name:'文字起こしを再生成',exact:true}).getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
   await page.waitForFunction(()=>!!window.monBrowserFixture.regenerationRequest);
   check(await page.evaluate(()=>{const f=window.monBrowserFixture,r=f.regenerationRequest;return r.numSpeakers===5&&!('speakerCounts' in r)&&JSON.stringify([f.preferences,f.diarizationPreferences])===f.speakerTestPreferences;}),'count did not bind to the requested generation or changed global settings');
   await select.waitFor({state:'hidden'});
@@ -29,7 +33,7 @@ async page => {
   await page.screenshot({path:'output/playwright/diarization-speaker-fields-hidden.png'});results.push('five speakers belong to this generation only and global model settings remain unchanged');
   await boot(true);await select.selectOption('5');
   await page.evaluate(()=>{window.monBrowserFixture.regenerationLostResponse=true;});
-  await dialog().getByRole('button',{name:'文字起こしを生成',exact:true}).click();
+  await generate('文字起こしを生成');
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==='transcription');
   check(await page.evaluate(()=>{const c=window.monBrowserFixture.calls.filter(c=>c.command==='regenerate_transcription');return c.length===1&&c[0].args.request.expected.target===null&&c[0].args.request.numSpeakers===5;}),'initial generation or lost acknowledgement lost the count or duplicated admission');
   results.push('first generation freezes the count once even when its acknowledgement is lost');
@@ -38,8 +42,8 @@ async page => {
   const count=page.getByRole('combobox',{name:'会議全体の話者数',exact:true});await count.waitFor();
   check(await count.inputValue()==='','count leaked to another operation');
   await count.selectOption('4');
-  await dialog().getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
-  await page.getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
+  await generate('文字起こしを再生成');
+  await page.getByRole('dialog',{name:'文字起こしを再生成',exact:true}).getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
   await page.waitForFunction(()=>!!window.monBrowserFixture.regenerationRequest);
   check(await page.evaluate(()=>window.monBrowserFixture.regenerationRequest.numSpeakers===4),'whole meeting count was not sent');
   results.push('microphone and PC audio share one whole-meeting speaker limit');
@@ -49,14 +53,14 @@ async page => {
   check(await dialog().getByRole('combobox',{name:/話者数/}).count()===0,'diarization showed settings');
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.analysisFlow.diarizationJob.state='paused';await f.emitNotification();});
   await dialog().getByText('話者分離を一時停止しています。進捗は画面上部で確認できます。',{exact:true}).waitFor();
-  await dialog().getByRole('button',{name:'再開',exact:true}).waitFor();
+  check(await page.locator('.transcript-generation-host button').filter({hasText:'生成を再開'}).count()===1,'paused stage has no resume action');
   check(await dialog().getByRole('combobox',{name:/話者数/}).count()===0,'paused processing showed settings');
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.analysisFlow.stage='review';f.analysisFlow.diarizationJob=null;await f.emitNotification();});
   await count.waitFor();
   check(await count.inputValue()==='4','hidden settings lost their selected value');
   results.push('processing and paused stages hide settings and explain status; completed processing restores selections');
   await boot(true);
-  await dialog().getByRole('button',{name:'文字起こしを生成',exact:true}).click();
+  await generate('文字起こしを生成');
   await page.waitForFunction(()=>!!window.monBrowserFixture.regenerationRequest);
   check(await page.evaluate(()=>window.monBrowserFixture.regenerationRequest.numSpeakers===null),'automatic selection did not send null');
   results.push('automatic first generation explicitly sends numSpeakers null');

@@ -191,6 +191,9 @@ function MainWindow() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   useLayoutEffect(() => { closeInfoPopovers(); }, [detailTab]);
   const [meetingToolsOpen, setMeetingToolsOpen] = useState(false);
+  const [transcriptActionsHost, setTranscriptActionsHost] = useState<HTMLDivElement | null>(null);
+  const [transcriptCopyHost, setTranscriptCopyHost] = useState<HTMLDivElement | null>(null);
+  const [captureTestError, setCaptureTestError] = useState("");
   const [meetingActionsHost, setMeetingActionsHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => { setDetailTab("transcript"); }, [selectedMeeting?.id]);
   const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
@@ -542,7 +545,7 @@ function MainWindow() {
     if(!captureOwner||!captureInputs.selected||!captureScope.scope||root.current.baseWriteLocked||starting.current||closing.current)return;
     const owner=captureOwner,uid=captureInputs.uid,scope=checkedCaptureScope(captureScope.scope,captureScope.applications),scopeKey=JSON.stringify(scope);
     const sameInputs=()=>root.current.screen==="recording"&&(root.current.preparation?.id??root.current.selectedMeeting?.id)===owner&&root.current.captureInputs.uid===uid&&JSON.stringify(root.current.captureScope.scope)===scopeKey;
-    starting.current=true;setCaptureBusy(true);setCaptureError("");
+    starting.current=true;setCaptureBusy(true);setCaptureTestError("");
     try{
       const previous=await captureTest.client.refresh();
       if(previous?.busy)throw Error("前のテストの停止・検証を待ってください。");
@@ -552,7 +555,7 @@ function MainWindow() {
       const apps=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
       checkedCaptureScope(scope,apps);
       const app=captureApplicationScope(scope,apps);
-      return await startConfirm({opener:source,title:"5秒の録音前テストを開始しますか？",target:`${microphone.name} ／ ${scope.mode==="system"?"PCの再生音全体":app?.name}`,confirmLabel:"5秒テストを開始する",
+      return await startConfirm({opener:source,inlineErrors:true,title:"5秒の録音前テストを開始しますか？",target:`${microphone.name} ／ ${scope.mode==="system"?"PCの再生音全体":app?.name}`,confirmLabel:"5秒テストを開始する",
         message:"マイクとPCの音を一時保存します。参加者の同意と録音権限を確認してください。入力の初期化が終わってから5秒録音し、停止後に各音声を再生できます。会議・解析結果は作りません。解析とモデル準備は安全な停止を待ちます。"+
           (captureInputs.mode==="automatic"?"この5秒テストはOSの既定マイクを確認します。通常録音で会議アプリの別のマイクが選ばれた場合、その入力の検証にはなりません。":"")+
           (scope.mode==="system"?"PC音声には通知音や他の動画の音も含まれます。":"選択したアプリを取得します。ブラウザの他のタブの音も含まれる場合があります。終了・再起動時に別アプリへ切り替えません。")+
@@ -570,17 +573,19 @@ function MainWindow() {
           if((current?.runId??null)!==(previous?.runId??null)||current?.busy)throw Error("前のテストの状態が変更されています。");
           if(current)await captureTest.client.discard(current.runId);
           await captureTest.client.start({runId:crypto.randomUUID(),microphoneUid:uid,captureScope:scope,expectedImport:{token:importing.token,revision:importing.revision,busy:importing.busy}});
-        }),onError:cause=>setCaptureError(String(cause))});
-    }catch(cause){setCaptureError(String(cause));}
+        }),onError:cause=>setCaptureTestError(String(cause))});
+    }catch(cause){setCaptureTestError(String(cause));}
     finally{starting.current=false;setCaptureBusy(false);}
   };
   const cancelCaptureTest=async()=>{
     const id=captureTest.snapshot?.runId??captureTest.pending?.runId;if(!id)return;
-    try{await captureTest.client.cancel(id);}catch(cause){setCaptureError(String(cause));}
+    setCaptureTestError("");
+    try{await captureTest.client.cancel(id);}catch(cause){setCaptureTestError(String(cause));}
   };
   const discardCaptureTest=async()=>{
     const id=captureTest.snapshot?.runId;if(!id)return;
-    try{await stopAllPlayback();await captureTest.client.discard(id);}catch(cause){setCaptureError(String(cause));}
+    setCaptureTestError("");
+    try{await stopAllPlayback();await captureTest.client.discard(id);}catch(cause){setCaptureTestError(String(cause));}
   };
   const stopRecording = async (source?:HTMLElement) => {
     await recordingDecision.request(false,source);
@@ -783,12 +788,12 @@ function MainWindow() {
               onSettings={()=>void withSavedEdits(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
               inputs={captureAvailable?<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||!!preparation?.submitted||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>:<p>録音ヘルパーを利用できません。アプリのインストール状態と内部ログを確認してください。</p>}
               activeMicrophone={captureAvailable&&activeMicrophoneInput?<ActiveMicrophoneSelection control={captureInputs} locked={writeLocked||!captureInputs.inputs} onSelect={value=>void selectRecordingMicrophone(value)} status={microphoneSelection} pending={microphoneSelection?.source==="pending"||microphoneRequest?.owner===microphoneSession&&(!microphoneSelection||microphoneSelection.requestRevision<microphoneRequest.revision)}/>:null}
-              test={captureAvailable?<CaptureTestPanel control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
+              test={captureAvailable?<CaptureTestPanel operationError={captureTestError} control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
                 canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {selectedMeeting ? <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onGenerationStarted={() => setMeetingToolsOpen(false)} renderTools={renderMeetingTools} onHeadChanged={async () => {
+          {selectedMeeting ? <AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onGenerationStarted={() => setMeetingToolsOpen(false)} renderTools={renderMeetingTools} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
@@ -807,7 +812,8 @@ function MainWindow() {
             </tr>)}</tbody></table></div>}
           </section>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
-            <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={present => setTranscriptMeeting(present ? selectedMeeting.id : null)} onConsolidated={async()=>{
+            <div className="card-head transcript-primary-heading"><h2>文字起こし</h2><div className="plain-minutes-primary-actions transcript-primary-actions"><div ref={setTranscriptCopyHost} className="transcript-copy-host" /><div ref={setTranscriptActionsHost} className="transcript-generation-host" /></div></div>
+            <TranscriptEditor actionsHost={transcriptCopyHost} key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={present => setTranscriptMeeting(present ? selectedMeeting.id : null)} onConsolidated={async()=>{
               const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id:selectedMeeting.id}),invoke<Meeting[]>("list_meetings")]);
               setSelectedMeeting(meeting);setMeetings(items);setAnalysisEpoch(value=>value+1);
             }} />

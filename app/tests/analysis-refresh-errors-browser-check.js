@@ -18,10 +18,11 @@ async page => {
   });
   await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).click();
   const tools=page.getByRole("dialog",{name:"会議管理・録音・解析操作",exact:true});
-  const regen=tools.getByRole("button",{name:"文字起こしを再生成",exact:true});
+  const regen=page.locator(".transcript-generation-host button").filter({hasText:"文字起こしを再生成"});
   await regen.waitFor();
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.holdOldRead=true;await f.emitNotification();});
   await page.waitForFunction(()=>!!window.monBrowserFixture.releaseOldRead);
+  if(await tools.isVisible())await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
   await regen.click();
   const confirmation=page.getByRole("dialog",{name:"文字起こしを再生成",exact:true});
   await confirmation.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
@@ -50,6 +51,7 @@ async page => {
   results.push("current read failures remain visible and are resolved only after read recovery");
 
   await page.evaluate(()=>{window.monBrowserFixture.failAction=true;});
+  if(await tools.isVisible())await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
   await regen.click();
   const action=page.getByRole("alert").filter({hasText:"模擬再生成操作失敗"});
   await action.waitFor();
@@ -57,11 +59,11 @@ async page => {
     const card=[...document.querySelectorAll('.toast-card')].find(e=>e.textContent.includes('模擬再生成操作失敗'));
     if(!card)return false;
     const r=card.getBoundingClientRect();
-    return !!card.closest('dialog[open]') && card.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+    return card.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
   });
   await action.locator('xpath=ancestor::section[contains(@class,"toast-card")]').getByRole('button',{name:'エラー通知を閉じる',exact:true}).click();
   await action.waitFor({state:'hidden'});
-  check(await tools.isVisible(),'dismissing error closed the meeting tools');
+  check(await page.getByRole('tabpanel',{name:'文字起こし',exact:true}).isVisible(),'dismissing error hid the transcript');
   results.push('action errors appear above the native modal and can be dismissed without closing it');
   await page.evaluate(()=>window.monBrowserFixture.emitNotification());
   check(await action.count()===0,"polling resurrected a dismissed action failure");
@@ -81,6 +83,7 @@ async page => {
     };
     await f.emitNotification();
   });
+  await page.getByRole('button',{name:'会議管理・録音・解析操作',exact:true}).click();
   await tools.getByRole('button',{name:'話者分離を再開',exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==='diarization');
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='regenerate_transcription').length)===1,'handoff recovery reran transcription');

@@ -627,7 +627,7 @@ impl CaptureTests {
                     }
                     other => {
                         run.snapshot.phase = if cancelled() { "cancelled" } else { "error" }.into();
-                        run.snapshot.error_message = other.err();
+                        run.snapshot.error_message = terminal_error(other.err(), cancelled());
                         if let Some(directory) = &run.directory {
                             match directory.cleanup() {
                                 Ok(()) => run.directory = None,
@@ -834,5 +834,53 @@ fn watch(
             }
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+// Cancellation is an expected outcome. Keep unrelated failures (including stop
+// timeouts) visible, and append cleanup failures separately at the call site.
+fn terminal_error(error: Option<String>, cancelled: bool) -> Option<String> {
+    error.filter(|message| {
+        !cancelled
+            || !matches!(
+                message.as_str(),
+                "録音前テストを取り消しました"
+                    | "テストの音声検証を取り消しました"
+                    | "音声ファイルの照合を中断しました"
+                    | "録音音声の照合を中断しました"
+                    | "FLAC音声処理を中断しました"
+            )
+    })
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::terminal_error;
+
+    #[test]
+    fn normal_cancellation_has_no_error() {
+        for message in [
+            "録音前テストを取り消しました",
+            "テストの音声検証を取り消しました",
+            "音声ファイルの照合を中断しました",
+            "録音音声の照合を中断しました",
+            "FLAC音声処理を中断しました",
+        ] {
+            assert_eq!(terminal_error(Some(message.into()), true), None);
+            assert_eq!(
+                terminal_error(Some(message.into()), false),
+                Some(message.into())
+            );
+        }
+        assert_eq!(terminal_error(None, true), None);
+    }
+
+    #[test]
+    fn cancellation_preserves_real_failures() {
+        let message = "テストの初期化または停止が時間上限を超えました。取得プロセスは終了しました";
+        assert_eq!(
+            terminal_error(Some(message.into()), true),
+            Some(message.into())
+        );
     }
 }

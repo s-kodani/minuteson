@@ -7,10 +7,11 @@ export type ConfirmationOptions = {
   action: () => Promise<void>;
   validate?: () => boolean;
   onError?: (cause: unknown) => void;
+  inlineErrors?: boolean;
   progressAction?: { label: string; action: () => Promise<void> };
   alternativeAction?: { label: string; action: () => Promise<void> };
 };
-export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel"> & {
+export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel" | "inlineErrors"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
   phase: ConfirmationPhase; error: string;
@@ -32,7 +33,7 @@ export class ConfirmationController<Parent, Opener> {
     if (this.snapshot) return Promise.resolve<ConfirmationOutcome>("cancelled");
     return new Promise<ConfirmationOutcome>(resolve => {
       this.pending = { options, resolve };
-      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
+      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, inlineErrors: options.inlineErrors, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
     });
   }
   cancel(id: string) {

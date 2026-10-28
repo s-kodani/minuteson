@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import { IconButton } from "./action-icon";
 import { InfoPopover } from "./info-popover";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -14,11 +16,12 @@ import { transcriptionAdmissions } from "./transcription-admission";
 /** Meeting actions contain no model settings, candidate review or adoption.
  * Native recording/import completion starts the global-settings flow.
  */
-export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, renderTools }: {
+export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost, renderTools }: {
   meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; recordingActive: boolean; locked: boolean;
   onHeadChanged: () => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onReplaceGenerated: (flow: AnalysisFlow) => Promise<void>;
   onGenerationStarted?: () => void;
+  actionsHost?: HTMLElement | null;
   renderTools?: (tools: ReactNode, review: ModalReplacement | null, persistentViews?: ReactNode) => ReactNode;
 }) {
   const [flow, setFlow] = useState<AnalysisFlow | null>(null);
@@ -71,8 +74,8 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     void refresh(); const timer = window.setInterval(() => void refresh(), 3000);
     return () => { alive.current = false; disposed = true; stops.forEach(stop => stop()); window.clearInterval(timer); };
   }, [meetingId]);
-  const run = async (action: () => Promise<void>) => {
-    if (running.current || locked || recordingActive) return;
+  const run = async (action: () => Promise<void>, allowDuringRecording = false) => {
+    if (running.current || locked || recordingActive && !allowDuringRecording) return;
     running.current = true; setBusy(true); setError("");
     try { await withConfirmedEdits(withSavedEdits, action); await refreshRef.current(); }
     catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setError(String(cause)); }
@@ -123,6 +126,40 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     // keep its native modal open. run() still owns errors and duplicate guards.
     if (outcome === "completed" && regeneration.current) await submitRegeneration(regeneration.current);
   });
+  const jobAction = (command: string) => {
+    if (!active) return;
+    void run(async () => { await invoke(command, { jobId: active.id }); }, command !== "resume_analysis_job");
+  };
+  const cancelJob = () => {
+    if (!active) return;
+    const jobId = active.id;
+    void run(async () => {
+      await confirm({ title: "文字起こし生成を取り消す", target: `会議「${meetingTitle}」`,
+        message: "文字起こしと話者分離の生成を取り消します。保存済みの文字起こしと編集内容、議事録は保持します。", confirmLabel: "生成を取り消す",
+        action: async () => {
+          const current = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
+          const currentJob = current?.stage === "diarization" ? current.diarizationJob : current?.transcriptionJob;
+          if (current?.id !== flow?.id || currentJob?.id !== jobId || !["queued", "running", "pausing", "paused", "interrupted"].includes(currentJob.state)) {
+            throw Error("生成の状態が変わりました。現在の状態を確認して、もう一度操作してください。");
+          }
+          await invoke("cancel_analysis_job", { jobId });
+        },
+      });
+    }, true);
+  };
+  const actions = <>
+      {!resumeSpeakerHandoff && !hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(async()=>{
+        const expected=await invoke<RegenerationTarget>("get_transcription_regeneration_target",{meetingId});
+        const request={meetingId,operationId:crypto.randomUUID(),expected,numSpeakers};
+        regeneration.current=request;await submitRegeneration(request);
+      }))}>文字起こしを生成</button>}
+      {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" disabled={locked || busy || recordingActive || !recorded || pending} onClick={() => void regenerate()}>文字起こしを再生成</button>}
+      {pending && active && ["queued", "running", "pausing", "paused", "interrupted"].includes(active.state) && <div className="analysis-actions">
+        {["queued", "running"].includes(active.state) && <IconButton label="生成を一時停止" icon="pause" disabled={locked || busy} onClick={() => jobAction("pause_analysis_job")} />}
+        {["paused", "interrupted"].includes(active.state) && <button type="button" disabled={locked || busy || recordingActive} onClick={() => jobAction("resume_analysis_job")}>生成を再開</button>}
+        <IconButton label="生成を取り消す" icon="close" disabled={locked || busy} onClick={cancelJob} />
+      </div>}
+  </>;
   const tools = <section className="analysis-card" aria-label="文字起こし操作">
     <div className="heading-with-info"><h2>文字起こし</h2><InfoPopover label="文字起こし">全体設定のモデルを使います。完了した結果は発言一覧に保存します。</InfoPopover></div>
     {pending ? <p role="status">{flow?.stage === "diarization" ? "話者分離" : "文字起こし"}{!active ? "の開始を準備しています。" : active.state === "paused" ? "を一時停止しています。" : active.state === "interrupted" ? "が中断しています。" : active.state === "queued" ? "の開始を待っています。" : active.state === "pausing" ? "を停止しています。" : "中です。"}進捗は画面上部で確認できます。</p> : (
@@ -131,18 +168,12 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     <div className="analysis-actions">
       {flow?.replacementReady && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void onReplaceGenerated(flow)}>生成結果に置き換える</button>}
       {resumeSpeakerHandoff && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(() => invoke("continue_analysis_flow", { meetingId, expectedLockVersion: flow!.lockVersion }))}>話者分離を再開</button>}
-      {!resumeSpeakerHandoff && !hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(async()=>{
-        const expected=await invoke<RegenerationTarget>("get_transcription_regeneration_target",{meetingId});
-        const request={meetingId,operationId:crypto.randomUUID(),expected,numSpeakers};
-        regeneration.current=request;await submitRegeneration(request);
-      }))}>文字起こしを生成</button>}
-      {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" disabled={locked || busy || recordingActive || !recorded || pending} onClick={() => void regenerate()}>文字起こしを再生成</button>}
-      {active && ["paused", "interrupted"].includes(active.state) && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(() => invoke("resume_analysis_job", { jobId: active.id }))}>再開</button>}
     </div>
   </section>;
   return <>
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || flow?.errorMessage} historyOnly={!error && flowHistoryOnly} />
     {refreshError && <p role="status">文字起こしの状態を確認中です。</p>}
+    {actionsHost ? createPortal(actions, actionsHost) : <div className="analysis-actions">{actions}</div>}
     {renderTools ? renderTools(tools, null) : tools}
   </>;
 }
