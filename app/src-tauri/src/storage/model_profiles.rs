@@ -28,6 +28,8 @@ impl ProfileName {
 pub(crate) enum Settings {
     #[serde(rename = "whisper.cpp")]
     Whisper(preferences::EnginePreferences),
+    #[serde(rename = "asr")]
+    Asr(preferences::EnginePreferences),
     #[serde(rename = "sherpa-onnx")]
     Sherpa(diarization_preferences::DiarizationEnginePreferences),
     #[serde(rename = "llama.cpp")]
@@ -36,7 +38,7 @@ pub(crate) enum Settings {
 impl Settings {
     fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Whisper(p) => super::preferences::validate(&AnalysisPreferences {
+            Self::Whisper(p) | Self::Asr(p) => super::preferences::validate(&AnalysisPreferences {
                 standard: p.clone(),
                 high_accuracy: p.clone(),
             }),
@@ -53,20 +55,21 @@ impl Settings {
     fn engine(&self) -> Engine {
         match self {
             Self::Whisper(_) => Engine::Whisper,
+            Self::Asr(_) => Engine::Asr,
             Self::Sherpa(_) => Engine::Sherpa,
             Self::Llama(_) => Engine::Llama,
         }
     }
     fn roles(&self) -> &'static [&'static str] {
         match self {
-            Self::Whisper(_) => &["asr"],
+            Self::Whisper(_) | Self::Asr(_) => &["asr"],
             Self::Sherpa(_) => &["segmentation", "speaker_embedding"],
             Self::Llama(_) => &["llm"],
         }
     }
     fn key(&self) -> &'static str {
         match self {
-            Self::Whisper(_) => "whisper_profiles",
+            Self::Whisper(_) | Self::Asr(_) => "whisper_profiles",
             Self::Sherpa(_) => "diarization_profiles",
             Self::Llama(_) => "llama_profiles",
         }
@@ -93,7 +96,7 @@ impl Settings {
         }
         let executable = path(Role::Executable)?;
         Ok(match self {
-            Self::Whisper(before) => {
+            Self::Whisper(before) | Self::Asr(before) => {
                 let mut p = before.clone();
                 p.executable_path = executable;
                 p.model_path = path(Role::Asr)?;
@@ -102,7 +105,13 @@ impl Settings {
                 } else {
                     None
                 };
-                Self::Whisper(p)
+                let previous_backend=p.backend.as_ref().map(|b|b.id.clone());
+                p.backend = record.manifest.backend.as_ref().map(|b| crate::transcription::asr::BackendPreferences {
+                    id: b.id.clone(), files: b.files.iter().map(|(k,v)| (k.clone(), directory.join(v).to_string_lossy().into_owned())).collect()
+                });
+                let backend_id=p.backend.as_ref().map(|b|b.id.clone());
+                if previous_backend!=backend_id {p.vad_options=Some(crate::transcription::asr::find(backend_id.as_deref().unwrap_or(crate::transcription::asr::WHISPER))?.descriptor().default_vad);}
+                if let Some(backend)=&p.backend { if !crate::transcription::asr::find(&backend.id)?.descriptor().supports_gpu {p.use_gpu=false;} Self::Asr(p) } else { Self::Whisper(p) }
             }
             Self::Sherpa(before) => {
                 let mut p = before.clone();
@@ -331,14 +340,11 @@ fn heads(db: &Connection) -> Result<(Heads, i64), String> {
 fn settings(db: &Connection, name: ProfileName, engine: Engine) -> Result<(Settings, i64), String> {
     let high = name == ProfileName::HighAccuracy;
     let (value, version) = match engine {
-        Engine::Whisper => {
+        Engine::Whisper | Engine::Asr => {
             let p = super::preferences::load(db)?;
             (
-                Settings::Whisper(if high {
-                    p.payload.high_accuracy
-                } else {
-                    p.payload.standard
-                }),
+                if engine == Engine::Asr { Settings::Asr(if high { p.payload.high_accuracy } else { p.payload.standard }) }
+                else { Settings::Whisper(if high { p.payload.high_accuracy } else { p.payload.standard }) },
                 p.lock_version,
             )
         }
@@ -556,7 +562,7 @@ fn preview(
             return Err("VADを設定する文字起こしモデルを確認してください".into());
         }
         match &mut binding.settings {
-            Settings::Whisper(settings) => {
+            Settings::Whisper(settings) | Settings::Asr(settings) => {
                 if before.configured(record, models_root)? != before {
                     return Err("使用中の文字起こしモデルを確認してください".into());
                 }
@@ -564,7 +570,7 @@ fn preview(
             }
             _ => return Err("VAD設定は文字起こしモデルだけに適用できます".into()),
         }
-    } else if let Settings::Whisper(settings) = &mut binding.settings {
+    } else if let Settings::Whisper(settings) | Settings::Asr(settings) = &mut binding.settings {
         // New official VAD packages default on; historical arbitrary packages
         // remain byte-for-byte compatible when simply read or reapplied.
         if settings.vad_options.is_none()
@@ -643,7 +649,7 @@ fn save_selected(db: &Connection, preview: &ApplyPreview) -> Result<(), String> 
         .ok_or("解析設定の版番号が範囲外です")?;
     let high = preview.profile == ProfileName::HighAccuracy;
     match &preview.after {
-        Settings::Whisper(p) => {
+        Settings::Whisper(p) | Settings::Asr(p) => {
             let mut value = super::preferences::load(db)?.payload;
             if high {
                 value.high_accuracy = p.clone();
@@ -847,7 +853,7 @@ impl Storage {
         }
         cancelled(check_cancelled)?;
         let mut bindings = old.as_ref().map_or_else(Vec::new, |p| p.bindings.clone());
-        bindings.retain(|b| b.settings.engine() != record.manifest.engine);
+        bindings.retain(|b| b.settings.roles() != expected.after.roles());
         bindings.push(Binding {
             schema_version: 1,
             package_id: record.package_id.clone(),

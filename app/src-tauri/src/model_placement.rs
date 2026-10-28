@@ -134,6 +134,8 @@ pub(crate) struct CatalogEntry {
     pub model_files: Vec<ModelFileIdentity>,
     pub engine: String,
     pub engine_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_id: Option<String>,
     pub total_bytes: u64,
     pub placement_recorded: bool,
     pub body_removed: bool,

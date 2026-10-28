@@ -233,7 +233,7 @@ impl Bundle {
         network.sources.extend(vad.sources);
         files.extend(network.files);
         sources.extend(network.sources);
-        let recipe = Recipe { schema_version: 4, manifest: PackageManifest {
+        let recipe = Recipe { schema_version: 4, manifest: PackageManifest { backend: None,
             schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
             model_name: format!("Whisper {name}（多言語）"), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
             quantization: None, target: Target::MacosAarch64,

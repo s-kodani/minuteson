@@ -146,7 +146,7 @@ fn real_guarded_vocabulary_rechecks_verified_pcm_and_reference() {
         .canonicalize()
         .unwrap()
         .starts_with(std::env::temp_dir().canonicalize().unwrap()));
-    let config: WhisperConfig = serde_json::from_value(manifest["engine"].clone()).unwrap();
+    let config: AsrConfig = serde_json::from_value(manifest["engine"].clone()).unwrap();
     let vocabulary: VocabularySnapshot =
         serde_json::from_value(manifest["vocabulary"].clone()).unwrap();
     config.verify(&|| false).unwrap();

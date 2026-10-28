@@ -171,6 +171,8 @@ def main():
     import mon_windows_workers
     mon_windows_workers.prepare()
     mon_windows_workers.prepare(vulkan=True)
+    from mon_asr_bundle import append_windows_choices
+    append_windows_choices(PACKAGE)
     print('Windows native runtime package ready:',PACKAGE)
 
 if __name__=='__main__':main()

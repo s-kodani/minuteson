@@ -2,7 +2,7 @@ use super::*;
 use crate::audio::tests::caf_fixture;
 use crate::transcription::{
     enqueue, process,
-    whisper::{Fingerprint, WhisperConfig},
+    whisper::{Fingerprint, AsrConfig},
     RetryRequest,
 };
 use std::os::unix::fs::PermissionsExt;
@@ -11,7 +11,7 @@ mod guard_tests;
 #[path = "transcription_tests/known_tests.rs"]
 pub(crate) mod known_tests;
 
-pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
+pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, AsrConfig) {
     let (storage, meeting, config) = pending_fixture(root, seconds);
     storage
         .publish_single_wav(&meeting, &|| false, &|_, _| {})
@@ -20,7 +20,7 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
 }
 
 /// Capture inputs before the explicit canonical-WAV publication boundary.
-pub(crate) fn pending_fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
+pub(crate) fn pending_fixture(root: &Path, seconds: i64) -> (Storage, String, AsrConfig) {
     let storage = Storage::open(root.to_owned()).unwrap();
     let meeting = storage.create_meeting("解析結合テスト").unwrap();
     let relative = PathBuf::from("meetings").join(&meeting.id).join("audio");
@@ -76,7 +76,7 @@ pub(crate) fn pending_fixture(root: &Path, seconds: i64) -> (Storage, String, Wh
     )
     .unwrap();
     std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let config = WhisperConfig {
+    let config = AsrConfig { backend: None,
         executable: Fingerprint::capture(&cli_path, &crate::test_support::never_cancelled).unwrap(),
         model: Fingerprint::capture(&model_path, &crate::test_support::never_cancelled).unwrap(),
         vad_model: None,

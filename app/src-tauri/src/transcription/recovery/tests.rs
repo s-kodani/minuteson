@@ -1,7 +1,7 @@
 use super::*;
 use std::cell::Cell;
 
-fn fixture(seconds: u64) -> (tempfile::TempDir, whisper::WhisperConfig) {
+fn fixture(seconds: u64) -> (tempfile::TempDir, whisper::AsrConfig) {
     let root = tempfile::tempdir().unwrap();
     let frames = seconds * RATE;
     let mut bytes = wave::wav_header(frames as u32).to_vec();
@@ -12,7 +12,7 @@ fn fixture(seconds: u64) -> (tempfile::TempDir, whisper::WhisperConfig) {
         size: 1,
         sha256: "a".repeat(64),
     };
-    let config = whisper::WhisperConfig {
+    let config = whisper::AsrConfig { backend: None,
         executable: proof.clone(),
         model: proof,
         vad_model: None,
@@ -24,7 +24,7 @@ fn fixture(seconds: u64) -> (tempfile::TempDir, whisper::WhisperConfig) {
     (root, config)
 }
 fn result(
-    config: &whisper::WhisperConfig,
+    config: &whisper::AsrConfig,
     dir: &Path,
     duration: i64,
     bad: bool,
@@ -217,7 +217,7 @@ fn private_meeting_transcription_reaches_the_last_unit() {
     };
     let _resident_scope =
         crate::local_engine::resident::Scope::enter(&output, Some(&snapshot)).unwrap();
-    let config = whisper::WhisperConfig {
+    let config = whisper::AsrConfig { backend: None,
         executable: snapshot.resolve(&output).unwrap(),
         model: Fingerprint::capture(&model, &|| false).unwrap(),
         vad_model: Some(Fingerprint::capture(&vad, &|| false).unwrap()),

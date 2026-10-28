@@ -175,7 +175,7 @@ fn run(
     match record.manifest.engine {
         Engine::Whisper => {
             wave(directory)?;
-            let config = crate::transcription::whisper::WhisperConfig {
+            let config = crate::transcription::asr::AsrConfig { backend: None,
                 executable,
                 model: one(record, package, Role::Asr)?,
                 vad_model: fingerprints(record, package, Role::Vad).into_iter().next(),
@@ -197,6 +197,20 @@ fn run(
                 cancelled,
             )?
             .ok_or("モデル互換性確認を取り消しました")?;
+        }
+        Engine::Asr => {
+            wave(directory)?;
+            let backend = record.manifest.backend.as_ref().ok_or("ASRバックエンドがありません")?;
+            let capture = |relative: &String| -> Result<_,String> { Fingerprint::capture_retained(&package.join(relative), cancelled) };
+            let mut config=crate::transcription::asr::AsrConfig {
+                executable, model: one(record, package, Role::Asr)?,
+                vad_model: fingerprints(record, package, Role::Vad).into_iter().next(), vad_options: Some(Default::default()),
+                threads:1, use_gpu:false, prompt:String::new(),
+                backend:Some(crate::transcription::asr::BackendBinding { id: backend.id.clone(), files:backend.files.iter().map(|(k,p)|Ok((k.clone(),capture(p)?))).collect::<Result<_,String>>()? })
+            };
+            config.vad_options=Some(crate::transcription::asr::adapter(&config)?.descriptor().default_vad);
+            config.verify(cancelled)?;
+            crate::transcription::asr::adapter(&config)?.recognize(&config,directory.path(),10_000_000,cancelled)?.ok_or("ASR動作確認を取り消しました")?;
         }
         Engine::Sherpa => {
             wave(directory)?;

@@ -21,7 +21,7 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
     let package = uuid::Uuid::new_v4().to_string();
     let models = app_data.path().canonicalize().unwrap().join("models");
     let roles = match engine {
-        Engine::Whisper => vec![("model.bin", Role::Asr)],
+        Engine::Whisper | Engine::Asr => vec![("model.bin", Role::Asr)],
         Engine::Llama => vec![("model.bin", Role::Llm)],
         Engine::Sherpa => vec![
             ("seg.onnx", Role::Segmentation),
@@ -36,7 +36,7 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
         .unwrap();
     }
     let native=match engine {
-        Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
+        Engine::Whisper | Engine::Asr=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
         Engine::Llama=>"printf '{\"ok\":true}'".into(),
         Engine::Sherpa=> {
             let proof=|name: &str| {let mut p=Fingerprint::capture(&source.path().join(name),&||false).unwrap();p.path=models.join(&package).join(name);p};
@@ -63,7 +63,7 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
         expected_size: None,
         expected_hash: None,
     }));
-    let manifest = PackageManifest {
+    let manifest = PackageManifest { backend: None,
         schema_version: 1,
         engine,
         engine_version: "fixture declaration".into(),

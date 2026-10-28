@@ -25,11 +25,15 @@ pub(crate) struct PackageManifest {
     pub license_ref: String,
     pub target: Target,
     pub files: Vec<PackageFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<crate::transcription::asr::BackendManifest>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) enum Engine {
     #[serde(rename = "whisper.cpp")]
     Whisper,
+    #[serde(rename = "asr")]
+    Asr,
     #[serde(rename = "sherpa-onnx")]
     Sherpa,
     #[serde(rename = "llama.cpp")]
@@ -57,6 +61,7 @@ pub(crate) enum Role {
     RuntimeLibrary,
     Notice,
     Asr,
+    AsrAsset,
     Vad,
     Segmentation,
     SpeakerEmbedding,
@@ -166,9 +171,10 @@ impl PackageManifest {
         }
         let count = |role| self.files.iter().filter(|f| f.role == role).count();
         let roles = match self.engine {
-            Engine::Whisper => vec![
+            Engine::Whisper | Engine::Asr => vec![
                 Role::Executable,
                 Role::Asr,
+                Role::AsrAsset,
                 Role::Vad,
                 Role::RuntimeLibrary,
                 Role::Notice,
@@ -193,7 +199,7 @@ impl PackageManifest {
             || count(Role::Vad) > 1
             || self.files.iter().any(|f| !roles.contains(&f.role))
             || match self.engine {
-                Engine::Whisper => count(Role::Asr) != 1,
+                Engine::Whisper | Engine::Asr => count(Role::Asr) != 1,
                 Engine::Sherpa => {
                     count(Role::Segmentation) != 1 || count(Role::SpeakerEmbedding) != 1
                 }
@@ -202,6 +208,7 @@ impl PackageManifest {
         {
             return Err("エンジンに必要なモデル・実行ファイルの構成が一致しません".into());
         }
+        crate::transcription::asr::validate_manifest(self)?;
         Ok(())
     }
 }

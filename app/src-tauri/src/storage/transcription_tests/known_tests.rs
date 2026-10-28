@@ -2,7 +2,7 @@ use super::*;
 use crate::storage::transcription::known::KnownInput;
 use sha2::{Digest, Sha256};
 
-pub(crate) fn split_fixture(root: &Path) -> (Storage, String, WhisperConfig) {
+pub(crate) fn split_fixture(root: &Path) -> (Storage, String, AsrConfig) {
     let (storage, meeting, config) = pending_fixture(root, 10);
     let path = storage
         .root

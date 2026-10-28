@@ -128,7 +128,7 @@ fn fixture() -> Fixture {
     )
     .unwrap();
     std::fs::write(source.path().join("weights/model.bin"), vec![b'm'; 150_000]).unwrap();
-    let manifest = PackageManifest {
+    let manifest = PackageManifest { backend: None,
         schema_version: 1,
         engine: Engine::Whisper,
         engine_version: "unverified release".into(),

@@ -2,17 +2,17 @@ use super::*;
 use crate::diarization::sherpa::SherpaConfig;
 use crate::generation::llama::LlamaConfig;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
-use crate::transcription::whisper::WhisperConfig;
+use crate::transcription::asr::AsrConfig;
 use serde_json::json;
 
 mod rebinding;
 
-fn whisper(f: &Fixture) -> WhisperConfig {
+fn whisper(f: &Fixture) -> AsrConfig {
     let p = f.storage.analysis_preferences().unwrap().payload.standard;
     let capture = |s: &str| {
         Fingerprint::capture(Path::new(s), &crate::test_support::never_cancelled).unwrap()
     };
-    WhisperConfig {
+    AsrConfig { backend: None,
         executable: capture(&p.executable_path),
         model: capture(&p.model_path),
         vad_model: p.vad_model_path.as_deref().map(capture),
@@ -270,7 +270,7 @@ fn managed_jobs_all_three_engines_bind_partial_or_complete_profile_without_runni
     let d = sherpa(&f);
     let (l, b) = llama(&f);
     for (job, engine) in jobs.iter().zip([
-        Execution::Whisper(&w),
+        Execution::Asr(&w),
         Execution::Sherpa(&d),
         Execution::Llama(&l, b),
     ]) {
@@ -292,7 +292,7 @@ fn managed_jobs_all_three_engines_bind_partial_or_complete_profile_without_runni
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&w),
+            Execution::Asr(&w),
             &crate::test_support::never_cancelled
         )
         .unwrap()
@@ -366,7 +366,7 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&w),
+            Execution::Asr(&w),
             &crate::test_support::never_cancelled
         )
         .is_err());
@@ -375,13 +375,13 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
         .storage
         .prepare_model_selection(
             "high_accuracy",
-            Execution::Whisper(&w),
+            Execution::Asr(&w),
             &crate::test_support::never_cancelled
         )
         .is_err());
     assert!(f
         .storage
-        .prepare_model_selection("standard", Execution::Whisper(&w), &|| true)
+        .prepare_model_selection("standard", Execution::Asr(&w), &|| true)
         .is_err());
     let original = f.storage.analysis_preferences().unwrap();
     let mut prefs = original.payload;
@@ -393,7 +393,7 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&whisper(&f)),
+            Execution::Asr(&whisper(&f)),
             &crate::test_support::never_cancelled
         )
         .is_err());
@@ -402,7 +402,7 @@ fn managed_jobs_stale_numeric_settings_manual_paths_other_profile_and_cancellati
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&whisper(&f)),
+            Execution::Asr(&whisper(&f)),
             &crate::test_support::never_cancelled
         )
         .unwrap()
@@ -519,7 +519,7 @@ fn managed_jobs_fixed_execution_and_same_operation_survive_head_settings_and_tri
         )
         .is_err());
     for (job, e) in jobs.iter().zip([
-        Execution::Whisper(&w),
+        Execution::Asr(&w),
         Execution::Sherpa(&d),
         Execution::Llama(&l, b),
     ]) {
@@ -720,7 +720,7 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&w),
+            Execution::Asr(&w),
             &crate::test_support::never_cancelled,
         )
         .unwrap();
@@ -733,12 +733,12 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
     ] {
         p.path = PathBuf::from(format!("mon-unavailable:{}", p.sha256));
     }
-    managed::validate(&profile, Execution::Whisper(&portable)).unwrap();
+    managed::validate(&profile, Execution::Asr(&portable)).unwrap();
     let mut invalid = portable.clone();
     invalid.threads = 0;
     let mut invalid_profile = profile.clone();
     invalid_profile["managedModel"]["configuration"]["threads"] = json!(0);
-    assert!(managed::validate(&invalid_profile, Execution::Whisper(&invalid)).is_err());
+    assert!(managed::validate(&invalid_profile, Execution::Asr(&invalid)).is_err());
     let mut other = profile.clone();
     let mut record: PlacementRecord =
         serde_json::from_value(other["managedModel"]["package"].clone()).unwrap();
@@ -752,28 +752,28 @@ fn managed_jobs_portable_decoder_accepts_other_supported_target_but_rejects_tamp
     .unwrap();
     other["managedModel"]["compatibility"]["reviewHash"] = json!(record.review_hash);
     other["managedModel"]["package"] = serde_json::to_value(record).unwrap();
-    managed::validate(&other, Execution::Whisper(&portable)).unwrap();
+    managed::validate(&other, Execution::Asr(&portable)).unwrap();
     assert!(managed::verify(
         &other,
-        Execution::Whisper(&portable),
+        Execution::Asr(&portable),
         &crate::test_support::never_cancelled
     )
     .is_err());
     let mut mixed = portable.clone();
     mixed.executable = w.executable.clone();
-    assert!(managed::validate(&profile, Execution::Whisper(&mixed)).is_err());
+    assert!(managed::validate(&profile, Execution::Asr(&mixed)).is_err());
     for field in ["profileHash", "configuration", "compatibility"] {
         let mut p = profile.clone();
         p["managedModel"][field] = json!(null);
-        assert!(managed::validate(&p, Execution::Whisper(&portable)).is_err());
+        assert!(managed::validate(&p, Execution::Asr(&portable)).is_err());
     }
     let mut p = profile.clone();
     p["managedModel"]["package"]["files"][1]["actualHash"] = json!("a".repeat(64));
-    assert!(managed::validate(&p, Execution::Whisper(&portable)).is_err());
+    assert!(managed::validate(&p, Execution::Asr(&portable)).is_err());
     // Native availability remains a separate operation, never a restore gate.
     assert!(managed::verify(
         &profile,
-        Execution::Whisper(&portable),
+        Execution::Asr(&portable),
         &crate::test_support::never_cancelled
     )
     .is_err());
@@ -850,7 +850,7 @@ fn managed_jobs_plan_save_rechecks_current_head_and_never_commits_a_stale_plan()
         .storage
         .prepare_model_selection(
             "standard",
-            Execution::Whisper(&w),
+            Execution::Asr(&w),
             &crate::test_support::never_cancelled,
         )
         .unwrap();

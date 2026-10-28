@@ -140,6 +140,8 @@ pub const COMMANDS: &[&str] = &[
     "resume_analysis_job",
     "cancel_analysis_job",
     "get_analysis_preferences",
+    "get_asr_preferences",
+    "get_asr_backends",
     "get_ui_preferences",
     "save_ui_preferences",
     "get_diarization_preferences",

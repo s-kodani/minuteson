@@ -121,8 +121,11 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
         });
     }
     whisper.append(&mut result);
-    let result = whisper;
-    Ok(result)
+    for choice in crate::model_asr_catalog::options(&root.parent().ok_or("ASR素材の場所がありません")?.join("inference-runtime"))? {
+        whisper.push(OptionView { id:choice.id,label:choice.label,description:choice.description,
+            definition:String::from_utf8(choice.recipe.bytes()?).map_err(|e|e.to_string())?, review:choice.recipe.review()?,token_limits:None });
+    }
+    Ok(whisper)
 }
 
 #[cfg(all(test, target_os = "macos"))]

@@ -34,6 +34,7 @@ export interface ModelPlacementEntry {
   modelFiles?: { role: string; size: number; sha256: string }[];
   engine: string;
   engineVersion: string;
+  backendId?: string;
   totalBytes: number;
   placementRecorded: boolean;
   bodyRemoved?: boolean;

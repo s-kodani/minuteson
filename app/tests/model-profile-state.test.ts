@@ -74,7 +74,7 @@ test("readback checks the selected actual preferences and never substitutes sett
   assert.throws(() => assertAppliedPreferences({ ...value, lockVersion: 5 }, preview));
   assert.throws(() => assertAppliedPreferences({ ...value, payload: { standard: before.settings, highAccuracy: after.settings } }, preview));
   assert.throws(() => assertAppliedPreferences({ ...value, payload: { ...value.payload, standard: { ...after.settings, threads: 1 } } }, preview));
-  assert.equal(preferenceCommand("whisper.cpp"), "get_analysis_preferences");
+  assert.equal(preferenceCommand("whisper.cpp"), "get_asr_preferences");
   assert.equal(preferenceCommand("sherpa-onnx"), "get_diarization_preferences");
   assert.equal(preferenceCommand("llama.cpp"), "get_minutes_preferences");
 });

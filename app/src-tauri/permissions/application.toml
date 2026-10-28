@@ -39,6 +39,8 @@ commands.allow = [
   "get_analysis_notification_jobs",
   "get_analysis_notification_output",
   "get_analysis_preferences",
+  "get_asr_preferences",
+  "get_asr_backends",
   "get_analysis_preparations",
   "get_analysis_versions",
   "get_application_close_activity",

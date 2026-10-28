@@ -2,27 +2,30 @@ import type { OfficialModelOption } from "./model-download-state";
 import type { ModelPlacementEntry } from "./model-inspection-state";
 import { canReviewApplication, type ModelProfileComponent, type ModelProfileView } from "./model-profile-state.ts";
 
-const modelRoles = new Set(["llm", "asr", "vad", "segmentation", "speaker_embedding"]);
+export const isAsrEngine = (engine: string) => engine === "whisper.cpp" || engine === "asr";
+const matchesSlot = (engine: string, slot: string) => slot === "asr" ? isAsrEngine(engine) : engine === slot;
+const modelRoles = new Set(["llm", "asr", "asr_asset", "vad", "segmentation", "speaker_embedding"]);
 const retiredRecipes = new Set(["36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"]);
 export const isRetiredModel = (entry: ModelPlacementEntry) => entry.download != null && retiredRecipes.has(entry.download.recipeHash);
-function identity(engine: string, files: { role: string; size: number; sha256: string }[]): string | null {
+function identity(engine: string, files: { role: string; size: number; sha256: string }[], backendId?: string): string | null {
+  if (engine === "asr" && !backendId) return null;
   const models = files.filter(file => modelRoles.has(file.role) && !(engine === "whisper.cpp" && file.role === "vad"));
   if (!models.length || models.some(file => !Number.isSafeInteger(file.size) || file.size <= 0 || !/^[0-9a-f]{64}$/u.test(file.sha256))) return null;
-  return JSON.stringify([engine, models.map(file => [file.role, file.size, file.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
+  return JSON.stringify([engine, backendId ?? null, models.map(file => [file.role, file.size, file.sha256]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]);
 }
 function entryIdentity(entry: ModelPlacementEntry): string {
-  return identity(entry.engine, entry.modelFiles ?? []) ?? JSON.stringify([entry.engine, entry.download?.recipeHash ?? entry.packageId]);
+  return identity(entry.engine, entry.modelFiles ?? [], entry.backendId) ?? JSON.stringify([entry.engine, entry.download?.recipeHash ?? entry.packageId]);
 }
 export function matchesOfficialModel(entry: ModelPlacementEntry, option: OfficialModelOption): boolean {
-  if (entry.engine !== option.review.manifest.engine) return false;
+  if (entry.engine !== option.review.manifest.engine || entry.engine === "asr" && entry.backendId !== option.review.manifest.backend?.id) return false;
   if (entry.sourceType === "download" && entry.download?.recipeHash === option.review.recipeHash) return true;
-  const key = identity(entry.engine, entry.modelFiles ?? []);
-  return key !== null && key === identity(option.review.manifest.engine, option.review.manifest.files.map(file => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })));
+  const key = identity(entry.engine, entry.modelFiles ?? [], entry.backendId);
+  return key !== null && key === identity(option.review.manifest.engine, option.review.manifest.files.map(file => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), option.review.manifest.backend?.id);
 }
 // Matching weights retain the display identity. Whisper needs the current
 // engine, and Sherpa needs the C API library added for voice registration.
 export function canReuseOfficialModel(entry: ModelPlacementEntry, option: OfficialModelOption): boolean {
-  return matchesOfficialModel(entry, option) && (!["whisper.cpp", "sherpa-onnx"].includes(entry.engine)
+  return matchesOfficialModel(entry, option) && (!["whisper.cpp", "asr", "sherpa-onnx"].includes(entry.engine)
     || entry.sourceType === "download" && entry.download?.recipeHash === option.review.recipeHash);
 }
 export function modelDisplayName(entry: ModelPlacementEntry, options: OfficialModelOption[]): string {
@@ -79,7 +82,7 @@ export function modelChoiceAction(choice: ModelChoice | undefined, entries: Mode
 }
 export function modelChoices(engine: string, entries: ModelPlacementEntry[], options: OfficialModelOption[], profiles: ModelProfileView[]): ModelChoice[] {
   const groups = installedModelGroups(entries.filter(entry => !isRetiredModel(entry)), profiles);
-  const official = options.filter(option => option.review.manifest.engine === engine);
+  const official = options.filter(option => matchesSlot(option.review.manifest.engine, engine));
   const result: ModelChoice[] = official.map(option => {
     const matching = groups.flatMap(group => group.entries).filter(entry => matchesOfficialModel(entry, option));
     const reusable = matching.filter(entry => canReuseOfficialModel(entry, option) && (entry.sourceType === "download" || canReviewApplication(entry)));
@@ -87,7 +90,7 @@ export function modelChoices(engine: string, entries: ModelPlacementEntry[], opt
       entry: reusable.length ? preferred(reusable, profiles) : undefined, packageIds: matching.map(entry => entry.packageId) };
   });
   for (const group of groups) {
-    if (group.entry.engine !== engine || group.entries.some(entry => official.some(option => matchesOfficialModel(entry, option)))) continue;
+    if (!matchesSlot(group.entry.engine, engine) || group.entries.some(entry => official.some(option => matchesOfficialModel(entry, option)))) continue;
     result.push({ value: group.entry.packageId, label: modelDisplayName(group.entry, options), entry: group.entry, packageIds: group.entries.map(entry => entry.packageId) });
   }
   return result;

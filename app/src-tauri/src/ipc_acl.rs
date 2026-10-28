@@ -27,6 +27,8 @@ mod tests {
             "start_recording",
             "start_audio_import",
             "start_model_download",
+            "get_asr_preferences",
+            "get_asr_backends",
             "start_data_operation",
             "save_transcript_draft",
             "save_minutes_markdown",

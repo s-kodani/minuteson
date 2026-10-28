@@ -11,6 +11,8 @@ pub struct EnginePreferences {
     pub vad_options: Option<crate::transcription::vad::VadOptions>,
     pub threads: u32,
     pub use_gpu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<crate::transcription::asr::BackendPreferences>,
 }
 
 impl Default for EnginePreferences {
@@ -22,6 +24,7 @@ impl Default for EnginePreferences {
             vad_options: None,
             threads: 4,
             use_gpu: false,
+            backend: None,
         }
     }
 }
@@ -86,6 +89,13 @@ impl Storage {
 
 pub(super) fn validate(payload: &AnalysisPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
+        if let Some(backend) = &engine.backend {
+            backend.validate()?;
+            let descriptor=crate::transcription::asr::find(&backend.id)?.descriptor();
+            if engine.use_gpu && !descriptor.supports_gpu || engine.vad_options.is_some_and(|v| v.samples_overlap_ms!=0 && !descriptor.supports_vad_overlap) {
+                return Err("文字起こしバックエンドが対応していない設定です".into());
+            }
+        }
         if let Some(options) = engine.vad_options {
             options.validate()?;
         }

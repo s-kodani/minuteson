@@ -92,7 +92,7 @@ impl Fixture {
         )
         .unwrap();
         let mut asr = storage.analysis_preferences().unwrap().payload;
-        asr.standard = preferences::EnginePreferences {
+        asr.standard = preferences::EnginePreferences { backend: None,
             executable_path: engine.executable.path.to_str().unwrap().into(),
             model_path: engine.model.path.to_str().unwrap().into(),
             vad_model_path: None,
@@ -144,6 +144,7 @@ impl Fixture {
         let check = Uuid::new_v4().to_string();
         let models = self.models();
         let roles = match engine {
+            Engine::Asr => vec![("model.bin",Role::Asr),("vad.bin",Role::Vad),("decoder",Role::AsrAsset),("joiner",Role::AsrAsset),("tokens",Role::AsrAsset),("lib/runtime",Role::RuntimeLibrary)],
             Engine::Whisper => vec![
                 ("model.bin", Role::Asr),
                 ("vad.bin", Role::Vad),
@@ -169,6 +170,15 @@ impl Fixture {
             "exit 42".into()
         } else {
             match engine {
+            Engine::Asr => r#"while [ "$#" -gt 0 ]; do
+case "$1" in
+--model) model="$2";shift;; --decoder) decoder="$2";shift;; --joiner) joiner="$2";shift;; --library) library="$2";shift;; --tokens) tokens="$2";shift;;
+--output) output="$2";shift;; --mon-first-frame) first="$2";shift;; --mon-end-frame) end="$2";shift;;
+esac
+shift
+done
+printf '{"schemaVersion":1,"backendId":"sherpa-onnx-transducer","models":{"model":"%s","decoder":"%s","joiner":"%s","library":"%s","tokens":"%s"},"durationUs":%s,"segments":[{"startUs":0,"endUs":500000,"text":"文字起こしテスト"}],"tokens":[],"ignoredHotwords":[]}' "$model" "$decoder" "$joiner" "$library" "$tokens" "$(( (end-first)*1000000/16000 ))" > "$output"
+"#.into(),
             Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
             Engine::Llama=>r#"predict=
 while [ "$#" -gt 0 ]; do case "$1" in --predict) predict="$2"; shift;; esac; shift; done
@@ -215,7 +225,9 @@ printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationM
             expected_size: None,
             expected_hash: None,
         }));
-        let manifest = PackageManifest {
+        let manifest = PackageManifest { backend: if engine==Engine::Asr {Some(crate::transcription::asr::BackendManifest {
+            id:crate::transcription::asr::TRANSDUCER.into(), files:[("decoder","decoder"),("joiner","joiner"),("library","lib/runtime"),("tokens","tokens")].into_iter().map(|(k,p)|(k.into(),p.into())).collect()
+        })}else{None},
             schema_version: 1,
             engine,
             engine_version: "fixture declaration".into(),
@@ -945,4 +957,31 @@ fn profile_application_backup_maintenance_blocks_publication_and_later_applicati
         .profile_version,
         1
     );
+}
+
+#[test]
+fn asr_models_switch_in_the_same_profile_and_execute_the_common_pipeline() {
+    let mut f=Fixture::new();
+    f.storage.acquire_local_inference_job().unwrap().unwrap();
+    crate::transcription::process(&f.storage,&f.baseline.id,&||false,&|_|{}).unwrap().unwrap();
+    let whisper=f.add(Engine::Whisper,true,false); f.apply(whisper,ProfileName::Standard);
+    let original=f.storage.analysis_preferences().unwrap().payload.standard;
+    let original_model=std::fs::read(&original.model_path).unwrap();
+    let diarization=f.add(Engine::Sherpa,true,false); f.apply(diarization,ProfileName::Standard);
+    let asr=f.add(Engine::Asr,true,false); f.apply(asr,ProfileName::Standard);
+    let profiles=f.storage.model_profiles().unwrap();
+    let profile=profiles.iter().find(|p|p.name==ProfileName::Standard).unwrap();
+    assert_eq!(profile.components.iter().filter(|c|c.roles==["asr"]).count(),1);
+    assert!(profile.components.iter().any(|c|c.engine==Engine::Asr));
+    let plan=crate::analysis_flow::prepare(&f.storage,"standard",&||false).unwrap();
+    assert_eq!(crate::transcription::asr::adapter(&plan.whisper).unwrap().descriptor().id,crate::transcription::asr::TRANSDUCER);
+    let job=crate::transcription::enqueue(&f.storage,&f.meeting,"asr-adapter-integration",plan.whisper,"standard").unwrap();
+    assert_eq!(f.storage.acquire_local_inference_job().unwrap().unwrap().id,job.id);
+    assert!(crate::transcription::process(&f.storage,&job.id,&||false,&|_|{}).unwrap().is_some());
+    assert_eq!(f.storage.get_job(&job.id).unwrap().state,"succeeded");
+    f.apply(whisper,ProfileName::Standard);
+    let selected=f.storage.analysis_preferences().unwrap().payload.standard;
+    assert_eq!(selected.model_path,original.model_path);
+    assert!(selected.backend.is_none());
+    assert_eq!(std::fs::read(&selected.model_path).unwrap(),original_model);
 }

@@ -1,0 +1,328 @@
+[
+  {
+    "id": "reazonspeech-k2-v2-int8-fp32",
+    "label": "ReazonSpeech-k2-v2（軽量）",
+    "description": "日本語専用・CPU動作。Encoder/Joiner INT8・Decoder FP32。用語ヒントは表記のみを使用します。",
+    "recipe": {
+      "schemaVersion": 4,
+      "manifest": {
+        "schemaVersion": 1,
+        "engine": "asr",
+        "engineVersion": "v1.13.8",
+        "modelName": "ReazonSpeech-k2-v2（軽量）",
+        "modelVersion": "291488c8151be24d7da4bf7af26e533fad96e407",
+        "quantization": "int8-fp32",
+        "licenseRef": "ReazonSpeech-k2-v2 / sherpa-onnx: Apache-2.0; ONNX Runtime / Silero VAD / nlohmann-json: MIT. License texts and the official model card are included in notices/.",
+        "target": "macos_aarch64",
+        "files": [
+          {
+            "relativePath": "models/encoder.int8.onnx",
+            "role": "asr",
+            "expectedSize": 154670139,
+            "expectedHash": "2c7bd08a8a99f9ddd0d9e458456577b1f6279214e51426f114f9eced44c54e1d"
+          },
+          {
+            "relativePath": "models/decoder.onnx",
+            "role": "asr_asset",
+            "expectedSize": 11767836,
+            "expectedHash": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+          },
+          {
+            "relativePath": "models/joiner.int8.onnx",
+            "role": "asr_asset",
+            "expectedSize": 2696970,
+            "expectedHash": "49cc7ea1d3d35a40a27442db5e89996da64bf0e683a903dce76e99e57a12e4de"
+          },
+          {
+            "relativePath": "models/tokens.txt",
+            "role": "asr_asset",
+            "expectedSize": 45754,
+            "expectedHash": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+          },
+          {
+            "relativePath": "models/silero_vad.onnx",
+            "role": "vad",
+            "expectedSize": 643854,
+            "expectedHash": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+          },
+          {
+            "relativePath": "lib/libonnxruntime.dylib",
+            "role": "runtime_library",
+            "expectedSize": 28775120,
+            "expectedHash": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+          },
+          {
+            "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+            "role": "runtime_library",
+            "expectedSize": 2999920,
+            "expectedHash": "ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1"
+          },
+          {
+            "relativePath": "notices/sherpa-Apache-2.0.txt",
+            "role": "notice",
+            "expectedSize": 11358,
+            "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "relativePath": "notices/onnxruntime-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1073,
+            "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+          },
+          {
+            "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+            "role": "notice",
+            "expectedSize": 325054,
+            "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+          },
+          {
+            "relativePath": "notices/reazonspeech-model-card.md",
+            "role": "notice",
+            "expectedSize": 1188,
+            "expectedHash": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0"
+          },
+          {
+            "relativePath": "notices/silero-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1075,
+            "expectedHash": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+          }
+        ],
+        "backend": {
+          "id": "sherpa-onnx-transducer",
+          "files": {
+            "decoder": "models/decoder.onnx",
+            "joiner": "models/joiner.int8.onnx",
+            "library": "lib/libsherpa-onnx-c-api.dylib",
+            "tokens": "models/tokens.txt"
+          }
+        }
+      },
+      "sources": [
+        {
+          "relativePath": "models/encoder.int8.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/encoder-epoch-99-avg-1.int8.onnx"
+        },
+        {
+          "relativePath": "models/decoder.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/decoder-epoch-99-avg-1.onnx"
+        },
+        {
+          "relativePath": "models/joiner.int8.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/joiner-epoch-99-avg-1.int8.onnx"
+        },
+        {
+          "relativePath": "models/tokens.txt",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/tokens.txt"
+        },
+        {
+          "relativePath": "models/silero_vad.onnx",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+        },
+        {
+          "relativePath": "lib/libonnxruntime.dylib",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 18252168,
+            "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+            "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib"
+          }
+        },
+        {
+          "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 18252168,
+            "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+            "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib"
+          }
+        },
+        {
+          "relativePath": "notices/sherpa-Apache-2.0.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "relativePath": "notices/onnxruntime-MIT.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        },
+        {
+          "relativePath": "notices/reazonspeech-model-card.md",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+        },
+        {
+          "relativePath": "notices/silero-MIT.txt",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        }
+      ]
+    }
+  },
+  {
+    "id": "reazonspeech-k2-v2-fp32",
+    "label": "ReazonSpeech-k2-v2（FP32）",
+    "description": "日本語専用・CPU動作。Encoder/Decoder/Joiner FP32。用語ヒントは表記のみを使用します。",
+    "recipe": {
+      "schemaVersion": 4,
+      "manifest": {
+        "schemaVersion": 1,
+        "engine": "asr",
+        "engineVersion": "v1.13.8",
+        "modelName": "ReazonSpeech-k2-v2（FP32）",
+        "modelVersion": "291488c8151be24d7da4bf7af26e533fad96e407",
+        "quantization": "fp32",
+        "licenseRef": "ReazonSpeech-k2-v2 / sherpa-onnx: Apache-2.0; ONNX Runtime / Silero VAD / nlohmann-json: MIT. License texts and the official model card are included in notices/.",
+        "target": "macos_aarch64",
+        "files": [
+          {
+            "relativePath": "models/encoder.onnx",
+            "role": "asr",
+            "expectedSize": 592347848,
+            "expectedHash": "ecdb0b771e16104aaf8e579cb3c1e32fbd589eb641c5946d82b615bd366c5f96"
+          },
+          {
+            "relativePath": "models/decoder.onnx",
+            "role": "asr_asset",
+            "expectedSize": 11767836,
+            "expectedHash": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+          },
+          {
+            "relativePath": "models/joiner.onnx",
+            "role": "asr_asset",
+            "expectedSize": 10720115,
+            "expectedHash": "d38a81d1191c9ed6de6a1719503692e07e3e973e2364adde0abae5eaaded1174"
+          },
+          {
+            "relativePath": "models/tokens.txt",
+            "role": "asr_asset",
+            "expectedSize": 45754,
+            "expectedHash": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+          },
+          {
+            "relativePath": "models/silero_vad.onnx",
+            "role": "vad",
+            "expectedSize": 643854,
+            "expectedHash": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+          },
+          {
+            "relativePath": "lib/libonnxruntime.dylib",
+            "role": "runtime_library",
+            "expectedSize": 28775120,
+            "expectedHash": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+          },
+          {
+            "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+            "role": "runtime_library",
+            "expectedSize": 2999920,
+            "expectedHash": "ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1"
+          },
+          {
+            "relativePath": "notices/sherpa-Apache-2.0.txt",
+            "role": "notice",
+            "expectedSize": 11358,
+            "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "relativePath": "notices/onnxruntime-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1073,
+            "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+          },
+          {
+            "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+            "role": "notice",
+            "expectedSize": 325054,
+            "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+          },
+          {
+            "relativePath": "notices/reazonspeech-model-card.md",
+            "role": "notice",
+            "expectedSize": 1188,
+            "expectedHash": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0"
+          },
+          {
+            "relativePath": "notices/silero-MIT.txt",
+            "role": "notice",
+            "expectedSize": 1075,
+            "expectedHash": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+          }
+        ],
+        "backend": {
+          "id": "sherpa-onnx-transducer",
+          "files": {
+            "decoder": "models/decoder.onnx",
+            "joiner": "models/joiner.onnx",
+            "library": "lib/libsherpa-onnx-c-api.dylib",
+            "tokens": "models/tokens.txt"
+          }
+        }
+      },
+      "sources": [
+        {
+          "relativePath": "models/encoder.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/encoder-epoch-99-avg-1.onnx"
+        },
+        {
+          "relativePath": "models/decoder.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/decoder-epoch-99-avg-1.onnx"
+        },
+        {
+          "relativePath": "models/joiner.onnx",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/joiner-epoch-99-avg-1.onnx"
+        },
+        {
+          "relativePath": "models/tokens.txt",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/tokens.txt"
+        },
+        {
+          "relativePath": "models/silero_vad.onnx",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+        },
+        {
+          "relativePath": "lib/libonnxruntime.dylib",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 18252168,
+            "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+            "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib"
+          }
+        },
+        {
+          "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+          "archive": {
+            "format": "tar",
+            "expectedSize": 18252168,
+            "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+            "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib"
+          }
+        },
+        {
+          "relativePath": "notices/sherpa-Apache-2.0.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "relativePath": "notices/onnxruntime-MIT.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        },
+        {
+          "relativePath": "notices/reazonspeech-model-card.md",
+          "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+        },
+        {
+          "relativePath": "notices/silero-MIT.txt",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        }
+      ]
+    }
+  }
+]

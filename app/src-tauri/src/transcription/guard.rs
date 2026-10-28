@@ -1,6 +1,6 @@
 //! Versioned quality gate. Normalization is for comparison only; accepted
 //! engine text and timestamps are never edited by this module.
-use super::whisper::{self, Segment, WhisperConfig};
+use super::whisper::{self, Segment, AsrConfig};
 use crate::storage::VocabularySnapshot;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -185,7 +185,7 @@ pub(super) struct Outcome {
 }
 
 pub(super) fn run(
-    config: &WhisperConfig,
+    config: &AsrConfig,
     directory: &Path,
     duration: i64,
     suppress: bool,

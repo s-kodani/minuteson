@@ -27,6 +27,12 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Value) {
     )
     .unwrap();
     std::fs::write(root.join("whisper-runtime.tar"), &bytes).unwrap();
+    let asr=root.parent().unwrap().join("inference-runtime");
+    std::fs::create_dir(&asr).unwrap();
+    std::fs::write(asr.join("asr-index.json"),serde_json::to_vec(&json!({"schemaVersion":1,"archiveBytes":10240,"archiveSha256":hash(b"asr archive"),"files":[
+        {"relativePath":"bin/mon-transducer-worker","role":"executable","expectedSize":16,"expectedHash":hash(b"asr worker")},
+        {"relativePath":"notices/nlohmann-MIT.txt","role":"notice","expectedSize":16,"expectedHash":hash(b"asr notice")}
+    ]})).unwrap()).unwrap();
     (temp, root, bytes, value)
 }
 #[test]
@@ -37,7 +43,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 14);
+    assert_eq!(catalog.as_array().unwrap().len(), 16);
     assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(

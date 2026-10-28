@@ -18,7 +18,7 @@ pub(crate) struct Binding {
 }
 
 pub(crate) enum Resolved {
-    Whisper(WhisperConfig),
+    Asr(AsrConfig),
     Sherpa(SherpaConfig),
     Llama(LlamaConfig, usize),
 }
@@ -26,7 +26,7 @@ impl Resolved {
     #[cfg(test)]
     pub(crate) fn execution(&self) -> Execution<'_> {
         match self {
-            Self::Whisper(e) => Execution::Whisper(e),
+            Self::Asr(e) => Execution::Asr(e),
             Self::Sherpa(e) => Execution::Sherpa(e),
             Self::Llama(e, budget) => Execution::Llama(e, *budget),
         }
@@ -170,7 +170,7 @@ impl Binding {
             .enumerate()
             .filter(|(_, f)| {
                 f.role != Role::RuntimeLibrary
-                    || execution.engine() == Engine::Sherpa
+                    || matches!(execution.engine(), Engine::Sherpa | Engine::Asr)
                     || origin.is_none()
             })
             .collect::<Vec<_>>();
@@ -227,7 +227,7 @@ impl Binding {
         }
         let mut proofs = indices.into_iter().map(|i| self.files[i].clone());
         Ok(match execution {
-            Execution::Whisper(e) => {
+            Execution::Asr(e) => {
                 let mut c = e.clone();
                 c.executable = proofs.next().unwrap();
                 c.model = proofs.next().unwrap();
@@ -236,7 +236,10 @@ impl Binding {
                 } else {
                     None
                 };
-                Resolved::Whisper(c)
+                if let Some(backend) = &mut c.backend {
+                    for file in backend.files.values_mut() { *file = proofs.next().ok_or("ASR補助モデルが不足しています")?; }
+                }
+                Resolved::Asr(c)
             }
             Execution::Sherpa(e) => {
                 let mut c = e.clone();
@@ -311,7 +314,7 @@ pub(crate) fn conditions(spec: &JobSpec) -> Result<Value, String> {
         e.validate_settings()?;
         super::validate(&spec.profile_snapshot, e)?;
         let hint = match e {
-            Execution::Whisper(w) => {
+            Execution::Asr(w) => {
                 json!({"characters":w.prompt.chars().count(),"sha256":format!("{:x}",Sha256::digest(w.prompt.as_bytes()))})
             }
             _ => Value::Null,
@@ -340,13 +343,13 @@ pub(crate) fn runtime(profile: &Value, execution: Execution<'_>) -> Result<Resol
         return binding.resolve(profile, execution);
     }
     Ok(match execution {
-        Execution::Whisper(e) => Resolved::Whisper(e.clone()),
+        Execution::Asr(e) => Resolved::Asr(e.clone()),
         Execution::Sherpa(e) => Resolved::Sherpa(e.clone()),
         Execution::Llama(e, budget) => Resolved::Llama(e.clone(), budget),
     })
 }
-pub(crate) fn whisper(profile: &Value, engine: &WhisperConfig) -> Result<WhisperConfig, String> {
-    let Resolved::Whisper(e) = runtime(profile, Execution::Whisper(engine))? else {
+pub(crate) fn whisper(profile: &Value, engine: &AsrConfig) -> Result<AsrConfig, String> {
+    let Resolved::Asr(e) = runtime(profile, Execution::Asr(engine))? else {
         unreachable!()
     };
     Ok(e)

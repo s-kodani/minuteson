@@ -26,6 +26,8 @@ enum Configuration {
         threads: u32,
         use_gpu: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        backend: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         vad_options: Option<crate::transcription::vad::VadOptions>,
     },
     #[serde(rename = "sherpa-onnx", rename_all = "camelCase")]
@@ -54,9 +56,10 @@ enum Configuration {
 impl Configuration {
     fn from_settings(settings: &Settings) -> Self {
         match settings {
-            Settings::Whisper(s) => Self::Whisper {
+            Settings::Whisper(s) | Settings::Asr(s) => Self::Whisper {
                 threads: s.threads,
                 use_gpu: s.use_gpu,
+                backend: s.backend.as_ref().map(|b| b.id.clone()),
                 vad_options: s.vad_options,
             },
             Settings::Sherpa(s) => Self::Sherpa {
@@ -80,17 +83,21 @@ impl Configuration {
     fn settings(&self) -> Settings {
         // Empty paths allow numerical validation by the actual preferences
         // validators. They are not selected model references on this host.
-        match *self {
+        match self.clone() {
             Self::Whisper {
                 threads,
                 use_gpu,
+                backend,
                 vad_options,
-            } => Settings::Whisper(preferences::EnginePreferences {
+            } => { let settings=preferences::EnginePreferences {
                 threads,
                 use_gpu,
+                backend: backend.as_ref().map(|id|crate::transcription::asr::BackendPreferences {
+                    id:id.clone(),files:crate::transcription::asr::find(id).map(|a|a.descriptor().slots.iter().map(|slot|(slot.to_string(),format!("/portable-model/{slot}"))).collect()).unwrap_or_default()
+                }),
                 vad_options,
                 ..Default::default()
-            }),
+            }; if backend.is_some(){Settings::Asr(settings)}else{Settings::Whisper(settings)} },
             Self::Sherpa {
                 threads,
                 cluster_threshold_milli,

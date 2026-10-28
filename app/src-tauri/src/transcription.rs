@@ -1,5 +1,7 @@
-//! Local whisper.cpp execution. No shell, network, speaker inference or text
+//! Local ASR execution through registered adapters. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
+pub(crate) mod asr;
+mod transducer;
 mod guard;
 mod recovery;
 pub(crate) use recovery::ReviewRange;
@@ -24,7 +26,7 @@ use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
 };
 use serde::{Deserialize, Serialize};
-use whisper::WhisperConfig;
+use asr::AsrConfig;
 
 fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
     let current = storage.recorded_analysis_input(&spec.meeting_id)?;
@@ -88,7 +90,7 @@ pub(crate) struct StartRequest {
 #[cfg(test)]
 impl StartRequest {
     pub fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
-        let engine = WhisperConfig {
+        let engine = AsrConfig { backend: None,
             executable: whisper::Fingerprint::capture(
                 &self.executable_path,
                 &crate::test_support::never_cancelled,
@@ -172,7 +174,7 @@ pub(crate) fn retry_preflight(
     runtime.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
-        Execution::Whisper(&parameters.engine),
+        Execution::Asr(&parameters.engine),
         cancelled,
     )?;
     check_source(storage, spec, &parameters)?;
@@ -198,7 +200,7 @@ pub(crate) fn retry_preflight(
     runtime.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
-        Execution::Whisper(&parameters.engine),
+        Execution::Asr(&parameters.engine),
         cancelled,
     )?;
     optimization.finish(cancelled)
@@ -222,9 +224,10 @@ fn verify_saved_pcm(
 // Frozen per job so old checkpoints keep their original decoding settings.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-enum RecognitionPolicy {
+pub(crate) enum RecognitionPolicy {
     GuardedVocabularyV2,
     AdaptiveRecoveryV3,
+    AdapterV1,
 }
 
 // Frozen for new jobs only. `use_gpu` requests the engine's GPU backend; when
@@ -237,7 +240,7 @@ enum AccelerationPolicy {
 }
 
 impl AccelerationPolicy {
-    fn configure(self, engine: &mut WhisperConfig) {
+    fn configure(self, engine: &mut AsrConfig) {
         if self == Self::AutoMetalV1 && cfg!(target_os = "macos") {
             engine.use_gpu = true;
         }
@@ -253,7 +256,7 @@ struct Parameters {
     resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     schema_version: u32,
     source: RecordedAudioPlan,
-    engine: WhisperConfig,
+    engine: AsrConfig,
     units: Vec<Unit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     vocabulary: Option<crate::storage::VocabularySnapshot>,
@@ -338,6 +341,10 @@ fn checked_output(
     rejected: Option<&[u8]>,
     duration: i64,
 ) -> Result<Vec<whisper::Segment>, String> {
+    if parameters.recognition_policy == Some(RecognitionPolicy::AdapterV1) {
+        if rejected.is_some() || output.recognition.as_ref().is_none_or(|a| a.rejected.is_some() || !a.reasons.is_empty()) { return Err("ASR採用記録が不正です".into()); }
+        return asr::adapter(&parameters.engine)?.parse_result(bytes, &parameters.engine, duration);
+    }
     if parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3)
         && output
             .recognition
@@ -482,13 +489,13 @@ fn decode_parameters(
     let parameters: Parameters =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     if let Some(runtime) = &parameters.resident_runtime {
-        runtime.accepts("whisper")?;
+        runtime.accepts(asr::adapter(&parameters.engine)?.descriptor().worker)?;
     }
     if parameters.resident_runtime.is_none()
         || parameters.optimization_version != Some(crate::current_formats::OPTIMIZATION)
         || !matches!(
             parameters.recognition_policy,
-            Some(RecognitionPolicy::GuardedVocabularyV2 | RecognitionPolicy::AdaptiveRecoveryV3)
+            Some(RecognitionPolicy::GuardedVocabularyV2 | RecognitionPolicy::AdaptiveRecoveryV3 | RecognitionPolicy::AdapterV1)
         )
         || spec.kind != JobKind::Transcription
         || parameters.schema_version != crate::current_formats::TRANSCRIPTION
@@ -511,13 +518,13 @@ fn decode_parameters(
         && parameters
             .vocabulary
             .as_ref()
-            .is_none_or(|v| v.method != "whisper-vocabulary-v2")
+            .is_none_or(|v| v.method != asr::adapter(&parameters.engine).map(|a| a.descriptor().vocabulary_method).unwrap_or(""))
     {
         return Err("新しい認識ポリシーと用語方式が一致しません".into());
     }
     managed::validate(
         &spec.profile_snapshot,
-        Execution::Whisper(&parameters.engine),
+        Execution::Asr(&parameters.engine),
     )?;
     Ok(parameters)
 }
@@ -610,7 +617,7 @@ pub(crate) fn enqueue(
     storage: &Storage,
     meeting_id: &str,
     operation_id: &str,
-    engine: WhisperConfig,
+    engine: AsrConfig,
     profile: &str,
 ) -> Result<JobSnapshot, String> {
     enqueue_with_stamp(storage, meeting_id, operation_id, engine, profile, None)
@@ -619,7 +626,7 @@ pub(crate) fn enqueue_with_stamp(
     storage: &Storage,
     meeting_id: &str,
     operation_id: &str,
-    mut engine: WhisperConfig,
+    mut engine: AsrConfig,
     profile: &str,
     expected: Option<crate::storage::VocabularyStamp>,
 ) -> Result<JobSnapshot, String> {
@@ -633,7 +640,7 @@ pub(crate) fn enqueue_with_stamp(
         meeting_id,
         operation_id,
         profile,
-        Execution::Whisper(&engine),
+        Execution::Asr(&engine),
     )?;
     storage.ensure_meeting_mix(meeting_id, &|| false, &|_, _| {})?;
     let (source, known_input) = storage.recorded_analysis_input(meeting_id)?;
@@ -644,17 +651,19 @@ pub(crate) fn enqueue_with_stamp(
     let units = planned_units(&source, known_input.as_ref())?;
     let total = units.len() as i64;
     let resident_runtime =
-        crate::local_engine::resident::prepare_job(storage, meeting_id, operation_id, "whisper")?;
+        crate::local_engine::resident::prepare_job(storage, meeting_id, operation_id, asr::adapter(&engine)?.descriptor().worker)?;
     let optimization_version =
         storage.optimization_version_for_operation(meeting_id, operation_id)?;
     let extra = engine.prompt.clone();
     audio_verification.verify()?;
     verification.finish(&|| false)?;
-    storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
+    let descriptor = asr::adapter(&engine)?.descriptor();
+    storage.enqueue_with_vocabulary_method(meeting_id,operation_id,&extra,expected,descriptor.vocabulary_method,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let acceleration_policy=if cfg!(target_os="macos"){Some(AccelerationPolicy::AutoMetalV1)}else if cfg!(windows)&&resident_runtime.as_ref().is_some_and(|r|r.gpu.is_some()){Some(AccelerationPolicy::AutoVulkanV1)}else{None};
-        let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::AdaptiveRecoveryV3),acceleration_policy};
-        Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
+        let acceleration_policy=if !descriptor.supports_gpu {None}else if cfg!(target_os="macos"){Some(AccelerationPolicy::AutoMetalV1)}else if cfg!(windows)&&resident_runtime.as_ref().is_some_and(|r|r.gpu.is_some()){Some(AccelerationPolicy::AutoVulkanV1)}else{None};
+        let recognition_policy=asr::adapter(&engine)?.recognition_policy();
+        let parameters=Parameters{optimization_version,resident_runtime,schema_version:crate::current_formats::TRANSCRIPTION,source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(recognition_policy),acceleration_policy};
+        Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":asr::engine(&parameters.engine),"backendId":descriptor.id,"adapterRevision":descriptor.revision,"modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
 
@@ -736,7 +745,7 @@ pub(crate) fn process(
         runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
-            Execution::Whisper(&parameters.engine),
+            Execution::Asr(&parameters.engine),
             &cancelled,
         )?;
         check_source(storage, &spec, &parameters)?;
@@ -774,7 +783,7 @@ pub(crate) fn process(
             let duration = ((unit.window_end - unit.window_first) * 1_000_000 / 16000) as i64;
             managed::verify(
                 &spec.profile_snapshot,
-                Execution::Whisper(&parameters.engine),
+                Execution::Asr(&parameters.engine),
                 &cancelled,
             )?;
             let first_native_unit =
@@ -800,7 +809,7 @@ pub(crate) fn process(
                         .is_some_and(|file| {
                             let mut log = String::new();
                             file.take(65536).read_to_string(&mut log).is_ok()
-                                && log.contains("mon_model_load: whisper=1")
+                                && log.contains(&format!("mon_model_load: {}=1", asr::adapter(&runtime).map(|a| a.descriptor().worker).unwrap_or("unknown")))
                         });
                     if ready {
                         loading.set(false);
@@ -817,7 +826,7 @@ pub(crate) fn process(
             let guarded = if checkpoint.pending_recovery.is_some() {
                 Err(format!("{}再認識を再開", QUALITY_FAILURE_PREFIX))
             } else {
-                guard::run(
+                asr::adapter(&runtime)?.guarded(
                     &runtime,
                     &directory,
                     duration,
@@ -903,7 +912,7 @@ pub(crate) fn process(
             }
             managed::verify(
                 &spec.profile_snapshot,
-                Execution::Whisper(&parameters.engine),
+                Execution::Asr(&parameters.engine),
                 &cancelled,
             )?;
             let wav = &parameters.source.tracks[unit.track_index].chunks[0];
@@ -912,12 +921,7 @@ pub(crate) fn process(
                 if !recovered && runtime.model.path != parameters.engine.model.path {
                     let bytes =
                         crate::restored_processing::read_local(path, 8 * 1024 * 1024, &cancelled)?;
-                    let normalized = whisper::logical_output(
-                        &bytes,
-                        &runtime.model.path,
-                        &parameters.engine.model.path,
-                        duration,
-                    )?;
+                    let normalized = asr::adapter(&runtime)?.logical_output(&bytes, &runtime, &parameters.engine, duration)?;
                     result_path = path.with_file_name("logical-result.json");
                     crate::restored_processing::write_new(&result_path, &normalized)?;
                 }
@@ -989,7 +993,7 @@ pub(crate) fn process(
         let mut review_ranges = Vec::<recovery::ReviewRange>::new();
         managed::verify(
             &spec.profile_snapshot,
-            Execution::Whisper(&parameters.engine),
+            Execution::Asr(&parameters.engine),
             &cancelled,
         )?;
         for output in &checkpoint.outputs {
@@ -1144,7 +1148,7 @@ mod recognition_policy_tests {
 
     #[test]
     fn gpu_policy_is_optional_versioned_and_preserves_base_configuration() {
-        let base = WhisperConfig {
+        let base = AsrConfig { backend: None,
             executable: whisper::Fingerprint {
                 path: "/cli".into(),
                 size: 1,

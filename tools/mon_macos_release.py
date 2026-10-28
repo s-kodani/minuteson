@@ -252,7 +252,7 @@ def asr_module():
     return runtime
 
 
-WORKER_NAMES = ("mon-whisper-worker", "mon-llama-worker", "mon-sherpa-worker")
+WORKER_NAMES = ("mon-whisper-worker", "mon-llama-worker", "mon-sherpa-worker", "mon-transducer-worker")
 
 def verify_inference_runtime(app, team=None):
     root = private_path(app / "Contents/Resources/inference-runtime", directory=True)
@@ -260,9 +260,9 @@ def verify_inference_runtime(app, team=None):
     if index_file.stat().st_size > 65536:
         raise ValueError("worker index exceeds the metadata limit")
     index = json.loads(index_file.read_text())
-    if not isinstance(index, list) or len(index) != 3:
+    if not isinstance(index, list) or len(index) != len(WORKER_NAMES):
         raise ValueError("worker index is incomplete")
-    expected = dict(zip(("whisper", "llama", "sherpa"), WORKER_NAMES))
+    expected = dict(zip(("whisper", "llama", "sherpa", "asr-transducer"), WORKER_NAMES))
     if {item.get("engine") for item in index} != set(expected):
         raise ValueError("worker index engines differ")
     runtime = asr_module()
@@ -275,7 +275,7 @@ def verify_inference_runtime(app, team=None):
             raise ValueError("worker bytes differ from the fixed index")
         runtime.verify_binary(binary)
         if team is not None:
-            policy = "embedding.plist" if item["engine"] == "sherpa" else "main.plist"
+            policy = "embedding.plist" if item["engine"] in ("sherpa", "asr-transducer") else "main.plist"
             verify_signature(binary, team, runtime=True,
                              entitlements=REPOSITORY / "app/src-tauri/release-entitlements" / policy)
     for notice in ("whisper-MIT.txt", "llama-MIT.txt", "nlohmann-MIT.txt", "sherpa-Apache-2.0.txt", "build-info.json"):
@@ -288,11 +288,15 @@ def sign_inference_runtime(app, identity, team, policy):
     root = app / "Contents/Resources/inference-runtime"
     for item in index:
         binary = root / item["name"]
-        sign(binary, identity, team, policy / ("embedding.plist" if item["engine"] == "sherpa" else "main.plist"))
+        sign(binary, identity, team, policy / ("embedding.plist" if item["engine"] in ("sherpa", "asr-transducer") else "main.plist"))
         item["bytes"], item["sha256"] = binary.stat().st_size, digest(binary)
     # Final signed bytes are the identities frozen into future jobs. This runs
     # only in the private release copy, before sealing the enclosing app.
     (root / "runtime-index.json").write_text(json.dumps(index, indent=2) + "\n")
+    spec = importlib.util.spec_from_file_location("mon_release_asr_bundle", REPOSITORY / "tools/mon_asr_bundle.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.assemble(root)
     return verify_inference_runtime(app, team)
 
 

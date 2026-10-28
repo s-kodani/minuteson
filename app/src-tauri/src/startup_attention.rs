@@ -245,6 +245,8 @@ impl Startup {
                         | "get_meeting_analysis_audio"
                         | "get_ui_preferences"
                         | "get_analysis_preferences"
+                        | "get_asr_preferences"
+                        | "get_asr_backends"
                         | "get_diarization_preferences"
                         | "get_minutes_preferences"
                         | "get_minutes_prompt_preferences"

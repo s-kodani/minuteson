@@ -3,11 +3,12 @@ import type { ModelInspectionReport, ModelPlacementReceipt } from "./model-inspe
 export const downloadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const hash = /^[0-9a-f]{64}$/u, maximum = 32 * 1024 ** 3;
 type File = { relativePath: string; role: string; expectedSize: number; expectedHash: string };
-export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[] };
+export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[]; backend?: { id: string; files: Record<string, string> } };
 export type DownloadArchive = { format: "tar"; expectedSize: number; expectedHash: string; memberPath: string };
 export const bundledWhisperSource = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
+export const bundledAsrSource = "mon-bundled://asr-v1/asr-runtime.tar";
 export const bundledWindowsSource = "mon-bundled://windows-runtime-v1/runtime.tar";
-const isBundledSource = (url: string) => url === bundledWhisperSource || url === bundledWindowsSource;
+const isBundledSource = (url: string) => url === bundledWhisperSource || url === bundledWindowsSource || url === bundledAsrSource;
 export type DownloadRecipe = { schemaVersion: 4; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
 export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
@@ -28,13 +29,17 @@ function identity(value: unknown): string { if (typeof value !== "string" || !do
 // authoritative for OS, roles, portable paths, URLs and metadata byte budget.
 export function canonicalRecipe(value: unknown): DownloadRecipe {
   const recipe = object(value); keys(recipe, ["schemaVersion", "manifest", "sources"]);
-  const m = object(recipe.manifest); keys(m, ["schemaVersion", "engine", "engineVersion", "modelName", "modelVersion", "quantization", "licenseRef", "target", "files"]);
+  const m = object(recipe.manifest); keys(m, ["schemaVersion", "engine", "engineVersion", "modelName", "modelVersion", "quantization", "licenseRef", "target", "files", "backend"]);
   if (recipe.schemaVersion !== 4 || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
   const manifest: DownloadManifest = {
     schemaVersion: 1, engine: text(m.engine, 32), engineVersion: text(m.engineVersion, 128), modelName: text(m.modelName, 256), modelVersion: text(m.modelVersion, 128),
     quantization: m.quantization == null ? null : text(m.quantization, 128), licenseRef: text(m.licenseRef, 4096), target: text(m.target, 32),
     files: m.files.map(value => { const f = object(value); keys(f, ["relativePath", "role", "expectedSize", "expectedHash"]); return { relativePath: text(f.relativePath, 4096), role: text(f.role, 32), expectedSize: size(f.expectedSize), expectedHash: sha(f.expectedHash) }; }),
   };
+  if (m.backend !== undefined) {
+    const b = object(m.backend); keys(b, ["id", "files"]); const files = object(b.files);
+    manifest.backend = { id: text(b.id, 128), files: Object.fromEntries(Object.keys(files).sort().map(key => [text(key, 64), text(files[key], 4096)])) };
+  }
   const sources = recipe.sources.map((value, index) => {
     const s = object(value); keys(s, ["relativePath", "url", "archive"]);
     if (s.relativePath !== manifest.files[index].relativePath) fail();
@@ -50,6 +55,8 @@ export function canonicalRecipe(value: unknown): DownloadRecipe {
       const file = manifest.files[index], member = result.archive?.memberPath;
       if (manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
         || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
+    } else if (result.url === bundledAsrSource) {
+      if (manifest.engine !== "asr" || manifest.target !== "macos_aarch64" || !result.archive || !["executable", "notice"].includes(manifest.files[index].role)) fail();
     } else if (result.url === bundledWindowsSource) {
       if (manifest.target !== "windows_x86_64" || !result.archive
         || !["executable", "runtime_library", "notice"].includes(manifest.files[index].role)) fail();

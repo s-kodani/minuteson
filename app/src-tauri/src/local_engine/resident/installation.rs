@@ -41,6 +41,7 @@ impl Snapshot {
             }
             return Ok(());
         }
+        let asr_binary=crate::transcription::asr::worker_binary(&self.engine).map(|n| if cfg!(windows) {format!("{n}.exe")} else {n.to_owned()});
         let name = match self.engine.as_str() {
             #[cfg(windows)]
             "whisper" => "mon-whisper-worker.exe",
@@ -54,7 +55,7 @@ impl Snapshot {
             "llama" => "mon-llama-worker",
             #[cfg(not(windows))]
             "sherpa" => "mon-sherpa-worker",
-            _ => return Err("未知の常駐推論エンジンです".into()),
+            _ => asr_binary.as_deref().ok_or("未知の常駐推論エンジンです")?,
         };
         let accelerated_name = match self.engine.as_str() {
             "whisper" => "mon-whisper-vulkan-worker.exe",
@@ -77,7 +78,7 @@ impl Snapshot {
             "whisper" => "mon-whisper-worker",
             "llama" => "mon-llama-worker",
             "sherpa" => "mon-sherpa-worker",
-            _ => "",
+            _ => crate::transcription::asr::worker_binary(&self.engine).unwrap_or(""),
         };
         if self.protocol != 1
             || (self.name != name
@@ -324,7 +325,7 @@ pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, Str
         return Err("推論ランタイムの定義が上限を超えています".into());
     }
     let snapshots: Vec<Snapshot> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if snapshots.len() != 3 {
+    if snapshots.len() != 2 + crate::transcription::asr::registry().len() {
         return Err("推論ランタイムの構成が不正です".into());
     }
     for snapshot in &snapshots {
@@ -353,7 +354,7 @@ pub(crate) fn prepare_job(
     {
         let (spec, _) = storage.fixed_job_input(&existing.id)?;
         let parameters = match engine {
-            "whisper" => &spec.parameters,
+            "whisper" | "asr-transducer" => &spec.parameters,
             "sherpa" => &spec.parameters["diarization"],
             "llama" => &spec.parameters["generation"],
             _ => return Err("未知の常駐推論工程です".into()),
@@ -382,7 +383,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
     let snapshot = Snapshot {
         protocol: 1,
         engine: engine.into(),
-        name: format!("mon-{engine}-worker"),
+        name: crate::transcription::asr::worker_binary(engine).map(str::to_owned).unwrap_or_else(||format!("mon-{engine}-worker")),
         bytes: SYNTHETIC.len() as u64,
         sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
         gpu: None,

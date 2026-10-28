@@ -234,6 +234,9 @@ pub(super) fn compile_method(
             prompt.push('\n');
         }
         match method {
+            "transducer-hotwords-v1" => {
+                prompt.push_str(&entries.iter().map(|e| e.entry.term.as_str()).collect::<Vec<_>>().join("\n"));
+            }
             "whisper-vocabulary-v2" => {
                 for (index, item) in entries.iter().enumerate() {
                     if index > 0 {
@@ -250,7 +253,7 @@ pub(super) fn compile_method(
             _ => return Err("未対応の用語ヒント方式です".into()),
         }
     }
-    if method != "whisper-vocabulary-v2" {
+    if !matches!(method, "whisper-vocabulary-v2" | "transducer-hotwords-v1") {
         return Err("未対応の用語ヒント方式です".into());
     }
     if prompt.chars().count() > 8000 || prompt.contains('\0') {
@@ -386,6 +389,12 @@ impl Storage {
         expected: Option<VocabularyStamp>,
         build: impl FnOnce(VocabularySnapshot) -> Result<JobSpec, String>,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_with_vocabulary_method(meeting, operation, extra, expected, "whisper-vocabulary-v2", build)
+    }
+    pub(crate) fn enqueue_with_vocabulary_method(
+        &self, meeting: &str, operation: &str, extra: &str, expected: Option<VocabularyStamp>,
+        method: &str, build: impl FnOnce(VocabularySnapshot) -> Result<JobSpec, String>,
+    ) -> Result<JobSnapshot, String> {
         let mut db = self
             .connection
             .lock()
@@ -440,9 +449,9 @@ impl Storage {
                 id: Uuid::new_v4().to_string(),
                 meeting_id: meeting.into(),
                 stamp,
-                actual_prompt: compile_method(&entries, extra, "whisper-vocabulary-v2")?,
+                actual_prompt: compile_method(&entries, extra, method)?,
                 entries,
-                method: "whisper-vocabulary-v2".into(),
+                method: method.into(),
                 extra_prompt: extra.into(),
                 content_hash: String::new(),
             };

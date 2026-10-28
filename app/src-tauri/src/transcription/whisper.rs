@@ -15,47 +15,7 @@ const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 // segment can end in that window's padding, not at the final input sample.
 const TIMESTAMP_WINDOW_US: i64 = 30_000_000;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct WhisperConfig {
-    pub executable: Fingerprint,
-    pub model: Fingerprint,
-    pub vad_model: Option<Fingerprint>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vad_options: Option<super::vad::VadOptions>,
-    pub threads: u32,
-    pub use_gpu: bool,
-    pub prompt: String,
-}
-
-impl WhisperConfig {
-    pub(crate) fn validate_settings(&self) -> Result<(), String> {
-        if let Some(options) = self.vad_options {
-            options.validate()?;
-        }
-        if !(1..=64).contains(&self.threads) || self.prompt.chars().count() > 8000 {
-            return Err("文字起こしのスレッド数または用語ヒントが不正です".into());
-        }
-        Ok(())
-    }
-    pub fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
-        self.validate_settings()?;
-        self.executable.verify(cancelled)?;
-        self.model.verify(cancelled)?;
-        if let Some(vad) = &self.vad_model {
-            vad.verify(cancelled)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Segment {
-    pub start_us: i64,
-    pub end_us: i64,
-    pub text: String,
-}
+pub use super::asr::{AsrConfig, Segment};
 
 #[derive(Deserialize)]
 struct Output {
@@ -176,7 +136,7 @@ pub(crate) fn logical_output(
 }
 
 pub fn run_unit(
-    config: &WhisperConfig,
+    config: &AsrConfig,
     directory: &Path,
     duration_us: i64,
     timeout: Duration,
@@ -188,7 +148,7 @@ pub fn run_unit(
 // Package compatibility checks execute the package's upstream CLI directly.
 // It reads a complete WAV and does not understand MON's worker range flags.
 pub(crate) fn run_standalone_unit(
-    config: &WhisperConfig,
+    config: &AsrConfig,
     directory: &Path,
     duration_us: i64,
     timeout: Duration,
@@ -207,7 +167,7 @@ pub(crate) fn run_standalone_unit(
 // Suppress non-speech tokens during decoding, never delete recognized words.
 // The caller fixes this choice in the job, rather than changing old replays.
 pub(crate) fn run_unit_with_suppression(
-    config: &WhisperConfig,
+    config: &AsrConfig,
     directory: &Path,
     duration_us: i64,
     timeout: Duration,
@@ -232,7 +192,7 @@ enum Invocation {
 }
 
 fn run(
-    config: &WhisperConfig,
+    config: &AsrConfig,
     directory: &Path,
     duration_us: i64,
     timeout: Duration,
@@ -423,7 +383,7 @@ mod tests {
             )
             .unwrap();
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let config = WhisperConfig {
+            let config = AsrConfig { backend: None,
                 executable: Fingerprint::capture(
                     &executable,
                     &crate::test_support::never_cancelled,
@@ -623,7 +583,7 @@ mod tests {
         let model = root.path().join("model.bin");
         std::fs::write(&model, b"unused synthetic model").unwrap();
         let proof = Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap();
-        let config = WhisperConfig {
+        let config = AsrConfig { backend: None,
             executable: proof.clone(),
             model: proof,
             vad_model: None,
@@ -671,7 +631,7 @@ mod tests {
             )
             .unwrap()
         };
-        let config = WhisperConfig {
+        let config = AsrConfig { backend: None,
             executable: proof("MON_WHISPER_CLI"),
             model: proof("MON_WHISPER_MODEL"),
             vad_model: Some(proof("MON_WHISPER_VAD_MODEL")),
@@ -735,7 +695,7 @@ mod tests {
                 frames,
             }],
         };
-        let config = WhisperConfig {
+        let config = AsrConfig { backend: None,
             executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
@@ -804,7 +764,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let config = WhisperConfig {
+        let config = AsrConfig { backend: None,
             executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
                 .unwrap(),
             model: proof,
@@ -838,7 +798,7 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let model = directory.path().join("model.bin");
         std::fs::write(&model, b"model").unwrap();
-        let mut config = WhisperConfig {
+        let mut config = AsrConfig { backend: None,
             executable: Fingerprint::capture(&executable, &crate::test_support::never_cancelled)
                 .unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),

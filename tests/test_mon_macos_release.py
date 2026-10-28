@@ -65,7 +65,7 @@ class ReleaseTests(unittest.TestCase):
             executable.chmod(0o755)
         workers = self.app / "Contents/Resources/inference-runtime"
         entries = []
-        for engine, name in zip(("whisper", "llama", "sherpa"), release.WORKER_NAMES):
+        for engine, name in zip(("whisper", "llama", "sherpa", "asr-transducer"), release.WORKER_NAMES):
             binary = self.file(workers / name, ("synthetic " + name).encode())
             binary.chmod(0o755)
             entries.append({"protocol":1,"engine":engine,"name":name,"bytes":binary.stat().st_size,"sha256":release.digest(binary)})
@@ -103,7 +103,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(index["signingTeamId"], TEAM)
         if "--entitlements" in argv and "--display" in argv:
             target = argv[-1]
-            policy = "embedding.plist" if target.endswith(("mon-speaker-embedding", "mon-sherpa-worker")) else "capture.plist" if target.endswith("MONCaptureProbe.app") else "main.plist"
+            policy = "embedding.plist" if target.endswith(("mon-speaker-embedding", "mon-sherpa-worker", "mon-transducer-worker")) else "capture.plist" if target.endswith("MONCaptureProbe.app") else "main.plist"
             return (self.policy / policy).read_bytes(), b"warning: display"
         if "--display" in argv:
             return b"", (f"Authority={IDENTITY}\nTeamIdentifier={TEAM}\nTimestamp=Oct 10 2026\nCodeDirectory v=20500 size=100 flags=0x10000(runtime) hashes=3+2\n").encode()

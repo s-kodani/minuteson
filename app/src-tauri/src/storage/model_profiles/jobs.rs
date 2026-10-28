@@ -5,7 +5,7 @@ use crate::diarization::sherpa::SherpaConfig;
 use crate::generation::llama::LlamaConfig;
 use crate::local_engine::Fingerprint;
 use crate::model_compatibility::ProbeReport;
-use crate::transcription::whisper::WhisperConfig;
+use crate::transcription::asr::AsrConfig;
 use serde_json::{json, Value};
 
 pub(crate) mod rebinding;
@@ -27,14 +27,14 @@ pub(crate) struct Snapshot {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Execution<'a> {
-    Whisper(&'a WhisperConfig),
+    Asr(&'a AsrConfig),
     Sherpa(&'a SherpaConfig),
     Llama(&'a LlamaConfig, usize),
 }
 impl Execution<'_> {
     fn validate_settings(&self) -> Result<(), String> {
         match self {
-            Self::Whisper(e) => e.validate_settings(),
+            Self::Asr(e) => e.validate_settings(),
             Self::Sherpa(e) => e.validate_settings(None),
             Self::Llama(e, b) => {
                 e.validate()?;
@@ -52,16 +52,19 @@ impl Execution<'_> {
     }
     fn engine(&self) -> Engine {
         match self {
-            Self::Whisper(_) => Engine::Whisper,
+            Self::Asr(e) => crate::transcription::asr::engine(e),
             Self::Sherpa(_) => Engine::Sherpa,
             Self::Llama(_, _) => Engine::Llama,
         }
     }
     fn files(&self) -> Vec<(Role, &Fingerprint)> {
         match self {
-            Self::Whisper(e) => {
+            Self::Asr(e) => {
                 let mut files = vec![(Role::Executable, &e.executable), (Role::Asr, &e.model)];
                 files.extend(e.vad_model.iter().map(|f| (Role::Vad, f)));
+                if let Some(backend) = &e.backend {
+                    files.extend(backend.files.iter().map(|(k,f)| (if k == "library" { Role::RuntimeLibrary } else { Role::AsrAsset }, f)));
+                }
                 files
             }
             Self::Sherpa(e) => {
@@ -88,14 +91,15 @@ impl Execution<'_> {
                 .ok_or("モデルパスが不正です".into())
         };
         Ok(match self {
-            Self::Whisper(e) => Settings::Whisper(preferences::EnginePreferences {
+            Self::Asr(e) => { let preferences = preferences::EnginePreferences {
                 executable_path: path(&e.executable)?,
                 model_path: path(&e.model)?,
                 vad_model_path: e.vad_model.as_ref().map(path).transpose()?,
                 vad_options: e.vad_options,
                 threads: e.threads,
                 use_gpu: e.use_gpu,
-            }),
+                backend: e.backend.as_ref().map(|b| -> Result<_,String> { Ok(crate::transcription::asr::BackendPreferences { id: b.id.clone(), files: b.files.iter().map(|(k,f)| Ok((k.clone(), path(f)?))).collect::<Result<_,String>>()? }) }).transpose()?,
+            }; if e.backend.is_some() { Settings::Asr(preferences) } else { Settings::Whisper(preferences) } },
             Self::Sherpa(e) => {
                 Settings::Sherpa(diarization_preferences::DiarizationEnginePreferences {
                     executable_path: path(&e.executable)?,
@@ -132,7 +136,7 @@ impl Execution<'_> {
     // has its own immutable vocabulary snapshot in the transcription job.
     fn configuration(&self) -> Value {
         match self {
-            Self::Whisper(e) => {
+            Self::Asr(e) => {
                 let mut value = json!({"threads":e.threads,"useGpu":e.use_gpu});
                 if let Some(options) = e.vad_options {
                     value["vadOptions"] = serde_json::to_value(options).unwrap();
@@ -196,7 +200,7 @@ impl Snapshot {
                 // Whisper/llama runtime libraries are verified as part of the whole
                 // package even though their CLI configs have no library argument.
                 f.role != Role::Notice
-                    && (f.role != Role::RuntimeLibrary || execution.engine() == Engine::Sherpa)
+                    && (f.role != Role::RuntimeLibrary || matches!(execution.engine(), Engine::Sherpa | Engine::Asr))
             })
             .collect::<Vec<_>>();
         if proofs.len() != declared.len() {
@@ -454,9 +458,9 @@ fn with_execution<T>(
 ) -> Result<T, String> {
     match spec.kind {
         JobKind::Transcription => {
-            let e: WhisperConfig = serde_json::from_value(spec.parameters["engine"].clone())
+            let e: AsrConfig = serde_json::from_value(spec.parameters["engine"].clone())
                 .map_err(|e| e.to_string())?;
-            run(Execution::Whisper(&e))
+            run(Execution::Asr(&e))
         }
         JobKind::VoiceRegistration | JobKind::VoiceMatching => {
             let e: SherpaConfig =
@@ -501,7 +505,7 @@ fn flow_selection(
     let flow = super::super::analysis_flows::read_flow(db, meeting)?
         .ok_or("固定した解析工程がありません")?;
     let kind = match execution {
-        Execution::Whisper(_) => "transcription",
+        Execution::Asr(_) => "transcription",
         Execution::Sherpa(_) => "diarization",
         _ => return Err("工程のモデル種別が不正です".into()),
     };
@@ -513,8 +517,8 @@ fn flow_selection(
         profile,
     )?;
     let (fixed, snapshot) = match execution {
-        Execution::Whisper(_) => (
-            Execution::Whisper(&plan.whisper),
+        Execution::Asr(_) => (
+            Execution::Asr(&plan.whisper),
             plan.whisper_managed.clone(),
         ),
         Execution::Sherpa(_) => (Execution::Sherpa(&plan.sherpa), plan.sherpa_managed.clone()),
@@ -758,7 +762,7 @@ pub(in crate::storage) fn gate_plan(
     value: &Value,
 ) -> Result<(), String> {
     let plan = crate::analysis_flow::saved_plan(value.clone(), profile)?;
-    if current(db, profile, &Execution::Whisper(&plan.whisper))?.map(|(s, _)| s)
+    if current(db, profile, &Execution::Asr(&plan.whisper))?.map(|(s, _)| s)
         != plan.whisper_managed
         || current(db, profile, &Execution::Sherpa(&plan.sherpa))?.map(|(s, _)| s)
             != plan.sherpa_managed

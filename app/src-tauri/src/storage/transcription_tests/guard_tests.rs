@@ -5,7 +5,7 @@ fn engine(
     root: &Path,
     seconds: i64,
     fail_plain: bool,
-) -> (Storage, String, WhisperConfig, PathBuf) {
+) -> (Storage, String, AsrConfig, PathBuf) {
     let (storage, meeting, mut config) = fixture(root, seconds);
     let calls = root.join("calls.jsonl");
     let model = &config.model.path;
@@ -151,7 +151,7 @@ fn real_guarded_vocabulary_worker_checks_all_units_against_unhinted_audio() {
         serde_json::from_slice(&std::fs::read(root.join("verification-input.json")).unwrap())
             .unwrap();
     let meeting = marker["meetingId"].as_str().unwrap();
-    let engine: WhisperConfig = serde_json::from_value(marker["engine"].clone()).unwrap();
+    let engine: AsrConfig = serde_json::from_value(marker["engine"].clone()).unwrap();
     engine.verify(&|| false).unwrap();
     let storage = Storage::open_with_models(
         root.clone(),
@@ -164,7 +164,7 @@ fn real_guarded_vocabulary_worker_checks_all_units_against_unhinted_audio() {
         &storage,
         meeting,
         "vocabulary-v2-real-verification",
-        WhisperConfig {
+        AsrConfig {
             prompt: String::new(),
             ..engine.clone()
         },

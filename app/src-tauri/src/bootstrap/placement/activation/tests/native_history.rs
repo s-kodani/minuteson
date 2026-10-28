@@ -596,7 +596,7 @@ fn synthetic_model(f: &NativeFixture, completed: bool) -> (String, PathBuf) {
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("cli"), b"SYNTHETIC DO NOT EXECUTE").unwrap();
     std::fs::write(source.join("weights.bin"), b"SYNTHETIC MODEL").unwrap();
-    let manifest = PackageManifest {
+    let manifest = PackageManifest { backend: None,
         schema_version: 1,
         engine: Engine::Whisper,
         engine_version: "test".into(),

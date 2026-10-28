@@ -272,7 +272,7 @@ impl FixedWorkspace {
                 {
                     return Err("文字起こしの管理モデルが固定計画と一致しません".into());
                 }
-                let mut engine: crate::transcription::whisper::WhisperConfig =
+                let mut engine: crate::transcription::asr::AsrConfig =
                     serde_json::from_value(source.parameters["engine"].clone())
                         .map_err(|e| e.to_string())?;
                 // Enqueue adds the validated fixed vocabulary to the empty base

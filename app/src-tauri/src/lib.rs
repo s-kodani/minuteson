@@ -27,6 +27,7 @@ mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod model_application;
+mod model_asr_catalog;
 #[cfg(target_os = "macos")]
 mod model_bundled_runtime;
 mod model_compatibility;
@@ -650,6 +651,17 @@ fn save_vocabulary_book(
         expected_lock_version,
         payload,
     )
+}
+
+#[tauri::command]
+fn get_asr_preferences(window: WebviewWindow) -> Result<storage::PreferencesSnapshot, String> {
+    get_analysis_preferences(window)
+}
+
+#[tauri::command]
+fn get_asr_backends(window: WebviewWindow) -> Result<Vec<transcription::asr::Descriptor>, String> {
+    if window.label() != "main" { return Err("メイン画面で操作してください".into()); }
+    Ok(transcription::asr::registry().iter().map(|a| a.descriptor()).collect())
 }
 
 #[tauri::command]
@@ -2748,6 +2760,8 @@ pub fn run() {
                 pause_analysis_job,
                 resume_analysis_job,
                 cancel_analysis_job,
+                get_asr_preferences,
+                get_asr_backends,
                 get_analysis_preferences,
                 get_ui_preferences,
                 save_ui_preferences,

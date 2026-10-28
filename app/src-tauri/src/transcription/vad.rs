@@ -63,7 +63,7 @@ impl VadOptions {
 mod tests {
     use super::*;
     use crate::local_engine::Fingerprint;
-    use crate::transcription::whisper::{run_unit, WhisperConfig};
+    use crate::transcription::whisper::{run_unit, AsrConfig};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
@@ -117,7 +117,7 @@ mod tests {
             std::fs::create_dir(&dir).unwrap();
             crate::test_support::write_wave(&dir.join("input.wav"));
             let capture = |p: &std::path::Path| Fingerprint::capture(p, &|| false).unwrap();
-            let config = WhisperConfig {
+            let config = AsrConfig { backend: None,
                 executable: capture(&cli),
                 model: capture(&model),
                 vad_model: Some(capture(&vad)),
@@ -161,7 +161,7 @@ mod tests {
 mod real_tests {
     use super::*;
     use crate::local_engine::Fingerprint;
-    use crate::transcription::whisper::{run_unit, WhisperConfig};
+    use crate::transcription::whisper::{run_unit, AsrConfig};
     use std::path::PathBuf;
     use std::time::Duration;
     #[test]
@@ -201,7 +201,7 @@ mod real_tests {
                 let dir = results.join(format!("{name}-{enabled}"));
                 std::fs::create_dir(&dir).unwrap();
                 std::fs::copy(&wav, dir.join("input.wav")).unwrap();
-                let config = WhisperConfig {
+                let config = AsrConfig { backend: None,
                     executable: cli.clone(),
                     model: model.clone(),
                     vad_model: Some(vad.clone()),

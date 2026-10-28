@@ -4,7 +4,7 @@ use crate::diarization::sherpa::SherpaConfig;
 use crate::local_engine::Fingerprint;
 use crate::storage::model_profiles::jobs::{Execution, Snapshot};
 use crate::storage::{analysis_flows::AnalysisFlow, MinutesJobRequest, Storage};
-use crate::transcription::whisper::WhisperConfig;
+use crate::transcription::asr::AsrConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct Plan {
     schema_version: u32,
     pub(crate) profile: String,
-    pub(crate) whisper: WhisperConfig,
+    pub(crate) whisper: AsrConfig,
     pub(crate) sherpa: SherpaConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) whisper_managed: Option<Snapshot>,
@@ -76,7 +76,7 @@ pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan
         target.validate()?;
     }
     if let Some(s) = &plan.whisper_managed {
-        s.validate(profile, &Execution::Whisper(&plan.whisper))?;
+        s.validate(profile, &Execution::Asr(&plan.whisper))?;
     }
     if let Some(s) = &plan.sherpa_managed {
         s.validate(profile, &Execution::Sherpa(&plan.sherpa))?;
@@ -109,7 +109,7 @@ pub(crate) fn prepare(
         return Err("話者分離モデルが未導入です。設定のローカルAIでモデルを選び、ダウンロードして使用してください。保存済み音声は保持しています".into());
     }
     let capture = |path: &str| Fingerprint::capture_retained(std::path::Path::new(path), cancelled);
-    let whisper = WhisperConfig {
+    let whisper = AsrConfig {
         executable: capture(&w.executable_path)?,
         model: capture(&w.model_path)?,
         vad_model: w.vad_model_path.as_deref().map(capture).transpose()?,
@@ -117,6 +117,7 @@ pub(crate) fn prepare(
         threads: w.threads,
         use_gpu: w.use_gpu,
         prompt: String::new(),
+        backend: w.backend.as_ref().map(|b| b.capture(cancelled)).transpose()?,
     };
     let sherpa = SherpaConfig {
         executable: capture(&d.executable_path)?,
@@ -137,7 +138,7 @@ pub(crate) fn prepare(
     whisper.verify(cancelled)?;
     sherpa.verify(cancelled)?;
     let whisper_managed =
-        storage.prepare_model_selection(profile, Execution::Whisper(&whisper), cancelled)?;
+        storage.prepare_model_selection(profile, Execution::Asr(&whisper), cancelled)?;
     let sherpa_managed =
         storage.prepare_model_selection(profile, Execution::Sherpa(&sherpa), cancelled)?;
     verification.finish(cancelled)?;

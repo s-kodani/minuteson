@@ -24,7 +24,7 @@ LLAMA_BYTES = 37840022
 SHERPA_COMMIT = "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
 SHERPA_LICENSE_SHA = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 HEADER_SHA = "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"
-NAMES = {"whisper": "mon-whisper-worker", "llama": "mon-llama-worker", "sherpa": "mon-sherpa-worker"}
+NAMES = {"whisper": "mon-whisper-worker", "llama": "mon-llama-worker", "sherpa": "mon-sherpa-worker", "asr-transducer": "mon-transducer-worker"}
 
 
 def checked(path, sha, size=None):
@@ -185,6 +185,9 @@ target_compile_features(mon-llama-worker PRIVATE cxx_std_17)
 add_executable(mon-sherpa-worker mon/sherpa.cpp)
 target_include_directories(mon-sherpa-worker PRIVATE mon)
 target_compile_features(mon-sherpa-worker PRIVATE cxx_std_17)
+add_executable(mon-transducer-worker mon/transducer-main.cpp)
+target_include_directories(mon-transducer-worker PRIVATE mon)
+target_compile_features(mon-transducer-worker PRIVATE cxx_std_17)
 ''')
 
 
@@ -206,6 +209,8 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
         if package.exists() and (package / "build-info.json").exists():
             info = json.loads((package / "build-info.json").read_text(encoding="utf8"))
             if info.get("recipeSha256") == stamp:
+                from mon_asr_bundle import assemble
+                assemble(package)
                 verify(package)
                 return package
         whisper = acquire(cache,"whisper-source.tar.gz",asr.SOURCE_URL,asr.SOURCE_SHA,asr.SOURCE_BYTES,whisper_source)
@@ -229,7 +234,7 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
                 if engine == "llama":
                     options += ["-DLLAMA_BUILD_COMMON=ON","-DLLAMA_BUILD_TESTS=OFF","-DLLAMA_BUILD_TOOLS=OFF","-DLLAMA_BUILD_EXAMPLES=OFF","-DLLAMA_BUILD_APP=OFF","-DLLAMA_BUILD_MTMD=OFF","-DLLAMA_OPENSSL=OFF"]
                 asr.command([str(cmake),"-S",str(root),"-B",str(build),*options],env=env)
-                targets = [NAMES[engine]] + ([NAMES["sherpa"]] if engine == "llama" else [])
+                targets = [NAMES[engine]] + ([NAMES["sherpa"], NAMES["asr-transducer"]] if engine == "llama" else [])
                 asr.command([str(cmake),"--build",str(build),"--target",*targets,"--parallel",str(jobs)],env=env,timeout=1800)
                 for target in targets:
                     binary = build/"bin"/target
@@ -252,13 +257,15 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
             # the application's hash cache and never get overwritten here.
             if package.exists(): shutil.rmtree(package)
             shutil.copytree(pending,package)
+            from mon_asr_bundle import assemble
+            assemble(package)
             verify(package)
             return package
 
 
 def verify(package):
     index = json.loads((package / "runtime-index.json").read_text(encoding="utf8"))
-    if len(index) != 3 or {i["engine"] for i in index} != set(NAMES):
+    if len(index) != len(NAMES) or {i["engine"] for i in index} != set(NAMES):
         raise ValueError("invalid worker index")
     for item in index:
         if item["name"] != NAMES[item["engine"]] or item["protocol"] != 1:

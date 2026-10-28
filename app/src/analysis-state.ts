@@ -6,6 +6,7 @@ export interface EnginePreferences {
   vadModelPath: string | null;
   threads: number;
   useGpu: boolean;
+  backend?: { id: string; files: Record<string, string> };
 }
 
 export interface AnalysisPreferences {

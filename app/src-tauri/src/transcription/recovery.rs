@@ -167,7 +167,7 @@ impl State {
 }
 
 pub(super) fn run(
-    config: &whisper::WhisperConfig,
+    config: &whisper::AsrConfig,
     logical_model: &Path,
     directory: &Path,
     core_first: u64,
@@ -198,7 +198,7 @@ pub(super) fn run(
     )
 }
 fn run_with(
-    config: &whisper::WhisperConfig,
+    config: &whisper::AsrConfig,
     logical_model: &Path,
     directory: &Path,
     core_first: u64,
@@ -207,7 +207,7 @@ fn run_with(
     cancelled: &impl Fn() -> bool,
     save: &mut impl FnMut(&State) -> Result<(), String>,
     recognize: &mut impl FnMut(
-        &whisper::WhisperConfig,
+        &whisper::AsrConfig,
         &Path,
         i64,
         &dyn Fn() -> bool,

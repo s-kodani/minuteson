@@ -11,7 +11,7 @@ pub(crate) const MAX_TOTAL: u64 = 32 * 1024 * 1024 * 1024;
 pub(crate) const BUNDLED_WHISPER: &str = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
 pub(crate) const BUNDLED_WINDOWS: &str = "mon-bundled://windows-runtime-v1/runtime.tar";
 pub(crate) fn is_bundled(url: &str) -> bool {
-    matches!(url, BUNDLED_WHISPER | BUNDLED_WINDOWS)
+    matches!(url, BUNDLED_WHISPER | BUNDLED_WINDOWS) || url == crate::model_asr_catalog::URI
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -186,6 +186,11 @@ impl Recipe {
                     )
                 {
                     return Err("同梱実行ファイルの識別子・版・対象・構成が不正です".into());
+                }
+            } else if source.url == crate::model_asr_catalog::URI {
+                if self.manifest.engine != crate::model_inspection::Engine::Asr || self.manifest.target != Target::MacosAarch64
+                    || source.archive.is_none() || !matches!(file.role,crate::model_inspection::Role::Executable|crate::model_inspection::Role::Notice) {
+                    return Err("ASR同梱素材の対象・構成が不正です".into());
                 }
             } else if source.url == BUNDLED_WINDOWS {
                 if self.manifest.target != Target::WindowsX86_64

@@ -108,7 +108,7 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
             next.id
         );
         let candidate = match engine {
-            Engine::Whisper => crate::transcription::process(
+            Engine::Whisper | Engine::Asr => crate::transcription::process(
                 &f.storage,
                 &next.id,
                 &crate::test_support::never_cancelled,
@@ -361,7 +361,7 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
             }
         };
         let candidate = match engine {
-            Engine::Whisper => crate::transcription::process(
+            Engine::Whisper | Engine::Asr => crate::transcription::process(
                 &f.storage,
                 &job.id,
                 &crate::test_support::never_cancelled,
@@ -525,7 +525,7 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
             next.id
         );
         let candidate = match engine {
-            Engine::Whisper => crate::transcription::process(
+            Engine::Whisper | Engine::Asr => crate::transcription::process(
                 &f.storage,
                 &next.id,
                 &crate::test_support::never_cancelled,
@@ -616,9 +616,9 @@ fn check_execution<T>(spec: &JobSpec, run: impl FnOnce(Execution<'_>) -> T) -> T
             panic!("not a rebinding fixture")
         }
         JobKind::Transcription => {
-            let e: WhisperConfig =
+            let e: AsrConfig =
                 serde_json::from_value(spec.parameters["engine"].clone()).unwrap();
-            run(Execution::Whisper(&e))
+            run(Execution::Asr(&e))
         }
         JobKind::Diarization => {
             let e: SherpaConfig =
@@ -765,7 +765,7 @@ fn model_rebinding_three_engines_resolve_new_identical_packages_without_mutating
 
 fn engine_files(e: Execution<'_>) -> Vec<&Fingerprint> {
     match e {
-        Execution::Whisper(w) => {
+        Execution::Asr(w) => {
             let mut files = vec![&w.executable, &w.model];
             files.extend(&w.vad_model);
             files
@@ -780,7 +780,7 @@ fn engine_files(e: Execution<'_>) -> Vec<&Fingerprint> {
 }
 fn execution_configuration(e: Execution<'_>) -> serde_json::Value {
     let mut value = match e {
-        Execution::Whisper(e) => serde_json::to_value(e).unwrap(),
+        Execution::Asr(e) => serde_json::to_value(e).unwrap(),
         Execution::Sherpa(e) => serde_json::to_value(e).unwrap(),
         Execution::Llama(e, budget) => json!({"engine":e,"promptBudget":budget}),
     };

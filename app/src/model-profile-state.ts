@@ -5,7 +5,7 @@ import type { MinutesEngine } from "./minutes-state.ts";
 import { modelBodyAvailable, placementLabel, type ModelPlacementEntry } from "./model-inspection-state.ts";
 
 export type ModelProfileName = "standard" | "high_accuracy";
-export type ModelSettings = { engine: "whisper.cpp"; settings: EnginePreferences }
+export type ModelSettings = { engine: "whisper.cpp" | "asr"; settings: EnginePreferences }
   | { engine: "sherpa-onnx"; settings: DiarizationEngine }
   | { engine: "llama.cpp"; settings: MinutesEngine };
 export interface ModelProfileComponent {
@@ -31,9 +31,10 @@ const id = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[
 const sha = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 const version = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const names = ["standard", "high_accuracy"];
-const roles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
+const roles = { "asr": ["asr"], "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
 const fileKeys = ["executablePath", "modelPath", "vadModelPath", "segmentationModelPath", "embeddingModelPath", "runtimeLibraryPaths"];
 const keys = {
+  "asr": ["executablePath", "modelPath", "vadModelPath", "threads", "useGpu"],
   "whisper.cpp": ["executablePath", "modelPath", "vadModelPath", "threads", "useGpu"],
   "sherpa-onnx": ["executablePath", "segmentationModelPath", "embeddingModelPath", "runtimeLibraryPaths", "threads", "clusterThresholdMilli", "windowShiftMilli", "minDurationOnMs", "minDurationOffMs"],
   "llama.cpp": ["executablePath", "modelPath", "threads", "contextTokens", "predictionTokens", "gpuLayers", "seed", "promptBudget"],
@@ -50,12 +51,12 @@ export function assertProfileView(view: ModelProfileView) {
     || (view.id === null ? view.profileVersion !== 0 || view.components.length !== 0 : !id(view.id) || view.profileVersion < 1 || !view.components.length)) fail();
   const engines = new Set<string>();
   for (const component of view.components) {
-    if (!component || !Object.hasOwn(roles, component.engine) || engines.has(component.engine)
+    if (!component || !Object.hasOwn(roles, component.engine) || engines.has(component.roles?.[0])
       || !id(component.packageId) || !id(component.checkOperationId)
       || typeof component.modelName !== "string" || !component.modelName || typeof component.modelVersion !== "string" || !component.modelVersion
       || typeof component.settingsMatch !== "boolean" || typeof component.compatibilityCurrent !== "boolean"
       || JSON.stringify(component.roles) !== JSON.stringify(roles[component.engine])) fail();
-    engines.add(component.engine);
+    engines.add(component.roles[0]);
   }
   if (view.configurationComplete !== (engines.size === 3 && view.components.every(c => c.settingsMatch && c.compatibilityCurrent))) fail();
 }
@@ -72,12 +73,17 @@ export function profileConfigurationLabel(view: ModelProfileView) {
 function settingsEntries(value: ModelSettings): [string, unknown][] {
   if (!value || !Object.hasOwn(keys, value.engine) || !value.settings || typeof value.settings !== "object") fail();
   const entries = Object.entries(value.settings);
-  const vad = value.engine === "whisper.cpp" ? value.settings.vadOptions : undefined;
+  const vad = "vadOptions" in value.settings ? value.settings.vadOptions : undefined;
   if (vad !== undefined) checkedVadOptions(vad);
-  if (entries.length !== keys[value.engine].length + Number(vad !== undefined) || keys[value.engine].some(k => !Object.hasOwn(value.settings, k))) fail();
-  if (entries.some(([k, v]) => k === "vadOptions" && value.engine === "whisper.cpp" ? false : fileKeys.includes(k)
+  if (entries.length !== keys[value.engine].length + Number(vad !== undefined) + Number("backend" in value.settings) || keys[value.engine].some(k => !Object.hasOwn(value.settings, k))) fail();
+  if (entries.some(([k, v]) => (k === "backend" || k === "vadOptions") && ["whisper.cpp", "asr"].includes(value.engine) ? false : fileKeys.includes(k)
     ? (k === "runtimeLibraryPaths" ? !Array.isArray(v) || v.some(p => typeof p !== "string") : k === "vadModelPath" && v === null ? false : typeof v !== "string")
     : k === "useGpu" ? typeof v !== "boolean" : typeof v !== "number" || !Number.isSafeInteger(v) || v < 0)) fail();
+  if ("backend" in value.settings && value.settings.backend !== undefined) {
+    const b = value.settings.backend;
+    if (!b || typeof b.id !== "string" || !b.id || typeof b.files !== "object" || !b.files || Array.isArray(b.files)
+      || Object.values(b.files).some(path => typeof path !== "string" || !path || path.length > 4096 || path.includes("\0"))) fail();
+  }
   if (value.settings.threads < 1 || value.settings.threads > 64) fail();
   return entries;
 }
@@ -93,7 +99,7 @@ export function assertApplicationPreview(preview: ModelApplicationPreview, entry
     || (current.id === null ? preview.expectedProfileHash !== null : !sha(preview.expectedProfileHash))
     || preview.before.engine !== entry.engine || preview.after.engine !== entry.engine
     || !sameOptionalVad(preview.whisperVadOptions, whisperVadOptions)
-    || whisperVadOptions !== undefined && (preview.after.engine !== "whisper.cpp" || !preview.after.settings.vadOptions || !sameVadOptions(checkedVadOptions(whisperVadOptions), checkedVadOptions(preview.after.settings.vadOptions)))
+    || whisperVadOptions !== undefined && (!["whisper.cpp", "asr"].includes(preview.after.engine) || !("vadOptions" in preview.after.settings) || !preview.after.settings.vadOptions || !sameVadOptions(checkedVadOptions(whisperVadOptions), checkedVadOptions(preview.after.settings.vadOptions)))
     || preview.diarizationThreads !== diarizationThreads
     || preview.diarizationClusterThresholdMilli !== diarizationClusterThresholdMilli
     || diarizationClusterThresholdMilli !== undefined && (preview.after.engine !== "sherpa-onnx" || !Number.isInteger(diarizationClusterThresholdMilli) || diarizationClusterThresholdMilli < 0 || diarizationClusterThresholdMilli > 2000 || preview.after.settings.clusterThresholdMilli !== diarizationClusterThresholdMilli)
@@ -104,8 +110,14 @@ export function assertApplicationPreview(preview: ModelApplicationPreview, entry
   if (preview.before.engine === "whisper.cpp" && preview.after.engine === "whisper.cpp"
     && preview.before.settings.vadOptions !== undefined && whisperVadOptions === undefined
     && !sameOptionalVad(preview.before.settings.vadOptions, preview.after.settings.vadOptions)) fail();
-  const hasVad = entry.engine === "whisper.cpp" && entry.modelFiles?.some(f => f.role === "vad");
+  const hasVad = ["whisper.cpp", "asr"].includes(entry.engine) && entry.modelFiles?.some(f => f.role === "vad");
   for (const change of applicationChanges(preview)) {
+    if (change.key === "backend") continue;
+    if (change.key === "vadOptions" && preview.after.engine === "asr" && "backend" in preview.after.settings
+      && JSON.stringify((preview.before.settings as EnginePreferences).backend) !== JSON.stringify(preview.after.settings.backend)) {
+      checkedVadOptions(change.after); continue;
+    }
+    if (change.key === "useGpu" && preview.after.engine === "asr" && change.after === false) continue;
     if (!change.file && JSON.stringify(change.before) !== JSON.stringify(change.after) && !(change.key === "vadOptions" && hasVad && (whisperVadOptions !== undefined || change.before === undefined && sameVadOptions(checkedVadOptions(change.after), { enabled: true, thresholdMilli: 600, minSpeechDurationMs: 300, minSilenceDurationMs: 100, maxSpeechDurationS: 30, speechPadMs: 30, samplesOverlapMs: 100 }))) && !(change.key === "threads" && diarizationThreads !== undefined) && !(change.key === "clusterThresholdMilli" && diarizationClusterThresholdMilli !== undefined)) fail();
     if (tuning && change.file && JSON.stringify(change.before) !== JSON.stringify(change.after)) fail();
     if (change.file) for (const path of Array.isArray(change.after) ? change.after : change.after === null ? [] : [change.after]) {
@@ -120,7 +132,7 @@ export function assertApplicationResult(view: ModelProfileView, operationId: str
     || !component || component.packageId !== preview.packageId || component.checkOperationId !== preview.checkOperationId
     || !component.settingsMatch || !component.compatibilityCurrent) fail();
 }
-export const preferenceCommand = (engine: ModelSettings["engine"]) => ({ "whisper.cpp": "get_analysis_preferences", "sherpa-onnx": "get_diarization_preferences", "llama.cpp": "get_minutes_preferences" })[engine];
+export const preferenceCommand = (engine: ModelSettings["engine"]) => ({ "asr": "get_asr_preferences", "whisper.cpp": "get_asr_preferences", "sherpa-onnx": "get_diarization_preferences", "llama.cpp": "get_minutes_preferences" })[engine];
 export function assertAppliedPreferences(value: { lockVersion: number; payload: { standard: unknown; highAccuracy: unknown } }, preview: ModelApplicationPreview) {
   const key = preview.profile === "standard" ? "standard" : "highAccuracy";
   const expected = Object.fromEntries(settingsEntries(preview.after));

@@ -17,7 +17,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, modelChoiceAction, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel } from "./model-selection-state";
+import { modelChoices, modelChoiceAction, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -25,9 +25,11 @@ let unresolved: Pending | null = null;
 // fresh download replaces an uncertain writer or a retained download receipt.
 const downloads = new Map<string, DownloadReceipt>();
 const automaticMergeChoices = [{value:500,label:"従来（分けやすい）"},{value:900,label:"ややまとめる"},{value:1100,label:"まとめる"},{value:1300,label:"強くまとめる"},{value:1500,label:"さらに強くまとめる"}];
-const engines = [{ engine: "whisper.cpp", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
+const engines = [{ engine: "asr", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
+  const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
+  useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => setError(String(cause))); }, [visible]);
   const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>({});
   const [cpuThreads, setCpuThreads] = useState<number | null>(null), [threadChoice, setThreadChoice] = useState("");
@@ -82,11 +84,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }).catch(cause => { if (active) setError(String(cause)); });
     return () => { active = false; };
   }, [visible, profileId, selectedDiarization?.packageId]);
-  const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "whisper.cpp" && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
+  const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => isAsrEngine(item.engine) && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
   useEffect(() => {
     let active = true;
     setWhisperPreferences(null);
-    if (visible && isTauri() && selectedWhisper) void invoke<{ payload: AnalysisPreferences }>("get_analysis_preferences").then(value => {
+    if (visible && isTauri() && selectedWhisper) void invoke<{ payload: AnalysisPreferences }>("get_asr_preferences").then(value => {
       const preferences = value?.payload?.standard;
       if (!preferences || !(preferences.vadModelPath === null || typeof preferences.vadModelPath === "string")) throw Error("VAD設定を確認できません。");
       if (preferences.vadOptions !== undefined) checkedVadOptions(preferences.vadOptions);
@@ -136,7 +138,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const value = await invoke<ModelProfileView>("apply_model_profile_application", { token, preview });
       assertApplicationResult(value, token, preview);
       if (diarizationThreads !== undefined || diarizationClusterThresholdMilli !== undefined) assertAppliedPreferences(await invoke("get_diarization_preferences"), preview);
-      if (whisperVadOptions !== undefined) assertAppliedPreferences(await invoke("get_analysis_preferences"), preview);
+      if (whisperVadOptions !== undefined) assertAppliedPreferences(await invoke("get_asr_preferences"), preview);
       return value;
     }, { entry, preview });
   };
@@ -148,7 +150,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     const option = choice?.option;
     setTarget(choice?.label ?? "ローカルAI");
     if (!entry && option) {
-      entry = entries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && item.engine === engine && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
+      entry = entries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
       if (!entry) {
         let receipt = downloads.get(option.review.recipeHash);
         if (!receipt) {
@@ -220,7 +222,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         if (profile?.id === value.token) assertAppliedPreferences(await invoke("get_diarization_preferences"), value.preview);
         else if (profile?.id !== value.preview.expectedProfileId) throw Error("話者分離の設定が別の操作で変更されています。現在の設定を確認してください。");
       }
-      if (value.preview?.whisperVadOptions !== undefined && current.catalog.find(item => item.name === "standard")?.id === value.token) assertAppliedPreferences(await invoke("get_analysis_preferences"), value.preview);
+      if (value.preview?.whisperVadOptions !== undefined && current.catalog.find(item => item.name === "standard")?.id === value.token) assertAppliedPreferences(await invoke("get_asr_preferences"), value.preview);
       const entry = value.entry;
       if (mounted.current) setSelection(selection => ({ ...selection, [entry.engine]: entry.packageId }));
     }
@@ -236,7 +238,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
-      const used = selectedProfile?.components.find(item => item.engine === engine);
+      const used = selectedProfile?.components.find(item => engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine);
       const choices = modelChoices(engine, entries, options, profiles);
       const selected = selection[engine] ?? used?.packageId ?? "";
       const choice = choices.find(item => item.value === selected || item.packageIds.includes(selected));
@@ -255,8 +257,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   <section className="analysis-card local-ai-settings" aria-label="ローカルAI詳細設定" hidden={!visible}>
     <h2>ローカルAI詳細設定</h2>
     <section className="ai-settings-group" aria-label="発話検知設定"><h3>発話検知設定</h3>
+    {whisperPreferences && <p>{backends.find(b => b.id === (whisperPreferences.backend?.id ?? "whisper.cpp"))?.vocabularyDescription}</p>}
     {selectedWhisper && whisperPreferences && <VadSettings
       value={whisperPreferences.vadOptions ?? { ...defaultVadOptions, enabled: !!whisperPreferences.vadModelPath }}
+      overlapAvailable={backends.find(b => b.id === (whisperPreferences.backend?.id ?? "whisper.cpp"))?.supportsVadOverlap ?? true}
+      defaults={backends.find(b => b.id === (whisperPreferences.backend?.id ?? "whisper.cpp"))?.defaultVad ?? defaultVadOptions}
       available={!!whisperPreferences.vadModelPath}
       disabled={disabled || !selectedWhisper.settingsMatch || !selectedWhisper.compatibilityCurrent}
       onApply={options => void run("VAD設定を保存しています", async () => {
@@ -299,7 +304,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     <ul>{installed.map(item => {
       const selected = selectedProfile?.components.some(component => component.packageId === item.packageId);
       const status = isRetired(item) ? "選択対象外" : selected ? "使用中" : "導入済み";
-      const purpose = engines.find(e => e.engine === item.engine)?.label ?? item.engine;
+      const purpose = engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
       return <li key={item.packageId}><div className="model-inventory-summary"><strong>{modelDisplayName(item, options)}</strong>
         <span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span><span className="model-copy-id">コピー {item.packageId.slice(0, 8)}</span></div>
         <div className="model-inventory-actions"><OptionsModal label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">

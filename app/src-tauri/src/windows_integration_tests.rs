@@ -654,7 +654,7 @@ fn windows_real_worker_reuses_cpu_model_and_runs_available_vulkan() {
     let snapshot = crate::local_engine::resident::prepare(&root, "whisper")
         .unwrap()
         .unwrap();
-    let config = crate::transcription::whisper::WhisperConfig {
+    let config = crate::transcription::asr::AsrConfig { backend: None,
         executable: snapshot.resolve(&root).unwrap(),
         model,
         vad_model: None,

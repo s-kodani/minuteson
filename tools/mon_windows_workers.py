@@ -81,7 +81,7 @@ def prepare(vulkan=False):
         if engine=='whisper':options+=['-DWHISPER_BUILD_TESTS=OFF','-DWHISPER_BUILD_EXAMPLES=ON']
         else:options+=['-DLLAMA_BUILD_COMMON=ON','-DLLAMA_BUILD_TESTS=OFF','-DLLAMA_BUILD_TOOLS=OFF','-DLLAMA_BUILD_EXAMPLES=OFF','-DLLAMA_BUILD_APP=OFF','-DLLAMA_BUILD_MTMD=OFF','-DLLAMA_OPENSSL=OFF']
         subprocess.run(['cmake','-S',str(source),'-B',str(build),'-G','Visual Studio 17 2022','-A','x64',*options],check=True)
-        targets=[shared.NAMES[engine]]+([shared.NAMES['sherpa']] if engine=='llama' and not vulkan else [])
+        targets=[shared.NAMES[engine]]+([shared.NAMES['sherpa'], shared.NAMES['asr-transducer']] if engine=='llama' and not vulkan else [])
         subprocess.run(['cmake','--build',str(build),'--config','Release','--target',*targets,'--parallel','4'],check=True)
         for name in targets:
             candidates=list(build.rglob(name+'.exe'));candidates=[p for p in candidates if p.parent.name=='Release']
@@ -91,12 +91,15 @@ def prepare(vulkan=False):
     index=[dict(protocol=1,engine=engine,name=name+'.exe',bytes=(package/(name+'.exe')).stat().st_size,sha256=runtime.digest(package/(name+'.exe'))) for engine,name in shared.NAMES.items()]
     if vulkan:
         for item in index:
-            if item['engine']=='sherpa':continue
+            if item['engine'] in ('sherpa','asr-transducer'):continue
             path=package/(shared.NAMES[item['engine']].replace('-worker','-vulkan-worker')+'.exe')
             item['gpu']=dict(name=path.name,bytes=path.stat().st_size,sha256=runtime.digest(path))
     (package/'runtime-index.json').write_text(json.dumps(index,indent=2)+'\n',encoding='utf8')
     (package/('build-info-vulkan.json' if vulkan else 'build-info.json')).write_text(json.dumps(dict(recipeSha256=stamp,whisperSource=definition['sourceSha256'],llamaCommit=shared.LLAMA_COMMIT,sherpaCommit=shared.SHERPA_COMMIT,vulkan=vulkan,protocol=1),indent=2)+'\n',encoding='utf8')
     for engine,source in roots.items():shutil.copyfile(source/'LICENSE',package/(engine+'-MIT.txt'))
+    header=(roots['llama']/'vendor/nlohmann/json.hpp').read_text(encoding='utf8').split('#ifndef')[0]
+    license_text=(ROOT/'third-party/notices/spdx-MIT-template.txt').read_text(encoding='utf8').replace('<year> <copyright holders>','2013 - 2025 Niels Lohmann')
+    (package/'nlohmann-MIT.txt').write_text(header+'\n'+license_text,encoding='utf8')
     print('Windows resident workers ready',package,flush=True)
 
 if __name__=='__main__':

@@ -65,7 +65,7 @@ fn fixture(engine: Engine) -> (tempfile::TempDir, PackageManifest) {
     std::fs::create_dir(dir.path().join("weights")).unwrap();
     let mut files = vec![("engine-cli", Role::Executable)];
     files.extend(match engine {
-        Engine::Whisper => vec![("weights/model.bin", Role::Asr)],
+        Engine::Whisper | Engine::Asr => vec![("weights/model.bin", Role::Asr)],
         Engine::Sherpa => vec![
             ("weights/seg.onnx", Role::Segmentation),
             ("weights/embedding.onnx", Role::SpeakerEmbedding),
@@ -87,7 +87,7 @@ fn fixture(engine: Engine) -> (tempfile::TempDir, PackageManifest) {
             }
         })
         .collect();
-    let manifest = PackageManifest {
+    let manifest = PackageManifest { backend: None,
         schema_version: 1,
         engine,
         engine_version: "fixture-version".into(),

@@ -1,6 +1,6 @@
 //! A synthetic inference freezes the Windows backend before the first source
 //! unit. A resumed GPU job never changes to CPU or another physical adapter.
-use super::whisper::{self, WhisperConfig};
+use super::whisper::{self, AsrConfig};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, path::Path, time::Duration};
 #[derive(Debug, Deserialize, Serialize)]
@@ -18,7 +18,7 @@ pub(super) enum Resolved {
     },
 }
 impl Resolved {
-    pub(super) fn configure(&self, engine: &mut WhisperConfig) -> Result<(), String> {
+    pub(super) fn configure(&self, engine: &mut AsrConfig) -> Result<(), String> {
         match self {
             Self::Cpu { reason } => {
                 if !["no_device", "trial_failed"].contains(&reason.as_str()) {
@@ -54,7 +54,7 @@ impl Resolved {
     }
 }
 pub(super) fn resolve(
-    engine: &WhisperConfig,
+    engine: &AsrConfig,
     directory: &Path,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Resolved>, String> {
