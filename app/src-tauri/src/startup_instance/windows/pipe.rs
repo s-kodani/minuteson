@@ -1,34 +1,20 @@
-//! Same-user local rendezvous. Only activation is accepted over the pipe;
-//! termination is exclusively an admitted, reviewed main-window command.
-use super::process::{wide, Target};
+//! Same-user transport for the authenticated restart and residency relay.
+use super::process::wide;
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Read, Write},
     os::windows::{
         fs::OpenOptionsExt,
         io::{AsRawHandle, FromRawHandle},
     },
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     time::{Duration, Instant},
 };
-use tauri::Manager;
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
     System::Pipes::*,
 };
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Ack {
-    version: u8,
-    pid: u32,
-    shown: bool,
-}
 pub(super) fn server(name: &str) -> Result<File, String> {
     let descriptor = wide(&format!(
         "D:P(A;;GA;;;SY)(A;;GA;;;{})",
@@ -139,125 +125,4 @@ pub(super) fn line_io(file: &mut File, deadline: Instant) -> Result<Vec<u8>, std
         std::io::ErrorKind::TimedOut,
         "MONの画面表示の応答がありません",
     ))
-}
-pub(super) fn activate(
-    name: &str,
-    executable: &Path,
-    timeout: Duration,
-) -> Result<(Target, bool), String> {
-    let deadline = Instant::now() + timeout;
-    let mut file = loop {
-        match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION)
-            .open(name)
-        {
-            Ok(file) => break file,
-            Err(e)
-                if Instant::now() < deadline
-                    && [Some(2), Some(231)].contains(&e.raw_os_error()) =>
-            {
-                std::thread::sleep(Duration::from_millis(30))
-            }
-            Err(e) => return Err(format!("既存MONとの接続を確認できません: {e}")),
-        }
-    };
-    let mut pid = 0;
-    if unsafe { GetNamedPipeServerProcessId(file.as_raw_handle(), &mut pid) } == 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let target = Target::open(pid, executable)?;
-    target.allow_foreground();
-    let shown = file.write_all(b"MON_ACTIVATE_V1\n").is_ok()
-        && line(&mut file, deadline)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Ack>(&bytes).ok())
-            .is_some_and(|ack| ack.version == 1 && ack.pid == pid && ack.shown);
-    let _ = file.write_all(RECEIVED);
-    Ok((target, shown))
-}
-pub(super) fn serve(
-    app: tauri::AppHandle,
-    name: String,
-    stop: Arc<AtomicBool>,
-) -> Result<(), String> {
-    let mut file = server(&name)?;
-    std::thread::Builder::new()
-        .name("mon-startup-instance".into())
-        .spawn(move || {
-            while !stop.load(Ordering::SeqCst) {
-                let connected = match connected(&file) {
-                    Ok(connected) => connected,
-                    Err(_) => return,
-                };
-                if !connected {
-                    std::thread::sleep(Duration::from_millis(20));
-                    continue;
-                }
-                if line(&mut file, Instant::now() + Duration::from_millis(800))
-                    .is_ok_and(|line| line == b"MON_ACTIVATE_V1\n")
-                {
-                    let (sender, receive) = std::sync::mpsc::sync_channel(1);
-                    let handle = app.clone();
-                    let cancelled = stop.clone();
-                    let request_id = uuid::Uuid::new_v4().to_string();
-                    let request = request_id.clone();
-                    let queued = app
-                        .run_on_main_thread(move || {
-                            let shown = !cancelled.load(Ordering::SeqCst)
-                                && handle.get_webview_window("main").is_some_and(|main| {
-                                    crate::residency::restore(&handle).is_ok()
-                                        && main.is_visible().unwrap_or(false)
-                                        && !main.is_minimized().unwrap_or(true)
-                                });
-                            if shown {
-                                if let Ok(mut pending) = handle
-                                    .state::<crate::startup_instance::Instance>()
-                                    .activation
-                                    .lock()
-                                {
-                                    *pending = Some((request.clone(), sender));
-                                }
-                                use tauri::Emitter;
-                                if let Some(main) = handle.get_webview_window("main") {
-                                    let _ = main.emit(
-                                        "startup-activate-requested",
-                                        serde_json::json!({"requestId":request}),
-                                    );
-                                }
-                            } else {
-                                let _ = sender.send(false);
-                            }
-                        })
-                        .is_ok();
-                    let shown = queued
-                        && receive
-                            .recv_timeout(Duration::from_secs(4))
-                            .unwrap_or(false);
-                    if let Ok(mut pending) = app
-                        .state::<crate::startup_instance::Instance>()
-                        .activation
-                        .lock()
-                    {
-                        if pending.as_ref().is_some_and(|(id, _)| *id == request_id) {
-                            pending.take();
-                        }
-                    }
-                    if let Ok(mut bytes) = serde_json::to_vec(&Ack {
-                        version: 1,
-                        pid: std::process::id(),
-                        shown,
-                    }) {
-                        bytes.push(b'\n');
-                        let _ = reply(&mut file, &bytes);
-                    }
-                }
-                unsafe {
-                    DisconnectNamedPipe(file.as_raw_handle());
-                }
-            }
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(())
 }

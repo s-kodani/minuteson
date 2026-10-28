@@ -107,6 +107,7 @@ jobs:
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib ipc_acl::tests
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib session::tests
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib startup_attention::tests
+          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib startup_instance::tests
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib storage::playback::tests
       - name: Windows public signing preflight fails without a certificate
         if: runner.os == 'Windows'

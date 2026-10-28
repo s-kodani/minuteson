@@ -37,11 +37,11 @@ test("startup recovery reports validate retained reasons and preserve old report
   for (const bad of [null, { ...recovery, kind: "unknown" }, { ...recovery, reviewRequired: true }, { ...recovery, reasons: ["pending"] }, { ...recovery, recordPath: "../outside" }, { ...pending, reasons: ["x".repeat(257)] }, { ...recovery, repaired: true }]) assert.throws(() => checkedStartupReport({ ...ready, recovery: bad }));
   assert.throws(() => acceptStartupReport({ ...ready, recovery }, { ...ready, recovery: pending }));
 });
-test("main entry gates workspace providers and can acknowledge a native activation", () => {
+test("main entry gates workspace providers without a frontend activation handshake", () => {
   const root = source("../src/main.tsx"), ui = source("../src/startup-attention.tsx");
   assert.ok(root.includes("<StartupGate>{desktopWindow}</StartupGate>"));
   assert.ok(ui.includes('state.report?.phase === "ready" ? <>'));
-  assert.deepEqual([...ui.matchAll(/invoke\("([^"]+)"/gu)].map(m => m[1]), ["get_startup_report", "acknowledge_startup_activation", "quit_blocked_startup"]);
+  assert.deepEqual([...ui.matchAll(/invoke\("([^"]+)"/gu)].map(m => m[1]), ["get_startup_report", "retry_startup", "quit_blocked_startup"]);
   assert.doesNotMatch(ui, /ThemeProvider|setInterval|localStorage|\.reload\(/u);
 });
 test("native dispatch guard runs before any generated command and admission refusal precedes workers", () => {

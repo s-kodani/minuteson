@@ -199,6 +199,8 @@ pub(crate) fn initialize(app: &tauri::AppHandle) {
                                 // seconds and >=20 confirmed absent samples.
                                 // Unknown results, restored entries, suspend
                                 // and screen lock reset this authorization.
+                                #[cfg(any(windows, target_os = "macos"))]
+                                tauri_plugin_single_instance::destroy(app);
                                 std::process::exit(1);
                             }
                             _ => {}

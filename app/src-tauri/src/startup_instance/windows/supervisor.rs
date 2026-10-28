@@ -183,27 +183,6 @@ pub(super) fn schedule() -> Result<(), String> {
         .map_err(|_| "再起動の要求を処理中です")?
         .schedule()
 }
-pub(super) fn available() -> Result<(), String> {
-    let mut supervisor = SUPERVISOR
-        .get()
-        .ok_or("再起動の準備が未完了です")?
-        .as_ref()
-        .map_err(Clone::clone)?
-        .try_lock()
-        .map_err(|_| "再起動の要求を処理中です")?;
-    if supervisor.scheduled {
-        return Err("再起動要求は送信済みです。再送していません。".into());
-    }
-    if supervisor
-        .child
-        .try_wait()
-        .map_err(|e| e.to_string())?
-        .is_some()
-    {
-        return Err("再起動の監視処理を確認できません。復旧画面は保持しています。".into());
-    }
-    Ok(())
-}
 pub(super) fn entry() -> Option<i32> {
     let args: Vec<OsString> = std::env::args_os().collect();
     if args.get(1).is_none_or(|arg| arg != MODE) {

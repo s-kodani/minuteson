@@ -1,51 +1,22 @@
-//! All OS operations below target children of this test executable and private
-//! temporary roots. Never discover or stop the user's installed MON.
+//! Private child processes exercise the restart relay and residency monitor.
 use super::*;
 use std::{
+    fs::OpenOptions,
     io::Write,
+    path::PathBuf,
     process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 use windows_sys::Win32::{Foundation::*, System::Pipes::*, UI::WindowsAndMessaging::*};
-const TITLE: &str = "MON startup recovery synthetic fixture";
-#[test]
-fn rendezvous_separates_users_products_and_config_roots() {
-    let config = Path::new(r"C:\Users\fixture\MON");
-    let endpoint = endpoint_for(config, "jp.mon.desktop", "S-1-5-21-fixture");
-    assert_eq!(
-        endpoint,
-        endpoint_for(
-            Path::new(r"c:\users\FIXTURE\mon"),
-            "jp.mon.desktop",
-            "S-1-5-21-fixture"
-        )
-    );
-    assert_ne!(
-        endpoint,
-        endpoint_for(config, "jp.mon.desktop.qa", "S-1-5-21-fixture")
-    );
-    assert_ne!(
-        endpoint,
-        endpoint_for(config, "jp.mon.desktop", "S-1-5-21-other")
-    );
-    assert_ne!(
-        endpoint,
-        endpoint_for(
-            Path::new(r"C:\Users\fixture\Other"),
-            "jp.mon.desktop",
-            "S-1-5-21-fixture"
-        )
-    );
-}
+
 struct Fixture {
     child: Child,
     root: tempfile::TempDir,
-    endpoint: String,
 }
 impl Fixture {
     fn start(mode: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         crate::native_fs::private_directories(root.path(), true).unwrap();
-        let endpoint = format!(r"\\.\pipe\mon-startup-test-{}", uuid::Uuid::new_v4());
         let child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -55,17 +26,12 @@ impl Fixture {
             ])
             .env("MON_STARTUP_FIXTURE_ROOT", root.path())
             .env("MON_STARTUP_FIXTURE_MODE", mode)
-            .env("MON_STARTUP_FIXTURE_PIPE", &endpoint)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let fixture = Self {
-            child,
-            root,
-            endpoint,
-        };
+        let fixture = Self { child, root };
         let deadline = Instant::now() + Duration::from_secs(10);
         while !fixture.root.path().join("ready").exists() {
             assert!(
@@ -75,26 +41,6 @@ impl Fixture {
             std::thread::sleep(Duration::from_millis(20));
         }
         fixture
-    }
-    fn coordinator(&self) -> Coordinator {
-        Coordinator {
-            config: self.root.path().canonicalize().unwrap(),
-            executable: std::env::current_exe().unwrap().canonicalize().unwrap(),
-            title: TITLE.into(),
-            endpoint: self.endpoint.clone(),
-            guard: None,
-            stop: Arc::new(AtomicBool::new(false)),
-            target: None,
-            target_id: None,
-            message: String::new(),
-        }
-    }
-    fn target(&self) -> process::Target {
-        process::Target::open(
-            self.child.id(),
-            &std::env::current_exe().unwrap().canonicalize().unwrap(),
-        )
-        .unwrap()
     }
 }
 impl Drop for Fixture {
@@ -233,195 +179,9 @@ fn process_helper() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    let guard = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(root.join(".bootstrap.lock"))
-        .unwrap();
-    guard.lock().unwrap();
-    if mode.starts_with("pipe") {
-        let endpoint = std::env::var("MON_STARTUP_FIXTURE_PIPE").unwrap();
-        let mut file = pipe::server(&endpoint).unwrap();
-        std::fs::write(root.join("ready"), b"ready").unwrap();
-        loop {
-            if !pipe::connected(&file).unwrap() {
-                std::thread::sleep(Duration::from_millis(10));
-                continue;
-            }
-            let request = pipe::line(&mut file, Instant::now() + Duration::from_secs(1)).unwrap();
-            assert_eq!(request, b"MON_ACTIVATE_V1\n");
-            if mode != "pipe-hung" {
-                let ack = serde_json::json!({"version":1,"pid":std::process::id(),"shown":mode=="pipe-ready"});
-                file.write_all(format!("{ack}\n").as_bytes()).unwrap();
-            } else {
-                std::thread::sleep(Duration::from_secs(5));
-            }
-            std::thread::sleep(Duration::from_millis(300));
-            unsafe {
-                DisconnectNamedPipe(std::os::windows::io::AsRawHandle::as_raw_handle(&file));
-            }
-        }
-    }
-    if mode.starts_with("legacy") {
-        let hwnd = unsafe {
-            CreateWindowExW(
-                0,
-                process::wide("STATIC").as_ptr(),
-                process::wide(TITLE).as_ptr(),
-                WS_OVERLAPPEDWINDOW,
-                -10000,
-                -10000,
-                160,
-                80,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            )
-        };
-        assert!(!hwnd.is_null());
-        if mode == "legacy-minimized" {
-            unsafe {
-                ShowWindow(hwnd, SW_MINIMIZE);
-            }
-        }
-        std::fs::write(root.join("ready"), b"ready").unwrap();
-        if mode == "legacy-hung" {
-            loop {
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
-        let mut message = MSG::default();
-        while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
-            unsafe {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-        }
-    }
-    std::fs::write(root.join("ready"), b"ready").unwrap();
-    loop {
-        std::thread::sleep(Duration::from_secs(1));
-    }
+    panic!("unknown fixture mode: {mode}");
 }
 
-#[test]
-fn pipe_activation_pins_the_actual_peer_and_requires_successful_ack() {
-    for (mode, expected) in [("pipe-ready", true), ("pipe-denied", false)] {
-        let fixture = Fixture::start(mode);
-        let mut coordinator = fixture.coordinator();
-        assert_eq!(coordinator.open_existing().unwrap(), expected);
-        assert_eq!(
-            coordinator.target.as_ref().unwrap().identity(),
-            fixture.target().identity()
-        );
-        assert!(coordinator.report().can_restart);
-        assert!(fixture.target().exited() == false);
-    }
-}
-#[test]
-fn transport_timeout_retains_verified_owner_for_review_instead_of_losing_it() {
-    let fixture = Fixture::start("pipe-hung");
-    let (target, shown) = pipe::activate(
-        &fixture.endpoint,
-        &std::env::current_exe().unwrap().canonicalize().unwrap(),
-        Duration::from_millis(350),
-    )
-    .unwrap();
-    assert!(!shown);
-    assert_eq!(target.identity(), fixture.target().identity());
-    assert!(!target.exited());
-}
-#[test]
-fn legacy_bootstrap_owner_is_found_and_hidden_or_minimized_window_is_restored() {
-    for mode in ["legacy-hidden", "legacy-minimized"] {
-        let fixture = Fixture::start(mode);
-        let mut coordinator = fixture.coordinator();
-        coordinator.discover(".bootstrap.lock").unwrap();
-        assert_eq!(
-            coordinator.target.as_ref().unwrap().identity(),
-            fixture.target().identity()
-        );
-        assert!(coordinator
-            .target
-            .as_ref()
-            .unwrap()
-            .restore_legacy(TITLE)
-            .unwrap());
-        assert!(!fixture.target().exited());
-    }
-}
-#[test]
-fn reviewed_unresponsive_owner_is_stopped_and_real_bootstrap_lock_is_released() {
-    let fixture = Fixture::start("legacy-hung");
-    let mut coordinator = fixture.coordinator();
-    // Primary recovery owns its broker, so it never contacts itself.
-    let broker = coordinator.lock_file(".startup-instance.lock").unwrap();
-    broker.lock().unwrap();
-    coordinator.guard = Some(broker);
-    coordinator.discover(".bootstrap.lock").unwrap();
-    assert!(!coordinator.open_existing().unwrap());
-    let token = coordinator.report().target_id.unwrap();
-    assert!(!coordinator.recover(&token).unwrap());
-    assert!(coordinator.target.as_ref().unwrap().exited());
-    assert!(!coordinator.report().can_restart);
-    assert!(coordinator
-        .lock_file(".bootstrap.lock")
-        .unwrap()
-        .try_lock()
-        .is_ok());
-    assert!(
-        coordinator.recover(&token).is_err(),
-        "consumed consent must not replay"
-    );
-}
-#[test]
-fn wrong_consent_and_changed_generation_never_stop_the_process() {
-    let fixture = Fixture::start("legacy-hung");
-    let mut coordinator = fixture.coordinator();
-    coordinator.set_target(fixture.target());
-    let token = coordinator.report().target_id.unwrap();
-    assert!(coordinator.recover("wrong-review").is_err());
-    assert!(!fixture.target().exited());
-    let other = Fixture::start("legacy-hung");
-    coordinator.set_target(other.target());
-    assert!(coordinator.recover(&token).is_err());
-    assert!(!fixture.target().exited());
-    assert!(!other.target().exited());
-}
-#[test]
-fn a_recovered_owner_is_opened_instead_of_terminated_after_review() {
-    let fixture = Fixture::start("pipe-ready");
-    let mut coordinator = fixture.coordinator();
-    coordinator.set_target(fixture.target());
-    let token = coordinator.report().target_id.unwrap();
-    assert!(coordinator.recover(&token).unwrap());
-    assert!(!fixture.target().exited());
-}
-#[test]
-fn wrong_executable_and_current_process_are_not_recovery_targets() {
-    let fixture = Fixture::start("legacy-hung");
-    assert!(process::Target::open(fixture.child.id(), Path::new(r"C:\not-mon.exe")).is_err());
-    assert!(process::Target::open(std::process::id(), &std::env::current_exe().unwrap()).is_err());
-    assert!(!fixture.target().exited());
-}
-#[test]
-fn separate_config_roots_have_independent_exclusive_brokers() {
-    let first = Fixture::start("legacy-hung");
-    let second = Fixture::start("legacy-hung");
-    let a = first.coordinator();
-    let b = second.coordinator();
-    let a_guard = a.lock_file(".startup-instance.lock").unwrap();
-    a_guard.try_lock().unwrap();
-    assert!(matches!(
-        a.lock_file(".startup-instance.lock").unwrap().try_lock(),
-        Err(std::fs::TryLockError::WouldBlock)
-    ));
-    let b_guard = b.lock_file(".startup-instance.lock").unwrap();
-    b_guard.try_lock().unwrap();
-    assert_ne!(a.endpoint, b.endpoint);
-}
 #[test]
 fn approved_restart_survives_the_old_application_job_and_waits_for_parent_exit() {
     let mut fixture = Fixture::start("restart-parent");

@@ -190,19 +190,7 @@ impl Startup {
         }
         if matches!(
             command,
-            "get_startup_instance" | "acknowledge_startup_activation"
-        ) {
-            return if label == "main" {
-                Ok(())
-            } else {
-                Err("起動連携はメイン画面だけで確認できます".into())
-            };
-        }
-        if matches!(
-            command,
-            "open_existing_instance"
-                | "recover_startup_instance"
-                | "retry_startup"
+            "retry_startup"
                 | "get_startup_reset_preview"
                 | "choose_startup_reset_backup_directory"
                 | "start_startup_reset"
@@ -351,17 +339,7 @@ mod tests {
     #[test]
     fn recovery_commands_are_main_only_and_never_unlock_normal_storage_commands() {
         let startup = Startup::default();
-        for command in ["get_startup_instance", "acknowledge_startup_activation"] {
-            assert!(startup.admit_command("main", command).is_ok());
-            assert!(startup.admit_command("recorder", command).is_err());
-        }
-        for command in [
-            "open_existing_instance",
-            "recover_startup_instance",
-            "retry_startup",
-        ] {
-            assert!(startup.admit_command("main", command).is_err());
-        }
+        assert!(startup.admit_command("main", "retry_startup").is_err());
         startup
             .block(Failure::new(
                 Stage::StorageSelection,
@@ -370,20 +348,14 @@ mod tests {
                 None,
             ))
             .unwrap();
-        for command in [
-            "open_existing_instance",
-            "recover_startup_instance",
-            "retry_startup",
+        assert!(startup.admit_command("main", "retry_startup").is_ok());
+        for label in [
+            "recorder",
+            "recorder-info",
+            "recording-confirmation",
+            "unknown",
         ] {
-            assert!(startup.admit_command("main", command).is_ok());
-            for label in [
-                "recorder",
-                "recorder-info",
-                "recording-confirmation",
-                "unknown",
-            ] {
-                assert!(startup.admit_command(label, command).is_err());
-            }
+            assert!(startup.admit_command(label, "retry_startup").is_err());
         }
         for command in ["start_recording", "list_meetings", "finish_main_close"] {
             assert!(startup.admit_command("main", command).is_err());

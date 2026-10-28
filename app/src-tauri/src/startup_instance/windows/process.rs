@@ -6,8 +6,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::ConvertSidToStringSidW, *},
-    System::{RestartManager::*, Threading::*},
-    UI::WindowsAndMessaging::*,
+    System::Threading::*,
 };
 pub(super) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -102,7 +101,7 @@ impl Target {
     }
     pub(super) fn open(pid: u32, executable: &Path) -> Result<Self, String> {
         if pid == std::process::id() {
-            return Err("現在の復旧画面は終了対象にできません".into());
+            return Err("自分自身は監視対象にできません".into());
         }
         let handle = owned(unsafe {
             OpenProcess(
@@ -146,11 +145,6 @@ impl Target {
     pub(super) fn exited(&self) -> bool {
         unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) == WAIT_OBJECT_0 }
     }
-    pub(super) fn allow_foreground(&self) {
-        unsafe {
-            AllowSetForegroundWindow(self.pid);
-        }
-    }
     pub(super) fn terminate_checked(
         &self,
         executable: &Path,
@@ -183,140 +177,4 @@ impl Target {
         }
         Ok(())
     }
-    pub(super) fn restore_legacy(&self, title: &str) -> Result<bool, String> {
-        struct Find {
-            pid: u32,
-            title: Vec<u16>,
-            found: Vec<HWND>,
-        }
-        unsafe extern "system" fn visit(hwnd: HWND, value: LPARAM) -> i32 {
-            let state = unsafe { &mut *(value as *mut Find) };
-            let mut pid = 0;
-            unsafe {
-                GetWindowThreadProcessId(hwnd, &mut pid);
-            }
-            if pid != state.pid {
-                return 1;
-            }
-            let mut text = vec![0u16; 1024];
-            let len = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
-            if text[..len as usize] == state.title {
-                state.found.push(hwnd);
-            }
-            1
-        }
-        let mut state = Find {
-            pid: self.pid,
-            title: title.encode_utf16().collect(),
-            found: Vec::new(),
-        };
-        unsafe {
-            EnumWindows(Some(visit), &mut state as *mut _ as isize);
-        }
-        if state.found.len() != 1 {
-            return Ok(false);
-        }
-        let hwnd = state.found[0];
-        let mut result = 0;
-        if unsafe {
-            SendMessageTimeoutW(
-                hwnd,
-                WM_NULL,
-                0,
-                0,
-                SMTO_ABORTIFHUNG | SMTO_BLOCK,
-                500,
-                &mut result,
-            )
-        } == 0
-        {
-            return Ok(false);
-        }
-        self.allow_foreground();
-        unsafe {
-            ShowWindowAsync(hwnd, SW_RESTORE);
-            ShowWindowAsync(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-        }
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        loop {
-            if self.exited() {
-                return Ok(false);
-            }
-            if unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 } {
-                return Ok(true);
-            }
-            if std::time::Instant::now() >= deadline {
-                return Ok(false);
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-}
-pub(super) fn lock_owners(path: &Path) -> Result<Vec<(u32, u64)>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let mut session = 0;
-    let mut key = [0u16; 33];
-    let code = unsafe { RmStartSession(&mut session, 0, key.as_mut_ptr()) };
-    if code != 0 {
-        return Err(std::io::Error::from_raw_os_error(code as i32).to_string());
-    }
-    struct Session(u32);
-    impl Drop for Session {
-        fn drop(&mut self) {
-            unsafe {
-                RmEndSession(self.0);
-            }
-        }
-    }
-    let _session = Session(session);
-    let name = wide(&path.to_string_lossy());
-    let ptr = name.as_ptr();
-    let code =
-        unsafe { RmRegisterResources(session, 1, &ptr, 0, std::ptr::null(), 0, std::ptr::null()) };
-    if code != 0 {
-        return Err(std::io::Error::from_raw_os_error(code as i32).to_string());
-    }
-    for _ in 0..3 {
-        let (mut needed, mut count, mut reasons) = (0, 0, 0);
-        let code = unsafe {
-            RmGetList(
-                session,
-                &mut needed,
-                &mut count,
-                std::ptr::null_mut(),
-                &mut reasons,
-            )
-        };
-        if code == 0 {
-            return Ok(Vec::new());
-        }
-        if code != ERROR_MORE_DATA || needed > 64 {
-            return Err("起動設定を使用中のプロセスを限定できません".into());
-        }
-        let mut entries = vec![unsafe { std::mem::zeroed::<RM_PROCESS_INFO>() }; needed as usize];
-        count = needed;
-        let code = unsafe {
-            RmGetList(
-                session,
-                &mut needed,
-                &mut count,
-                entries.as_mut_ptr(),
-                &mut reasons,
-            )
-        };
-        if code == ERROR_MORE_DATA {
-            continue;
-        }
-        if code != 0 {
-            return Err(std::io::Error::from_raw_os_error(code as i32).to_string());
-        }
-        return Ok(entries[..count as usize]
-            .iter()
-            .map(|e| (e.Process.dwProcessId, timestamp(e.Process.ProcessStartTime)))
-            .collect());
-    }
-    Err("起動設定の所有者が変化しています。再確認してください。".into())
 }

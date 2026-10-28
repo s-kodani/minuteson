@@ -1,6 +1,5 @@
-//! The recovery window never opens storage. Restart always re-enters admission
-//! in a new process, rather than resetting a confirmed startup report in place.
-use serde::Serialize;
+//! Single-instance activation; restart still re-enters storage admission.
+use std::sync::Mutex;
 use tauri::{Manager, WebviewWindow};
 
 #[cfg(windows)]
@@ -21,156 +20,65 @@ pub(crate) fn residency_pulse(probe: &crate::residency::Probe) -> Result<bool, S
 pub(crate) fn residency_available() -> bool {
     windows::residency_available()
 }
+// Activation can arrive during plugin initialization, before any windows exist.
+// Only the event-loop thread restores windows, once native setup has completed.
 #[derive(Default)]
-pub(crate) struct Instance {
-    activation: std::sync::Mutex<Option<(String, std::sync::mpsc::SyncSender<bool>)>>,
-    #[cfg(windows)]
-    inner: std::sync::Mutex<Option<windows::Coordinator>>,
+pub(crate) struct Instance(Mutex<Activation>);
+
+#[derive(Default)]
+struct Activation {
+    ready: bool,
+    pending: bool,
 }
-#[tauri::command]
-pub(crate) fn acknowledge_startup_activation(
-    window: WebviewWindow,
-    request_id: String,
-) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("メイン画面だけで応答できます".into());
-    }
-    let state = window.state::<Instance>();
-    let mut pending = state
-        .activation
-        .lock()
-        .map_err(|_| "画面表示の確認を読めません")?;
-    if pending.as_ref().is_none_or(|(id, _)| *id != request_id) {
-        return Err("画面表示の確認は期限切れです".into());
-    }
-    if let Some((_, sender)) = pending.take() {
-        let _ = sender.send(true);
-    }
-    Ok(())
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Report {
-    schema_version: u8,
-    supported: bool,
-    target_id: Option<String>,
-    can_restart: bool,
-    message: String,
-}
-impl Instance {
-    fn report(&self) -> Result<Report, String> {
-        #[cfg(windows)]
-        {
-            let state = self
-                .inner
-                .try_lock()
-                .map_err(|_| "起動復旧の処理中です。操作の応答を待ってください")?;
-            if let Some(coordinator) = state.as_ref() {
-                let mut report = coordinator.report();
-                if report.can_restart {
-                    if let Err(error) = windows::restart_available() {
-                        report.can_restart = false;
-                        report.target_id = None;
-                        report.message = error;
-                    }
-                }
-                return Ok(report);
-            }
+impl Activation {
+    fn request(&mut self) -> bool {
+        if self.ready {
+            true
+        } else {
+            self.pending = true;
+            false
         }
-        Ok(Report {
-            schema_version: 1,
-            supported: cfg!(windows),
-            target_id: None,
-            can_restart: false,
-            message: String::new(),
-        })
+    }
+    fn ready(&mut self) -> bool {
+        self.ready = true;
+        std::mem::take(&mut self.pending)
     }
 }
-#[cfg(windows)]
-pub(crate) fn initialize(app: &tauri::AppHandle, config: &std::path::Path) -> Result<bool, String> {
-    let mut coordinator = windows::Coordinator::new(app, config)?;
-    let proceed = coordinator.enter(app)?;
-    *app.state::<Instance>()
-        .inner
-        .lock()
-        .map_err(|_| "起動連携を保持できません")? = Some(coordinator);
-    Ok(proceed)
+
+pub(crate) fn activate(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let result = app.run_on_main_thread(move || {
+        if handle
+            .state::<Instance>()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .request()
+        {
+            restore(&handle);
+        }
+    });
+    if let Err(error) = result {
+        crate::internal_logs::report_error("startup_activation", &error.to_string());
+    }
 }
-fn require_recovery(window: &WebviewWindow) -> Result<(), String> {
-    crate::startup_reset::check_idle(window.app_handle())?;
-    if window.label() != "main"
-        || !window
-            .state::<crate::startup_attention::Startup>()
-            .blocked()
+pub(crate) fn ready(app: &tauri::AppHandle) {
+    if app
+        .state::<Instance>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ready()
     {
-        return Err("起動復旧のメイン画面だけで操作できます".into());
+        restore(app);
     }
-    if !cfg!(windows) {
-        return Err("この復旧操作はWindows版で利用できます".into());
+}
+fn restore(app: &tauri::AppHandle) {
+    if let Err(error) = crate::residency::restore(app) {
+        crate::internal_logs::report_error("startup_activation", &error);
     }
-    Ok(())
 }
-#[tauri::command]
-pub(crate) fn get_startup_instance(window: WebviewWindow) -> Result<Report, String> {
-    if window.label() != "main" {
-        return Err("起動連携はメイン画面だけで確認できます".into());
-    }
-    window.state::<Instance>().report()
-}
-#[tauri::command]
-pub(crate) async fn open_existing_instance(window: WebviewWindow) -> Result<bool, String> {
-    require_recovery(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(windows)]
-        {
-            let state = window.state::<Instance>();
-            let mut coordinator = state.inner.try_lock().map_err(|_| "起動復旧の処理中です")?;
-            let opened = coordinator
-                .as_mut()
-                .ok_or("起動連携を準備できていません")?
-                .open_existing()?;
-            if opened {
-                exit_secondary(window.app_handle());
-            }
-            return Ok(opened);
-        }
-        #[cfg(not(windows))]
-        Err("Windows版で利用できます".into())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-pub(crate) async fn recover_startup_instance(
-    window: WebviewWindow,
-    target_id: String,
-) -> Result<(), String> {
-    require_recovery(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(windows)]
-        {
-            let state = window.state::<Instance>();
-            let mut coordinator = state.inner.try_lock().map_err(|_| "起動復旧の処理中です")?;
-            let coordinator = coordinator.as_mut().ok_or("復旧対象を確認できません")?;
-            windows::restart_available()?;
-            if coordinator.recover(&target_id)? {
-                exit_secondary(window.app_handle());
-            } else {
-                windows::schedule_restart()?;
-                coordinator.release();
-                exit_secondary(window.app_handle());
-            }
-            return Ok(());
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = target_id;
-            Err("Windows版で利用できます".into())
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
+
 #[tauri::command]
 pub(crate) fn retry_startup(window: WebviewWindow) -> Result<(), String> {
     crate::startup_reset::check_idle(window.app_handle())?;
@@ -179,22 +87,43 @@ pub(crate) fn retry_startup(window: WebviewWindow) -> Result<(), String> {
         .admit_command(window.label(), "retry_startup")?;
     #[cfg(windows)]
     {
-        let state = window.state::<Instance>();
-        let mut owner = state.inner.try_lock().map_err(|_| "起動復旧の処理中です")?;
+        // The relay waits for this process to exit before starting its successor,
+        // so the successor cannot be mistaken for a duplicate of this instance.
         windows::schedule_restart()?;
-        if let Some(coordinator) = owner.as_mut() {
-            coordinator.release();
-        }
-        exit_secondary(window.app_handle());
+        window
+            .state::<crate::ExitGuard>()
+            .0
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        window.app_handle().exit(0);
         return Ok(());
     }
+    // Tauri's synchronous restart may skip RunEvent::Exit on the main thread.
+    // Release the macOS rendezvous before starting the replacement process.
+    #[cfg(target_os = "macos")]
+    tauri_plugin_single_instance::destroy(window.app_handle());
     #[cfg(not(windows))]
     window.app_handle().restart();
 }
-#[cfg(windows)]
-pub(super) fn exit_secondary(app: &tauri::AppHandle) {
-    app.state::<crate::ExitGuard>()
-        .0
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    app.exit(0);
+
+#[cfg(test)]
+mod tests {
+    use super::Activation;
+
+    #[test]
+    fn early_requests_are_coalesced_and_restored_once_after_setup() {
+        let mut activation = Activation::default();
+        assert!(!activation.request());
+        assert!(!activation.request());
+        assert!(activation.ready());
+        assert!(!activation.ready());
+        assert!(activation.request());
+    }
+    #[test]
+    fn ready_without_a_request_does_not_restore_but_later_requests_do() {
+        let mut activation = Activation::default();
+        assert!(!activation.ready());
+        assert!(activation.request());
+        assert!(activation.request());
+        assert!(!activation.pending);
+    }
 }

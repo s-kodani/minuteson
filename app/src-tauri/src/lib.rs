@@ -2337,16 +2337,12 @@ pub fn run() {
         if let Some(code) = residency::supervisor_entry() {
             std::process::exit(code);
         }
-        residency::prepare_supervisor();
     }
     #[cfg(windows)]
     {
         if let Some(code) = startup_instance::supervisor_entry() {
             std::process::exit(code);
         }
-        // Start the narrow restart relay before assigning the application job.
-        // It owns no storage and exits with its parent unless restart is approved.
-        startup_instance::prepare_supervisor();
     }
     let context = tauri::generate_context!();
     #[cfg(target_os = "windows")]
@@ -2356,6 +2352,10 @@ pub fn run() {
         context
     };
     let builder = tauri::Builder::default();
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        startup_instance::activate(app);
+    }));
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_dialog::init());
     builder
@@ -2380,6 +2380,12 @@ pub fn run() {
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
+            // The single-instance plugin has already rejected secondary launches.
+            // On Windows the restart relay must precede the kill-on-close job.
+            #[cfg(windows)]
+            startup_instance::prepare_supervisor();
+            #[cfg(target_os = "macos")]
+            residency::prepare_supervisor();
             let logs = internal_logs::initialize(
                 app.path()
                     .app_log_dir()
@@ -2427,32 +2433,6 @@ pub fn run() {
             };
             #[cfg(any(target_os = "macos", windows))]
             {
-                #[cfg(windows)]
-                {
-                    let connected = app
-                        .path()
-                        .app_config_dir()
-                        .map_err(|e| e.to_string())
-                        .and_then(|config| startup_instance::initialize(app.handle(), &config));
-                    match connected {
-                        Ok(true) => {}
-                        result => {
-                            let message = result.err().unwrap_or_else(|| {
-                                "既存のMONを開き直すか、確認して再起動できます。".into()
-                            });
-                            app.state::<startup_attention::Startup>().block(
-                                startup_attention::Failure::new(
-                                    startup_attention::Stage::StorageSelection,
-                                    message,
-                                    None,
-                                    app.path().app_config_dir().ok().as_deref(),
-                                ),
-                            )?;
-                            startup_attention::show(app.handle());
-                            return Ok(());
-                        }
-                    }
-                }
                 let admission = app
                     .path()
                     .app_config_dir()
@@ -2606,10 +2586,7 @@ pub fn run() {
             if webview.state::<startup_reset::Reset>().busy()
                 && !matches!(
                     invoke.message.command(),
-                    "get_startup_report"
-                        | "get_startup_reset_state"
-                        | "start_startup_reset"
-                        | "acknowledge_startup_activation"
+                    "get_startup_report" | "get_startup_reset_state" | "start_startup_reset"
                 )
             {
                 invoke
@@ -2626,10 +2603,6 @@ pub fn run() {
                 startup_reset::start_startup_reset,
                 startup_reset::get_startup_reset_state,
                 startup_attention::quit_blocked_startup,
-                startup_instance::get_startup_instance,
-                startup_instance::acknowledge_startup_activation,
-                startup_instance::open_existing_instance,
-                startup_instance::recover_startup_instance,
                 startup_instance::retry_startup,
                 residency::get_residency_state,
                 residency::hide_main_to_background,
@@ -2849,9 +2822,12 @@ pub fn run() {
         .build(context)
         .expect("failed to start mon desktop")
         .run(|app, event| {
+            if let RunEvent::Ready = &event {
+                startup_instance::ready(app);
+            }
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = &event {
-                let _ = residency::restore(app);
+                startup_instance::activate(app);
             }
             if let RunEvent::Exit = event {
                 residency::stopping(app);
