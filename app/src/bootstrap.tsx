@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "./ipc.ts";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StartupAttentionWindow, StartupGate } from "./startup-attention";
+import { StartupLoading } from "./startup-loading";
 import { ThemeProvider } from "./theme";
 import { RecorderOperationProvider } from "./recorder-operation-notices";
 import { RecordingInputProvider } from "./recording-input-status";
@@ -28,6 +29,6 @@ async function start() {
   } else environment = { schemaVersion: 1, role, platform: "other", capabilities: { voiceIdentity: false } };
   if (environment.platform === "windows" && ["recorder", "recorder-info", "recording-confirmation"].includes(role)) document.documentElement.dataset.floatingWindow = "windows";
   const desktopWindow = <ThemeProvider><RecorderOperationProvider>{role === "recording-confirmation" ? <RecordingConfirmationWindow /> : role === "recorder-info" ? <RecorderInfoWindow /> : <RecordingInputProvider windowLabel="recorder"><RecorderPanel /></RecordingInputProvider>}</RecorderOperationProvider></ThemeProvider>;
-  root.render(<WindowEnvironmentProvider value={environment}><WindowsDesktopFrame><Suspense fallback={<main><p role="status">画面を読み込んでいます…</p></main>}>{role === "startup-attention" ? <StartupAttentionWindow /> : role === "main" ? <StartupGate><ThemeProvider><MainDesktopWindow /></ThemeProvider></StartupGate> : desktopWindow}</Suspense></WindowsDesktopFrame></WindowEnvironmentProvider>);
+  root.render(<WindowEnvironmentProvider value={environment}><WindowsDesktopFrame><Suspense fallback={<StartupLoading />}>{role === "startup-attention" ? <StartupAttentionWindow /> : role === "main" ? <StartupGate><ThemeProvider><MainDesktopWindow /></ThemeProvider></StartupGate> : desktopWindow}</Suspense></WindowsDesktopFrame></WindowEnvironmentProvider>);
 }
 void start().catch(cause => root.render(<main className="startup-attention"><h1>画面の接続を確認できません</h1><p role="alert">{String(cause)}</p>{isTauri() && <button type="button" onClick={() => void getCurrentWindow().close()}>ウィンドウを閉じる</button>}</main>));

@@ -7,6 +7,7 @@ import { CommonModal } from "./common-modal";
 import { usePlatform } from "./platform";
 import { StartupReset } from "./startup-reset";
 import { ResidencyNotifications } from "./residency-notifications";
+import { StartupLoading } from "./startup-loading";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
@@ -62,7 +63,7 @@ export function StartupGate({ children }: { children: ReactNode }) {
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
   </> : !state.error && (!state.report || state.report.phase === "starting")
-    ? <><ToastHost /><ResidencyNotifications scope="startup"/><main className="startup-loading" aria-label="起動確認"><p role="status">MONを起動しています…</p></main></>
+    ? <><ToastHost /><ResidencyNotifications scope="startup"/><StartupLoading /></>
     : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
