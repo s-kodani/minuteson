@@ -168,11 +168,7 @@ impl Binding {
             .files
             .iter()
             .enumerate()
-            .filter(|(_, f)| {
-                f.role != Role::RuntimeLibrary
-                    || matches!(execution.engine(), Engine::Sherpa | Engine::Asr)
-                    || origin.is_none()
-            })
+            .filter(|(_, f)| origin.is_none() || execution_file(&self.package.manifest, f))
             .collect::<Vec<_>>();
         let proofs = execution.files();
         // Legacy jobs have no evidence for undeclared dependencies. Do not

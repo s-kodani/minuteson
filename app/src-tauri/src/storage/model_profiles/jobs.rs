@@ -10,6 +10,31 @@ use serde_json::{json, Value};
 
 pub(crate) mod rebinding;
 
+#[cfg(test)]
+mod tests;
+
+// Only explicit engine arguments have execution fingerprints. Other libraries
+// and notices remain sealed in the snapshot and verified with the whole package.
+fn execution_file(
+    manifest: &crate::model_inspection::PackageManifest,
+    file: &crate::model_inspection::FileReport,
+) -> bool {
+    match file.role {
+        Role::Notice => false,
+        Role::RuntimeLibrary => match manifest.engine {
+            Engine::Sherpa => true,
+            Engine::Asr => manifest.backend.as_ref().is_some_and(|backend| {
+                backend
+                    .files
+                    .values()
+                    .any(|path| path == &file.relative_path)
+            }),
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Snapshot {
@@ -225,13 +250,7 @@ impl Snapshot {
             .package
             .files
             .iter()
-            .filter(|f| {
-                // Whisper/llama runtime libraries are verified as part of the whole
-                // package even though their CLI configs have no library argument.
-                f.role != Role::Notice
-                    && (f.role != Role::RuntimeLibrary
-                        || matches!(execution.engine(), Engine::Sherpa | Engine::Asr))
-            })
+            .filter(|f| execution_file(&self.package.manifest, f))
             .collect::<Vec<_>>();
         if proofs.len() != declared.len() {
             return Err("固定した管理モデルの役割が不足・重複しています".into());
