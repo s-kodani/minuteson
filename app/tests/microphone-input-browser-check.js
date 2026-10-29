@@ -67,7 +67,8 @@ async (page, capturePath, detailUI) => {
 
     for(const permission of ["denied","restricted"]){
       stage=permission;await boot({microphonePermission:permission});
-      check(await start().isDisabled()&&(await page.getByRole("alert").filter({hasText:"macOSのシステム設定"}).count())===1&&await count("start_recording")===0,"denied permission allowed capture or requested TCC");
+      const permissionSettings = await page.evaluate(() => navigator.platform.includes("Win") ? "Windowsの設定" : "macOSのシステム設定");
+      check(await start().isDisabled()&&(await page.getByRole("alert").filter({hasText:permissionSettings}).count())===1&&await count("start_recording")===0,"denied permission allowed capture or requested TCC");
       results.push(`${permission} microphone permission blocks start and provides manual permission guidance`);
     }
     stage="unknown";await boot({microphonePermission:"unknown"});

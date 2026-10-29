@@ -39,6 +39,10 @@ async (page,capturePath) => {
   await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   check(await page.evaluate(()=>{const c=window.__mon.plainCalls.filter(c=>c.cmd==="save_minutes_markdown");return JSON.stringify(c[1])===JSON.stringify(c[2]);}),"save retry changed operation/base/body");
   results.push("navigation save failure blocks departure; explicit retry preserves the identical operation and text");
+  check(await panel().getByRole("button",{name:"保存",exact:true}).evaluate(button=>{
+    const bounds=button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2));
+  }),"retained notifications cover the next explicit save");
   await input().fill("# 応答喪失の保存\n");await page.evaluate(()=>window.__mon.plainMode="lost");await panel().getByRole("button",{name:"保存",exact:true}).click();await page.getByRole("alert").filter({hasText:"保存できませんでした"}).first().waitFor();
   await input().fill("# 応答待ち中の追記\n");await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"未保存"}).waitFor();
   check(await input().inputValue()==="# 応答待ち中の追記\n","lost success displaced later human input");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();

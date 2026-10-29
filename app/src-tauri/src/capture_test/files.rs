@@ -159,11 +159,17 @@ fn windows_five_second_initialization_failure_retains_the_primary_error() {
     request.microphone_uid = "synthetic-microphone".into();
     let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
-    let child = super::command(&binary, &directory.path, &request)
-        .unwrap()
-        .args(["--synthetic", "--parent-pid", "4294967295"])
-        .spawn()
-        .unwrap();
+    let child = super::command_for(
+        &binary,
+        &directory.path,
+        &request,
+        "mon-five-second-test",
+        u32::MAX,
+    )
+    .unwrap()
+    .arg("--synthetic")
+    .spawn()
+    .unwrap();
     let child = super::Probe(std::sync::Mutex::new(child));
     let error = super::watch(
         &directory,

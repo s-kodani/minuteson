@@ -36,6 +36,8 @@ async (page) => {
     check((await modal().innerText()).includes("参加者の同意を得た音声"), "consent warning hidden inside help");
     results.push(`${label}: help-only Escape, same selection and visible consent, no import/cancel command`);
   }
+  // Parent-dialog Escape must not race a fresh hover preview of the last icon.
+  await page.mouse.move(8, 8);
   await page.keyboard.press("Escape");
   await discard().waitFor();
   check(await page.locator("dialog[open]").count() === 1 && (await discard().innerText()).includes("入力は復元できません"), "discard stacked or omitted irreversible input loss");

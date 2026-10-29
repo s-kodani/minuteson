@@ -457,8 +457,8 @@ int wmain(int argc, wchar_t** argv) {
       product::RawSegments raw(directory,"6ed98cb6-1658-4e35-ab1c-6c98d82abc58","microphone",1);
       std::vector<float> packet(48000,0.125f);std::size_t maximum=0;
       for(std::uint64_t second=0;second<14400;++second){raw.append(packet.data(),48000,90000000000ULL+second*10000000ULL,second%901==0);maximum=std::max(maximum,raw.pcm.capacity());}
-      raw.finish();if(raw.total!=691200000||raw.sequence!=3600||maximum>192000*4)throw std::runtime_error("raw fixture exceeded duration or memory contract");
-      std::cout<<product::Json{{"frames",raw.total},{"segments",raw.sequence},{"maximumPendingPcmBytes",maximum},{"durationSeconds",14400}}.dump()<<std::endl;return 0;
+      raw.finish();if(raw.prefix.frames!=691200000||raw.prefix.segments!=3600||maximum>192000*4)throw std::runtime_error("raw fixture exceeded duration or memory contract");
+      std::cout<<product::Json{{"frames",raw.prefix.frames},{"segments",raw.prefix.segments},{"maximumPendingPcmBytes",maximum},{"durationSeconds",14400}}.dump()<<std::endl;return 0;
     }
     if(argc>1&&std::wstring(argv[1])==L"--import-audio")return audio_import::run(argc,argv);
     for (int i=1;i<argc;++i) {

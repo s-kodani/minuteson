@@ -64,6 +64,11 @@ async page => {
   for (let i = 0; i < 4; i++) await show({ key: `critical-${i}`, level: "error", message: `重要な問題 ${i}` });
   await show({ key: "queued-success", level: "success", message: "待機している完了通知" });
   await page.waitForFunction(() => document.querySelectorAll('.toast-host .toast-card').length === 3 && [...document.querySelectorAll('.toast-host .info-popover')].some(e => e.textContent.includes('ほか 2 件')));
+  await input.focus(); await page.mouse.move(8, 8);
+  await page.waitForFunction(() => document.querySelector('.toast-host [data-sonner-toast][data-front=true]')?.dataset.expanded === "false");
+  check(await host.getByRole("alert").count() === 1, "important notifications expanded over the workspace without interaction");
+  await host.locator('[data-sonner-toast][data-front=true] .toast-card').hover();
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast-host [data-sonner-toast]')].every(e => e.dataset.expanded === "true"));
   check(await host.locator(".toast-card").count() === 3 && await host.getByRole("alert").count() === 3 && (await host.locator('.info-popover').allTextContents()).some(text => text.includes("ほか 2 件")), "queue does not cap at three or prioritize important problems");
   await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).first().click();
   await page.waitForFunction(() => document.querySelectorAll('.toast-host .toast-card').length === 3 && [...document.querySelectorAll('.toast-host .toast-card')].some(e => e.textContent.includes('重要な問題 0')));

@@ -2,7 +2,8 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   clearScreen: false,
-  server: { host: "127.0.0.1", port: 1420, strictPort: true },
+  server: { host: "127.0.0.1", port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
+  optimizeDeps: { entries: ["index.html", "tests/*.html"] },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: { target: "es2020" },
 });

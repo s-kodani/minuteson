@@ -6,6 +6,7 @@ async page=>{
     await route.fulfill({response,body});
   });
   const card=(input="マイク")=>page.locator(".toast-host .toast-card").filter({hasText:new RegExp(`終了した録音.*${input}`,"u")});
+  const readStack=()=>page.locator('.toast-host [data-sonner-toast][data-front=true] .toast-card').hover();
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});
   const openHistory=async()=>{await page.getByRole("button",{name:"通知一覧",exact:true}).click();await history().waitFor();};
   const closeHistory=async()=>{await history().getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();await history().waitFor({state:"hidden"});};
@@ -38,6 +39,8 @@ async page=>{
     await page.evaluate(()=>{document.querySelector("#archive-cover").showModal();for(const card of document.querySelectorAll('.toast-host .toast-card'))card.style.transform="";window.closeFixture.showQueueBlockers();document.querySelector("#archive-cover").close();});
     await page.waitForTimeout(400);check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"queued archive card fabricated render");
     const old=(await calls())[0];await reload();await card().waitFor();
+    // Both lanes must actually be exposed before either render receipt counts.
+    await readStack();
     await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0].delivery.rendered));
     check(await page.evaluate(old=>{const row=window.closeFixture.archived.rows[0],n=row.lanes[old.noticeId.includes(":system:")?"system":"microphone"][0];return n.delivery.generation===2&&n.recipientId!==old.recipientId;},old),"unshown historical head not generation fenced");
     check(await page.evaluate(async old=>{try{await window.closeFixture.archivedAction({...old,action:"render",receiveId:null});return false;}catch{return true;}},old),"old archived render accepted after replacement");
@@ -53,6 +56,7 @@ async page=>{
     check(await page.locator(".archived-input-notices,.issue-status").count()===0,"historical diagnostics escaped the notification list");
     await closeHistory();
     results.push("meeting action navigates through production UI without playback; missing history and loss remain after dismissal");
+    await readStack();
     for(const input of ["マイク","PC音声"]){const n=card(input);if(await n.count())await n.getByRole("button",{name:input==="マイク"?"情報通知を閉じる":"注意通知を閉じる",exact:true}).click();}
     await card("PC音声").filter({hasText:"復帰していました"}).waitFor();await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.rendered);
     await reload();await page.waitForTimeout(700);check(await card().count()===0&&await card("PC音声").count()===0,"rendered past event replayed after reload");
@@ -121,6 +125,7 @@ async page=>{
     await page.setViewportSize({width:1200,height:900});
     const visualTitle="終了済み録音の通知を確認するための点検会議";
     await seed({title:visualTitle,both:true,loss:4,issue:"invalid"});await card().filter({hasText:visualTitle}).waitFor();
+    await readStack();
     await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0]?.delivery.rendered));
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
       await page.setViewportSize({width,height:900});await page.waitForTimeout(200);

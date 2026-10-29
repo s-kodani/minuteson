@@ -2,12 +2,14 @@
 async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true });
+  const readStack = () => host.locator('[data-sonner-toast][data-front=true] .toast-card').hover();
   const modal = page.getByRole("dialog", { name: "音声を取り込む", exact: true });
   const calls = command => page.evaluate(c => window.monImportFixture.calls.filter(x => x.command === c).length, command);
   const boot = async options => { await page.reload(); await page.waitForFunction(() => !!window.monImportFixture); if (options) await page.evaluate(v => Object.assign(window.monImportFixture, v), options); };
   const open = async () => { await page.getByRole("button", { name: "音声を取り込む", exact: true }).click(); await modal.getByRole("textbox", { name: "会議名", exact: true }).waitFor(); await page.waitForFunction(() => window.monImportFixture.import.phase === "ready" && document.querySelector('dialog[open] input')?.value === "会議"); };
   await boot(); await open(); check(await host.locator(".toast-success").count() === 0, "inspected source falsely displayed saved result");
   await modal.getByRole("button", { name: "取り込む", exact: true }).click(); await modal.waitFor({ state: "hidden" });
+  await readStack();
   await host.getByRole("status").filter({ hasText: "音声を保存しました" }).waitFor();
   const saved = await page.evaluate(() => structuredClone(window.monImportFixture.import.saved));
   check(await calls("start_audio_import") === 1 && await host.getByRole("button", { name: "保存した会議を開く", exact: true }).isEnabled(), "confirmed import duplicated or has no open action");
@@ -28,7 +30,7 @@ async page => {
   results.push("saved audio with failed meeting navigation retains modal cause and explicit reopen, without false navigation success or re-import");
 
   await boot({ loseStart: true }); await open(); await modal.getByRole("button", { name: "取り込む", exact: true }).click();
-  await modal.waitFor({ state: "hidden" }); await host.getByRole("status").filter({ hasText: "音声を保存しました" }).waitFor();
+  await modal.waitFor({ state: "hidden" }); await readStack(); await host.getByRole("status").filter({ hasText: "音声を保存しました" }).waitFor();
   check(await calls("start_audio_import") === 1, "lost start reply repeated write");
   results.push("lost admission reply is resolved by the native fixture receipt, not another start command");
 
@@ -45,6 +47,7 @@ async page => {
 
   await boot(); await open(); await modal.getByRole("button", { name: "閉じる", exact: true }).click();
   await page.getByRole("dialog", { name: "取り込み確認内容の破棄を確認", exact: true }).getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click(); await modal.waitFor({ state: "hidden" });
+  await readStack();
   await host.getByRole("status").filter({ hasText: "取り込みを取り消しました" }).waitFor();
   check(await host.locator(".toast-success").count() === 0 && await calls("cancel_audio_import") === 1 && await calls("start_audio_import") === 0, "cancel was labeled saved or executed another action");
   results.push("confirmed cancellation is information, not saved success, and contains no destructive notification action");

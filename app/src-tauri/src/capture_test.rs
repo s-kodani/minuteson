@@ -175,6 +175,21 @@ fn command(
     directory: &std::path::Path,
     request: &Request,
 ) -> Result<Command, String> {
+    command_for(
+        binary,
+        directory,
+        request,
+        "mon-five-second-test",
+        std::process::id(),
+    )
+}
+fn command_for(
+    binary: &std::path::Path,
+    directory: &std::path::Path,
+    request: &Request,
+    scenario: &str,
+    parent_pid: u32,
+) -> Result<Command, String> {
     request.validate()?;
     let mut command = Command::new(binary);
     mon_native::process::configure(&mut command, mon_native::process::Purpose::CaptureTest);
@@ -191,10 +206,10 @@ fn command(
         .arg("--backend")
         .arg(crate::recorder::capture_backend())
         .arg("--scenario")
-        .arg("mon-five-second-test")
+        .arg(scenario)
         .arg("--stop-on-file")
         .arg("--parent-pid")
-        .arg(std::process::id().to_string())
+        .arg(parent_pid.to_string())
         .arg("--microphone-uid")
         .arg(&request.microphone_uid)
         .arg("--five-second-test")
@@ -219,7 +234,10 @@ fn owned_command(
     directory: &files::TestDirectory,
     request: &Request,
 ) -> Result<Command, String> {
-    let mut launch = command(binary, &directory.path, request)?;
+    with_lease(command(binary, &directory.path, request)?, directory)
+}
+#[cfg(any(target_os = "macos", windows))]
+fn with_lease(mut launch: Command, directory: &files::TestDirectory) -> Result<Command, String> {
     let descriptor = directory.inherit_lease(&mut launch)?;
     #[cfg(target_os = "macos")]
     launch

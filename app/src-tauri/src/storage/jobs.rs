@@ -628,7 +628,9 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
+        // Retain retired jobs in storage, but exclude them before applying the
+        // current history limit and decoding executable job kinds.
+        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE meeting_id = ?1 AND kind != 'transcript_cleanup' ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![meeting_id], job_from_row)
             .map_err(|e| e.to_string())?;
@@ -1399,6 +1401,23 @@ mod tests {
             params![retired, current.id],
         ).unwrap();
         assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, current.id);
+        // A full page of newer retired records must not hide current work or
+        // cause the entire history read to fail at the typed boundary.
+        {
+            let mut db = storage.connection.lock().unwrap();
+            let tx = db.transaction().unwrap();
+            for index in 0..100 {
+                tx.execute(
+                    "INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,completed_units,total_units,attempt,created_at,updated_at) SELECT ?1,meeting_id,'transcript_cleanup','succeeded',?2,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,total_units,1,created_at+1,updated_at FROM processing_jobs WHERE id=?3",
+                    params![Uuid::new_v4().to_string(), format!("retired-history-{index}"), current.id],
+                ).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let history = storage.list_jobs(&meeting.id).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, current.id);
+        assert_eq!(history[0].state, "running");
         // Unsupported historical kinds stay untouched in the DB, but are not
         // admitted into the typed executable snapshot or current worker.
         let retained: (String, String) = storage

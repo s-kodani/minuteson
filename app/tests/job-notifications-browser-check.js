@@ -93,6 +93,7 @@ async page => {
   const field=page.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("通知で失われない本文");
   await page.evaluate(()=>window.monBrowserFixture.failSave=true);await start({meetingId:"meeting-1",meetingTitle:"会議B"});
   await host().getByRole("button",{name:"会議を開く",exact:true}).click();
+  await host().locator('[data-sonner-toast][data-front=true] .toast-card').hover();
   await alert("編集内容はこの画面に保持").waitFor();
   check(await field.inputValue()==="通知で失われない本文"&&await page.getByRole("heading",{name:"会議A",exact:true}).isVisible(),"notification navigation discarded unsaved input");await noWork();
   results.push("notification navigation respects failed edit saving and retains original meeting/input");

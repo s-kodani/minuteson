@@ -365,12 +365,16 @@ mod tests {
                 .unwrap();
         let helper = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
-        let mut command =
-            crate::capture_test::owned_command(&helper, &directory, &request).unwrap();
-        command
-            .arg("--synthetic")
-            .args(["--scenario", scenario])
-            .stderr(Stdio::piped());
+        let command = crate::capture_test::command_for(
+            &helper,
+            &directory.path,
+            &request,
+            scenario,
+            std::process::id(),
+        )
+        .unwrap();
+        let mut command = crate::capture_test::with_lease(command, &directory).unwrap();
+        command.arg("--synthetic").stderr(Stdio::piped());
         let child = command.spawn().unwrap();
         drop(command);
         let output = child.wait_with_output().unwrap();
@@ -411,9 +415,9 @@ mod tests {
         std::fs::create_dir(&other).unwrap();
         let helper = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../probes/windows-capture/build/Release/mon-windows-capture.exe");
-        let mut command =
-            crate::capture_test::owned_command(&helper, &directory, &request).unwrap();
-        command.arg("--synthetic").arg("--output").arg(&other);
+        let command = crate::capture_test::command(&helper, &other, &request).unwrap();
+        let mut command = crate::capture_test::with_lease(command, &directory).unwrap();
+        command.arg("--synthetic");
         let child = crate::capture_test::Probe(Mutex::new(command.spawn().unwrap()));
         drop(command);
         let error = crate::capture_test::watch(

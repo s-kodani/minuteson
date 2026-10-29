@@ -9,6 +9,7 @@ async page => {
   const recording = header.getByLabel("共通録音状態", { exact: true });
   const nav = page.getByRole("navigation", { name: "メインナビゲーション", exact: true });
   const open = () => header.getByRole("button", { name: "録音画面へ", exact: true });
+  const headerTop = await page.evaluate(() => navigator.platform.includes("Win") ? 32 : 0);
   await nav.getByRole("button", { name: "設定", exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
   const bounds = async () => page.evaluate(() => {
@@ -20,13 +21,13 @@ async page => {
     await workspace.evaluate(e => { e.scrollTop = e.scrollHeight; });
     const b = await bounds();
     check(b.navWidth === (width >= 1280 ? 220 : 64), `navigation width mismatch: ${JSON.stringify(b)}`);
-    check(b.headerTop === 0 && b.mainTop === b.headerBottom && b.mainBottom <= b.height + 1 && b.pageHeight <= b.height + 1 && b.pageWidth <= width && b.scroll > 0 && b.pageScroll === 0, `workspace obscures header or scrolls the page: ${JSON.stringify(b)}`);
+    check(b.headerTop === headerTop && b.mainTop === b.headerBottom && b.mainBottom <= b.height + 1 && b.pageHeight <= b.height + 1 && b.pageWidth <= width && b.scroll > 0 && b.pageScroll === 0, `workspace obscures header or scrolls the page: ${JSON.stringify(b)}`);
     check(await nav.getByRole("button", { name: "設定", exact: true }).getAttribute("title") === "設定", "collapsed navigation lost its name or tooltip");
   }
   results.push("1280/1200/1120/1119/960px reserve the header and navigation outside the body scrollport, with accessible collapsed navigation");
   await workspace.focus(); await workspace.press("Home"); await workspace.press("PageDown");
   await page.waitForFunction(() => document.querySelector(".content").scrollTop > 100);
-  check((await bounds()).headerTop === 0 && (await bounds()).pageScroll === 0, "keyboard scroll hid the header");
+  check((await bounds()).headerTop === headerTop && (await bounds()).pageScroll === 0, "keyboard scroll hid the header");
   results.push("keyboard PageDown scrolls the focused workspace without moving the header");
 
   const session = { revision: 5, phase: "recording", elapsedMs: 8341000, microphoneConnected: true, systemAudioConnected: true, meetingId: "meeting-1", sessionId: "synthetic-header-session", errorMessage: null };
@@ -83,7 +84,7 @@ async page => {
     await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
     await workspace.evaluate(e => { e.scrollTop = e.scrollHeight; });
     await page.screenshot({ path: `workspace-header-${theme}-960.png` });
-    check((await bounds()).headerTop === 0 && await open().isVisible(), `${theme} hid the header at the end of content`);
+    check((await bounds()).headerTop === headerTop && await open().isVisible(), `${theme} hid the header at the end of content`);
   }
   const changes = await page.evaluate(() => window.monBrowserFixture.calls.filter(c => /^(start_recording|stop_recording|request_recording_confirmation|decide_recording_confirmation|finish_main_close)$/u.test(c.command)));
   check(changes.length === 0, "header navigation changed recording or closed the app");

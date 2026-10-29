@@ -230,7 +230,7 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     onFocusCapture={() => { setFocused(true); pauseStack("focus", true); }}
     onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setFocused(false); pauseStack("focus", false); } }}>
     <Toaster id={notificationPresenterId} position="top-right" visibleToasts={3} gap={12}
-      expand={focused || notices.some(toast => toast.important)} hotkey={[]}
+      expand={focused} hotkey={[]}
       customAriaLabel="通知（Option + Tで移動）" className="mon-notification-stack"
       offset={{ top: `${top}px`, right: "16px" }} mobileOffset={{ top: `${top}px`, right: "16px" }}
       style={{ "--width": "min(380px, calc(100vw - 96px))" } as CSSProperties} />
