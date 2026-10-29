@@ -23,7 +23,7 @@ async (page, capturePath, detailUI) => {
   });
   const settled=()=>page.waitForFunction(()=>window.cancelBarrierState!=="pending");
   const released=()=>page.waitForFunction(()=>Object.keys(window.monBrowserFixture.preparation.reservations).length===0&&Object.keys(window.monBrowserFixture.meetingAudio.sessions).length===0);
-  const holdMeeting=async()=>{await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["both"]);await start.click();await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);};
+  const holdMeeting=async()=>{await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["mixed"]);await start.click();await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);};
 
   await boot();
   check(await player.count()===1&&await start.isEnabled()&&await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).isDisabled()&&await count("register_playback_preparation")===0&&await count("prepare_meeting_playback")===0&&await count("read_playback_chunk")===0,"initial bar was absent or prepared audio without a user action");
@@ -78,15 +78,17 @@ async (page, capturePath, detailUI) => {
   check(await page.evaluate(()=>window.cancelBarrierState)==="fulfilled"&&await count("read_playback_chunk")===0,"known-token retry did not release or replayed");
   results.push("known-token close failures stay in the barrier after receipt loss and are released only by a successful retry");
 
-  await boot();await start.click();await player.getByRole("button",{name:"一時停止",exact:true}).click();
-  await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).fill("960000");await player.getByRole("combobox",{name:"速度",exact:true}).selectOption("1.5");
-  await dock.getByRole("button",{name:"再生設定",exact:true}).click();await settings.waitFor();
-  await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["system"]);await mode.selectOption("system");
-  await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);await mode.selectOption("both");await settings.press("Escape");await settings.waitFor({state:"hidden"});await player.getByRole("button",{name:"再生",exact:true}).waitFor();
-  const newest=await page.evaluate(()=>Object.keys(window.monBrowserFixture.meetingAudio.sessions)[0]);
-  await page.evaluate(()=>window.monBrowserFixture.meetingAudio.pending[0].release());await page.waitForFunction(()=>Object.keys(window.monBrowserFixture.preparation.reservations).length===0);
-  check(await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).inputValue()==="960000"&&await player.getByRole("combobox",{name:"速度",exact:true}).inputValue()==="1.5"&&await page.evaluate(token=>!!window.monBrowserFixture.meetingAudio.sessions[token],newest),"old cancelled preparation released or replaced newer audio checkpoint");
-  results.push("a late cancelled track preparation cannot replace or release newer playback, its exact position or speed");
+  // Per-input switching was retired with the canonical meeting WAV.
+  // Opening the remaining settings must preserve the existing paused checkpoint.
+  await boot(); await start.click(); await player.getByRole("button", {name:"一時停止",exact:true}).click();
+  await player.getByRole("slider", {name:"会議全体の再生位置",exact:true}).fill("320000");
+  await player.getByRole("combobox", {name:"速度",exact:true}).selectOption("1.5");
+  const preparationsBeforeSettings = await count("prepare_meeting_playback");
+  await dock.getByRole("button", {name:"再生設定",exact:true}).click(); await settings.waitFor();
+  check(await settings.getByRole("combobox").count() === 0, "retired source switching is exposed");
+  await settings.press("Escape"); await settings.waitFor({state:"hidden"});
+  check(await player.getByRole("slider", {name:"会議全体の再生位置",exact:true}).inputValue() === "320000" && await player.getByRole("combobox", {name:"速度",exact:true}).inputValue() === "1.5" && await count("prepare_meeting_playback") === preparationsBeforeSettings, "settings reset or re-prepared canonical playback");
+  results.push("canonical settings preserve position and speed without preparing another token");
 
   await boot({responsive:true});await row.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
   const field=row.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("取消でも未確定本文を保持します。");

@@ -13,7 +13,7 @@ final class InitialCapturePreparation: @unchecked Sendable {
   private var result: Outcome?
 
   static func run(
-    timeout: Duration = .seconds(5),
+    timeout: Duration = .nanoseconds(CaptureCore.acquisitionTimeoutNanoseconds),
     operation: @escaping @Sendable () async throws -> Void,
     cancel: @escaping @Sendable () -> Void
   ) async -> Outcome {

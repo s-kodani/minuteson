@@ -1,4 +1,4 @@
-import {invoke} from "@tauri-apps/api/core";
+import {invoke} from "./ipc.ts";
 
 export type InputReadStage="live-journal"|"live-journal-notice"|"archived-page"|"archived-rows"|"archived-validation"|"archived-window"|"archived-subscribe";
 /** Keep polling cheap: record changed failures and recovery, never every poll. */

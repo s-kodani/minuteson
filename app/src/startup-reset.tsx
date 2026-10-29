@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc.ts";
 import { useEffect, useRef, useState } from "react";
 import { CommonModal } from "./common-modal";
 import { checkedResetPreview, checkedResetSnapshot, resetRequest, type ResetAvailability, type ResetPreview, type ResetSnapshot } from "./startup-reset-state";

@@ -1,0 +1,874 @@
+[
+  {
+    "id": "llama-b11533-qwen25-15b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 32768,
+      "maxOutputTokens": 8192,
+      "maxContextTokens": 32768,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 2.5 1.5B · Q4_K_M",
+    "description": "Qwen 2.5 1.5B・Q4_K_M。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen2.5-1.5B-Instruct",
+      "modelVersion": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen Apache-2.0: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE ; 本文はnoticesに保持。圧縮内ファイルSHAは取得時に独立算出した照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 1117320736,
+        "expectedHash": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11343,
+        "expectedHash": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "sherpa-1138-pyannote3-eres2net-base",
+    "label": "Pyannote + ERes2Net base",
+    "description": "pyannote segmentation 3.0・3D-Speaker ERes2Net base。人数は通常自動推定です。品質・速度は正式評価前で、取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "sherpa-onnx",
+      "engineVersion": "v1.13.8",
+      "modelName": "pyannote segmentation 3.0 + 3D-Speaker ERes2Net base",
+      "modelVersion": "segmentation-3-0+eres2net-base-16k-SHA-fixed-capi1",
+      "quantization": null,
+      "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。3D-Speaker Apache-2.0: https://github.com/modelscope/3D-Speaker/blob/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE ; ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。segmentationアーカイブ・内部ファイル・本文SHAは独立算出の照合値で、配布元署名の認証や再配布承認ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "role": "segmentation",
+        "expectedSize": 5992913,
+        "expectedHash": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079"
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "role": "speaker_embedding",
+        "expectedSize": 39593761,
+        "expectedHash": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1061,
+        "expectedHash": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11358,
+        "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "relativePath": "notices/3DSpeaker-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11357,
+        "expectedHash": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1073,
+        "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "role": "notice",
+        "expectedSize": 325054,
+        "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
+        }
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+      },
+      {
+        "relativePath": "notices/3DSpeaker-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11533-qwen25-15b-q8",
+    "tokenLimits": {
+      "maxInputTokens": 32768,
+      "maxOutputTokens": 8192,
+      "maxContextTokens": 32768,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 2.5 1.5B · Q8_0",
+    "description": "Qwen 2.5 1.5B・Q8_0。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen2.5-1.5B-Instruct Q8_0",
+      "modelVersion": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+      "quantization": "Q8_0",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen Apache-2.0: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE ; 本文はnoticesに保持。圧縮内ファイルSHAは取得時に独立算出した照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 1894532128,
+        "expectedHash": "d7efb072e7724d25048a4fda0a3e10b04bdef5d06b1403a1c93bd9f1240a63c8"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11343,
+        "expectedHash": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q8_0.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "sherpa-1138-pyannote3-int8-eres2net-base",
+    "label": "Pyannote int8 + ERes2Net base",
+    "description": "pyannote segmentation 3.0 int8・3D-Speaker ERes2Net base。人数は通常自動推定です。品質・速度は正式評価前で、取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "sherpa-onnx",
+      "engineVersion": "v1.13.8",
+      "modelName": "pyannote segmentation 3.0 int8 + 3D-Speaker ERes2Net base",
+      "modelVersion": "segmentation-3-0-int8+eres2net-base-16k-SHA-fixed-capi1",
+      "quantization": null,
+      "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。3D-Speaker Apache-2.0: https://github.com/modelscope/3D-Speaker/blob/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE ; ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。segmentationアーカイブ・内部ファイル・本文SHAは独立算出の照合値で、配布元署名の認証や再配布承認ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "role": "segmentation",
+        "expectedSize": 1540506,
+        "expectedHash": "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d"
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "role": "speaker_embedding",
+        "expectedSize": 39593761,
+        "expectedHash": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1061,
+        "expectedHash": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11358,
+        "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "relativePath": "notices/3DSpeaker-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11357,
+        "expectedHash": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1073,
+        "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "role": "notice",
+        "expectedSize": 325054,
+        "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx"
+        }
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+      },
+      {
+        "relativePath": "notices/3DSpeaker-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11533-qwen3-8b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 40960,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 40960,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3 8B · Q4_K_M",
+    "description": "Qwen 3 8B・Q4_K_M。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen3-8B",
+      "modelVersion": "7c41481f57cb95916b40956ab2f0b139b296d974",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3 Apache-2.0: https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/7c41481f57cb95916b40956ab2f0b139b296d974/LICENSE ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 5027783488,
+        "expectedHash": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11533-qwen3-4b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 40960,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 40960,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3 4B · Q4_K_M",
+    "description": "Qwen 3 4B・Q4_K_M。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen3-4B",
+      "modelVersion": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3 Apache-2.0: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 2497280256,
+        "expectedHash": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11533-qwen35-4b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 262144,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3.5 4B · Q4_K_M",
+    "description": "Qwen 3.5 4B・Q4_K_M（Unsloth配布）。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen3.5-4B",
+      "modelVersion": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 2740937888,
+        "expectedHash": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-4B/resolve/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11533-qwen35-9b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 262144,
+      "tokenizer": "utf8_byte_bpe"
+    },
+    "label": "Qwen 3.5 9B · Q4_K_M",
+    "description": "Qwen 3.5 9B・Q4_K_M（Unsloth配布）。非思考モードで議事録を生成します。品質・速度は正式評価前です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11533",
+      "modelName": "Qwen3.5-9B",
+      "modelVersion": "3885219b6810b007914f3a7950a8d1b469d598a5",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 5680522464,
+        "expectedHash": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 12075871,
+          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
+          "memberPath": "llama-b11533/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "reazonspeech-k2-v2-int8-fp32",
+    "label": "ReazonSpeech-k2-v2（軽量）",
+    "description": "日本語専用・CPU動作。Encoder/Joiner INT8・Decoder FP32。用語ヒントは表記のみを使用します。",
+    "group": "asr",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "asr",
+      "engineVersion": "v1.13.8",
+      "modelName": "ReazonSpeech-k2-v2（軽量）",
+      "modelVersion": "291488c8151be24d7da4bf7af26e533fad96e407",
+      "quantization": "int8-fp32",
+      "licenseRef": "ReazonSpeech-k2-v2 / sherpa-onnx: Apache-2.0; ONNX Runtime / Silero VAD / nlohmann-json: MIT. License texts and the official model card are included in notices/.",
+      "backend": {
+        "id": "sherpa-onnx-transducer",
+        "files": {
+          "decoder": "models/decoder.onnx",
+          "joiner": "models/joiner.int8.onnx",
+          "tokens": "models/tokens.txt"
+        }
+      }
+    },
+    "files": [
+      {
+        "relativePath": "models/encoder.int8.onnx",
+        "role": "asr",
+        "expectedSize": 154670139,
+        "expectedHash": "2c7bd08a8a99f9ddd0d9e458456577b1f6279214e51426f114f9eced44c54e1d"
+      },
+      {
+        "relativePath": "models/decoder.onnx",
+        "role": "asr_asset",
+        "expectedSize": 11767836,
+        "expectedHash": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+      },
+      {
+        "relativePath": "models/joiner.int8.onnx",
+        "role": "asr_asset",
+        "expectedSize": 2696970,
+        "expectedHash": "49cc7ea1d3d35a40a27442db5e89996da64bf0e683a903dce76e99e57a12e4de"
+      },
+      {
+        "relativePath": "models/tokens.txt",
+        "role": "asr_asset",
+        "expectedSize": 45754,
+        "expectedHash": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+      },
+      {
+        "relativePath": "models/silero_vad.onnx",
+        "role": "vad",
+        "expectedSize": 643854,
+        "expectedHash": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11358,
+        "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1073,
+        "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "role": "notice",
+        "expectedSize": 325054,
+        "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      },
+      {
+        "relativePath": "notices/reazonspeech-model-card.md",
+        "role": "notice",
+        "expectedSize": 1188,
+        "expectedHash": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0"
+      },
+      {
+        "relativePath": "notices/silero-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1075,
+        "expectedHash": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "models/encoder.int8.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/encoder-epoch-99-avg-1.int8.onnx"
+      },
+      {
+        "relativePath": "models/decoder.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/decoder-epoch-99-avg-1.onnx"
+      },
+      {
+        "relativePath": "models/joiner.int8.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/joiner-epoch-99-avg-1.int8.onnx"
+      },
+      {
+        "relativePath": "models/tokens.txt",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/tokens.txt"
+      },
+      {
+        "relativePath": "models/silero_vad.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+      },
+      {
+        "relativePath": "notices/reazonspeech-model-card.md",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+      },
+      {
+        "relativePath": "notices/silero-MIT.txt",
+        "url": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "reazonspeech-k2-v2-fp32",
+    "label": "ReazonSpeech-k2-v2（FP32）",
+    "description": "日本語専用・CPU動作。Encoder/Decoder/Joiner FP32。用語ヒントは表記のみを使用します。",
+    "group": "asr",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "asr",
+      "engineVersion": "v1.13.8",
+      "modelName": "ReazonSpeech-k2-v2（FP32）",
+      "modelVersion": "291488c8151be24d7da4bf7af26e533fad96e407",
+      "quantization": "fp32",
+      "licenseRef": "ReazonSpeech-k2-v2 / sherpa-onnx: Apache-2.0; ONNX Runtime / Silero VAD / nlohmann-json: MIT. License texts and the official model card are included in notices/.",
+      "backend": {
+        "id": "sherpa-onnx-transducer",
+        "files": {
+          "decoder": "models/decoder.onnx",
+          "joiner": "models/joiner.onnx",
+          "tokens": "models/tokens.txt"
+        }
+      }
+    },
+    "files": [
+      {
+        "relativePath": "models/encoder.onnx",
+        "role": "asr",
+        "expectedSize": 592347848,
+        "expectedHash": "ecdb0b771e16104aaf8e579cb3c1e32fbd589eb641c5946d82b615bd366c5f96"
+      },
+      {
+        "relativePath": "models/decoder.onnx",
+        "role": "asr_asset",
+        "expectedSize": 11767836,
+        "expectedHash": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+      },
+      {
+        "relativePath": "models/joiner.onnx",
+        "role": "asr_asset",
+        "expectedSize": 10720115,
+        "expectedHash": "d38a81d1191c9ed6de6a1719503692e07e3e973e2364adde0abae5eaaded1174"
+      },
+      {
+        "relativePath": "models/tokens.txt",
+        "role": "asr_asset",
+        "expectedSize": 45754,
+        "expectedHash": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+      },
+      {
+        "relativePath": "models/silero_vad.onnx",
+        "role": "vad",
+        "expectedSize": 643854,
+        "expectedHash": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11358,
+        "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1073,
+        "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "role": "notice",
+        "expectedSize": 325054,
+        "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      },
+      {
+        "relativePath": "notices/reazonspeech-model-card.md",
+        "role": "notice",
+        "expectedSize": 1188,
+        "expectedHash": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0"
+      },
+      {
+        "relativePath": "notices/silero-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1075,
+        "expectedHash": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "models/encoder.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/encoder-epoch-99-avg-1.onnx"
+      },
+      {
+        "relativePath": "models/decoder.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/decoder-epoch-99-avg-1.onnx"
+      },
+      {
+        "relativePath": "models/joiner.onnx",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/joiner-epoch-99-avg-1.onnx"
+      },
+      {
+        "relativePath": "models/tokens.txt",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/tokens.txt"
+      },
+      {
+        "relativePath": "models/silero_vad.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+      },
+      {
+        "relativePath": "notices/reazonspeech-model-card.md",
+        "url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+      },
+      {
+        "relativePath": "notices/silero-MIT.txt",
+        "url": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  }
+]

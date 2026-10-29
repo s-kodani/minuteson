@@ -4,7 +4,7 @@ async page => {
   await page.unrouteAll({ behavior: "wait" });
   await page.route("http://127.0.0.1:1420/", async route => {
     const response = await route.fetch();
-    await route.fulfill({ response, body: (await response.text()).replace("/src/main.tsx", "/tests/application-close-browser-fixture.js") });
+    await route.fulfill({ response, body: (await response.text()).replace("/src/bootstrap.tsx", "/tests/application-close-browser-fixture.js") });
   });
   await page.goto("http://127.0.0.1:1420/");
   await page.getByRole("button", { name: "新しい録音", exact: true }).click();

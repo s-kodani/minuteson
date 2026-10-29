@@ -146,6 +146,20 @@ impl<'p, 's> FixedData<'p, 's> {
                 .ok_or_else(|| format!("復元列がありません: {name}"))
         };
         match table.name.as_str() {
+            "post_analysis_intents" => {
+                // Restored intent is history, never new consent to run under
+                // today's models/registry. Explicit regeneration creates a new one.
+                let text = row_text(&row, column("spec_json")?)?.to_owned();
+                let policy: crate::storage::post_analysis::Policy =
+                    serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                if policy.schema_version != 1 {
+                    return Err("未対応の後続処理形式です".into());
+                }
+                row[column("spec_hash")?] =
+                    SqlValue::Text(format!("{:x}", Sha256::digest(text.as_bytes())));
+                row[column("phase")?] = SqlValue::Text("restored".into());
+                row[column("error_message")?] = SqlValue::Null;
+            }
             "recording_sessions" => {
                 if let Some(index) = table
                     .columns

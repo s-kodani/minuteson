@@ -9,11 +9,12 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include "../../crates/mon-capture-ffi/include/mon_capture.h"
 
 namespace product {
 struct EmptyPreparationContext {};
 struct PreparationSchedule {
-  static constexpr std::uint64_t timeout_ms=5000,retry_ms=1000;
+  static inline const std::uint64_t timeout_ms=mon_capture_limit(9)/1000000,retry_ms=mon_capture_limit(10)/1000000;
   std::uint64_t started_at=0,retry_at=0;
   bool outstanding=false,cancelled=false,initial_resolved=false;
   bool may_start(std::uint64_t now)const{return !outstanding&&now>=retry_at;}

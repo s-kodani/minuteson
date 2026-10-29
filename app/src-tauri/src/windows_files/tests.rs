@@ -1,5 +1,25 @@
 use super::*;
 #[test]
+fn windows_model_placement_records_actual_namespace_guarantee_and_private_acl() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap().join("private-models");
+    let directory = crate::model_placement::fs::Directory::root(&root).unwrap();
+    assert!(security_metadata(&directory_for_test(&root)).unwrap().1);
+    let (file, parent) = directory.create("nested/receipt.json").unwrap();
+    use std::io::Write;
+    (&file).write_all(b"flushed payload").unwrap();
+    file.sync_all().unwrap();
+    assert!(security_metadata(&file).unwrap().1);
+    assert!(matches!(
+        parent.sync_namespace().unwrap(),
+        mon_native::durability::NamespaceDurability::Flushed
+            | mon_native::durability::NamespaceDurability::RestartRecoverable
+    ));
+}
+fn directory_for_test(path: &std::path::Path) -> std::fs::File {
+    directory(path).unwrap()
+}
+#[test]
 fn private_root_reopen_keeps_descendant_change_proofs() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();

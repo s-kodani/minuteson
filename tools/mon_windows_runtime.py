@@ -14,6 +14,11 @@ import subprocess
 import tarfile
 import urllib.request
 import zipfile
+# Support both direct CLI execution and file-based release/test imports.
+import importlib.util
+_catalog_spec = importlib.util.spec_from_file_location("mon_model_catalog", Path(__file__).with_name("mon_model_catalog.py"))
+mon_model_catalog = importlib.util.module_from_spec(_catalog_spec)
+_catalog_spec.loader.exec_module(mon_model_catalog)
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.cache/windows-runtime'
@@ -74,7 +79,7 @@ def upstream_engines():
             if member.isfile() and (leaf=='sherpa-onnx-offline-speaker-diarization.exe' or leaf.lower().endswith('.dll')):
                 dump(archive.extractfile(member).read(),PACKAGE/'sherpa'/leaf)
     # Ship engine notices with the app itself, before any model is downloaded.
-    upstream=json.loads((ROOT/'app/model-catalog/macos.json').read_text(encoding="utf8"))
+    upstream=mon_model_catalog.compile_target('windows_x86_64')
     for choice in upstream:
         if choice['id'] not in ('llama-b11533-qwen25-15b-q4km','sherpa-1138-pyannote3-eres2net-base'):continue
         engine='llama' if choice['recipe']['manifest']['engine']=='llama.cpp' else 'sherpa'
@@ -90,7 +95,7 @@ def upstream_engines():
     print('Windows runtime files:',[str(p.relative_to(PACKAGE)) for p in PACKAGE.rglob('*') if p.is_file()],flush=True)
 
 def catalog():
-    upstream=json.loads((ROOT/'app/model-catalog/macos.json').read_text(encoding="utf8"))
+    upstream=mon_model_catalog.compile_target('windows_x86_64')
     whisper_network=json.loads((ROOT/'app/model-catalog/whisper-small-network.json').read_text(encoding="utf8"))
     variants=json.loads((ROOT/'app/model-catalog/whisper-variants.json').read_text(encoding="utf8"))
     choices=[]
@@ -102,13 +107,9 @@ def catalog():
         vad=json.loads((ROOT/'app/model-catalog/whisper-vad-network.json').read_text(encoding="utf8"))
         network['files']+=vad['files'];network['sources']+=vad['sources']
         choices.append(dict(id=f"windows-whisper-194-{variant['name']}",label=f"Whisper {variant['name']}（多言語・CPU／Vulkan）",description='Windows x64でGPUを試行し、利用できない場合はCPUで文字起こしします。取得後に動作確認して適用します。',recipe=dict(schemaVersion=4,manifest=dict(schemaVersion=1,engine='whisper.cpp',engineVersion='v1.9.4',modelName=f"Whisper {variant['name']}",modelVersion='5359861c739e955e79d9a303bcbc70fb988958b1',quantization=None,licenseRef='whisper.cpp / OpenAI Whisper MIT. Notices included. Windows CPU build; quality not evaluated.',target='windows_x86_64',files=network['files']),sources=network['sources'])))
-    for original in upstream:
-        if original['recipe']['manifest']['engine'] not in ('llama.cpp','sherpa-onnx'):
+    for choice in upstream:
+        if choice['recipe']['manifest']['engine'] not in ('llama.cpp','sherpa-onnx'):
             raise ValueError('unsupported shared model engine')
-        choice=copy.deepcopy(original);choice['id']='windows-'+choice['id'];choice['label']+='（Windows CPU）' if choice['recipe']['manifest']['engine']=='sherpa-onnx' else '（Windows CPU／Vulkan）'
-        recipe=choice['recipe']; recipe['manifest']['target']='windows_x86_64'
-        pairs=[(f,s) for f,s in zip(recipe['manifest']['files'],recipe['sources']) if f['role'] not in ('executable','runtime_library')]
-        recipe['manifest']['files']=[f for f,s in pairs];recipe['sources']=[s for f,s in pairs]
         choices.append(choice)
     executables={'whisper':'whisper-cli.exe','llama':'llama-completion.exe','sherpa':'sherpa-onnx-offline-speaker-diarization.exe'}
     engine_ids={'whisper.cpp':'whisper','llama.cpp':'llama','sherpa-onnx':'sherpa'}

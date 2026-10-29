@@ -9,8 +9,10 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::Inference.policy();
+const MAX_JSON_BYTES: u64 = PROCESS_POLICY.result_bytes;
+const MAX_LOG_BYTES: u64 = PROCESS_POLICY.stderr_bytes;
 // Whisper decodes timestamp tokens inside a 30-second context. The last
 // segment can end in that window's padding, not at the final input sample.
 const TIMESTAMP_WINDOW_US: i64 = 30_000_000;
@@ -248,7 +250,10 @@ fn run(
         &["stdout.log", "stderr.log"],
         "transcription",
     );
-    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let mut launch = OwnedCommand::for_purpose(
+        &config.executable.path,
+        mon_native::process::Purpose::Inference,
+    )?;
     let command = &mut launch.command;
     command
         // Do not inherit injected libraries, credentials, or engine overrides.
@@ -311,7 +316,7 @@ fn run(
         if cancelled() {
             return Ok(None);
         }
-        if started.elapsed() > timeout {
+        if PROCESS_POLICY.expired(started.elapsed(), Some(timeout)) {
             return Err("文字起こし処理が制限時間を超えました".into());
         }
         for path in [&stdout_path, &stderr_path] {

@@ -48,7 +48,7 @@ class TauriPlatformTests(unittest.TestCase):
 
     def test_every_registered_command_is_in_the_acl_manifest_and_has_an_explicit_role(self):
         source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
-        handler = source.split("tauri::generate_handler![", 1)[1].split("];", 1)[0]
+        handler = (TAURI / "src/command_handler.rs").read_text(encoding="utf8").split("tauri::generate_handler![", 1)[1].split("]", 1)[0]
         commands = re.findall(r"^\s*(?:\w+::)*(\w+),\s*$", handler, re.M)
         manifest = re.findall(r'"(\w+)"', (TAURI / "app_commands.rs").read_text(encoding="utf8"))
         self.assertGreater(len(commands), 100)
@@ -72,11 +72,11 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertTrue(sensitive <= self.grants("main"))
         self.assertFalse(self.grants("unknown"))
         self.assertEqual(self.grants("recording-confirmation"), {
-            "get_ui_preferences", "get_recording_confirmation", "decide_recording_confirmation",
+            "get_window_environment", "get_ui_preferences", "get_recording_confirmation", "decide_recording_confirmation",
             "get_recorder_operation_notices", "publish_recorder_operation_notice",
         })
         self.assertEqual(self.grants("recorder-info"), {
-            "get_ui_preferences", "get_recorder_operation_notices", "close_recorder_info",
+            "get_window_environment", "get_ui_preferences", "get_recorder_operation_notices", "close_recorder_info",
             "publish_recorder_operation_notice",
         })
         self.assertTrue({"request_recording_confirmation", "get_recording_input_status",

@@ -159,119 +159,141 @@ pub(crate) fn availability(app: &tauri::AppHandle) -> Availability {
     }
 }
 #[tauri::command]
-pub(crate) async fn get_startup_reset_preview(window: WebviewWindow) -> Result<Preview, String> {
-    require(&window)?;
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Reset>();
-        let mut inner = state
-            .inner
-            .lock()
-            .map_err(|_| "初期化状態を取得できません")?;
-        if state.busy() || inner.choosing {
-            return Err("初期化の操作中です".into());
-        }
-        if inner.snapshot.operation_id.is_some() {
-            return Err("初期化は受付済みです。状態を確認し、MONを再起動してください".into());
-        }
-        #[cfg(any(target_os = "macos", windows))]
-        {
-            match selection(&app) {
-                Ok(selection) => {
-                    let id = uuid::Uuid::new_v4().to_string();
-                    let root = selection.root().into();
-                    inner.prepared = Some(Prepared {
-                        id: id.clone(),
-                        selection,
-                        destination: None,
-                    });
-                    Ok(Preview {
-                        availability: Availability {
-                            available: true,
-                            reason: None,
-                        },
-                        operation_id: Some(id),
-                        meeting_root: Some(root),
-                        archive_path: None,
-                    })
-                }
-                Err(reason) => Ok(Preview {
-                    availability: Availability::unavailable(reason),
-                    operation_id: None,
-                    meeting_root: None,
-                    archive_path: None,
-                }),
-            }
-        }
-        #[cfg(not(any(target_os = "macos", windows)))]
-        {
-            Ok(Preview {
-                availability: availability(&app),
-                operation_id: None,
-                meeting_root: None,
-                archive_path: None,
-            })
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-pub(crate) async fn choose_startup_reset_backup_directory(
+pub(crate) async fn get_startup_reset_preview(
     window: WebviewWindow,
-    operation_id: String,
-) -> Result<Option<PathBuf>, String> {
-    require(&window)?;
-    let app = window.app_handle().clone();
-    #[cfg(any(target_os = "macos", windows))]
-    {
-        {
+) -> Result<Preview, mon_contracts::AppError> {
+    let result: Result<Preview, String> = async move {
+        require(&window)?;
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<Reset>();
             let mut inner = state
                 .inner
                 .lock()
                 .map_err(|_| "初期化状態を取得できません")?;
-            if state.busy()
-                || inner.choosing
-                || inner.prepared.as_ref().is_none_or(|p| p.id != operation_id)
-            {
-                return Err("初期化の確認情報が無効か、操作中です".into());
+            if state.busy() || inner.choosing {
+                return Err("初期化の操作中です".into());
             }
-            inner.choosing = true;
-        }
-        let chosen = dialog(&window).await;
-        let state = app.state::<Reset>();
-        let mut inner = state
-            .inner
-            .lock()
-            .map_err(|_| "初期化状態を取得できません")?;
-        inner.choosing = false;
-        let prepared = inner
-            .prepared
-            .as_mut()
-            .filter(|p| p.id == operation_id)
-            .ok_or("初期化の確認情報が変わっています")?;
-        if let Some(parent) = chosen? {
-            let parent = parent.canonicalize().map_err(|e| e.to_string())?;
-            let destination = reset::Archive::select(&prepared.selection, &parent, &prepared.id)?;
-            let child = destination.path().to_owned();
-            // Native canonical parent is retained for the immediate recheck.
-            prepared.destination = Some(destination);
-            Ok(Some(child))
-        } else {
-            Ok(None)
-        }
+            if inner.snapshot.operation_id.is_some() {
+                return Err("初期化は受付済みです。状態を確認し、MONを再起動してください".into());
+            }
+            #[cfg(any(target_os = "macos", windows))]
+            {
+                match selection(&app) {
+                    Ok(selection) => {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let root = selection.root().into();
+                        inner.prepared = Some(Prepared {
+                            id: id.clone(),
+                            selection,
+                            destination: None,
+                        });
+                        Ok(Preview {
+                            availability: Availability {
+                                available: true,
+                                reason: None,
+                            },
+                            operation_id: Some(id),
+                            meeting_root: Some(root),
+                            archive_path: None,
+                        })
+                    }
+                    Err(reason) => Ok(Preview {
+                        availability: Availability::unavailable(reason),
+                        operation_id: None,
+                        meeting_root: None,
+                        archive_path: None,
+                    }),
+                }
+            }
+            #[cfg(not(any(target_os = "macos", windows)))]
+            {
+                Ok(Preview {
+                    availability: availability(&app),
+                    operation_id: None,
+                    meeting_root: None,
+                    archive_path: None,
+                })
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        let _ = (app, operation_id);
-        Err("このOSでは初期化を利用できません".into())
-    }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_startup_reset_preview", message)
+    })
 }
 #[tauri::command]
-pub(crate) fn get_startup_reset_state(window: WebviewWindow) -> Result<Snapshot, String> {
-    require(&window)?;
-    window.state::<Reset>().snapshot()
+pub(crate) async fn choose_startup_reset_backup_directory(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<Option<PathBuf>, mon_contracts::AppError> {
+    let result: Result<Option<PathBuf>, String> = async move {
+        require(&window)?;
+        let app = window.app_handle().clone();
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            {
+                let state = app.state::<Reset>();
+                let mut inner = state
+                    .inner
+                    .lock()
+                    .map_err(|_| "初期化状態を取得できません")?;
+                if state.busy()
+                    || inner.choosing
+                    || inner.prepared.as_ref().is_none_or(|p| p.id != operation_id)
+                {
+                    return Err("初期化の確認情報が無効か、操作中です".into());
+                }
+                inner.choosing = true;
+            }
+            let chosen = dialog(&window).await;
+            let state = app.state::<Reset>();
+            let mut inner = state
+                .inner
+                .lock()
+                .map_err(|_| "初期化状態を取得できません")?;
+            inner.choosing = false;
+            let prepared = inner
+                .prepared
+                .as_mut()
+                .filter(|p| p.id == operation_id)
+                .ok_or("初期化の確認情報が変わっています")?;
+            if let Some(parent) = chosen? {
+                let parent = parent.canonicalize().map_err(|e| e.to_string())?;
+                let destination =
+                    reset::Archive::select(&prepared.selection, &parent, &prepared.id)?;
+                let child = destination.path().to_owned();
+                // Native canonical parent is retained for the immediate recheck.
+                prepared.destination = Some(destination);
+                Ok(Some(child))
+            } else {
+                Ok(None)
+            }
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = (app, operation_id);
+            Err("このOSでは初期化を利用できません".into())
+        }
+    }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("choose_startup_reset_backup_directory", message)
+    })
+}
+#[tauri::command]
+pub(crate) fn get_startup_reset_state(
+    window: WebviewWindow,
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let result: Result<Snapshot, String> = (|| {
+        require(&window)?;
+        window.state::<Reset>().snapshot()
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_startup_reset_state", message)
+    })
 }
 #[tauri::command]
 #[allow(deprecated)] // Startup is blocked: no storage-backed WebView command can hold a State borrow.
@@ -279,98 +301,106 @@ pub(crate) fn start_startup_reset(
     window: WebviewWindow,
     operation_id: String,
     archive: bool,
-) -> Result<Snapshot, String> {
-    require(&window)?;
-    #[cfg(any(target_os = "macos", windows))]
-    {
-        let app = window.app_handle().clone();
-        let state = app.state::<Reset>();
-        let (prepared, response) = state.accept(operation_id, archive)?;
-        let Some(prepared) = prepared else {
-            return Ok(response);
-        };
-        tauri::async_runtime::spawn_blocking(move || {
-            let result = (|| {
-                let (config, data) = paths(&app)?;
-                app.state::<Reset>()
-                    .progress("起動時のデータ処理を停止し、保存先を解放しています");
-                app.state::<crate::import_controller::ImportController>()
-                    .drain_for_startup_reset()?;
-                let analysis = app.state::<crate::analysis_worker::AnalysisController>();
-                let _maintenance = analysis.begin_startup_reset_maintenance(
-                    app.state::<crate::session::SessionStore>()
-                        .snapshot()
-                        .is_active(),
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let operation = operation_id.clone();
+    let result: Result<Snapshot, String> = (|| {
+        require(&window)?;
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let app = window.app_handle().clone();
+            let state = app.state::<Reset>();
+            let (prepared, response) = state.accept(operation_id, archive)?;
+            let Some(prepared) = prepared else {
+                return Ok(response);
+            };
+            tauri::async_runtime::spawn_blocking(move || {
+                let result = (|| {
+                    let (config, data) = paths(&app)?;
+                    app.state::<Reset>()
+                        .progress("起動時のデータ処理を停止し、保存先を解放しています");
                     app.state::<crate::import_controller::ImportController>()
-                        .snapshot()?
-                        .recording_blocked,
-                )?;
-                app.state::<crate::capture_test::CaptureTests>()
-                    .release_for_startup_reset()?;
-                // Background startup users are drained and normal IPC remains
-                // blocked, so no Storage/Bootstrap State borrow can outlive removal.
-                // Closing SQLite releases its WAL/registry handles before any copy.
-                drop(app.unmanage::<crate::storage::Storage>());
-                let b = match app.unmanage::<bootstrap::Bootstrap>() {
-                    Some(b) => b,
-                    None => reset::open(&config, &data)?,
-                };
-                if archive {
-                    prepared
-                        .destination
-                        .as_ref()
-                        .ok_or("退避先を選択してください")?
-                        .verify()?;
-                }
-                reset::execute(
-                    b,
-                    &prepared.selection,
-                    &prepared.id,
+                        .drain_for_startup_reset()?;
+                    let analysis = app.state::<crate::analysis_worker::AnalysisController>();
+                    let _maintenance = analysis.begin_startup_reset_maintenance(
+                        app.state::<crate::session::SessionStore>()
+                            .snapshot()
+                            .is_active(),
+                        app.state::<crate::import_controller::ImportController>()
+                            .snapshot()?
+                            .recording_blocked,
+                    )?;
+                    app.state::<crate::capture_test::CaptureTests>()
+                        .release_for_startup_reset()?;
+                    // Background startup users are drained and normal IPC remains
+                    // blocked, so no Storage/Bootstrap State borrow can outlive removal.
+                    // Closing SQLite releases its WAL/registry handles before any copy.
+                    drop(app.unmanage::<crate::storage::Storage>());
+                    let b = match app.unmanage::<bootstrap::Bootstrap>() {
+                        Some(b) => b,
+                        None => reset::open(&config, &data)?,
+                    };
                     if archive {
                         prepared
                             .destination
                             .as_ref()
-                            .map(|destination| destination.path())
+                            .ok_or("退避先を選択してください")?
+                            .verify()?;
+                    }
+                    reset::execute(
+                        b,
+                        &prepared.selection,
+                        &prepared.id,
+                        if archive {
+                            prepared
+                                .destination
+                                .as_ref()
+                                .map(|destination| destination.path())
+                        } else {
+                            None
+                        },
+                        &|m| app.state::<Reset>().progress(m),
+                    )
+                })();
+                let state = app.state::<Reset>();
+                if let Ok(mut inner) = state.inner.lock() {
+                    inner.snapshot.busy = false;
+                    inner.snapshot.completed = result.is_ok();
+                    inner.snapshot.message = if result.is_ok() {
+                        "初期化が完了しました。MONを再起動しています".into()
                     } else {
-                        None
-                    },
-                    &|m| app.state::<Reset>().progress(m),
-                )
-            })();
-            let state = app.state::<Reset>();
-            if let Ok(mut inner) = state.inner.lock() {
-                inner.snapshot.busy = false;
-                inner.snapshot.completed = result.is_ok();
-                inner.snapshot.message = if result.is_ok() {
-                    "初期化が完了しました。MONを再起動しています".into()
-                } else {
-                    "初期化を完了できませんでした".into()
-                };
-                inner.snapshot.error = result
-                    .err()
-                    .map(|error| error.replace('\0', "\\0").chars().take(16384).collect());
-            }
-            state.busy.store(false, Ordering::Release);
-            if state.snapshot().is_ok_and(|s| s.completed) {
-                // Existing OS-specific restart always re-enters normal admission.
-                if let Some(main) = app.get_webview_window("main") {
-                    if let Err(e) = crate::startup_instance::retry_startup(main) {
-                        if let Ok(mut inner) = state.inner.lock() {
-                            inner.snapshot.error = Some(e);
-                            inner.snapshot.message =
-                                "初期化は完了しました。MONを再起動してください".into();
+                        "初期化を完了できませんでした".into()
+                    };
+                    inner.snapshot.error = result
+                        .err()
+                        .map(|error| error.replace('\0', "\\0").chars().take(16384).collect());
+                }
+                state.busy.store(false, Ordering::Release);
+                if state.snapshot().is_ok_and(|s| s.completed) {
+                    // Existing OS-specific restart always re-enters normal admission.
+                    if let Some(main) = app.get_webview_window("main") {
+                        if let Err(e) = crate::startup_instance::retry_startup(main) {
+                            if let Ok(mut inner) = state.inner.lock() {
+                                inner.snapshot.error = Some(e.to_string());
+                                inner.snapshot.message =
+                                    "初期化は完了しました。MONを再起動してください".into();
+                            }
                         }
                     }
                 }
-            }
-        });
-        Ok(response)
-    }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        let _ = (operation_id, archive);
-        Err("このOSでは初期化を利用できません".into())
-    }
+            });
+            Ok(response)
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = (operation_id, archive);
+            Err("このOSでは初期化を利用できません".into())
+        }
+    })();
+    result.map_err(|message| {
+        let mut error = mon_contracts::AppError::from_command("start_startup_reset", message);
+        error.operation_id = Some(operation);
+        error
+    })
 }
 #[cfg(windows)]
 async fn dialog(window: &WebviewWindow) -> Result<Option<PathBuf>, String> {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (name: string) => readFileSync(new URL(`../src-tauri/src/storage/deletion/${name}`, import.meta.url), "utf8");
 
-test("deletion history admits only the current schema and retains per-connection protections", () => {
+test("live deletion requires current schema while receipts admit only explicit schema 34/35 history", () => {
   const code = source("database.rs");
   assert.doesNotMatch(code, /known_schemas|historical_scope_fixture|historical_schema_hash_fixture|legacy_without_journal/);
   assert.match(code, /version != crate::storage::MIGRATIONS\.len\(\)/);
@@ -11,7 +11,7 @@ test("deletion history admits only the current schema and retains per-connection
   assert.match(code, /actual != expected\.objects/);
   for (const protection of ["verify_temp_schema(db)", "PRAGMA foreign_keys", "PRAGMA foreign_key_check", "SQLITE_DBCONFIG_ENABLE_TRIGGER"]) assert(code.includes(protection));
   assert.match(code, /OnceLock<Result<KnownSchema, String>>/);
-  assert.doesNotMatch(code, /OnceLock<Result<Vec<KnownSchema>/);
+  assert.match(code, /for version in \[34,35\]/);
 });
 test("missing deletion journals cannot be bypassed by legacy audio admission", () => {
   const code = source("audio_completion.rs");

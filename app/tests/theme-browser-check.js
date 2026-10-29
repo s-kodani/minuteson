@@ -32,7 +32,10 @@ async(page,capturePath)=>{
       check(contrast(tokens["--text"],tokens["--surface"])>=4.5,"body text contrast too low");
       check(contrast(tokens["--focus"],tokens["--surface"])>=3,"focus contrast too low");
       check(contrast(tokens["--primary"],mode==="light"?"#fff":"#18181b")>=4.5,"primary contrast too low");
-      for(const button of await page.locator('.toast-host').getByRole('button',{name:/通知を閉じる$/}).all()) await button.click();
+      while(await page.locator('.toast-host').getByRole('button',{name:/通知を閉じる$/}).count()) {
+        try { await page.locator('.toast-host').getByRole('button',{name:/通知を閉じる$/}).first().press('Enter',{timeout:1000}); }
+        catch(cause) { if(await page.locator('.toast-host').getByRole('button',{name:/通知を閉じる$/}).count()) throw cause; }
+      }
       await page.locator('.toast-host .toast-card').waitFor({state:"hidden"});
       await page.locator('.content').evaluate(e=>{e.scrollTop=0;});
       await page.screenshot({path:capturePath(`settings-${palette}-${mode}.png`)});
@@ -76,7 +79,7 @@ async(page,capturePath)=>{
   await select().selectOption("dark");await waitTheme("dark");
   const mini=await page.context().newPage();
   try{
-    await mini.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/theme-browser-fixture.js");</script>');await route.fulfill({response,body});});
+    await mini.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/theme-browser-fixture.js");</script>');await route.fulfill({response,body});});
     await mini.goto("http://127.0.0.1:1420/?window=recorder");await mini.waitForFunction(()=>document.documentElement.dataset.theme==="dark");
     check(await mini.evaluate(()=>{const p=window.themeFixture.stored().payload;return p.schemaVersion===1&&Object.keys(p).sort().join(',')==="colorTheme,schemaVersion,theme"&&document.documentElement.dataset.colorTheme==="monochrome";}),"mini adopted wrong color/preferences");
     await color().selectOption("purple");await mini.waitForFunction(()=>document.documentElement.dataset.colorTheme==="purple");

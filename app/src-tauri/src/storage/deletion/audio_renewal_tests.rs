@@ -2,6 +2,7 @@
 use super::*;
 use crate::analysis_worker::AnalysisController;
 use crate::storage::deletion::audio::tests::Fixture;
+use crate::storage::deletion::fs::NativeProof as _;
 use std::cell::Cell;
 
 fn owner() -> DataMaintenanceLease {

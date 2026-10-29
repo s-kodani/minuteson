@@ -14,9 +14,8 @@ async (page, capturePath) => {
     await page.waitForFunction(label=>{const element=document.querySelector(`[role="menuitem"][aria-label="${label}"]`); return element&&!element.disabled;},await remove.getAttribute("aria-label"));
   };
   const confirm=async()=>{
-    await page.getByRole("heading",{name:"会議の完全削除を確認",exact:true}).waitFor();
-    await page.getByRole("checkbox",{name:"対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。",exact:true}).check();
-    const remove=page.getByRole("button",{name:"会議を削除する",exact:true});
+    await page.getByRole("heading",{name:"会議を削除",exact:true}).waitFor();
+    const remove=page.getByRole("button",{name:"削除",exact:true});
     await page.waitForFunction(()=>!document.querySelector('.deletion-dialog .stop-button')?.disabled);
     await remove.click();
   };
@@ -52,12 +51,12 @@ async (page, capturePath) => {
   await page.getByText(/確認の直前に対象会議の処理が始まりました/).first().waitFor();
   check(!/確認の受付を確定できません/.test(await page.locator("body").innerText()),"known rejection became an unknown request");
   remove=await menu("既存会議"); await allow(remove); await remove.click();
-  await page.getByRole("button",{name:"削除せず閉じる",exact:true}).click();
+  await page.getByRole("button",{name:"キャンセル",exact:true}).click();
 
   await scenario("execute-race"); remove=await menu("既存会議"); await allow(remove); await remove.click(); await confirm();
-  await page.locator(".deletion-dialog").getByText(/実行の直前に対象会議の処理が始まりました/).first().waitFor();
+  await page.getByRole("alert").filter({hasText:/実行の直前に対象会議の処理が始まりました/}).first().waitFor();
   check(await page.locator(".meeting-name").filter({hasText:"既存会議"}).count()===1,"rejected request deleted its target");
-  await page.getByRole("button",{name:"会議を削除する",exact:true}).click();
+  await page.getByRole("button",{name:"削除",exact:true}).click();
   await page.getByRole("button",{name:"既存会議",exact:true}).waitFor({state:"hidden"});
   return {passed:8,results:["stale recording deletion","recorded deletion","running target blocked with job navigation","unrelated meeting deletion available","stopped target becomes deletable","read failure and recovery","review rejection can retry","execution rejection can retry"]};
 }

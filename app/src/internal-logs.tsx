@@ -1,7 +1,7 @@
 import { ErrorNotice, ToastNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { copyLogText, logCategories, logElapsed, logStates, mergeLogEntries, type InternalLogEntry, type InternalLogFilter, type InternalLogPage } from "./internal-logs-state";
 import { IconButton } from "./action-icon";
 import { CommonModal } from "./common-modal";

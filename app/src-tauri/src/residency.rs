@@ -300,28 +300,40 @@ fn report(app: &tauri::AppHandle) -> Report {
     }
 }
 #[tauri::command]
-pub(crate) fn get_residency_state(window: WebviewWindow) -> Result<Report, String> {
-    if window.label() != "main" {
-        return Err("常駐状態はメイン画面だけで確認できます".into());
-    }
-    Ok(report(window.app_handle()))
+pub(crate) fn get_residency_state(
+    window: WebviewWindow,
+) -> Result<Report, mon_contracts::AppError> {
+    let result: Result<Report, String> = (|| {
+        if window.label() != "main" {
+            return Err("常駐状態はメイン画面だけで確認できます".into());
+        }
+        Ok(report(window.app_handle()))
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("get_residency_state", message))
 }
 #[tauri::command]
-pub(crate) fn hide_main_to_background(window: WebviewWindow) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("メイン画面だけを収納できます".into());
-    }
-    let current = report(window.app_handle());
-    if !current.can_background {
-        let error = current.error.unwrap_or_else(|| {
-            "MONの画面を開き直せることを確認できません。画面を表示したままにします。".into()
-        });
-        set_error(window.app_handle(), error.clone());
-        return Err(error);
-    }
-    window.hide().map_err(|e| e.to_string())?;
-    let _ = crate::recorder_panel::synchronize(window.app_handle());
-    Ok(())
+pub(crate) fn hide_main_to_background(
+    window: WebviewWindow,
+) -> Result<(), mon_contracts::AppError> {
+    let result: Result<(), String> = (|| {
+        if window.label() != "main" {
+            return Err("メイン画面だけを収納できます".into());
+        }
+        let current = report(window.app_handle());
+        if !current.can_background {
+            let error = current.error.unwrap_or_else(|| {
+                "MONの画面を開き直せることを確認できません。画面を表示したままにします。".into()
+            });
+            set_error(window.app_handle(), error.clone());
+            return Err(error);
+        }
+        window.hide().map_err(|e| e.to_string())?;
+        let _ = crate::recorder_panel::synchronize(window.app_handle());
+        Ok(())
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("hide_main_to_background", message)
+    })
 }
 pub(crate) fn restore(app: &tauri::AppHandle) -> Result<(), String> {
     let main = app

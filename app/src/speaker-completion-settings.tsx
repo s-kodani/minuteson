@@ -1,5 +1,5 @@
 import { InfoPopover } from "./info-popover";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { useEffect, useRef, useState } from "react";
 import { IssueNotice } from "./toast";
 import { matchingThreshold, type CompletionPreferences } from "./speaker-completion-state";

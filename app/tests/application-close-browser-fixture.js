@@ -258,4 +258,4 @@ mockIPC(async (command, args) => {
   return dataSaveIPC(command, args);
 }, { shouldMockEvents: true });
 mockWindows(new URLSearchParams(location.search).get("window")??"main");
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

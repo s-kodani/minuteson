@@ -285,7 +285,10 @@ impl Counter {
             std::fs::File::create(dir.join(name)).map_err(|e| e.to_string())?;
         }
         self.engine.model.verify(&|| false)?;
-        let mut cmd = OwnedCommand::new(&self.engine.executable.path)?;
+        let mut cmd = OwnedCommand::for_purpose(
+            &self.engine.executable.path,
+            mon_native::process::Purpose::Tokenize,
+        )?;
         cmd.command
             .args(["--model"])
             .arg(&self.engine.model.path)
@@ -312,7 +315,10 @@ impl Counter {
                 }
                 break;
             }
-            if started.elapsed() > Duration::from_secs(5) {
+            if mon_native::process::Purpose::Tokenize
+                .policy()
+                .expired(started.elapsed(), None)
+            {
                 return Err("トークン算定が時間上限を超えました".into());
             }
             if dir
@@ -320,13 +326,13 @@ impl Counter {
                 .metadata()
                 .map_err(|e| e.to_string())?
                 .len()
-                > 4096
+                > mon_native::process::Purpose::Tokenize.policy().stdout_bytes
                 || dir
                     .join("count.log")
                     .metadata()
                     .map_err(|e| e.to_string())?
                     .len()
-                    > 1024 * 1024
+                    > mon_native::process::Purpose::Tokenize.policy().stderr_bytes
             {
                 return Err("トークン算定の出力上限です".into());
             }
@@ -336,10 +342,10 @@ impl Counter {
         let mut bytes = Vec::new();
         std::fs::File::open(dir.join("count.json"))
             .map_err(|e| e.to_string())?
-            .take(4097)
+            .take(mon_native::process::Purpose::Tokenize.policy().stdout_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        if bytes.len() > 4096 {
+        if bytes.len() as u64 > mon_native::process::Purpose::Tokenize.policy().stdout_bytes {
             return Err("トークン算定の出力上限です".into());
         }
         let result: Count = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;

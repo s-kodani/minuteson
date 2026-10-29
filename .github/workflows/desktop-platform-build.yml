@@ -5,42 +5,30 @@ on:
   pull_request:
     paths:
       - 'app/**'
-      - 'probes/windows-capture/**'
-      - 'probes/macos-capture/**'
-      - 'tests/fixtures/audio-import/**'
-      - 'probes/inference-worker/**'
-      - 'probes/speaker-embedding/**'
-      - 'tools/mon_third_party_notices.py'
-      - 'tools/mon_windows_*.py'
-      - 'tests/test_mon_tauri_platform.py'
-      - 'tests/test_mon_third_party_notices.py'
-      - 'tests/test_windows_release_signing.py'
-      - 'tests/test_mon_windows_build_evidence.py'
-      - 'tests/test_mon_windows_installer_publication.py'
-      - 'tools/sign-windows.ps1'
-      - 'tools/publish-windows-installer.ps1'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'probes/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'Makefile'
       - 'third-party/**'
-      - '.github/workflows/desktop-platform-build.yml'
+      - '.github/workflows/**'
   push:
     branches: [main, master]
     paths:
       - 'app/**'
-      - 'probes/windows-capture/**'
-      - 'probes/macos-capture/**'
-      - 'tests/fixtures/audio-import/**'
-      - 'probes/inference-worker/**'
-      - 'probes/speaker-embedding/**'
-      - 'tools/mon_third_party_notices.py'
-      - 'tools/mon_windows_*.py'
-      - 'tests/test_mon_tauri_platform.py'
-      - 'tests/test_mon_third_party_notices.py'
-      - 'tests/test_windows_release_signing.py'
-      - 'tests/test_mon_windows_build_evidence.py'
-      - 'tests/test_mon_windows_installer_publication.py'
-      - 'tools/sign-windows.ps1'
-      - 'tools/publish-windows-installer.ps1'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'probes/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'Makefile'
       - 'third-party/**'
-      - '.github/workflows/desktop-platform-build.yml'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -50,6 +38,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Common tooling tests
+        run: python -m unittest discover -s tests -v
   native:
     strategy:
       fail-fast: false
@@ -72,9 +69,16 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: . -> app/src-tauri/target
       - name: Install frontend dependencies
         run: npm ci --prefix app
+      - name: Check generated command contracts
+        run: |
+          python tools/mon_contracts.py --check
+          python tools/mon_model_catalog.py --check
+      - name: Check generated IPC types and validators
+        working-directory: app
+        run: npm run check:contracts
       - name: Check application permissions and platform configuration
         run: python -m unittest discover -s tests -p test_mon_tauri_platform.py -v
       - name: Dependency notice generation tests
@@ -92,12 +96,28 @@ jobs:
         run: |
           npm test
           npm run build
+      - name: Install browser engine
+        working-directory: app
+        shell: bash
+        run: npx playwright install --with-deps ${{ runner.os == 'macOS' && 'webkit' || 'chromium' }}
+      - name: Browser regression tests
+        working-directory: app
+        run: npm run test:browser
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics-${{ runner.os }}
+          path: output/playwright/
+          retention-days: 7
       - name: Rust formatting
-        run: cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+        run: cargo fmt --all --check
       - name: Check native application and test compilation
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
         run: cargo check --manifest-path app/src-tauri/Cargo.toml --locked --tests
+      - name: Shared Rust core tests
+        run: cargo test --workspace --exclude mon-desktop --locked --lib
       - name: Common state and startup tests
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
@@ -160,6 +180,7 @@ jobs:
           done
           swift --version
           swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)", sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else "Swift 6.2 or later is required")'
+          sh probes/macos-capture/build-core.sh
           swift build --package-path probes/macos-capture --configuration release
           swift test --package-path probes/macos-capture
       - name: macOS common and native regression tests

@@ -176,40 +176,25 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     }
   }
 
-  func testSubNanosecondDurationRoundingNeverAdmitsMoreThanHalfASecond() throws {
+  func testPendingWindowAllowsTwentySecondsAndRejectsBeforeDiscardingPCM() throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
     let gate = RawSegmentGate()
     let writer = try RawRecordingSegments(
       output: root, owner: owner, lane: "microphone", beforeAppend: gate.waitOnce)
     defer { gate.released.signal() }
-    let rate: Int64 = 380_000
-    try writer.enqueue(
-      buffer(frames: 95_000, rate: Double(rate)), observation: .timestamp(origin),
-      sourceFrame: 0)
+    let quarter = try buffer()
+    try writer.enqueue(quarter, observation: .timestamp(origin), sourceFrame: 0)
     XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
-    try writer.enqueue(
-      buffer(frames: 90_001, rate: Double(rate)), observation: .timestamp(origin + 250_000_000),
-      sourceFrame: 95_000)
-    let tiny = try buffer(frames: 1, rate: Double(rate))
-    var admittedFrames: Int64 = 185_001
-    var rejected = false
-    // Exact rational duration exceeds 0.5s at 190,001 frames. Rounding
-    // each tiny callback down can hide that extra frame within the budget.
-    for _ in 0..<5_000 {
-      do {
-        try writer.enqueue(
-          tiny,
-          observation: .timestamp(origin + admittedFrames * 1_000_000_000 / rate),
-          sourceFrame: admittedFrames)
-        admittedFrames += 1
-      } catch {
-        rejected = true
-        break
-      }
+    for index in 1..<80 {
+      try writer.enqueue(
+        quarter, observation: .timestamp(origin + Int64(index) * 250_000_000),
+        sourceFrame: Int64(index) * 2000)
     }
-    XCTAssertTrue(rejected)
-    XCTAssertLessThanOrEqual(admittedFrames * 2, rate)
+    XCTAssertThrowsError(
+      try writer.enqueue(
+        buffer(frames: 1),
+        observation: .timestamp(origin + 20_000_000_000), sourceFrame: 160_000))
     XCTAssertEqual(writer.snapshot().sealedFrames, 0)
     XCTAssertFalse(writer.snapshot().producerClosed)
     gate.released.signal()
@@ -359,20 +344,25 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       root.appendingPathComponent("raw-system-00000002.caf"), frames: 12000, rate: 48000)
   }
 
-  func testSlowStorageCannotAccumulateMoreThanHalfASecondOfUncommittedPCM() throws {
+  func testSlowStorageCannotExceedSixteenMiBOfUncommittedPCM() throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
     let gate = RawSegmentGate()
     let writer = try RawRecordingSegments(
-      output: root, owner: owner, lane: "microphone", beforeAppend: { gate.wait() })
-    try writer.enqueue(buffer(), observation: .timestamp(origin), sourceFrame: 0)
+      output: root, owner: owner, lane: "microphone", beforeAppend: gate.waitOnce)
+    defer { gate.released.signal() }
+    let large = try buffer(frames: 96_000, rate: 384_000)
+    try writer.enqueue(large, observation: .timestamp(origin), sourceFrame: 0)
     XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
-    try writer.enqueue(
-      buffer(), observation: .timestamp(origin + 250_000_000), sourceFrame: 2000)
+    for index in 1..<21 {
+      try writer.enqueue(
+        large, observation: .timestamp(origin + Int64(index) * 250_000_000),
+        sourceFrame: Int64(index) * 96_000)
+    }
     XCTAssertThrowsError(
       try writer.enqueue(
-        buffer(), observation: .timestamp(origin + 500_000_000), sourceFrame: 4000))
-    gate.released.signal()
+        large,
+        observation: .timestamp(origin + 5_250_000_000), sourceFrame: 21 * 96_000))
     gate.released.signal()
     XCTAssertThrowsError(try writer.finish())
     XCTAssertEqual(writer.snapshot().failure, "raw_segment_callback_rejected")

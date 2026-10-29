@@ -1,4 +1,4 @@
-import {isTauri} from "@tauri-apps/api/core";
+import {isTauri} from "./ipc.ts";
 import {listen} from "@tauri-apps/api/event";
 import {useEffect,useState} from "react";
 

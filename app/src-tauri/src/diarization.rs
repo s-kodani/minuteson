@@ -9,9 +9,10 @@ pub(crate) mod known;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 pub(crate) mod sherpa;
 pub(crate) mod timeline;
+pub(crate) use restore::manual_assignment_hash;
+pub(crate) use restore::restore_parameters;
 pub(crate) use restore::restore_saved_results;
 
-use crate::local_engine::Fingerprint;
 use crate::storage::{
     AnalysisInput, DiarizationInput, JobKind, JobSnapshot, JobSpec, MinutesJobRequest,
     RecordedAudioPlan, SpeakerInput, SpeakerSegmentInput, Storage, UtteranceInput,
@@ -53,23 +54,28 @@ impl StartRequest {
         if self.runtime_library_paths.len() > 16 {
             return Err("同梱ランタイムの指定が多すぎます".into());
         }
-        let capture = |path: &PathBuf| Fingerprint::capture(path, &|| false);
-        let engine = SherpaConfig {
-            executable: capture(&self.executable_path)?,
-            segmentation_model: capture(&self.segmentation_model_path)?,
-            embedding_model: capture(&self.embedding_model_path)?,
-            runtime_libraries: self
+        let engine = SherpaConfig::capture(
+            [
+                &self.executable_path,
+                &self.segmentation_model_path,
+                &self.embedding_model_path,
+            ],
+            &self
                 .runtime_library_paths
                 .iter()
-                .map(capture)
-                .collect::<Result<_, _>>()?,
-            threads: self.threads,
-            cluster_threshold_milli: self.cluster_threshold_milli,
-            window_shift_milli: self.window_shift_milli,
-            min_duration_on_ms: self.min_duration_on_ms,
-            min_duration_off_ms: self.min_duration_off_ms,
-            speech_sensitivity_milli: self.speech_sensitivity_milli,
-        };
+                .map(|p| p.as_path())
+                .collect::<Vec<_>>(),
+            sherpa::SherpaSettings {
+                threads: self.threads,
+                cluster_threshold_milli: self.cluster_threshold_milli,
+                window_shift_milli: self.window_shift_milli,
+                min_duration_on_ms: self.min_duration_on_ms,
+                min_duration_off_ms: self.min_duration_off_ms,
+                speech_sensitivity_milli: self.speech_sensitivity_milli,
+            },
+            sherpa::CaptureMode::Transient,
+            &|| false,
+        )?;
         enqueue(storage, self.input, engine, &self.profile, self.tracks)
     }
 }

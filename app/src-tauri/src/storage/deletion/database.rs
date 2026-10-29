@@ -12,6 +12,7 @@ const MAX_MANIFEST: usize = 65_536;
 // Every selector is repository-owned SQL. No request may choose tables or SQL.
 // Order is dependency order, except the three self-referential trees below.
 pub(in crate::storage) const TARGETS: &[(&str, &str)] = &[
+    ("post_analysis_intents", "meeting_id=?1"),
     ("audio_upgrade_progress", "meeting_id=?1"),
     ("meeting_audio_commits", "meeting_id=?1"),
     ("voice_matches", "meeting_id=?1"),
@@ -190,35 +191,24 @@ fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static Kno
     if actual.hash == hash {
         Ok(actual)
     } else {
-        static PREVIOUS: std::sync::OnceLock<Result<KnownSchema, String>> =
+        static PREVIOUS: std::sync::OnceLock<Result<Vec<KnownSchema>, String>> =
             std::sync::OnceLock::new();
-        let previous = PREVIOUS
-            .get_or_init(|| {
-                let objects = crate::storage::legacy_audio_migration::deletion_schema()?.clone();
-                let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
-                let targets = TARGETS
-                    .iter()
-                    .copied()
-                    .filter(|(name, _)| {
-                        objects
-                            .iter()
-                            .any(|(kind, table, _, _)| kind == "table" && table == name)
-                    })
-                    .collect();
-                Ok(KnownSchema {
-                    version: 34,
-                    objects,
-                    hash,
-                    targets,
-                })
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
-        if previous.hash == hash {
-            Ok(previous)
-        } else {
-            Err("削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into())
-        }
+        let previous=PREVIOUS.get_or_init(|| {
+            let mut known=Vec::new();
+            for version in [34,35] {
+                let db=Connection::open_in_memory().map_err(|e|e.to_string())?;
+                db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
+                for (_,sql) in crate::storage::MIGRATIONS.iter().take(version) {db.execute_batch(sql).map_err(|e|e.to_string())?;}
+                let objects=schema(&db)?;let hash=digest(&serde_json::to_vec(&objects).map_err(|e|e.to_string())?);
+                let targets=TARGETS.iter().copied().filter(|(name,_)|objects.iter().any(|(kind,table,_,_)|kind=="table" && table==name)).collect();
+                known.push(KnownSchema{version,objects,hash,targets});
+            }
+            Ok(known)
+        }).as_ref().map_err(Clone::clone)?;
+        previous
+            .iter()
+            .find(|s| s.hash == hash)
+            .ok_or_else(|| "削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into())
     }
 }
 fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {

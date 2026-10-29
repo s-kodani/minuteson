@@ -1,0 +1,699 @@
+{
+  "contracts": {
+    "AppError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "RetryDisposition": {
+          "enum": [
+            "not_started",
+            "reconcile",
+            "retry",
+            "never"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryDisposition": {
+          "$ref": "#/definitions/RetryDisposition"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryDisposition"
+      ],
+      "title": "AppError",
+      "type": "object"
+    },
+    "ArchiveMember": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedHash": {
+          "type": "string"
+        },
+        "expectedSize": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "format": {
+          "type": "string"
+        },
+        "memberPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectedHash",
+        "expectedSize",
+        "format",
+        "memberPath"
+      ],
+      "title": "ArchiveMember",
+      "type": "object"
+    },
+    "BackendManifest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Slot -> package-relative path; the primary model and VAD have common roles.",
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "id"
+      ],
+      "title": "BackendManifest",
+      "type": "object"
+    },
+    "DownloadSource": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "ArchiveMember": {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHash": {
+              "type": "string"
+            },
+            "expectedSize": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "format": {
+              "type": "string"
+            },
+            "memberPath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedHash",
+            "expectedSize",
+            "format",
+            "memberPath"
+          ],
+          "type": "object"
+        }
+      },
+      "properties": {
+        "archive": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArchiveMember"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "relativePath",
+        "url"
+      ],
+      "title": "DownloadSource",
+      "type": "object"
+    },
+    "Engine": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "whisper.cpp",
+        "asr",
+        "sherpa-onnx",
+        "llama.cpp"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
+    "JobKind": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "transcription",
+        "diarization",
+        "minutes_generation",
+        "voice_registration",
+        "voice_matching",
+        "speaker_completion"
+      ],
+      "title": "JobKind",
+      "type": "string"
+    },
+    "JobState": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "title": "JobState",
+      "type": "string"
+    },
+    "PackageFile": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "Role": {
+          "enum": [
+            "executable",
+            "runtime_library",
+            "notice",
+            "asr",
+            "asr_asset",
+            "vad",
+            "segmentation",
+            "speaker_embedding",
+            "llm"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "expectedHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expectedSize": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        }
+      },
+      "required": [
+        "relativePath",
+        "role"
+      ],
+      "title": "PackageFile",
+      "type": "object"
+    },
+    "PackageManifest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BackendManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Slot -> package-relative path; the primary model and VAD have common roles.",
+              "type": "object"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "files",
+            "id"
+          ],
+          "type": "object"
+        },
+        "Engine": {
+          "enum": [
+            "whisper.cpp",
+            "asr",
+            "sherpa-onnx",
+            "llama.cpp"
+          ],
+          "type": "string"
+        },
+        "PackageFile": {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expectedSize": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "relativePath": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/definitions/Role"
+            }
+          },
+          "required": [
+            "relativePath",
+            "role"
+          ],
+          "type": "object"
+        },
+        "Role": {
+          "enum": [
+            "executable",
+            "runtime_library",
+            "notice",
+            "asr",
+            "asr_asset",
+            "vad",
+            "segmentation",
+            "speaker_embedding",
+            "llm"
+          ],
+          "type": "string"
+        },
+        "Target": {
+          "enum": [
+            "macos_aarch64",
+            "windows_x86_64"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BackendManifest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "engine": {
+          "$ref": "#/definitions/Engine"
+        },
+        "engineVersion": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/definitions/PackageFile"
+          },
+          "type": "array"
+        },
+        "licenseRef": {
+          "type": "string"
+        },
+        "modelName": {
+          "type": "string"
+        },
+        "modelVersion": {
+          "type": "string"
+        },
+        "quantization": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target": {
+          "$ref": "#/definitions/Target"
+        }
+      },
+      "required": [
+        "engine",
+        "engineVersion",
+        "files",
+        "licenseRef",
+        "modelName",
+        "modelVersion",
+        "schemaVersion",
+        "target"
+      ],
+      "title": "PackageManifest",
+      "type": "object"
+    },
+    "PauseReason": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "user",
+        "recording",
+        "exit"
+      ],
+      "title": "PauseReason",
+      "type": "string"
+    },
+    "Recipe": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "ArchiveMember": {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHash": {
+              "type": "string"
+            },
+            "expectedSize": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "format": {
+              "type": "string"
+            },
+            "memberPath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedHash",
+            "expectedSize",
+            "format",
+            "memberPath"
+          ],
+          "type": "object"
+        },
+        "BackendManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Slot -> package-relative path; the primary model and VAD have common roles.",
+              "type": "object"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "files",
+            "id"
+          ],
+          "type": "object"
+        },
+        "DownloadSource": {
+          "additionalProperties": false,
+          "properties": {
+            "archive": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ArchiveMember"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "relativePath": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "relativePath",
+            "url"
+          ],
+          "type": "object"
+        },
+        "Engine": {
+          "enum": [
+            "whisper.cpp",
+            "asr",
+            "sherpa-onnx",
+            "llama.cpp"
+          ],
+          "type": "string"
+        },
+        "PackageFile": {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expectedSize": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "relativePath": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/definitions/Role"
+            }
+          },
+          "required": [
+            "relativePath",
+            "role"
+          ],
+          "type": "object"
+        },
+        "PackageManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BackendManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "engine": {
+              "$ref": "#/definitions/Engine"
+            },
+            "engineVersion": {
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "$ref": "#/definitions/PackageFile"
+              },
+              "type": "array"
+            },
+            "licenseRef": {
+              "type": "string"
+            },
+            "modelName": {
+              "type": "string"
+            },
+            "modelVersion": {
+              "type": "string"
+            },
+            "quantization": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "schemaVersion": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "target": {
+              "$ref": "#/definitions/Target"
+            }
+          },
+          "required": [
+            "engine",
+            "engineVersion",
+            "files",
+            "licenseRef",
+            "modelName",
+            "modelVersion",
+            "schemaVersion",
+            "target"
+          ],
+          "type": "object"
+        },
+        "Role": {
+          "enum": [
+            "executable",
+            "runtime_library",
+            "notice",
+            "asr",
+            "asr_asset",
+            "vad",
+            "segmentation",
+            "speaker_embedding",
+            "llm"
+          ],
+          "type": "string"
+        },
+        "Target": {
+          "enum": [
+            "macos_aarch64",
+            "windows_x86_64"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "manifest": {
+          "$ref": "#/definitions/PackageManifest"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/definitions/DownloadSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "manifest",
+        "schemaVersion",
+        "sources"
+      ],
+      "title": "Recipe",
+      "type": "object"
+    },
+    "Role": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "executable",
+        "runtime_library",
+        "notice",
+        "asr",
+        "asr_asset",
+        "vad",
+        "segmentation",
+        "speaker_embedding",
+        "llm"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "Target": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "macos_aarch64",
+        "windows_x86_64"
+      ],
+      "title": "Target",
+      "type": "string"
+    },
+    "WindowEnvironment": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "Capabilities": {
+          "additionalProperties": false,
+          "properties": {
+            "voiceIdentity": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "voiceIdentity"
+          ],
+          "type": "object"
+        },
+        "Platform": {
+          "enum": [
+            "macos",
+            "windows",
+            "other"
+          ],
+          "type": "string"
+        },
+        "WindowRole": {
+          "enum": [
+            "main",
+            "recorder",
+            "recorder-info",
+            "recording-confirmation",
+            "startup-attention"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/Capabilities"
+        },
+        "platform": {
+          "$ref": "#/definitions/Platform"
+        },
+        "role": {
+          "$ref": "#/definitions/WindowRole"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capabilities",
+        "platform",
+        "role",
+        "schemaVersion"
+      ],
+      "title": "WindowEnvironment",
+      "type": "object"
+    }
+  },
+  "schemaVersion": 1
+}

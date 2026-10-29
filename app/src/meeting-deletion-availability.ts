@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { useEffect, useRef, useState } from "react";
 
 export interface MeetingDeletionBlocker { kind: string; reason: string; jobId: string | null }

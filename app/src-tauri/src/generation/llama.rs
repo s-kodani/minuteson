@@ -9,8 +9,10 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::Generation.policy();
+const MAX_OUTPUT_BYTES: u64 = PROCESS_POLICY.stdout_bytes;
+const MAX_LOG_BYTES: u64 = PROCESS_POLICY.stderr_bytes;
 // Covers the Qwen3.5 context, including multibyte text when token packing is enabled.
 pub(super) const MAX_PROMPT_BYTES: usize = 1024 * 1024;
 
@@ -305,7 +307,7 @@ pub(crate) fn run_unit_observed_on_device(
         || !schema.is_object()
         || schema_bytes.len() > 32 * 1024
         || idle_timeout.is_zero()
-        || idle_timeout > Duration::from_secs(1800)
+        || idle_timeout > PROCESS_POLICY.timeout().expect("generation idle deadline")
     {
         return Err("議事録の入力・schema・制限時間が不正です".into());
     }
@@ -356,7 +358,10 @@ pub(crate) fn run_unit_observed_on_device(
         .map_err(|e| e.to_string())?;
     let _log_capture =
         crate::internal_logs::watch_engine(&directory, &["stderr.log"], "minutes_generation");
-    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let mut launch = OwnedCommand::for_purpose(
+        &config.executable.path,
+        mon_native::process::Purpose::Generation,
+    )?;
     let command = &mut launch.command;
     command
         .current_dir(&directory)
@@ -471,7 +476,7 @@ pub(crate) fn run_unit_observed_on_device(
             }
             break;
         }
-        if last_output.elapsed() > idle_timeout {
+        if PROCESS_POLICY.expired(last_output.elapsed(), Some(idle_timeout)) {
             return Err("議事録の出力が30分間更新されなかったため処理を停止しました。完了済みの解析結果は保持しています。（minutes_generation_stalled）".into());
         }
         std::thread::sleep(Duration::from_millis(100));

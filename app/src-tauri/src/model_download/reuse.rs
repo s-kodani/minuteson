@@ -87,6 +87,7 @@ impl Candidate {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::model_download_recipe::RecipeExt;
     #[test]
     fn asr_model_acquisition_reuses_weights_when_only_the_runtime_recipe_changes() {
         let temp = tempfile::tempdir().unwrap();

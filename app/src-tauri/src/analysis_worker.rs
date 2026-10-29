@@ -1,4 +1,5 @@
 use crate::storage::{JobSnapshot, Storage};
+use mon_core::operation::{self, Active, Decision, Kind, Request, Scope};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Condvar, Mutex,
@@ -27,18 +28,67 @@ struct State {
     model_deletion: Option<std::sync::Arc<AtomicBool>>,
     meeting_deletions: std::collections::HashMap<String, std::sync::Arc<AtomicBool>>,
     export_intent: bool,
+    export_owner: Option<std::sync::Arc<AtomicBool>>,
     storage_restart_required: bool,
     notice_writers: Vec<data_maintenance::NoticeWriter>,
 }
 
 impl State {
+    fn admission(&self, request: Request<'_>, shutdown: bool) -> Decision {
+        // Ordering also controls the first informative blocker returned to UI.
+        let mut active = Vec::new();
+        let mut global = |kind, enabled| {
+            if enabled {
+                active.push(Active {
+                    kind,
+                    scope: Scope::Global,
+                });
+            }
+        };
+        global(Kind::Shutdown, shutdown);
+        global(Kind::Restart, self.storage_restart_required);
+        global(Kind::GlobalMaintenance, self.data_maintenance.is_some());
+        global(Kind::ModelDeletion, self.model_deletion.is_some());
+        for meeting in self.meeting_deletions.keys() {
+            active.push(Active {
+                kind: Kind::MeetingDeletion,
+                scope: Scope::Meeting(meeting),
+            });
+        }
+        for (kind, enabled) in [
+            (Kind::Recording, self.recording_intent),
+            (Kind::Import, self.import_intent),
+            (Kind::ModelPreparation, self.model_preparation.is_some()),
+            (Kind::Export, self.export_intent),
+        ] {
+            if enabled {
+                active.push(Active {
+                    kind,
+                    scope: Scope::Global,
+                });
+            }
+        }
+        for writer in &self.notice_writers {
+            active.push(Active {
+                kind: Kind::Notice,
+                scope: writer
+                    .meeting
+                    .as_deref()
+                    .map_or(Scope::Unscoped, Scope::Meeting),
+            });
+        }
+        if self.busy {
+            active.push(Active {
+                kind: Kind::Worker,
+                scope: Scope::Global,
+            });
+        }
+        operation::decide(request, &active)
+    }
     fn blocks_worker(&self) -> bool {
-        self.storage_restart_required
-            || self.recording_intent
-            || self.import_intent
-            || self.model_preparation.is_some()
-            || self.data_maintenance.is_some()
-            || self.model_deletion.is_some()
+        !self
+            .admission(Request::new(Kind::Worker, Scope::Global), false)
+            .can_reserve()
     }
 
     fn cancel_model_preparation(&self) {
@@ -147,6 +197,10 @@ impl AnalysisController {
             if stopping() {
                 return;
             }
+            if let Err(error) = app.state::<Storage>().drain_post_analysis(&stopping) {
+                crate::internal_logs::report_error("post_analysis", &error);
+                let _ = app.emit("analysis-worker-error", error.to_string());
+            }
             if let Err(error) =
                 crate::analysis_flow::advance(&app.state::<Storage>(), &stopping, &|flow| {
                     if flow.stage == "review"
@@ -178,8 +232,8 @@ impl AnalysisController {
                     let _ = app.emit("analysis-flow-changed", flow);
                 })
             {
-                crate::internal_logs::report_error("analysis", &error);
-                let _ = app.emit("analysis-worker-error", error);
+                crate::internal_logs::report_error("analysis", &error.to_string());
+                let _ = app.emit("analysis-worker-error", error.to_string());
             }
             let claimed = {
                 let Ok(mut state) = controller.state.lock() else {
@@ -195,52 +249,62 @@ impl AnalysisController {
                 Ok(Some((job, _meeting_owner))) => {
                     let _log_scope =
                         crate::internal_logs::Scope::enter(crate::internal_logs::Context {
-                            category: job.kind.clone(),
+                            category: job.kind.to_string(),
                             meeting_id: Some(job.meeting_id.clone()),
                             job_id: Some(job.id.clone()),
                             operation_id: Some(job.operation_id.clone()),
                         });
                     emit(app, job.clone());
                     let stopping = || controller.shutdown.load(Ordering::SeqCst);
-                    let result = match job.kind.as_str() {
-                        "transcription" => crate::transcription::process(
+                    let result = match job.kind {
+                        crate::storage::JobKind::Transcription => crate::transcription::process(
                             &app.state::<Storage>(),
                             &job.id,
                             &stopping,
                             &|job| emit(app, job),
                         ),
-                        "minutes_generation" => crate::generation::process_observed(
+                        crate::storage::JobKind::MinutesGeneration => {
+                            crate::generation::process_observed(
+                                &app.state::<Storage>(),
+                                &job.id,
+                                &stopping,
+                                &|job| emit(app, job),
+                                &|runtime| {
+                                    crate::internal_logs::runtime(&runtime);
+                                    let _ = app.emit("minutes-runtime-progress", runtime);
+                                },
+                            )
+                            .map_err(mon_contracts::ProcessingError::from)
+                        }
+                        crate::storage::JobKind::SpeakerCompletion => {
+                            crate::speaker_completion::process(
+                                &app.state::<Storage>(),
+                                &job.id,
+                                &stopping,
+                                &|job| emit(app, job),
+                            )
+                            .map_err(mon_contracts::ProcessingError::from)
+                        }
+                        crate::storage::JobKind::VoiceRegistration
+                        | crate::storage::JobKind::VoiceMatching => crate::voice::process(
                             &app.state::<Storage>(),
                             &job.id,
                             &stopping,
                             &|job| emit(app, job),
-                            &|runtime| {
-                                crate::internal_logs::runtime(&runtime);
-                                let _ = app.emit("minutes-runtime-progress", runtime);
-                            },
-                        ),
-                        "speaker_completion" => crate::speaker_completion::process(
-                            &app.state::<Storage>(),
-                            &job.id,
-                            &stopping,
-                            &|job| emit(app, job),
-                        ),
-                        "voice_registration" | "voice_matching" => crate::voice::process(
-                            &app.state::<Storage>(),
-                            &job.id,
-                            &stopping,
-                            &|job| emit(app, job),
-                        ),
-                        "diarization" => crate::diarization::process_observed(
-                            &app.state::<Storage>(),
-                            &job.id,
-                            &stopping,
-                            &|job| emit(app, job),
-                            &|runtime| {
-                                let _ = app.emit("diarization-runtime-progress", runtime);
-                            },
-                        ),
-                        _ => Err("未対応の解析工程です".into()),
+                        )
+                        .map_err(mon_contracts::ProcessingError::from),
+                        crate::storage::JobKind::Diarization => {
+                            crate::diarization::process_observed(
+                                &app.state::<Storage>(),
+                                &job.id,
+                                &stopping,
+                                &|job| emit(app, job),
+                                &|runtime| {
+                                    let _ = app.emit("diarization-runtime-progress", runtime);
+                                },
+                            )
+                            .map_err(mon_contracts::ProcessingError::from)
+                        }
                     };
                     if result.is_ok()
                         && app
@@ -250,10 +314,7 @@ impl AnalysisController {
                     {
                         if job.kind == "speaker_completion" {
                             let _ = app.emit("analysis-version-changed", &job.meeting_id);
-                            if let Err(e) = crate::voice::enqueue_automatic(
-                                &app.state::<Storage>(),
-                                &job.meeting_id,
-                            ) {
+                            if let Err(e) = app.state::<Storage>().drain_post_analysis(&stopping) {
                                 crate::internal_logs::report_error("voice_matching", &e);
                             }
                         } else if job.kind == "diarization"
@@ -299,29 +360,22 @@ impl AnalysisController {
                                 &job.id,
                                 current.completed_units,
                                 "failed",
-                                Some(match job.kind.as_str() {
-                                    "minutes_generation" => "minutes_generation_failed",
-                                    "diarization" => "diarization_failed",
-                                    "speaker_completion" => "speaker_completion_failed",
-                                    "voice_registration" | "voice_matching" => {
-                                        "voice_processing_failed"
-                                    }
-                                    "transcription"
-                                        if error.starts_with(
-                                            crate::transcription::QUALITY_FAILURE_PREFIX,
-                                        ) =>
+                                Some(
+                                    if job.kind == crate::storage::JobKind::Transcription
+                                        && error.is_quality_rejection()
                                     {
                                         "transcription_quality_failed"
-                                    }
-                                    _ => "transcription_failed",
-                                }),
+                                    } else {
+                                        job.kind.failure_code()
+                                    },
+                                ),
                             ) {
                                 emit(app, failed);
                             }
                         }
                         // Retain detailed diagnostics locally, without transcript text.
-                        crate::internal_logs::report_error("analysis", &error);
-                        let _ = app.emit("analysis-worker-error", error);
+                        crate::internal_logs::report_error("analysis", &error.to_string());
+                        let _ = app.emit("analysis-worker-error", error.to_string());
                     }
                     let resume = controller.state.lock().is_ok_and(|state| {
                         !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)
@@ -342,8 +396,8 @@ impl AnalysisController {
                     return;
                 }
                 Err(error) => {
-                    crate::internal_logs::report_error("analysis", &error);
-                    let _ = app.emit("analysis-worker-error", error);
+                    crate::internal_logs::report_error("analysis", &error.to_string());
+                    let _ = app.emit("analysis-worker-error", error.to_string());
                     return;
                 }
             }
@@ -358,12 +412,12 @@ impl AnalysisController {
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
-            if state.recording_intent
-                || state.import_intent
-                || state.data_maintenance.is_some()
-                || state.model_deletion.is_some()
-                || state.storage_restart_required
-                || controller.shutdown.load(Ordering::SeqCst)
+            if !state
+                .admission(
+                    Request::new(Kind::Recording, Scope::Global),
+                    controller.shutdown.load(Ordering::SeqCst),
+                )
+                .can_reserve()
             {
                 return Err("録音開始・取り込み・バックアップ・復元・終了処理が進行中です".into());
             }
@@ -381,8 +435,8 @@ impl AnalysisController {
     pub fn recording_finished(app: &AppHandle) {
         let controller = app.state::<Self>();
         if let Err(error) = app.state::<Storage>().resume_recording_jobs() {
-            crate::internal_logs::report_error("analysis", &error);
-            let _ = app.emit("analysis-worker-error", error);
+            crate::internal_logs::report_error("analysis", &error.to_string());
+            let _ = app.emit("analysis-worker-error", error.to_string());
         }
         if let Ok(mut state) = controller.state.lock() {
             state.recording_intent = false;
@@ -399,14 +453,13 @@ impl AnalysisController {
         let c = app.state::<Self>();
         {
             let mut state = c.state.lock().map_err(|_| "解析ロックを取得できません")?;
-            if state.recording_intent
-                || state.import_intent
-                || state.model_preparation.is_some()
-                || state.data_maintenance.is_some()
-                || state.model_deletion.is_some()
-                || state.storage_restart_required
-                || c.shutdown.load(Ordering::SeqCst)
-                || cancelled()
+            if cancelled()
+                || !state
+                    .admission(
+                        Request::new(Kind::Import, Scope::Global),
+                        c.shutdown.load(Ordering::SeqCst),
+                    )
+                    .can_reserve()
             {
                 return Err(
                     "録音開始・モデル準備・取り込み・バックアップ・復元・終了処理が進行中です"
@@ -435,8 +488,8 @@ impl AnalysisController {
             state.import_intent = false;
         }
         if let Err(error) = app.state::<Storage>().resume_recording_jobs() {
-            crate::internal_logs::report_error("analysis", &error);
-            let _ = app.emit("analysis-worker-error", error);
+            crate::internal_logs::report_error("analysis", &error.to_string());
+            let _ = app.emit("analysis-worker-error", error.to_string());
         }
         let _ = Self::kick(app);
     }
@@ -488,7 +541,13 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if state.export_intent || state.recording_intent || self.shutdown.load(Ordering::SeqCst) {
+        if !state
+            .admission(
+                Request::new(Kind::Shutdown, Scope::Global),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .can_reserve()
+        {
             return Err("書き出し・録音開始・終了処理が進行中です".into());
         }
         self.shutdown.store(true, Ordering::SeqCst);

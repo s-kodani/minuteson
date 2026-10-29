@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deletionAvailability, deletionReviewReason } from "../src/deletion-review-reason.ts";
+import { deletionAvailability, deletionReviewReason, permitsDeletionRecovery } from "../src/deletion-review-reason.ts";
+import { assertDataAvailability } from "../src/data-operation-state.ts";
 import type { DataOperation } from "../src/data-operation.ts";
 
 test("deletion explains the actual shared recording/AI blocker rather than platform support", () => {
@@ -44,4 +45,25 @@ test("deletion admission uses its native lane while retaining real blockers and 
   assert.deepEqual(deletionAvailability({available:true,reason:null}), {available:true,reason:null});
   assert.deepEqual(deletionAvailability({available:false,reason:"AI処理中"}), {available:false,reason:"AI処理中"});
   assert.equal(deletionAvailability(null).available, false);
+});
+
+test("recovery admission uses its own fixed code independently of translated copy", () => {
+  const code = "relocation_restart_required" as const;
+  const value = {available:false,reason:"保存先の変更後に再起動してください",reasonCode:code,deletionAvailable:false,deletionReason:"再起動待ち",deletionReasonCode:code};
+  assertDataAvailability(value);
+  assert.equal(deletionAvailability(value).reasonCode, code);
+  assert.equal(deletionAvailability({...value,deletionReasonCode:null} as unknown as Parameters<typeof deletionAvailability>[0]).reasonCode, null);
+  assert.throws(() => assertDataAvailability({...value,deletionReasonCode:null}));
+  assert.equal(deletionAvailability({available:false,reason:"保存先の切替後は終了して再起動が必要です"}).reasonCode, undefined);
+  assert.equal(deletionAvailability({...value,deletionReasonCode:"operation_active"}).reasonCode, "operation_active");
+});
+
+test("identical Japanese text cannot authorize pending deletion recovery with a different reason code", () => {
+  const reason = "保存先の切替後は終了して再起動が必要です";
+  assert.equal(permitsDeletionRecovery({reasonCode:"relocation_restart_required",reason} as Parameters<typeof permitsDeletionRecovery>[0], true), true);
+  for (const reasonCode of [undefined, null, "operation_active", "recording_active"] as const) {
+    assert.equal(permitsDeletionRecovery({reasonCode,reason} as Parameters<typeof permitsDeletionRecovery>[0], true), false);
+  }
+  assert.equal(permitsDeletionRecovery({reasonCode:"relocation_restart_required"}, false), false);
+  assert.equal(permitsDeletionRecovery(null, true), false);
 });

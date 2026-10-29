@@ -1,5 +1,7 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, isTauri } from "./ipc.ts";
+import { subscribeInvalidations } from "./native-snapshots";
+import { observeInvalidations } from "./snapshot-resource";
+import { browserFocus, browserSchedule } from "./snapshot-browser";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IconButton } from "./action-icon";
 import { IssueNotice, ToastNotice } from "./toast";
@@ -86,15 +88,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   }, [controller]);
   useEffect(() => {
     if (!isTauri()) return;
-    let disposed = false, inFlight: Promise<void> | null = null, again = false;
-    const stops: (() => void)[] = [];
-    const refresh = (): Promise<void> => {
-      if (disposed) return Promise.resolve();
-      if (inFlight) { again = true; return inFlight; }
-      inFlight = (async () => {
-        do {
-          again = false;
-          try {
+    let disposed = false;
+    const resource = observeInvalidations({
+      read: async () => {
             const [saved, analysis, preferences, allJobs, summary] = await Promise.all([
               read(), invoke<VersionState>("get_analysis_versions", { meetingId }),
               invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences"),
@@ -108,20 +104,13 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
             setSource(analysis); setSettings(preferences.payload); setJobs(allJobs); setLoaded(true);
             setAudioSummary(summary);
             minutesAdmissions.observe(meetingId, allJobs.map(job => job.operationId));
-          } catch (cause) { if (!disposed) setError(String(cause)); }
-        } while (again && !disposed);
-      })().finally(() => { inFlight = null; });
-      return inFlight;
-    };
-    refreshRef.current = refresh;
-    for (const event of ["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "model-profile-changed"]) {
-      void listen(event, () => { void refresh(); }).then(stop => {
-        if (disposed) stop(); else { stops.push(stop); void refresh(); }
-      }).catch(cause => { if (!disposed) setError(String(cause)); });
-    }
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
-    return () => { disposed = true; stops.forEach(stop => stop()); window.clearInterval(timer); };
+      },
+      subscribe: notify => subscribeInvalidations(["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "model-profile-changed"], notify),
+      error: cause => { if (!disposed) setError(String(cause)); },
+      intervalMs: 3000, schedule: browserSchedule, focus: browserFocus,
+    });
+    refreshRef.current = async () => { await resource.refresh(); };
+    return () => { disposed = true; resource.stop(); };
   }, [meetingId, controller]);
   useEffect(() => { void refreshRef.current(); }, [sourceEpoch]);
   const run = async (action: () => Promise<void>) => {

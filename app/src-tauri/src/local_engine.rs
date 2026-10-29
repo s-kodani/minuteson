@@ -119,6 +119,12 @@ pub(crate) struct OwnedCommand {
 }
 impl OwnedCommand {
     pub(crate) fn new(program: &Path) -> Result<Self, String> {
+        Self::for_purpose(program, mon_native::process::Purpose::Inference)
+    }
+    pub(crate) fn for_purpose(
+        program: &Path,
+        purpose: mon_native::process::Purpose,
+    ) -> Result<Self, String> {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -126,6 +132,7 @@ impl OwnedCommand {
             windows::initialize().map_err(|e| e.to_string())?;
             let job = windows::Job::new().map_err(|e| e.to_string())?;
             let mut command = Command::new(program);
+            mon_native::process::configure(&mut command, purpose);
             command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
             Ok(Self {
                 command,
@@ -134,9 +141,9 @@ impl OwnedCommand {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(Self {
-                command: Command::new(program),
-            })
+            let mut command = Command::new(program);
+            mon_native::process::configure(&mut command, purpose);
+            Ok(Self { command })
         }
         #[cfg(target_os = "macos")]
         {
@@ -151,6 +158,7 @@ impl OwnedCommand {
             }
             let fd = receiver.as_raw_fd();
             let mut command = Command::new(executable);
+            mon_native::process::configure(&mut command, purpose);
             command.args([
                 std::ffi::OsString::from(guard_core::ENTRY),
                 std::process::id().to_string().into(),

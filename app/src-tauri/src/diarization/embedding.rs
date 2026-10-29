@@ -9,8 +9,10 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-const MAX_OUTPUT: u64 = 64 * 1024;
-const MAX_LOG: u64 = 1024 * 1024;
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::Embedding.policy();
+const MAX_OUTPUT: u64 = PROCESS_POLICY.stdout_bytes;
+const MAX_LOG: u64 = PROCESS_POLICY.stderr_bytes;
 const MAX_DIMENSION: usize = 4096;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -287,7 +289,7 @@ fn run_inner(
     if first >= end
         || end - first > 480_000
         || timeout.is_zero()
-        || timeout > Duration::from_secs(3600)
+        || timeout > PROCESS_POLICY.timeout().expect("embedding deadline")
         || !wave.path.is_absolute()
         || wave
             .path
@@ -323,7 +325,8 @@ fn run_inner(
     }
     let _log_capture =
         crate::internal_logs::watch_engine(&directory, &["embedding.stderr.log"], "diarization");
-    let mut launch = OwnedCommand::new(&config.helper.path)?;
+    let mut launch =
+        OwnedCommand::for_purpose(&config.helper.path, mon_native::process::Purpose::Embedding)?;
     launch
         .command
         .env_clear()
@@ -357,7 +360,7 @@ fn run_inner(
         if cancelled() {
             return Ok(None);
         }
-        if started.elapsed() > timeout {
+        if PROCESS_POLICY.expired(started.elapsed(), Some(timeout)) {
             return Err("特徴量抽出が制限時間を超えました".into());
         }
         stdout.check()?;

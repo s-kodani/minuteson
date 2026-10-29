@@ -13,10 +13,10 @@ use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-const MAX_SEGMENTS: u32 = 32_768;
-const MAX_JSON: u64 = 65 * 1024;
-const MAX_TOTAL_JSON: u64 = 32 * 1024 * 1024;
-const MAX_TOTAL_MAPS: usize = 65_536;
+const MAX_SEGMENTS: u32 = mon_core::capture::limits::MAX_SEGMENTS;
+const MAX_JSON: u64 = mon_core::capture::limits::MAX_ENTRY_BYTES;
+const MAX_TOTAL_JSON: u64 = mon_core::capture::limits::MAX_METADATA_BYTES;
+const MAX_TOTAL_MAPS: usize = mon_core::capture::limits::MAX_CLOCK_MAPS as usize;
 const SAFE: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

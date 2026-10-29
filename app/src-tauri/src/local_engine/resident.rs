@@ -9,6 +9,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, ChildStdout, ExitStatus, Stdio};
 
+const PROCESS_POLICY: mon_native::process::Policy = mon_native::process::Purpose::Resident.policy();
+
 mod installation;
 pub(crate) use installation::{prepare, prepare_job, Snapshot};
 #[cfg(all(test, unix))]
@@ -89,7 +91,8 @@ impl Worker {
         let proof = snapshot.resolve(&job.root)?;
         proof.verify(&|| false)?;
         let watched = StableFile::watch(&proof)?;
-        let mut launch = OwnedCommand::new(&proof.path)?;
+        let mut launch =
+            OwnedCommand::for_purpose(&proof.path, mon_native::process::Purpose::Resident)?;
         // Startup diagnostics have their own bounded file. Per-request engine
         // stderr is redirected by the child into each existing unit log.
         let startup = OpenOptions::new()
@@ -159,7 +162,7 @@ impl Worker {
         let id = self.next;
         self.next += 1;
         let mut bytes = serde_json::to_vec(&json!({"protocol":1,"id":id,"op":"infer","kind":kind,"args":args,"directory":directory,"stdout":stdout,"stderr":stderr})).map_err(|e| e.to_string())?;
-        if bytes.len() > 65536 {
+        if bytes.len() as u64 > PROCESS_POLICY.stdout_bytes {
             return Err("推論要求が上限を超えています".into());
         }
         bytes.push(b'\n');
@@ -180,7 +183,7 @@ impl Worker {
         if std::fs::metadata(&self.startup_path)
             .map_err(|e| e.to_string())?
             .len()
-            > 4 * 1024 * 1024
+            > PROCESS_POLICY.stderr_bytes
         {
             return Err("推論起動ログが上限を超えています".into());
         }
@@ -226,7 +229,7 @@ impl Worker {
                     return Err(e.to_string());
                 }
             }
-            if self.pending.len() > 65536 {
+            if self.pending.len() as u64 > PROCESS_POLICY.stdout_bytes {
                 self.failed = true;
                 return Err("推論応答が上限を超えています".into());
             }

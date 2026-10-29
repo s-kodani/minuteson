@@ -3,7 +3,7 @@ import Foundation
 
 /// The native owner atomically replaces this bounded control file. A request
 /// changes policy only; it does not claim that new PCM has been acquired.
-struct MicrophoneSelectionRequest: Decodable, Equatable {
+struct MicrophoneSelectionRequest: Codable, Equatable {
   let schemaVersion: Int
   let ownerId: String
   let revision: Int64
@@ -11,10 +11,8 @@ struct MicrophoneSelectionRequest: Decodable, Equatable {
   let uid: String?
 
   func valid(for owner: String, after previousRevision: Int64) -> Bool {
-    schemaVersion == 1 && ownerId == owner && InputLevelReport.validOwner(owner)
-      && revision > previousRevision && revision <= 9_007_199_254_740_991
-      && ((mode == "automatic" && uid == nil)
-        || (mode == "fixed" && uid.map(InputDevices.validUID) == true))
+    guard let bytes = try? JSONEncoder().encode(self) else { return false }
+    return revision > previousRevision && CaptureCore.validSelection(bytes, owner: owner)
   }
 }
 
@@ -47,6 +45,9 @@ final class MicrophoneSelectionReader {
     }
     guard count > 0, count <= 4096 else {
       throw ProbeError.capture("microphone selection request cannot be read")
+    }
+    guard CaptureCore.validSelection(Data(bytes.prefix(count)), owner: owner) else {
+      throw ProbeError.capture("microphone selection request is invalid")
     }
     let request = try JSONDecoder().decode(
       MicrophoneSelectionRequest.self, from: Data(bytes.prefix(count)))

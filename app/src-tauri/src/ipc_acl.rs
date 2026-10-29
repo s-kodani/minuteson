@@ -21,6 +21,48 @@ mod tests {
     }
 
     #[test]
+    fn every_generated_command_and_role_matches_the_actual_local_and_remote_acl() {
+        let acl = authority();
+        let registry: serde_json::Value =
+            serde_json::from_str(include_str!("../command_registry.json")).unwrap();
+        let remote = Origin::Remote {
+            url: "https://example.invalid/".parse().unwrap(),
+        };
+        for command in registry["commands"].as_array().unwrap() {
+            let name = command["name"].as_str().unwrap();
+            for role in [
+                "main",
+                "recorder",
+                "recorder-info",
+                "recording-confirmation",
+                "startup-attention",
+                "unknown",
+            ] {
+                let declared = command["roles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|v| v == role);
+                assert_eq!(
+                    crate::command_roles::permits(name, role),
+                    declared,
+                    "registry: {role}/{name}"
+                );
+                assert_eq!(
+                    acl.resolve_access(name, role, role, &Origin::Local)
+                        .is_some(),
+                    declared,
+                    "local: {role}/{name}"
+                );
+                assert!(
+                    acl.resolve_access(name, role, role, &remote).is_none(),
+                    "remote: {role}/{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn auxiliary_windows_are_denied_data_writes_by_the_actual_tauri_authority() {
         let acl = authority();
         for command in [

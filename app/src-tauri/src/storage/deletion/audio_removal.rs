@@ -3,6 +3,7 @@
 use super::super::{audio, MeetingCensus};
 use super::{active, read_with_progress, Prepared};
 use crate::analysis_worker::data_maintenance::DataMaintenanceLease;
+use crate::storage::deletion::fs::NativeProof as _;
 use crate::storage::{
     deletion::{
         files::{Entry, MAX_ENTRIES},

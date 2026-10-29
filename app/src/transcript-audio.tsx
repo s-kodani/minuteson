@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc.ts";
 import { InfoPopover } from "./info-popover";
 import { IconButton } from "./action-icon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";

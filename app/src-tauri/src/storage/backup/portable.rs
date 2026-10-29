@@ -41,6 +41,7 @@ pub(super) const TABLES: &[&str] = &[
     "vocabulary_snapshots",
     "diarization_manual_assignments",
     "analysis_flows",
+    "post_analysis_intents",
     "audio_import_commits",
     "audio_import_options",
     "restore_provenance",
@@ -97,7 +98,7 @@ pub(super) fn schema(version: usize) -> Result<Connection, String> {
 }
 
 pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
-    if version != MIGRATIONS.len() {
+    if !matches!(version, 35 | 36) {
         return Err("未対応のバックアップDB形式です".into());
     }
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
@@ -124,8 +125,10 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
+    let version = verify_migration_history(db).map_err(|e| e.to_string())?;
     let expected: BTreeSet<String> = TABLES
         .iter()
+        .filter(|&&name| version >= 36 || name != "post_analysis_intents")
         .chain(
             [
                 "app_settings",
@@ -151,6 +154,7 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     }
     TABLES
         .iter()
+        .filter(|&&name| version >= 36 || name != "post_analysis_intents")
         .map(|&name| {
             let columns = db
                 .prepare(&format!("PRAGMA table_info(\"{name}\")"))
@@ -282,9 +286,12 @@ fn redact_json(
                     }
                 } else if matches!(
                     key.as_str(),
-                    "managedModel" | "whisperManaged" | "sherpaManaged"
+                    "managedModel" | "whisperManaged" | "sherpaManaged" | "managed"
                 ) {
-                    references.extend(crate::storage::model_profiles::jobs::portable_files(item)?);
+                    if !item.is_null() {
+                        references
+                            .extend(crate::storage::model_profiles::jobs::portable_files(item)?);
+                    }
                 } else if key == "runtimeModel" {
                     let (portable, files) =
                         crate::storage::model_profiles::jobs::rebinding::portable(item)?;
@@ -493,6 +500,7 @@ pub(super) fn dump(
 ) -> Result<Vec<Table>, String> {
     let db = read_only(&snapshot.database)?;
     crate::storage::voice::validate_registry(&db)?;
+    crate::storage::post_analysis::validate(&db)?;
     let known = crate::storage::model_metadata::retained_files(&db)?;
     let trusted = schema(MIGRATIONS.len())?;
     let mut descriptions = tables(&db)?;
@@ -586,7 +594,10 @@ pub(super) fn dump(
                 }
                 if matches!(
                     table.name.as_str(),
-                    "export_records" | "audio_import_commits" | "analysis_flows"
+                    "export_records"
+                        | "audio_import_commits"
+                        | "analysis_flows"
+                        | "post_analysis_intents"
                 ) && column.name == "error_message"
                 {
                     *cell = Cell::Null;
@@ -608,6 +619,7 @@ pub(super) fn dump(
                         | ("audio_tracks", "processing_config_json")
                         | ("recording_sessions", "capture_config_json")
                         | ("analysis_flows", "plan_json")
+                        | ("post_analysis_intents", "spec_json")
                         | ("job_checkpoints", "checkpoint_json")
                 );
                 if sanitize {
@@ -621,6 +633,24 @@ pub(super) fn dump(
                         .map_err(|e| e.to_string())?;
                     }
                 }
+            }
+            if table.name == "post_analysis_intents" {
+                let spec = table
+                    .columns
+                    .iter()
+                    .position(|c| c.name == "spec_json")
+                    .ok_or("後続処理の条件列がありません")?;
+                let digest = table
+                    .columns
+                    .iter()
+                    .position(|c| c.name == "spec_hash")
+                    .ok_or("後続処理のSHA列がありません")?;
+                let Cell::Text(text) = &cells[spec] else {
+                    return Err("後続処理の条件が不正です".into());
+                };
+                // Portable paths are intentionally unavailable. The hash binds
+                // these portable bytes, without granting permission to execute.
+                cells[digest] = Cell::Text(format!("{:x}", Sha256::digest(text.as_bytes())));
             }
             let bytes = serde_json::to_vec(&Row {
                 table: table.name.clone(),
@@ -763,6 +793,7 @@ fn bounded_line(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
 
 pub(super) fn validate_scopes(db: &Connection) -> Result<(), String> {
     crate::storage::voice::validate_registry(db)?;
+    crate::storage::post_analysis::validate(db)?;
     crate::storage::minutes_markdown::verify_all(db)?;
     super::input_snapshots::validate_database(db, &|| false)?;
     for (table, head) in [

@@ -1,7 +1,8 @@
+import { useDeletionExchange } from "./deletion-exchange-hook";
 import { ErrorNotice } from "./toast";
 import {useDeletionNoticeWait} from "./deletion-notice-wait";
 import { IconButton } from "./action-icon";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { rowMenuReturnTarget } from "./row-menu";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
@@ -14,7 +15,7 @@ import { AudioDeletionConfirmation } from "./audio-deletion-confirmation";
 import type { useMeetingDeletionAvailability } from "./meeting-deletion-availability";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
-import { deletionReviewReason } from "./deletion-review-reason";
+import { deletionAvailability, deletionReviewReason, permitsDeletionRecovery } from "./deletion-review-reason";
 
 export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability }: {
   operation: DataOperation; locked: boolean;
@@ -25,19 +26,18 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
 }) {
   const noticeWaiting=useDeletionNoticeWait();
   const latest = useRef({ operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability }); latest.current = { operation, locked, withSavedEdits, onDeleted, onProtectionChange, availability };
-  const running = useRef(false), [rpcBusy, setRpcBusy] = useState(false);
-  const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
-  const [error, setError] = useState(""), [toast, setToast] = useState("");
+  const { exchange, rpcBusy, running, unknown, setUnknown, error, setError, pending, choice, run } = useDeletionExchange("audio_deletion_not_started");
+  const [open, setOpen] = useState(false);
+  const [toast, setToast] = useState("");
   const [toastEvent, setToastEvent] = useState("");
   const [page, setPage] = useState<AudioDeletionPage | null>(null), [pageError, setPageError] = useState(""), [pageBusy, setPageBusy] = useState(false);
   const pageEpoch = useRef(0), [understoodId, setUnderstoodId] = useState<string | null>(null), [includeUnknownId, setIncludeUnknownId] = useState<string | null>(null);
-  const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
-  const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null), opener = useRef<HTMLElement | null>(null);
   const s = operation.snapshot, preview = s?.kind === "audio_deletion" ? s.audioDeletionPreview : null, receipt = s?.kind === "audio_deletion" ? s.audioDeletionReceipt : null;
   const listing = operation.audioDeletionListing, protectedNow = rpcBusy || unknown;
-  const sharedAvailable = (operation.availability?.deletionAvailable ?? !!operation.availability?.available) || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
+  const admission = deletionAvailability(operation.availability);
+  const sharedAvailable = admission.available || (permitsDeletionRecovery(admission, listing?.restartRequired));
   const canReviewPending = isTauri() && operation.audioDeletionSupported && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
   const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
   const reviewUnavailableReason = canReviewNew ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.audioDeletionSupported, locked, protectedNow, sharedAvailable });
@@ -45,12 +45,6 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const canReviewNewId = (id: string) => canReviewNew && !availability.audioDeletionReason(id);
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const understood = !!preview && understoodId === preview.confirmationId, includeUnknown = !!preview && includeUnknownId === preview.confirmationId;
-  const run = async (action: () => Promise<void>) => {
-    if (running.current) return;
-    running.current = true; setRpcBusy(true); setError("");
-    try { await action(); } catch (cause) { setError(String(cause)); }
-    finally { running.current = false; setRpcBusy(false); }
-  };
   const protect = async (action: () => Promise<void>) => {
     const op = latest.current.operation, now = op.getSnapshot();
     if (op.audioDeletionListing?.writeBlocked || op.deletionListing?.writeBlocked || op.modelDeletionListing?.writeBlocked || now?.audioDeletionPreview?.pending || now?.deletionPreview?.pending) await run(action);
@@ -73,17 +67,16 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
     await protect(async () => {
       if (!pendingReview && latest.current.availability.audioDeletionReason(id)) return;
       await stopAllPlayback(); opener.current = active; setOpen(false); setToast("");
-      choice.current = { id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 };
-      try {
+      await exchange.review({ id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 }, async () => {
         latest.current.operation.accept(await invoke<DataSnapshot>(pendingReview ? "review_pending_audio_deletion" : "review_meeting_audio_deletion", pendingReview ? { operationId: id } : { meetingId: id }));
-        choice.current = null; setUnknown(false);
-      } catch (cause) { if(typeof cause==="string"&&cause.startsWith("audio_deletion_not_started:")){choice.current=null;setUnknown(false);throw Error(String(cause).split("audio_deletion_not_started:").slice(1).join("audio_deletion_not_started:"));} setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`); }
+      });
     });
   };
   const send = async (request: DataRequest, revision: number) => {
-    pending.current = { request, revision };
-    try { latest.current.operation.accept(await invoke<DataSnapshot>("start_data_operation", { request })); pending.current = null; setUnknown(false); setOpen(false); }
-    catch (cause) { if(typeof cause==="string"&&cause.startsWith("audio_deletion_not_started:")){pending.current=null;setUnknown(false);throw Error(String(cause).split("audio_deletion_not_started:").slice(1).join("audio_deletion_not_started:"));} setUnknown(true); throw Error(`受付結果を確定できません。別の削除を始めず、同じ音声削除操作の結果を確認してください: ${String(cause)}`); }
+    await exchange.send(request, revision, async () => {
+      latest.current.operation.accept(await invoke<DataSnapshot>("start_data_operation", { request }));
+      setOpen(false);
+    });
   };
   const submit = async (action: DataRequest["action"]) => {
     if (!canResolve || !preview) return;
@@ -127,10 +120,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   useEffect(() => {
     if (!s || s.kind !== "audio_deletion") { setOpen(false); return; }
     if (s.busy || receipt) setOpen(false);
-    if (unknown) {
-      const c = choice.current, p = pending.current;
-      if ((c && matchesChoice(s, c)) || (p && s.token === p.request.token && s.revision > p.revision && (s.busy || ["completed", "failed", "cancelled", "attention"].includes(s.phase) || (s.phase === "ready" && preview?.confirmationId !== p.request.confirmationId)))) { pending.current = null; choice.current = null; setUnknown(false); setError(""); }
-    }
+    if (unknown && exchange.reconcile(s, preview?.confirmationId, matchesChoice)) { setError(""); }
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
       completed.current = s.token; setToastEvent(s.token ?? ""); setError("");

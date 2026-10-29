@@ -23,7 +23,7 @@ const d = window.deletionFixture = {
   },
 };
 const makePreview = (meetingId, phase = "review") => ({ confirmationId: crypto.randomUUID(), operationId: crypto.randomUUID(), meetingId,
-  title: f.meetings.find(m => m.id === meetingId)?.title ?? `会議 ${meetingId}`, phase,
+  title: f.meetings.find(m => m.id === meetingId)?.title ?? `会議 ${meetingId}`, scopeMode:"directory", targetDirectory:`/synthetic/meetings/${meetingId}`, phase,
   pending: phase !== "review", executeAllowed: true, resumeReason: null, keepAllowed: phase === "not_started",
   pathCount: d.fileCount + 2, processedPaths: ["database", "awaiting_ack"].includes(phase) ? d.fileCount + 2 : 0, fileCount: d.fileCount,
   missingCount: 0, changedCount: 0, unregisteredCount: d.unknownCount, bytes: 1024 * 1024, rowCount: 20, rowPhaseCommitted: ["awaiting_ack", "database_files"].includes(phase),
@@ -40,7 +40,7 @@ mockIPC(async (command, args) => {
     if (d.listFail) throw Error("模擬削除一覧失敗");
     return { items: structuredClone(d.items), deletingMeetingIds: d.items.map(i => i.meetingId).filter(Boolean), writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? d.restart ? "削除解決後の再起動が必要" : "未完了削除のため書込停止" : null };
   }
-  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です" };
+  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required" };
   if (command === "review_meeting_deletion" || command === "review_pending_deletion") {
     if (d.reviewRejected) { d.reviewRejected=false; throw "meeting_deletion_not_started:確認の直前に対象会議の処理が始まりました"; }
     if (command === "review_pending_deletion" && d.invalidPendingReview) throw Error("模擬完了記録の検証失敗");
@@ -155,4 +155,4 @@ if (scopedScenario) {
   button.onclick = () => { f.meetingBlockers = {}; f.meetingAvailabilityFail = false; };
   controls.append(button); document.body.prepend(controls);
 }
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

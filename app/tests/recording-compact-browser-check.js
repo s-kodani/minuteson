@@ -3,7 +3,7 @@ async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch();
-    await route.fulfill({response,body:(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>')});
+    await route.fulfill({response,body:(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>')});
   });
   const workspace=()=>page.getByRole('region',{name:'録音状態',exact:true});
   const count=command=>page.evaluate(command=>window.closeFixture.calls.filter(c=>c.command===command).length,command);
@@ -149,13 +149,13 @@ async page=>{
     check(await workspace().getByRole('button',{name:'録音を開始',exact:true}).isDisabled(),'unconfirmed capture enabled competing recording');
     if(uncertain){
       check(await testDialog().locator('.common-modal-body>button.secondary').isDisabled(),'unknown result allowed restart');
-      check(await page.evaluate(()=>window.closeFixture.notificationHistory().some(n=>n.message.includes('開始要求の受付結果が未確認'))),'unknown receipt no longer reports its unresolved state');
+      await testDialog().getByRole('alert').filter({hasText:'開始要求の受付結果が未確認'}).waitFor();
     }else await testDialog().getByText('テストの入力を初期化しています',{exact:true}).waitFor();
   }
   results.push('lost and unknown start receipts still open one status dialog after failure, block competing capture and never resend start');
   await boot();await page.evaluate(()=>window.closeFixture.captureInputs.microphonePermission='denied');
   await testButton().click();
-  await page.getByRole('alert').filter({hasText:'選択したマイクまたは権限'}).first().waitFor();
+  await workspace().getByRole('status').filter({hasText:'選択したマイクまたは権限'}).waitFor();
   check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'preflight failure left an empty test dialog or started capture');
   results.push('failed input preflight reports the error without opening an empty modal or capturing');
   await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);
@@ -163,7 +163,9 @@ async page=>{
   await page.getByRole('alert').filter({hasText:'模擬編集保存失敗'}).first().waitFor();
   await page.keyboard.press('Escape');await consent.waitFor({state:'hidden'});
   check(await page.locator('dialog[open]').count()===0&&await count('start_capture_test')===0,'failed edit save opened an empty result dialog or captured');
-  await testButton().click();await consent.waitFor();
+  await testButton().click();await testDialog().waitFor();
+  await testDialog().getByRole('alert').filter({hasText:'編集の保存を完了できませんでした'}).waitFor();
+  await testDialog().getByRole('button',{name:'5秒録音して確認',exact:true}).click();await consent.waitFor();
   check(await count('start_capture_test')===0,'failed edit save prevented explicit consent retry');
   results.push('failed edit save returns to the initial trigger without an empty result dialog and permits a new explicit confirmation');
   return {passed:results.length,results};

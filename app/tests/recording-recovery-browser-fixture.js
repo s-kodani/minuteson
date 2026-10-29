@@ -28,4 +28,4 @@ mockIPC(async(command,args)=>{
   if(["get_model_deletion_items","get_audio_deletion_items"].includes(command))return {items:[],writeBlocked:false,restartRequired:false,reason:null};
   return dataSaveIPC(command,args);
 },{shouldMockEvents:true});
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

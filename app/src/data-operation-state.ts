@@ -32,7 +32,15 @@ export interface DataSnapshot { progress?: StageProgress | null; modelDeletionPr
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
 export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "keep" | "delete_including_unregistered" | "review_remaining" }
-export interface DataAvailability { available: boolean; reason: string | null; deletionAvailable?: boolean; deletionReason?: string | null }
+export type DataAvailabilityReasonCode = "recording_active" | "import_active" | "operation_active" | "relocation_restart_required" | "meeting_deletion_pending";
+export interface DataAvailability { available: boolean; reason: string | null; reasonCode?: DataAvailabilityReasonCode | null; deletionAvailable?: boolean; deletionReason?: string | null; deletionReasonCode?: DataAvailabilityReasonCode | null }
+export function assertDataAvailability(value: DataAvailability): void {
+  const codes = ["recording_active", "import_active", "operation_active", "relocation_restart_required", "meeting_deletion_pending"];
+  if (!value || typeof value.available !== "boolean" || !(value.reason === null || typeof value.reason === "string") || value.available !== (value.reason === null)) throw Error("利用可能状態を確認できません。");
+  if (value.reasonCode !== undefined && !(value.reasonCode === null ? value.available : !value.available && codes.includes(value.reasonCode))) throw Error("利用可能状態の理由を確認できません。");
+  if (value.deletionAvailable !== undefined && (typeof value.deletionAvailable !== "boolean" || !(value.deletionReason === null || typeof value.deletionReason === "string") || value.deletionAvailable !== (value.deletionReason === null))) throw Error("削除の受付状態を確認できません。");
+  if (value.deletionReasonCode !== undefined && !(value.deletionReasonCode === null ? value.deletionAvailable === true : value.deletionAvailable === false && codes.includes(value.deletionReasonCode))) throw Error("削除の受付状態の理由を確認できません。");
+}
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;

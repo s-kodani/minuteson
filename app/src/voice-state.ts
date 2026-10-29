@@ -17,7 +17,7 @@ export function selectedVoiceWindows(candidates:VoiceCandidate[],speakerId:strin
 export const voiceMatchLabel=(state:VoiceMatch["state"])=>({candidate:"候補",automatic:"自動識別",confirmed:"確認済み",dismissed:"対応を解除済み"})[state];
 export function registrationName(name:string):string {const clean=name.trim();if(!clean||Array.from(clean).length>200||/[\u0000-\u001f\u007f]/.test(clean))throw Error("人物名を1〜200文字で入力してください。");return clean;}
 export function voiceStartRequest(meetingId:string,context:VoiceContext,speakerId:string|null,personId:string|null,name:string,operationId:string,selectedKeys?:string[]){
-  if(!context.supported)throw Error("声の登録・照合は現在macOSのみ対応しています。");
+  if(!context.supported)throw Error("この環境では声の登録・照合を利用できません。");
   if(speakerId&&!(selectedKeys===undefined?context.windows:context.registrationCandidates).some(w=>w.speakerId===speakerId))throw Error("登録に使える単独の発言がありません。");
   const selectedWindows=speakerId&&selectedKeys!==undefined?selectedVoiceWindows(context.registrationCandidates,speakerId,selectedKeys):undefined;
   if(personId&&!context.people.some(p=>p.id===personId))throw Error("追加登録する人物が見つかりません。");

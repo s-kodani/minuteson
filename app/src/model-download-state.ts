@@ -1,15 +1,17 @@
+import type { ArchiveMember, BackendManifest, DownloadSource, PackageFile, PackageManifest, Recipe } from "./generated/contracts";
+import { validateRecipe } from "./generated/validators.js";
 import type { ModelInspectionReport, ModelPlacementReceipt } from "./model-inspection-state";
 
 export const downloadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const hash = /^[0-9a-f]{64}$/u, maximum = 32 * 1024 ** 3;
-type File = { relativePath: string; role: string; expectedSize: number; expectedHash: string };
-export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[]; backend?: { id: string; files: Record<string, string> } };
-export type DownloadArchive = { format: "tar"; expectedSize: number; expectedHash: string; memberPath: string };
+type File = Omit<PackageFile, "expectedSize" | "expectedHash"> & { expectedSize: number; expectedHash: string };
+export type DownloadManifest = Omit<PackageManifest, "schemaVersion" | "quantization" | "files" | "backend"> & { schemaVersion: 1; quantization: string | null; files: File[]; backend?: BackendManifest };
+export type DownloadArchive = ArchiveMember & { format: "tar" };
 export const bundledWhisperSource = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
 export const bundledAsrSource = "mon-bundled://asr-v1/asr-runtime.tar";
 export const bundledWindowsSource = "mon-bundled://windows-runtime-v1/runtime.tar";
 const isBundledSource = (url: string) => url === bundledWhisperSource || url === bundledWindowsSource || url === bundledAsrSource;
-export type DownloadRecipe = { schemaVersion: 4; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
+export type DownloadRecipe = Omit<Recipe, "schemaVersion" | "manifest" | "sources"> & { schemaVersion: 4; manifest: DownloadManifest; sources: (Omit<DownloadSource, "archive"> & { archive?: DownloadArchive })[] };
 export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
@@ -28,17 +30,18 @@ function identity(value: unknown): string { if (typeof value !== "string" || !do
 // This preserves Rust struct order for SHA binding. Native validation remains
 // authoritative for OS, roles, portable paths, URLs and metadata byte budget.
 export function canonicalRecipe(value: unknown): DownloadRecipe {
+  if (!validateRecipe(value)) fail();
   const recipe = object(value); keys(recipe, ["schemaVersion", "manifest", "sources"]);
   const m = object(recipe.manifest); keys(m, ["schemaVersion", "engine", "engineVersion", "modelName", "modelVersion", "quantization", "licenseRef", "target", "files", "backend"]);
   if (recipe.schemaVersion !== 4 || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
   const manifest: DownloadManifest = {
-    schemaVersion: 1, engine: text(m.engine, 32), engineVersion: text(m.engineVersion, 128), modelName: text(m.modelName, 256), modelVersion: text(m.modelVersion, 128),
-    quantization: m.quantization == null ? null : text(m.quantization, 128), licenseRef: text(m.licenseRef, 4096), target: text(m.target, 32),
-    files: m.files.map(value => { const f = object(value); keys(f, ["relativePath", "role", "expectedSize", "expectedHash"]); return { relativePath: text(f.relativePath, 4096), role: text(f.role, 32), expectedSize: size(f.expectedSize), expectedHash: sha(f.expectedHash) }; }),
+    schemaVersion: 1, engine: text(m.engine, 32) as DownloadManifest["engine"], engineVersion: text(m.engineVersion, 128), modelName: text(m.modelName, 256), modelVersion: text(m.modelVersion, 128),
+    quantization: m.quantization == null ? null : text(m.quantization, 128), licenseRef: text(m.licenseRef, 4096), target: text(m.target, 32) as DownloadManifest["target"],
+    files: m.files.map(value => { const f = object(value); keys(f, ["relativePath", "role", "expectedSize", "expectedHash"]); return { relativePath: text(f.relativePath, 4096), role: text(f.role, 32) as File["role"], expectedSize: size(f.expectedSize), expectedHash: sha(f.expectedHash) }; }),
   };
-  if (m.backend !== undefined) {
+  if (m.backend != null) {
     const b = object(m.backend); keys(b, ["id", "files"]); const files = object(b.files);
-    manifest.backend = { id: text(b.id, 128), files: Object.fromEntries(Object.keys(files).sort().map(key => [text(key, 64), text(files[key], 4096)])) };
+    manifest.backend = { id: text(b.id, 128), files: Object.fromEntries(Object.keys(files).sort(utf8Order).map(key => [text(key, 64), text(files[key], 4096)])) };
   }
   const sources = recipe.sources.map((value, index) => {
     const s = object(value); keys(s, ["relativePath", "url", "archive"]);
@@ -94,8 +97,28 @@ export function parseDownloadDefinition(definition: string): DownloadRecipe {
   if (new TextEncoder().encode(definition).length > 65_536) fail();
   return canonicalRecipe(JSON.parse(definition));
 }
+const utf8 = new TextEncoder();
+function utf8Order(a: string, b: string): number {
+  const x = utf8.encode(a), y = utf8.encode(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return x.length - y.length;
+}
+/** Keep Rust struct field order; only BackendManifest.files is a BTreeMap.
+ * Numeric keys and non-BMP keys cannot rely on JavaScript object enumeration. */
+export function canonicalModelJSON(value: unknown): string {
+  const write = (value: unknown, backend = false, map = false): string => {
+    if (Array.isArray(value)) return `[${value.map(item => write(item)).join(",")}]`;
+    if (value && typeof value === "object") {
+      const object = value as Record<string, unknown>, keys = Object.keys(object).filter(key => object[key] !== undefined);
+      if (map) keys.sort(utf8Order);
+      return `{${keys.map(key => `${JSON.stringify(key)}:${write(object[key], key === "backend", backend && key === "files")}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  return write(value);
+}
 export async function downloadDigest(value: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const bytes = new TextEncoder().encode(canonicalModelJSON(value));
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 export async function assertDownloadReview(value: unknown, expectedRecipeHash?: string): Promise<DownloadReview> {

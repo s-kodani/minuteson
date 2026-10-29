@@ -417,7 +417,12 @@ fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backu
     )
     .unwrap();
     assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
-    assert_eq!(source.manifest.tables.len(), 38);
+    assert_eq!(source.manifest.tables.len(), 39);
+    assert!(source
+        .manifest
+        .tables
+        .iter()
+        .any(|table| table.name == "post_analysis_intents"));
     assert!(source
         .manifest
         .tables
@@ -800,7 +805,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             0
         );
     }
-    assert_eq!(source.manifest.tables.len(), 38);
+    assert_eq!(source.manifest.tables.len(), 39);
 }
 
 #[test]

@@ -1,17 +1,20 @@
+import { useWindowEnvironment } from "./window-environment";
+import type { WindowEnvironment } from "./window-environment-state";
 import { ErrorNotice } from "./toast";
-import { isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "./ipc.ts";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import "./window-titlebar.css";
 
-function hasWindowsTitlebar() {
-  return isTauri() && navigator.platform.startsWith("Win") && getCurrentWindow().label === "main";
+function hasWindowsTitlebar(environment: WindowEnvironment | null) {
+  return isTauri() && environment?.platform === "windows" && environment.role === "main";
 }
 
 /** Outside StartupGate: a denied storage admission must still have window controls. */
 export function WindowsDesktopFrame({ children }: { children: ReactNode }) {
-  const [enabled] = useState(hasWindowsTitlebar);
+  const environment = useWindowEnvironment();
+  const enabled = hasWindowsTitlebar(environment);
   useLayoutEffect(() => {
     if (!enabled) return;
     document.documentElement.dataset.windowChrome = "windows";

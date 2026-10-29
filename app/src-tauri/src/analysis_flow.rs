@@ -123,22 +123,7 @@ pub(crate) fn prepare(
             .map(|b| b.capture(cancelled))
             .transpose()?,
     };
-    let sherpa = SherpaConfig {
-        executable: capture(&d.executable_path)?,
-        segmentation_model: capture(&d.segmentation_model_path)?,
-        embedding_model: capture(&d.embedding_model_path)?,
-        runtime_libraries: d
-            .runtime_library_paths
-            .iter()
-            .map(|p| capture(p))
-            .collect::<Result<_, _>>()?,
-        threads: d.threads,
-        cluster_threshold_milli: d.cluster_threshold_milli,
-        window_shift_milli: d.window_shift_milli,
-        min_duration_on_ms: d.min_duration_on_ms,
-        min_duration_off_ms: d.min_duration_off_ms,
-        speech_sensitivity_milli: d.speech_sensitivity_milli,
-    };
+    let sherpa = d.capture(crate::diarization::sherpa::CaptureMode::Retained, cancelled)?;
     whisper.verify(cancelled)?;
     sherpa.verify(cancelled)?;
     let whisper_managed =

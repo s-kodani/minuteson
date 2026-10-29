@@ -60,11 +60,15 @@ impl Capacity {
     pub(crate) fn reviewed(model: &Fingerprint) -> Result<Self, String> {
         // Official model cards and fixed revisions are reviewed per catalog
         // entry. Capacity binds exact model bytes, including quantization.
-        let choices: Vec<serde_json::Value> =
-            serde_json::from_str(include_str!("../../../model-catalog/macos.json"))
-                .map_err(|_| "モデル選択情報を読み取れません")?;
-        let choice = choices.iter().find(|choice| choice["recipe"]["manifest"]["engine"] == "llama.cpp"
-            && choice["recipe"]["manifest"]["files"].as_array().is_some_and(|files| files.iter().any(|file|
+        let choices: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../model-catalog/model-definitions.json"
+        ))
+        .map_err(|_| "モデル選択情報を読み取れません")?;
+        Self::reviewed_from(model, &choices)
+    }
+    fn reviewed_from(model: &Fingerprint, choices: &[serde_json::Value]) -> Result<Self, String> {
+        let choice = choices.iter().find(|choice| choice["manifest"]["engine"] == "llama.cpp"
+            && choice["files"].as_array().is_some_and(|files| files.iter().any(|file|
                 file["role"] == "llm" && file["expectedHash"] == model.sha256 && file["expectedSize"] == model.size)))
             .ok_or("選択モデルの生成上限が未確認です。対応済みの議事録モデルを全体設定で選んでください。（minutes_model_limits_unknown）")?;
         let limits: TokenLimits = serde_json::from_value(choice["tokenLimits"].clone())
@@ -205,6 +209,26 @@ impl Capacity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capacity_is_bound_to_neutral_model_bytes_even_for_a_platform_only_definition() {
+        let model = Fingerprint {
+            path: "/not-executed/windows-only.gguf".into(),
+            size: 17,
+            sha256: "a".repeat(64),
+        };
+        let definitions = vec![serde_json::json!({
+            "id":"windows-only-model","targets":["windows_x86_64"],
+            "manifest":{"engine":"llama.cpp"},
+            "files":[{"role":"llm","expectedSize":17,"expectedHash":"a".repeat(64)}],
+            "tokenLimits":{"maxInputTokens":4096,"maxOutputTokens":128,
+                "maxContextTokens":4096,"tokenizer":"utf8_byte_bpe"}
+        })];
+        let capacity = Capacity::reviewed_from(&model, &definitions).unwrap();
+        assert_eq!(capacity.max_context_tokens, 4096);
+        assert_eq!(capacity.max_output_tokens, 128);
+        let changed = Fingerprint { size: 18, ..model };
+        assert!(Capacity::reviewed_from(&changed, &definitions).is_err());
+    }
     fn engine() -> LlamaConfig {
         let proof = Fingerprint {
             path: "/synthetic/model.gguf".into(),
@@ -262,14 +286,16 @@ mod tests {
     }
     #[test]
     fn all_catalog_llms_bind_independent_exact_bytes_and_never_exceed_output_caps() {
-        let choices: Vec<serde_json::Value> =
-            serde_json::from_str(include_str!("../../../model-catalog/macos.json")).unwrap();
+        let choices: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../model-catalog/model-definitions.json"
+        ))
+        .unwrap();
         let mut seen = std::collections::BTreeSet::new();
         for choice in choices
             .iter()
-            .filter(|c| c["recipe"]["manifest"]["engine"] == "llama.cpp")
+            .filter(|c| c["manifest"]["engine"] == "llama.cpp")
         {
-            let file = choice["recipe"]["manifest"]["files"]
+            let file = choice["files"]
                 .as_array()
                 .unwrap()
                 .iter()

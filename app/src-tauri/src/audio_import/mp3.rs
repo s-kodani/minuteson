@@ -323,22 +323,9 @@ pub(super) fn decode(
     Ok(info)
 }
 pub(super) fn caf_header(rate: u32, channels: u32, frames: u64) -> Result<Vec<u8>, String> {
-    let length = frames
-        .checked_mul(u64::from(channels) * 4)
-        .and_then(|n| n.checked_add(4))
-        .and_then(|n| i64::try_from(n).ok())
-        .ok_or("PCM長が範囲外です")?;
-    let mut h = b"caff\0\x01\0\0desc".to_vec();
-    h.extend_from_slice(&32_i64.to_be_bytes());
-    h.extend_from_slice(&f64::from(rate).to_be_bytes());
-    h.extend_from_slice(b"lpcm");
-    for n in [3, channels * 4, 1, channels, 32] {
-        h.extend_from_slice(&n.to_be_bytes());
-    }
-    h.extend_from_slice(b"data");
-    h.extend_from_slice(&length.to_be_bytes());
-    h.extend_from_slice(&[0; 4]);
-    Ok(h)
+    mon_core::media::caf::header(rate, channels, frames)
+        .map(|header| header.to_vec())
+        .map_err(str::to_owned)
 }
 
 #[cfg(test)]

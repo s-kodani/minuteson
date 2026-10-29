@@ -34,12 +34,12 @@ async (page,capturePath) => {
   await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();check(await count("save_minutes_markdown")===1,"explicit leave-save wrote wrong number");await open();await panel().getByRole("heading",{name:"保存して移動",exact:true}).waitFor();
   results.push("explicit leave-save persists the exact plain body before navigation and reloads it on return");
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 保存失敗時の入力\n");await page.evaluate(()=>window.__mon.plainMode="failure");
-  await meetings().click();await dialog().getByRole("button",{name:"保存して続ける",exact:true}).click();await dialog().getByRole("alert").waitFor();await dismiss();
+  await meetings().click();await dialog().getByRole("button",{name:"保存して続ける",exact:true}).click();await dialog().getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await dismiss();
   check(await input().inputValue()==="# 保存失敗時の入力\n","failed navigation save lost input");
   await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   check(await page.evaluate(()=>{const c=window.__mon.plainCalls.filter(c=>c.cmd==="save_minutes_markdown");return JSON.stringify(c[1])===JSON.stringify(c[2]);}),"save retry changed operation/base/body");
   results.push("navigation save failure blocks departure; explicit retry preserves the identical operation and text");
-  await input().fill("# 応答喪失の保存\n");await page.evaluate(()=>window.__mon.plainMode="lost");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("alert").waitFor();
+  await input().fill("# 応答喪失の保存\n");await page.evaluate(()=>window.__mon.plainMode="lost");await panel().getByRole("button",{name:"保存",exact:true}).click();await page.getByRole("alert").filter({hasText:"保存できませんでした"}).first().waitFor();
   await input().fill("# 応答待ち中の追記\n");await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"未保存"}).waitFor();
   check(await input().inputValue()==="# 応答待ち中の追記\n","lost success displaced later human input");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   results.push("lost success recovery acknowledges original save while newer human input remains unsaved until explicit save");

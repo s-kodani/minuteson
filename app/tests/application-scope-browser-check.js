@@ -2,7 +2,7 @@ async (page, capturePath, detailUI) => {
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);},context=page.context();
   await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch();
-    const body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const mode=()=>page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true,includeHidden:true});
@@ -30,7 +30,7 @@ async (page, capturePath, detailUI) => {
     await app().selectOption(key);
     return key;
   };
-  const dismissFailure=async()=>{await modal().locator(".action-error[role=alert]").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
   let stage="setup";
   try{
     stage="global";await boot();await begin();await accept().click();await modal().waitFor({state:"hidden"});
@@ -69,7 +69,7 @@ async (page, capturePath, detailUI) => {
     results.push("process restart while saving edits is rejected by fresh post-flush catalog");
 
     stage="refresh-error";await boot();const selected=await choose();await page.evaluate(()=>{window.closeFixture.failCaptureApplications=true;});await refresh().click();
-    await details().getByText(/アプリ一覧を確認できません/u).waitFor();
+    await page.getByRole("alert").filter({hasText:"アプリ一覧を確認できません"}).waitFor();
     check(await start().isDisabled()&&await mode().inputValue()==="application"&&await app().inputValue()===selected,"catalog error changed target or enabled start");
     await page.evaluate(()=>{window.closeFixture.failCaptureApplications=false;});await refresh().click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
@@ -77,7 +77,7 @@ async (page, capturePath, detailUI) => {
     results.push("catalog failure blocks capture without fallback; successful explicit refresh restores the same exact instance");
 
     stage="malformed";await boot();await choose();await page.evaluate(()=>{window.closeFixture.captureApplications.applications.push({...window.closeFixture.captureApplications.applications[0]});});await refresh().click();
-    await details().getByText(/アプリ一覧を確認できません/u).waitFor();
+    await page.getByRole("alert").filter({hasText:"アプリ一覧を確認できません"}).waitFor();
     check(await start().isDisabled()&&await count("start_recording")===0,"ambiguous catalog enabled capture");
     results.push("duplicate PID metadata blocks application capture instead of selecting by name");
 

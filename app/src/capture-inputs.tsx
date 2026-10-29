@@ -1,5 +1,5 @@
 import { ErrorNotice } from "./toast";
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import {useEffect,useId,useRef,useState} from "react";
 import {checkedCaptureInputs,microphoneChoice,usableAutomaticMicrophone,usableMicrophone,type CaptureInputs} from "./capture-input-state";
 import {InfoPopover} from "./info-popover";

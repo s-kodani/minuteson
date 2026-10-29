@@ -31,7 +31,7 @@ test("regeneration is explicit, retains unknown acceptance identity and never re
   assert.doesNotMatch(view,/executablePath|modelPath|save_analysis_preferences/);
 });
 test("publication is coordinated outside the selected meeting and does not save or discard Markdown",()=>{
-  const hook=source("analysis-publication.ts"),main=source("main.tsx"),minutes=source("minutes.tsx");
+  const hook=source("analysis-publication.ts"),main=source("main.tsx")+source("saved-navigation.ts"),minutes=source("minutes.tsx");
   assert.match(hook,/get_ready_analysis_flows/);
   assert.match(hook,/publishWithReplacementConfirmation/);
   assert.match(hook,/expectedLockVersion: current.lockVersion, confirmedTarget/);

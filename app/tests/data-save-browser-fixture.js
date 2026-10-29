@@ -164,10 +164,10 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_model_placements") return [];
   if (command === "get_official_model_options") return [];
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
-  if (["get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
+  if (["get_asr_preferences", "get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
   if (["get_audio_import"].includes(command)) return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
   if (command === "finish_main_close") { if (f.failClose) throw Error("模擬終了失敗"); return null; }
   throw Error(`Unexpected data fixture command: ${command}`);
 };
 mockIPC(dataSaveIPC, { shouldMockEvents: true });
-if (!window.skipDataFixtureMain) await import("../src/main.tsx");
+if (!window.skipDataFixtureMain) await import("../src/bootstrap.tsx");

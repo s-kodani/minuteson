@@ -47,7 +47,7 @@ async (page, capturePath) => {
   await dialog().getByRole("heading", { name: "議事録を再生成", exact: true }).waitFor();
   await page.evaluate(() => window.__mon.minutesPrefReadFailure = true);
   await dialog().getByRole("button", { name: "議事録を再生成", exact: true }).click();
-  await dialog().getByRole("alert").filter({ hasText: "合成の全体設定読込み失敗" }).waitFor();
+  await dialog().getByRole("alert").filter({ hasText: "合成の全体設定読込み失敗" }).first().waitFor();
   check((await calls()).length === 1 && await page.evaluate(() => window.__mon.plain.m1.markdown.includes("生成された議事録")), "global read failure used a cached engine or changed the document");
   await page.evaluate(() => window.__mon.minutesPrefReadFailure = false); await dismiss();
   results.push("global settings read failure blocks admission and keeps saved Markdown instead of using stale preferences");
@@ -57,7 +57,7 @@ async (page, capturePath) => {
   await dialog().getByRole("heading", { name: "議事録を再生成", exact: true }).waitFor();
   await configure("");
   await dialog().getByRole("button", { name: "議事録を再生成", exact: true }).click();
-  await dialog().getByRole("alert").filter({ hasText: "議事録用モデルを導入してください" }).waitFor();
+  await dialog().getByRole("alert").filter({ hasText: "議事録用モデルを導入してください" }).first().waitFor();
   check((await calls()).length === 1, "missing global model silently fell back to the high accuracy slot");
   await dismiss();
   await panel().getByRole("button", { name: "議事録を生成", exact: true }).isDisabled().then(disabled => check(disabled, "missing global engine still allows regeneration"));

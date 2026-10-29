@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 
 mod progress;
 
-const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::Diarization.policy();
+const MAX_OUTPUT_BYTES: u64 = PROCESS_POLICY.stdout_bytes;
+const MAX_LOG_BYTES: u64 = PROCESS_POLICY.stderr_bytes;
 pub(crate) const MAX_SPEAKERS: u32 = 100;
 pub(super) const MAX_SEGMENTS: usize = 100_000;
 // sherpa-onnx 1.13.8 ComputeResult timestamps frame centers, including half
@@ -20,6 +22,22 @@ pub(super) const MAX_SEGMENTS: usize = 100_000;
 // terminal offset plus float32 error near the WAV limit and printed rounding.
 // Accepted ends are still clamped to the exact input duration before storage.
 const TERMINAL_TOLERANCE_US: i64 = 50_000;
+
+#[derive(Clone, Copy)]
+pub(crate) enum CaptureMode {
+    Transient,
+    Retained,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SherpaSettings {
+    pub threads: u32,
+    pub cluster_threshold_milli: u32,
+    pub window_shift_milli: u32,
+    pub min_duration_on_ms: u32,
+    pub min_duration_off_ms: u32,
+    pub speech_sensitivity_milli: i32,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -44,6 +62,53 @@ pub(crate) struct SherpaConfig {
 }
 
 impl SherpaConfig {
+    pub(crate) fn from_fingerprints(
+        executable: Fingerprint,
+        segmentation_model: Fingerprint,
+        embedding_model: Fingerprint,
+        runtime_libraries: Vec<Fingerprint>,
+        settings: SherpaSettings,
+    ) -> Self {
+        Self {
+            executable,
+            segmentation_model,
+            embedding_model,
+            runtime_libraries,
+            threads: settings.threads,
+            cluster_threshold_milli: settings.cluster_threshold_milli,
+            window_shift_milli: settings.window_shift_milli,
+            min_duration_on_ms: settings.min_duration_on_ms,
+            min_duration_off_ms: settings.min_duration_off_ms,
+            speech_sensitivity_milli: settings.speech_sensitivity_milli,
+        }
+    }
+    pub(crate) fn capture(
+        paths: [&Path; 3],
+        libraries: &[&Path],
+        settings: SherpaSettings,
+        mode: CaptureMode,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        if libraries.len() > 16 {
+            return Err("同梱ランタイムの指定が多すぎます".into());
+        }
+        let capture = |path: &Path| match mode {
+            CaptureMode::Transient => Fingerprint::capture(path, cancelled),
+            CaptureMode::Retained => Fingerprint::capture_retained(path, cancelled),
+        };
+        let config = Self::from_fingerprints(
+            capture(paths[0])?,
+            capture(paths[1])?,
+            capture(paths[2])?,
+            libraries
+                .iter()
+                .map(|p| capture(p))
+                .collect::<Result<_, _>>()?,
+            settings,
+        );
+        config.validate_settings(None)?;
+        Ok(config)
+    }
     fn validate(&self, num_speakers: Option<u32>) -> Result<(), String> {
         self.validate_settings(num_speakers)?;
         for proof in self.files() {
@@ -463,7 +528,10 @@ fn run_track_inner(
         .map_err(|e| e.to_string())?;
     let _log_capture =
         crate::internal_logs::watch_engine(&directory, &["stderr.log"], "diarization");
-    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let mut launch = OwnedCommand::for_purpose(
+        &config.executable.path,
+        mon_native::process::Purpose::Diarization,
+    )?;
     let command = &mut launch.command;
     command
         // No inherited preload/library overrides, credentials, or locale can
@@ -564,7 +632,7 @@ fn run_track_inner(
         if cancelled() {
             return Ok(None);
         }
-        if started.elapsed() > timeout {
+        if PROCESS_POLICY.expired(started.elapsed(), Some(timeout)) {
             return Err("話者分離が制限時間を超えました".into());
         }
         for (path, limit) in [

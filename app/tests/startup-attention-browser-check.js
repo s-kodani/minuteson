@@ -1,7 +1,7 @@
 async (page, capturePath = path => path) => {
   const results = [], check = (ok, msg) => { if (!ok) throw Error(msg); };
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/, async route => {
-    const response = await route.fetch(); const body = (await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/startup-attention-browser-fixture.js");</script>');
+    const response = await route.fetch(); const body = (await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/startup-attention-browser-fixture.js");</script>');
     await route.fulfill({ response, body });
   });
   const boot = async (variant = "blocked", dedicated = false) => { await page.goto(`http://127.0.0.1:1420/?fixture=${variant}${dedicated ? "&window=startup-attention" : ""}`); await page.getByRole("main", { name: "起動診断", exact: true }).waitFor(); await page.waitForFunction(() => window.startupFixture?.calls.length > 0); };

@@ -2,7 +2,7 @@ async (page, capturePath, detailUI) => {
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);},context=page.context();
   await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch();
-    const body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const input=()=>page.getByRole("combobox",{name:"録音するマイク",exact:true});
@@ -20,12 +20,12 @@ async (page, capturePath, detailUI) => {
     await input().waitFor();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
   };
-  const dismissFailure=async()=>{await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
   let stage="setup";
   try{
     stage="metadata-only";await boot();
     check(await input().inputValue()===""&&await count("get_capture_inputs")===1&&await count("start_recording")===0,"initial catalog started capture or failed automatic choice");
-    check((await section().innerText()).includes("実際の音声入力はまだ確認していません")&&(await section().innerText()).includes("5秒"),"metadata fabricated tested audio");
+    check((await section().innerText()).includes("権限未確認 / 入力未確認")&&await page.getByRole("button",{name:"5秒録音して確認",exact:true}).count()===1,"metadata fabricated tested audio");
     results.push("metadata-only catalog starts in automatic mode without pinning the OS default or starting recording");
 
     stage="explicit-cancel";await input().selectOption("usb-123");await start().click();await modal().waitFor();
@@ -56,7 +56,7 @@ async (page, capturePath, detailUI) => {
     stage="fixed-missing";await boot();await input().selectOption("usb-123");
     await page.evaluate(()=>{window.closeFixture.captureInputs.devices=window.closeFixture.captureInputs.devices.filter(d=>d.uid!=="usb-123");});await refresh().click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
-    check(await input().inputValue()==="usb-123"&&await start().isDisabled()&&(await section().innerText()).includes("見つかりません"),"missing fixed device silently fell back");
+    check(await input().inputValue()==="usb-123"&&await start().isDisabled()&&(await page.getByRole("alert").filter({hasText:"選択したマイクが見つかりません"}).count())===1,"missing fixed device silently fell back");
     await input().selectOption("built-in");check(await start().isEnabled(),"explicit alternate device did not enable consent");
     results.push("disconnected saved UID blocks start until an alternate is explicitly selected");
 
@@ -67,23 +67,23 @@ async (page, capturePath, detailUI) => {
 
     for(const permission of ["denied","restricted"]){
       stage=permission;await boot({microphonePermission:permission});
-      check(await start().isDisabled()&&(await section().innerText()).includes("macOSのシステム設定")&&await count("start_recording")===0,"denied permission allowed capture or requested TCC");
+      check(await start().isDisabled()&&(await page.getByRole("alert").filter({hasText:"macOSのシステム設定"}).count())===1&&await count("start_recording")===0,"denied permission allowed capture or requested TCC");
       results.push(`${permission} microphone permission blocks start and provides manual permission guidance`);
     }
     stage="unknown";await boot({microphonePermission:"unknown"});
-    check(await start().isEnabled()&&(await section().innerText()).includes("状態不明")&&!(await section().innerText()).includes("権限は許可済み"),"unknown permission fabricated authorization");
+    check(await start().isEnabled()&&(await section().innerText()).includes("権限未確認 / 入力未確認")&&!(await section().innerText()).includes("権限は許可済み"),"unknown permission fabricated authorization");
     results.push("unknown permission stays explicitly unknown and does not claim verified input");
 
     stage="refresh-failure";await boot();await input().selectOption("usb-123");
     await page.evaluate(()=>{window.closeFixture.failCaptureInputs=true;});await refresh().click();
-    await section().getByRole("alert").waitFor();check(await start().isDisabled()&&await input().inputValue()==="usb-123","read failure enabled capture or changed choice");
+    await page.getByRole("alert").first().waitFor();check(await start().isDisabled()&&await input().inputValue()==="usb-123","read failure enabled capture or changed choice");
     await page.evaluate(()=>{window.closeFixture.failCaptureInputs=false;});await refresh().click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
     check(await start().isEnabled()&&await input().inputValue()==="usb-123","explicit refresh failed to preserve choice");
     results.push("catalog failure blocks capture and explicit successful refresh preserves the UID");
 
     stage="malformed";await boot();await page.evaluate(()=>{window.closeFixture.captureInputs.devices.push({...window.closeFixture.captureInputs.devices[0]});});await refresh().click();
-    await section().getByRole("alert").waitFor();check(await start().isDisabled()&&await count("start_recording")===0,"duplicate device metadata accepted");
+    await page.getByRole("alert").first().waitFor();check(await start().isDisabled()&&await count("start_recording")===0,"duplicate device metadata accepted");
     results.push("duplicate or malformed catalog cannot enable recording");
 
     for(const change of ["disconnected","permission"]){
@@ -112,7 +112,7 @@ async (page, capturePath, detailUI) => {
       await section().scrollIntoViewIfNeeded();
       check(await section().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"input controls horizontally overflow");
       await page.screenshot({path:`microphone-${theme}-${width}.png`});
-      await section().getByRole("heading",{name:"マイク",exact:true}).scrollIntoViewIfNeeded();
+      await section().getByText("マイク",{exact:true}).scrollIntoViewIfNeeded();
       await page.screenshot({path:`microphone-${theme}-${width}-top.png`});
       await section().locator("p").last().scrollIntoViewIfNeeded();
       await page.screenshot({path:`microphone-${theme}-${width}-bottom.png`});

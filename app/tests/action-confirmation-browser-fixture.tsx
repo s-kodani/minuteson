@@ -15,7 +15,7 @@ function Owner({ nested = false, blocked }: { nested?: boolean; blocked: boolean
   const request = async (opener: HTMLElement) => {
     const version = window.actionFixture.version, mode = window.actionFixture.mode, target = nested ? "比較中の候補 #2" : "合成対象 #1";
     setBusy(true);
-    try { await confirm({ opener, title: "対象の変更を確認", target, confirmLabel: "対象を変更する", message: "この対象の未保存入力と古い直前版は復元できなくなります。現在の版とその編集は保持します。", validate: () => window.actionFixture.version === version, progressAction: window.actionFixture.progress ? { label: "準備の停止を要求する", action: async () => { window.actionFixture.cancellationCalls++; await new Promise<void>(resolve => { window.actionFixture.completeCancel = resolve; }); } } : undefined, action: async () => {
+    try { await confirm({ opener, inlineErrors: true, title: "対象の変更を確認", target, confirmLabel: "対象を変更する", message: "この対象の未保存入力と古い直前版は復元できなくなります。現在の版とその編集は保持します。", validate: () => window.actionFixture.version === version, progressAction: window.actionFixture.progress ? { label: "準備の停止を要求する", action: async () => { window.actionFixture.cancellationCalls++; await new Promise<void>(resolve => { window.actionFixture.completeCancel = resolve; }); } } : undefined, action: async () => {
       window.actionFixture.commands.push({ target, version });
       if (mode === "delay") await new Promise<void>(resolve => { window.actionFixture.complete = resolve; });
       if (mode === "timed") await new Promise<void>(resolve => setTimeout(resolve, 3000));

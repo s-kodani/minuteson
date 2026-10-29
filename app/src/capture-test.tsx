@@ -1,5 +1,5 @@
 import { InfoPopover } from "./info-popover";
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import { IconButton } from "./action-icon";
 import {useEffect,useRef,useState,useSyncExternalStore} from "react";
 import {CommonModal} from "./common-modal";

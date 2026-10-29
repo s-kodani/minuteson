@@ -139,11 +139,18 @@ fn can_dismiss(label: &str) -> bool {
     label == "main"
 }
 #[tauri::command]
-pub fn get_recorder_operation_notices(window: WebviewWindow) -> Result<Snapshot, String> {
-    if !can_read(window.label()) {
-        return Err("録音の操作画面から通知を確認してください".into());
-    }
-    Ok(window.state::<Notices>().snapshot())
+pub fn get_recorder_operation_notices(
+    window: WebviewWindow,
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let result: Result<Snapshot, String> = (|| {
+        if !can_read(window.label()) {
+            return Err("録音の操作画面から通知を確認してください".into());
+        }
+        Ok(window.state::<Notices>().snapshot())
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_recorder_operation_notices", message)
+    })
 }
 #[tauri::command]
 pub fn publish_recorder_operation_notice(
@@ -151,18 +158,23 @@ pub fn publish_recorder_operation_notice(
     source: Source,
     expected_revision: u64,
     message: Option<String>,
-) -> Result<Snapshot, String> {
-    if !can_publish(window.label(), source) {
-        return Err("この録音画面からは対象の操作エラーを報告できません".into());
-    }
-    let value = window
-        .state::<Notices>()
-        .update(source, expected_revision, message)?;
-    // Events are hints only; every reader checks the authoritative snapshot.
-    let _ = window
-        .app_handle()
-        .emit("recorder-operation-notices-changed", ());
-    Ok(value)
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let result: Result<Snapshot, String> = (|| {
+        if !can_publish(window.label(), source) {
+            return Err("この録音画面からは対象の操作エラーを報告できません".into());
+        }
+        let value = window
+            .state::<Notices>()
+            .update(source, expected_revision, message)?;
+        // Events are hints only; every reader checks the authoritative snapshot.
+        let _ = window
+            .app_handle()
+            .emit("recorder-operation-notices-changed", ());
+        Ok(value)
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("publish_recorder_operation_notice", message)
+    })
 }
 #[tauri::command]
 pub fn dismiss_recorder_operation_notice(
@@ -170,17 +182,22 @@ pub fn dismiss_recorder_operation_notice(
     source: Source,
     expected_revision: u64,
     event_id: String,
-) -> Result<Snapshot, String> {
-    if !can_dismiss(window.label()) {
-        return Err("メイン画面の通知から閉じてください".into());
-    }
-    let value = window
-        .state::<Notices>()
-        .dismiss(source, expected_revision, &event_id)?;
-    let _ = window
-        .app_handle()
-        .emit("recorder-operation-notices-changed", ());
-    Ok(value)
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let result: Result<Snapshot, String> = (|| {
+        if !can_dismiss(window.label()) {
+            return Err("メイン画面の通知から閉じてください".into());
+        }
+        let value = window
+            .state::<Notices>()
+            .dismiss(source, expected_revision, &event_id)?;
+        let _ = window
+            .app_handle()
+            .emit("recorder-operation-notices-changed", ());
+        Ok(value)
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("dismiss_recorder_operation_notice", message)
+    })
 }
 #[cfg(test)]
 mod tests {

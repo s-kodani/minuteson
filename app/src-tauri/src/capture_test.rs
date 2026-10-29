@@ -137,7 +137,14 @@ impl Probe {
         {
             return None;
         }
-        let mut bytes = vec![0; (available as usize).min(8192)];
+        let mut bytes = vec![
+            0;
+            (available as usize).min(
+                mon_native::process::Purpose::CaptureTest
+                    .policy()
+                    .stderr_bytes as usize
+            )
+        ];
         let count = pipe.read(&mut bytes).ok()?;
         let text = String::from_utf8_lossy(&bytes[..count]);
         let detail = text.trim();
@@ -170,6 +177,7 @@ fn command(
 ) -> Result<Command, String> {
     request.validate()?;
     let mut command = Command::new(binary);
+    mon_native::process::configure(&mut command, mon_native::process::Purpose::CaptureTest);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

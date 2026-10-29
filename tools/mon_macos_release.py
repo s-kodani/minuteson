@@ -221,7 +221,7 @@ def verify_notices(app):
         raise ValueError("dependency notice bundle exceeds the size limit")
     inventory = json.loads(inventory_path.read_text(encoding="utf8"))
     expected_locks = {name: digest(REPOSITORY / relative) for name, relative in
-                      (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))}
+                      (("cargo", "Cargo.lock"), ("npm", "app/package-lock.json"))}
     if (not isinstance(inventory, dict) or inventory.get("schemaVersion") != 1
             or inventory.get("target") != "aarch64-apple-darwin"
             or inventory.get("lockHashes") != expected_locks

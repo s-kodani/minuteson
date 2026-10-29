@@ -13,6 +13,9 @@ impl Directory {
     pub(crate) fn open_existing(path: &Path) -> Result<Self, String> {
         let parents = win::parents(path)?;
         let file = win::directory(path)?;
+        if !win::security_metadata(&file)?.1 {
+            return Err("モデル配置先の権限が非公開ではありません".into());
+        }
         let path = win::path(&file)?;
         let modified = file
             .metadata()
@@ -29,7 +32,7 @@ impl Directory {
         let parent = path.parent().ok_or("管理領域の親がありません")?;
         let _pins = win::parents(parent)?;
         match std::fs::create_dir(path) {
-            Ok(()) => (),
+            Ok(()) => win::set_private(path)?,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.to_string()),
         }
@@ -50,7 +53,7 @@ impl Directory {
         self.verify()?;
         let path = self.path.join(name);
         match std::fs::create_dir(&path) {
-            Ok(()) => (),
+            Ok(()) => win::set_private(&path)?,
             Err(e) if !new_only && e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.to_string()),
         }
@@ -103,6 +106,9 @@ impl Directory {
         if win::identity(&current)? != win::identity(&self.file)? {
             return Err("管理領域が変更されました".into());
         }
+        if !win::security_metadata(&current)?.1 {
+            return Err("モデル配置先の非公開権限が変更されました".into());
+        }
         Ok(())
     }
     pub(crate) fn verify_unchanged(&self) -> Result<(), String> {
@@ -118,10 +124,18 @@ impl Directory {
         }
         Ok(())
     }
-    // Windows directory handles cannot be FlushFileBuffers'ed by an ordinary
-    // user. Files are created write-through and individually sync_all'ed.
+    pub(crate) fn sync_namespace(
+        &self,
+    ) -> Result<mon_native::durability::NamespaceDurability, String> {
+        self.verify()?;
+        let durability = win::sync_directory_state(&self.path)?;
+        self.verify()?;
+        Ok(durability)
+    }
+    // Flushed file data and restart recovery are the minimum contract. The
+    // actual namespace guarantee is available separately, never fabricated.
     pub(crate) fn sync(&self) -> Result<(), String> {
-        self.verify()
+        self.sync_namespace().map(|_| ())
     }
     pub(crate) fn path(&self) -> &Path {
         &self.path

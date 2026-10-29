@@ -173,6 +173,12 @@ impl Startup {
         self.snapshot().map_or(true, |s| s.phase == Phase::Blocked)
     }
     pub(crate) fn admit_command(&self, label: &str, command: &str) -> Result<(), String> {
+        if command == "get_window_environment" {
+            return label
+                .parse::<mon_contracts::WindowRole>()
+                .map(|_| ())
+                .map_err(|_| "不明な画面です".into());
+        }
         let report = self.snapshot()?;
         if matches!(command, "get_residency_state" | "hide_main_to_background") {
             return if label == "main" {
@@ -320,19 +326,25 @@ pub(crate) fn show(app: &tauri::AppHandle) {
 pub(crate) fn get_startup_report(
     window: WebviewWindow,
     startup: State<'_, Startup>,
-) -> Result<Report, String> {
-    startup.admit_command(window.label(), "get_startup_report")?;
-    startup.snapshot()
+) -> Result<Report, mon_contracts::AppError> {
+    let result: Result<Report, String> = (|| {
+        startup.admit_command(window.label(), "get_startup_report")?;
+        startup.snapshot()
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("get_startup_report", message))
 }
 #[tauri::command]
 pub(crate) fn quit_blocked_startup(
     window: WebviewWindow,
     startup: State<'_, Startup>,
-) -> Result<(), String> {
-    startup.admit_command(window.label(), "quit_blocked_startup")?;
-    crate::startup_reset::check_idle(window.app_handle())?;
-    window.app_handle().exit(0);
-    Ok(())
+) -> Result<(), mon_contracts::AppError> {
+    let result: Result<(), String> = (|| {
+        startup.admit_command(window.label(), "quit_blocked_startup")?;
+        crate::startup_reset::check_idle(window.app_handle())?;
+        window.app_handle().exit(0);
+        Ok(())
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("quit_blocked_startup", message))
 }
 
 #[cfg(test)]

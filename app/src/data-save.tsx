@@ -1,6 +1,6 @@
 import { ErrorNotice } from "./toast";
 import { displayNativePath } from "./native-path";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { CommonModal } from "./common-modal";
 import { useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";

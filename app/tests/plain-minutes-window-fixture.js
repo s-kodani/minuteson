@@ -26,6 +26,7 @@ export async function installPlainMinutesWindowFixture(page) {
       transformCallback: fn => { const id=++sequence; callbacks.set(id,fn); return id; }, unregisterCallback: id=>callbacks.delete(id),
       invoke: async (cmd,args={}) => {
         data.calls.push({cmd,args:copy(args)});
+        if(cmd==="get_window_environment") return {schemaVersion:1,role:"main",platform:"macos",capabilities:{voiceIdentity:true}};
         if(cmd==="get_startup_report") return {schemaVersion:1,phase:"ready",failure:null};
         if(cmd==="get_recorder_operation_notices") {
           const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");
@@ -43,6 +44,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
         if (cmd === "get_archived_recording_input_notices") return {schemaVersion:3,recordings:[],nextCursor:null};
+        if (["get_voice_matching_preferences","get_speaker_completion_preferences"].includes(cmd)) return {id:cmd==="get_voice_matching_preferences"?"voice_matching":"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
         if (cmd === "get_ui_preferences") return copy(data.ui);
         if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(cmd)) return null;
         if (cmd === "save_ui_preferences") {
@@ -55,11 +57,11 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "list_restored_meeting_ids") return [];
         if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName:null, saved: null, errorMessage: null };
         if (cmd === "get_analysis_flow") return null;
-        if (cmd === "get_meeting_audio_summary") return {schemaVersion:1,durationUs:3600000000,modes:["mic","system","both"]};
+        if (cmd === "get_meeting_audio_summary") return {schemaVersion:1,durationUs:3600000000,modes:["mixed"]};
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td); }
-        if (cmd === "get_analysis_preferences") return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
+        if (["get_analysis_preferences","get_asr_preferences"].includes(cmd)) return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
         if (cmd === "get_meeting_analysis_audio") return {tracks:[]};
         if (cmd === "get_diarization_preferences") {const engine={executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:800,windowShiftMilli:500,minDurationOnMs:0,minDurationOffMs:0};return {id:"sherpa_profiles",lockVersion:0,payload:{standard:copy(engine),highAccuracy:copy(engine)}};}
         if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
@@ -69,8 +71,8 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if(cmd==="prepare_meeting_playback"){
           const {meetingId,mode}=args.request;
-          if(!["m1","m2"].includes(meetingId)||!["mic","system","both"].includes(mode))throw Error("invalid meeting playback");
-          const token=`meeting-audio-${++sequence}`,sampleRate=48000,totalFrames=sampleRate*3600;
+          if(!["m1","m2"].includes(meetingId)||mode!=="mixed")throw Error("invalid meeting playback");
+          const token=`meeting-audio-${++sequence}`,sampleRate=16000,totalFrames=sampleRate*3600;
           data.playbacks[token]={totalFrames,sampleRate};
           return {token,sampleRate,channels:1,totalFrames,startUs:0,endUs:3600000000,trackKind:mode,alignment:"unverified"};
         }

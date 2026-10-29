@@ -8,7 +8,7 @@ test("enrollment explicitly binds the selected speaker, person and current edito
   assert.equal(voiceStartRequest("m",context,null,null,"ignored","op").speakerId,null);
 });
 test("unsupported platforms, stale people and ineligible mixed voices do not start enrollment",()=>{
-  assert.throws(()=>voiceStartRequest("m",{...context,supported:false},"s",null,"田中","op"),/macOS/);
+  assert.throws(()=>voiceStartRequest("m",{...context,supported:false},"s",null,"田中","op"),/この環境/);
   assert.throws(()=>voiceStartRequest("m",context,"missing",null,"田中","op"),/単独/);
   assert.throws(()=>voiceStartRequest("m",context,"s","missing","","op"),/人物/);
   for(const name of [" ","a".repeat(201),"bad\nname"]){assert.throws(()=>registrationName(name));}

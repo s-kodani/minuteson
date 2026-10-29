@@ -96,8 +96,6 @@ enum CaptureApplications {
       // Screen permission is not evidence about audio-only tap permission.
       // No public audio-only preflight is used; explicit capture validates PCM.
       systemPermission: "unknown",
-      applications: rows.sorted {
-        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-      })
+      applications: try CaptureCore.catalogOrder(rows, applications: true).map { rows[$0] })
   }
 }

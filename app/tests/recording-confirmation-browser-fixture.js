@@ -14,4 +14,4 @@ mockIPC(async(command,args)=>{
  if(["get_recording_snapshot","get_recording_confirmation","request_recording_confirmation","decide_recording_confirmation","hide_recorder_panel","open_main_window","get_recorder_operation_notices","publish_recorder_operation_notice","dismiss_recorder_operation_notice"].includes(command))return rpc(command,args);
  return dataSaveIPC(command,args);
 },{shouldMockEvents:true});
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

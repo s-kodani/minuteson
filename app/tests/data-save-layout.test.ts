@@ -19,8 +19,8 @@ test("backup and restore notices describe current saved documents without remove
 });
 test("removing manual status refresh preserves automatic verification and uncertain-operation recovery", () => {
   const operation = readFileSync(new URL("../src/data-operation.ts", import.meta.url), "utf8");
-  assert.match(operation, /window.setInterval\(\(\) => void poll\(\), 1000\)/);
-  assert.match(operation, /window.addEventListener\("focus", poll\)/);
+  assert.match(operation, /observeSnapshots<DataSnapshot>/);
+  assert.match(operation, /intervalMs: 1000, schedule: browserSchedule, focus: browserFocus/);
   assert.match(panel, /同じ操作の結果を確認/);
   assert.match(panel, /未完了移動を確認/);
 });

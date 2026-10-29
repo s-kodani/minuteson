@@ -334,19 +334,26 @@ impl Storage {
         }))
     }
     pub(crate) fn enqueue_completion(&self, meeting: &str) -> Result<Option<JobSnapshot>, String> {
-        self.enqueue_completion_for(meeting, None)
+        self.enqueue_completion_for(meeting, None, None)
     }
     #[cfg(test)]
     pub(crate) fn enqueue_completion_for_assignment(
         &self,
         request: &transcript_consolidation::Request,
     ) -> Result<Option<JobSnapshot>, String> {
-        self.enqueue_completion_for(&request.meeting_id, Some(request))
+        self.enqueue_completion_for(&request.meeting_id, Some(request), None)
+    }
+    pub(crate) fn enqueue_completion_intent(
+        &self,
+        intent: &post_analysis::Intent,
+    ) -> Result<Option<JobSnapshot>, String> {
+        self.enqueue_completion_for(&intent.meeting_id, None, Some(intent))
     }
     fn enqueue_completion_for(
         &self,
         meeting: &str,
         request: Option<&transcript_consolidation::Request>,
+        intent: Option<&post_analysis::Intent>,
     ) -> Result<Option<JobSnapshot>, String> {
         self.require_data_writable()?;
         if !cfg!(any(target_os = "macos", windows)) {
@@ -376,17 +383,29 @@ impl Storage {
                 return Ok(None);
             }
         }
-        let engine = crate::voice::engine(self)?;
-        let extractor = crate::diarization::embedding::ExtractorConfig::capture(
-            &crate::diarization::known::helper_path()?,
-            &engine,
-        )?;
-        let managed = self.prepare_model_selection(
-            "standard",
-            model_profiles::jobs::Execution::Sherpa(&engine),
-            &|| false,
-        )?;
-        let runtime = crate::local_engine::resident::prepare(self.root(), "sherpa")?;
+        let (engine, extractor, managed, runtime) = if let Some(intent) = intent {
+            let fixed = intent.execution()?;
+            fixed.engine.verify(&|| false)?;
+            (
+                fixed.engine.clone(),
+                fixed.extractor.clone(),
+                fixed.managed.clone(),
+                fixed.runtime.clone(),
+            )
+        } else {
+            let engine = crate::voice::engine(self)?;
+            let extractor = crate::diarization::embedding::ExtractorConfig::capture(
+                &crate::diarization::known::helper_path()?,
+                &engine,
+            )?;
+            let managed = self.prepare_model_selection(
+                "standard",
+                model_profiles::jobs::Execution::Sherpa(&engine),
+                &|| false,
+            )?;
+            let runtime = crate::local_engine::resident::prepare(self.root(), "sherpa")?;
+            (engine, extractor, managed, runtime)
+        };
         let mut db = self
             .connection
             .lock()
@@ -396,7 +415,17 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let (view, _, working_hash) = working(&tx, meeting)?;
         let known = transcription::known::read(&tx, meeting, &source)?;
-        let mut options = super::completion_preferences::load(&tx)?.payload;
+        if let Some(intent) = intent {
+            // The completion plan and intent bind different hash domains.
+            // Preserve both guards without comparing their SHA values directly.
+            let (_, _, intent_working_hash) = super::voice::working(&tx, meeting)?;
+            intent.check(&tx, &view.id, &intent_working_hash)?;
+        }
+        let options = if let Some(intent) = intent {
+            intent.policy.completion
+        } else {
+            super::completion_preferences::load(&tx)?.payload
+        };
 
         let (references, targets, excluded) = evidence(&tx, &view, &known, &source)?;
         if targets.is_empty() {
@@ -430,14 +459,21 @@ impl Storage {
             let old: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
             if old["completion"] == value {
                 let job = jobs::load_job(&tx, &id)?;
+                if let (Some(intent), Some(job)) =
+                    (intent, job.as_ref().filter(|j| j.state != "succeeded"))
+                {
+                    intent.enqueued(&tx, &job.id, true)?;
+                    tx.commit().map_err(|e| e.to_string())?;
+                }
                 return Ok(job.filter(|j| j.state != "succeeded"));
             }
         }
         let spec = JobSpec {
             meeting_id: meeting.into(),
             kind: JobKind::SpeakerCompletion,
-            operation_id: request
-                .map(|r| r.operation_id.clone())
+            operation_id: intent
+                .map(|i| i.completion_operation_id.clone())
+                .or_else(|| request.map(|r| r.operation_id.clone()))
                 .unwrap_or_else(|| Uuid::new_v4().to_string()),
             input_analysis_id: Some(view.id),
             input_hash: view.content_hash,
@@ -449,6 +485,9 @@ impl Storage {
             total_units: Some(1),
         };
         let job = jobs::enqueue_in_transaction(&tx, &spec)?;
+        if let Some(intent) = intent {
+            intent.enqueued(&tx, &job.id, true)?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(Some(job))
     }
@@ -621,6 +660,11 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO job_checkpoints(id,job_id,sequence,completed_units,checkpoint_json,checkpoint_hash,created_at) VALUES(?1,?2,?3,1,?4,?5,?6)",params![Uuid::new_v4().to_string(),job_id,sequence,text,jobs::checkpoint_hash(&job.spec_hash,1,&text),now_ms()?]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE processing_jobs SET state='succeeded',completed_units=1,finished_at=?1,updated_at=?1 WHERE id=?2 AND state='running'",params![now_ms()?,job_id]).map_err(|e|e.to_string())?;
+        let (followup_view, _, followup_hash) = super::voice::working(&tx, &spec.meeting_id)?;
+        let advanced=tx.execute("UPDATE post_analysis_intents SET phase='matching_pending',current_analysis_id=?1,working_hash=?2,updated_at=?3 WHERE completion_job_id=?4 AND phase='completion_enqueued'",params![followup_view.id,followup_hash,now_ms()?,job_id]).map_err(|e|e.to_string())?;
+        if advanced == 0 {
+            super::post_analysis::record_after_completion(&tx, spec, plan, &followup_view.id)?;
+        }
         let job = jobs::load_job(&tx, job_id)?.ok_or("話者補完のジョブがありません")?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(job)
@@ -629,3 +673,25 @@ impl Storage {
 
 #[cfg(test)]
 pub(in crate::storage) mod tests;
+
+// Domain publication checks use the same read transaction as the notification
+// dispatcher; a valid historical job alone does not prove saved output content.
+impl crate::speaker_completion::result::OutputResolver for Transaction<'_> {
+    fn verify(&self, job: &JobSnapshot, id: &str) -> Result<(), String> {
+        let valid:bool=self.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id=?1 AND meeting_id=?2 AND json_extract(config_json,'$.speakerCompletion.jobId')=?3)",params![id,job.meeting_id,job.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !valid {
+            return Err("話者補完の保存版が一致しません".into());
+        }
+        let stored: String = self
+            .query_row(
+                "SELECT content_hash FROM analysis_revisions WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if stored != super::revisions::analysis_content_hash(self, id)? {
+            return Err("話者補完の保存版の内容が変わっています".into());
+        }
+        Ok(())
+    }
+}

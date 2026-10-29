@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::Inference.policy();
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Output {
@@ -37,7 +40,7 @@ pub(crate) fn parse(
     config: &AsrConfig,
     duration: i64,
 ) -> Result<Vec<Segment>, String> {
-    if bytes.len() > 8 * 1024 * 1024 || duration <= 0 {
+    if bytes.len() as u64 > PROCESS_POLICY.result_bytes || duration <= 0 {
         return Err("ASR出力のサイズ・時間が不正です".into());
     }
     let output: Output =
@@ -116,7 +119,10 @@ pub(crate) fn run(
     if result.exists() {
         return Err("ASR結果は既に存在しています".into());
     }
-    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let mut launch = OwnedCommand::for_purpose(
+        &config.executable.path,
+        mon_native::process::Purpose::Inference,
+    )?;
     let c = &mut launch.command;
     c.env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -194,13 +200,13 @@ pub(crate) fn run(
         if cancelled() {
             return Ok(None);
         }
-        if started.elapsed() > Duration::from_secs(1800) {
+        if PROCESS_POLICY.expired(started.elapsed(), None) {
             return Err("ASR処理が制限時間を超えました".into());
         }
         for (name, max) in [
-            ("stdout.log", 4 * 1024 * 1024),
-            ("stderr.log", 4 * 1024 * 1024),
-            ("result.json", 8 * 1024 * 1024),
+            ("stdout.log", PROCESS_POLICY.stdout_bytes),
+            ("stderr.log", PROCESS_POLICY.stderr_bytes),
+            ("result.json", PROCESS_POLICY.result_bytes),
         ] {
             if directory.join(name).metadata().is_ok_and(|m| m.len() > max) {
                 return Err("ASR出力が上限を超えました".into());
@@ -214,7 +220,8 @@ pub(crate) fn run(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let bytes = crate::restored_processing::read_local(&result, 8 * 1024 * 1024, cancelled)?;
+    let bytes =
+        crate::restored_processing::read_local(&result, PROCESS_POLICY.result_bytes, cancelled)?;
     for file in watched {
         file.verify()?;
     }

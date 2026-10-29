@@ -20,11 +20,11 @@ async page=>{
   await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
   check(await page.locator('.meeting-playback-dock .audio-player').count()===1,"interval created duplicate/outside dock player");
   check(Math.abs(await page.locator('.meeting-playback-dock').evaluate(el=>el.getBoundingClientRect().height)-dockHeight)<=1,"interval notification changed dock height");
-  check(await page.evaluate(()=>{const r=window.__mon.intervalCalls.find(c=>c.cmd==="prepare_meeting_playback").args.request;return r.meetingId==="m1"&&r.startReference.startUs===1000001&&r.startReference.endUs===3999999&&r.startReference.expectedDurationUs===60000000&&r.mode==="mic";}),"native request rounded or changed interval/mode");
+  check(await page.evaluate(()=>{const r=window.__mon.intervalCalls.find(c=>c.cmd==="prepare_meeting_playback").args.request;return r.meetingId==="m1"&&r.startReference.startUs===1000001&&r.startReference.endUs===3999999&&r.startReference.expectedDurationUs===60000000&&r.mode==="mixed";}),"native request rounded or changed interval/mode");
   await player().getByRole("button",{name:"一時停止",exact:true}).click();
   await page.screenshot({path:"plain-minutes-interval.png"});await close();
   results.push("click starts at the exact fractional time on the whole timeline in the one shared dock; pause and navigation release work");
-  for(const [modes,expected] of [[['mic','system','both'],'both'],[['system'],'system']]){
+  for(const [modes,expected] of [[['mixed'],'mixed']]){
     stage=`audio-mode-${expected}`;
     await page.evaluate(modes=>{window.__mon.audioSummary.modes=modes;window.__mon.emitPlain("minutes-version-changed");},modes);
     await page.waitForFunction(modes=>JSON.stringify(window.__mon.audioSummary.modes)===JSON.stringify(modes),modes);
@@ -34,7 +34,7 @@ async page=>{
     check(await page.evaluate(expected=>window.__mon.intervalCalls.filter(c=>c.cmd==="prepare_meeting_playback").at(-1).args.request.mode===expected,expected),"available audio mode ignored");
     await close();
   }
-  results.push("both and PC-only saved sources use the corresponding native mode without a model");
+  results.push("recorded canonical meeting audio uses the same native mode without a model");
   stage="no-audio-edit";
   const played=await count("prepare_meeting_playback");
   await page.evaluate(()=>{window.__mon.audioSummary.modes=[];window.__mon.emitPlain("minutes-version-changed");});await link().waitFor({state:"hidden"});
@@ -46,7 +46,7 @@ async page=>{
   // Return to the fixture's saved body without a write, using explicit discard.
   await page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true}).click();
   await page.locator("dialog[open]").getByRole("button",{name:"編集を破棄して続ける",exact:true}).click();
-  await page.evaluate(()=>window.__mon.audioSummary.modes=['mic']);await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await link().waitFor();
+  await page.evaluate(()=>window.__mon.audioSummary.modes=['mixed']);await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await link().waitFor();
   results.push("no audio leaves interval text visible and never blocks or autosaves human Markdown editing");
   stage="wrong-interval";
   await page.evaluate(()=>window.__mon.intervalMode="wrong");const readBefore=await count("read_playback_chunk");await link().click();
@@ -56,10 +56,10 @@ async page=>{
   results.push("wrong native interval is rejected and closed before reading PCM; explicit retry succeeds");
   stage="missing-interval";
   await page.evaluate(()=>window.__mon.intervalMode="gap");const gapReads=await count("read_playback_chunk");await link().click();
-  await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-  await page.waitForFunction(before=>window.__mon.intervalCalls.filter(c=>c.cmd==="read_playback_chunk").length>before,gapReads);
+  await page.getByRole("alert").filter({hasText:"欠損補完済みの連続音声"}).waitFor();
+  check(await count("read_playback_chunk")===gapReads,"legacy sparse output read PCM");
   check(await player().getByRole("button",{name:"音声欠損を確認",exact:true}).count()===0,"removed gap dialog remains");await close();
-  results.push("interval playback automatically skips missing time and reads saved PCM without a gap dialog or fabricated padding");
+  results.push("legacy sparse output is rejected before PCM reads; canonical playback requires continuous audio");
   stage="cancel-held-interval";
   await page.evaluate(()=>window.__mon.intervalMode="held");const closedBefore=await count("close_playback");await link().click();await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).waitFor();
   const countBefore=await count("read_playback_chunk");await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).click();await player().getByRole("slider",{name:"会議全体の再生位置",exact:true}).waitFor();

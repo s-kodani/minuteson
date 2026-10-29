@@ -2,7 +2,7 @@ async (page) => {
   const context = page.context(), results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/, async route => {
     const response = await route.fetch();
-    const body = (await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const body = (await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({ response, body });
   });
   const title = "進行中の処理を停止して終了しますか？", startTitle = "選択した会議の録音を開始しますか？";

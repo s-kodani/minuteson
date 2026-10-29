@@ -1,5 +1,6 @@
 //! Main-window boundary. Every filesystem writer/reader holds the shared model
 //! preparation lease until child teardown and durable IO have actually ended.
+use crate::model_download_recipe::RecipeExt;
 use crate::{model_download_recipe::Recipe, model_inspection::Inspector, Storage};
 use serde::Serialize;
 use tauri::{Manager, WebviewWindow};
@@ -67,7 +68,8 @@ pub(crate) async fn start_model_download(
     token: String,
     definition: String,
     expected_recipe_hash: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = async move {
     main(&window)?;
     binding(&token, &expected_recipe_hash)?;
 
@@ -97,41 +99,55 @@ pub(crate) async fn start_model_download(
             json(receipt)
         }).await
     }
+
+        }.await;
+    result.map_err(|message| mon_contracts::AppError::from_command("start_model_download", message))
 }
 
 #[tauri::command]
 pub(crate) fn get_model_download_lifetime(
     window: WebviewWindow,
     token: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    let (active, cancelled) = window.state::<Inspector>().status(&token)?;
-    // Inactive alone does not mean a delayed start IPC cannot arrive. Recovery
-    // first cancels this exact token and checks its retained tombstone.
-    Ok(serde_json::json!({"active": active, "cancelled": cancelled}))
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = (|| {
+        main(&window)?;
+        let (active, cancelled) = window.state::<Inspector>().status(&token)?;
+        // Inactive alone does not mean a delayed start IPC cannot arrive. Recovery
+        // first cancels this exact token and checks its retained tombstone.
+        Ok(serde_json::json!({"active": active, "cancelled": cancelled}))
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_model_download_lifetime", message)
+    })
 }
 
 #[tauri::command]
 pub(crate) async fn get_model_download_catalog(
     window: WebviewWindow,
     token: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    id(&token)?;
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = async move {
+        main(&window)?;
+        id(&token)?;
 
-    {
-        prepare(window, token, move |app, cancelled| {
-            let root = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?
-                .join("model-downloads");
-            json(crate::model_download::catalog::catalog(&root, &|| {
-                cancelled()
-            })?)
-        })
-        .await
+        {
+            prepare(window, token, move |app, cancelled| {
+                let root = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| e.to_string())?
+                    .join("model-downloads");
+                json(crate::model_download::catalog::catalog(&root, &|| {
+                    cancelled()
+                })?)
+            })
+            .await
+        }
     }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_model_download_catalog", message)
+    })
 }
 
 #[tauri::command]
@@ -140,29 +156,33 @@ pub(crate) async fn read_model_download(
     token: String,
     download_id: String,
     expected_recipe_hash: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    binding(&download_id, &expected_recipe_hash)?;
-    if window.state::<Inspector>().status(&download_id)?.0 {
-        return Err("元の取得処理の停止完了を待ってください".into());
-    }
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = async move {
+        main(&window)?;
+        binding(&download_id, &expected_recipe_hash)?;
+        if window.state::<Inspector>().status(&download_id)?.0 {
+            return Err("元の取得処理の停止完了を待ってください".into());
+        }
 
-    {
-        prepare(window, token, move |app, cancelled| {
-            let root = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?
-                .join("model-downloads");
-            json(crate::model_download::readback(
-                &root,
-                &download_id,
-                &expected_recipe_hash,
-                &|| cancelled(),
-            )?)
-        })
-        .await
+        {
+            prepare(window, token, move |app, cancelled| {
+                let root = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| e.to_string())?
+                    .join("model-downloads");
+                json(crate::model_download::readback(
+                    &root,
+                    &download_id,
+                    &expected_recipe_hash,
+                    &|| cancelled(),
+                )?)
+            })
+            .await
+        }
     }
+    .await;
+    result.map_err(|message| mon_contracts::AppError::from_command("read_model_download", message))
 }
 
 #[tauri::command]
@@ -172,30 +192,35 @@ pub(crate) async fn place_downloaded_model(
     download_id: String,
     expected_recipe_hash: String,
     expected_review_hash: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    binding(&download_id, &expected_recipe_hash)?;
-    if !hash(&expected_review_hash) {
-        return Err("素材の確認SHAが不正です".into());
-    }
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = async move {
+        main(&window)?;
+        binding(&download_id, &expected_recipe_hash)?;
+        if !hash(&expected_review_hash) {
+            return Err("素材の確認SHAが不正です".into());
+        }
 
-    {
-        let package = token.clone();
-        prepare(window, token, move |app, cancelled| {
-            let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
-            json(crate::model_download::place(
-                &app.state::<Storage>(),
-                &root.join("models"),
-                &root.join("model-downloads"),
-                &download_id,
-                &expected_recipe_hash,
-                &package,
-                &expected_review_hash,
-                &|| cancelled(),
-            )?)
-        })
-        .await
+        {
+            let package = token.clone();
+            prepare(window, token, move |app, cancelled| {
+                let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                json(crate::model_download::place(
+                    &app.state::<Storage>(),
+                    &root.join("models"),
+                    &root.join("model-downloads"),
+                    &download_id,
+                    &expected_recipe_hash,
+                    &package,
+                    &expected_review_hash,
+                    &|| cancelled(),
+                )?)
+            })
+            .await
+        }
     }
+    .await;
+    result
+        .map_err(|message| mon_contracts::AppError::from_command("place_downloaded_model", message))
 }
 
 #[tauri::command]
@@ -205,23 +230,28 @@ pub(crate) fn get_downloaded_model_placement_result(
     download_id: String,
     expected_recipe_hash: String,
     expected_review_hash: String,
-) -> Result<serde_json::Value, String> {
-    main(&window)?;
-    id(&package_id)?;
-    binding(&download_id, &expected_recipe_hash)?;
-    if !hash(&expected_review_hash) {
-        return Err("素材の確認SHAが不正です".into());
-    }
-    // Observe lifetime BEFORE the DB read: seeing active=false cannot race a
-    // pre-existing worker's later commit. Cancellation tombstone fences late IPC.
-    let (active, cancelled) = window.state::<Inspector>().status(&package_id)?;
-    let receipt = window.state::<Storage>().downloaded_placement_result(
-        &package_id,
-        &download_id,
-        &expected_recipe_hash,
-        &expected_review_hash,
-    )?;
-    Ok(serde_json::json!({"active": active, "cancelled": cancelled, "receipt": receipt}))
+) -> Result<serde_json::Value, mon_contracts::AppError> {
+    let result: Result<serde_json::Value, String> = (|| {
+        main(&window)?;
+        id(&package_id)?;
+        binding(&download_id, &expected_recipe_hash)?;
+        if !hash(&expected_review_hash) {
+            return Err("素材の確認SHAが不正です".into());
+        }
+        // Observe lifetime BEFORE the DB read: seeing active=false cannot race a
+        // pre-existing worker's later commit. Cancellation tombstone fences late IPC.
+        let (active, cancelled) = window.state::<Inspector>().status(&package_id)?;
+        let receipt = window.state::<Storage>().downloaded_placement_result(
+            &package_id,
+            &download_id,
+            &expected_recipe_hash,
+            &expected_review_hash,
+        )?;
+        Ok(serde_json::json!({"active": active, "cancelled": cancelled, "receipt": receipt}))
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_downloaded_model_placement_result", message)
+    })
 }
 
 #[cfg(test)]

@@ -19,8 +19,8 @@ async(page,capturePath,detailUI)=>{
   results.push('utterance playback uses the shared dock and keeps alignment information out of its height');
   check(await page.evaluate(async()=>{const {toasts}=await import('/src/toast.tsx');return [...toasts.getSnapshot(),...toasts.getHistorySnapshot()].every(t=>!t.key.includes('playback-alignment')&&!t.message.includes('同期未検証'));}),'utterance playback published an unwanted synchronization toast or history entry');results.push('utterance playback emits no synchronization toast or notification history entry');
   const fullSlider=player().getByRole('slider',{name:'会議全体の再生位置',exact:true});
-  check(await fullSlider.getAttribute('max')==='172800000','utterance clipped the full timeline');
-  await fullSlider.fill('715200');await player().getByRole('button',{name:'再生',exact:true}).click();
+  check(await fullSlider.getAttribute('max')==='57600000','utterance clipped the full timeline');
+  await fullSlider.fill('238400');await player().getByRole('button',{name:'再生',exact:true}).click();
   await editor.locator('[data-utterance-id="speech-b"].utterance-playing').waitFor();await pause();
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='prepare_meeting_playback').at(-1).args.request.startReference?.utteranceId)==='speech-a','following the next utterance changed the selected reference');
   results.push('playback crosses the selected utterance end and highlights the next utterance on the whole timeline');

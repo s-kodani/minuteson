@@ -184,7 +184,7 @@ fn real_guarded_vocabulary_worker_checks_all_units_against_unhinted_audio() {
         );
     });
     if let Err(error) = &outcome {
-        std::fs::write(root.join("worker-error.txt"), error).unwrap();
+        std::fs::write(root.join("worker-error.txt"), error.to_string()).unwrap();
     }
     let candidate = outcome.unwrap().unwrap();
     let (spec, cp) = storage.fixed_job_input(&job.id).unwrap();

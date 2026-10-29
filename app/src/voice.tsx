@@ -1,6 +1,6 @@
 import { ErrorNotice } from "./toast";
 import { InfoPopover } from "./info-popover";
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import {listen} from "@tauri-apps/api/event";
 import {IconButton} from "./action-icon";
 import {useTranscriptAudio} from "./transcript-audio";

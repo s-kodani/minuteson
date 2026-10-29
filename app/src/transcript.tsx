@@ -2,7 +2,7 @@ import { transcriptCopyText, writeTranscriptClipboard } from "./transcript-copy"
 import { SpeakerStructureDialog, type SpeakerStructureEdit } from "./speaker-structure-dialog";
 import { VoicePanel } from "./voice";
 import { listen } from "@tauri-apps/api/event";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";

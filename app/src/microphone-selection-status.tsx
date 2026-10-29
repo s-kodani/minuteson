@@ -1,4 +1,4 @@
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import {useEffect,useState} from "react";
 import {checkedMicrophoneSelectionStatus,microphoneFallbackMessage,type MicrophoneSelectionStatus} from "./microphone-selection-state";
 import {toasts} from "./toast";

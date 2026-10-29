@@ -12,8 +12,9 @@ pub(crate) mod vad;
 pub(crate) mod wave;
 pub(crate) mod whisper;
 mod windows_acceleration;
+pub(crate) use mon_contracts::ProcessingError;
+pub(crate) use restore::restore_parameters;
 pub(crate) use restore::restore_saved_results;
-pub(crate) const QUALITY_FAILURE_PREFIX: &str = "文字起こしの反復検査: ";
 
 #[cfg(test)]
 pub(crate) fn reference_is_repetitive(segments: &[whisper::Segment]) -> bool {
@@ -685,7 +686,7 @@ pub(crate) fn process(
     job_id: &str,
     stopping: &impl Fn() -> bool,
     progress: &impl Fn(JobSnapshot),
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, ProcessingError> {
     let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
     let parameters = checked_parameters(storage, &spec, job_id)?;
     let optimization =
@@ -840,7 +841,7 @@ pub(crate) fn process(
             let adaptive =
                 parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3);
             let guarded = if checkpoint.pending_recovery.is_some() {
-                Err(format!("{}再認識を再開", QUALITY_FAILURE_PREFIX))
+                Err(ProcessingError::quality("再認識を再開", vec![]))
             } else {
                 asr::adapter(&runtime)?.guarded(
                     &runtime,
@@ -855,7 +856,7 @@ pub(crate) fn process(
             let (outcome, recovered) = match guarded {
                 Ok(Some(value)) => (value, false),
                 Ok(None) => return Ok(None),
-                Err(error) if adaptive && error.starts_with(QUALITY_FAILURE_PREFIX) => {
+                Err(error) if adaptive && error.is_quality_rejection() => {
                     let state = checkpoint
                         .pending_recovery
                         .as_ref()
@@ -997,7 +998,7 @@ pub(crate) fn process(
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     checkpoint.outputs.pop();
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
             let paused = snapshot.state == "paused";

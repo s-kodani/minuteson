@@ -1,5 +1,5 @@
 import {listen} from "@tauri-apps/api/event";
-import {isTauri} from "@tauri-apps/api/core";
+import {isTauri} from "./ipc.ts";
 import {useEffect,useState} from "react";
 import {IssueNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";

@@ -6,6 +6,7 @@ use super::{
     fs::{Directory, Proof},
     intent::{self, Prepared},
 };
+use crate::storage::deletion::fs::NativeProof as _;
 use crate::storage::{now_ms, Storage};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};

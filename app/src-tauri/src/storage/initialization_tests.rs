@@ -40,7 +40,7 @@ fn old(db: &Connection, version: usize) {
 #[test]
 fn unsupported_old_versions_are_rejected_without_updating_schema_history_or_meetings() {
     for version in 1..MIGRATIONS.len() {
-        if legacy_audio_migration::admits_schema(version) {
+        if schema_upgrade::admits(version) {
             continue;
         }
         let mut db = Connection::open_in_memory().unwrap();

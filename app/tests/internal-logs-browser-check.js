@@ -1,8 +1,8 @@
 // Run with playwright-cli run-code. No native process or user storage is used.
-async page => {
+async (page, _capturePath, detailUI) => {
   const results = [], check = (condition, message) => { if (!condition) throw Error(message); };
   try {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await detailUI.prepareClipboard();
   await page.goto("http://127.0.0.1:1420/tests/internal-logs-browser.html");
   await page.getByRole("button", { name: "内部ログ", exact: true }).click();
   const logs = page.getByRole("region", { name: "内部ログ", exact: true });
@@ -157,7 +157,7 @@ async page => {
   check(await rows().count() === 110, "fetch failure cleared displayed logs");
   await page.evaluate(() => { window.internalLogsFixture.fail = false; window.internalLogsFixture.status = { storageError: "合成の保存失敗", droppedEntries: 7, historyTruncated: true }; });
   await logs.getByRole("button", { name: "更新", exact: true }).click();
-  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({ hasText: "合成の保存失敗" }).waitFor();
+  await logs.getByRole("status").filter({ hasText: "合成の保存失敗" }).waitFor();
   await logs.getByText(/7件のログを記録できませんでした/).waitFor();
   await logs.getByText(/保持期間または容量上限/).waitFor();
   await page.getByRole("button", { name: "前の画面へ戻る", exact: true }).click();

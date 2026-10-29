@@ -52,6 +52,7 @@ mod model_metadata;
 mod model_placements;
 pub(crate) mod model_profiles;
 mod playback;
+pub(crate) mod post_analysis;
 mod preferences;
 #[cfg(any(unix, windows))]
 mod publication_files;
@@ -61,6 +62,7 @@ mod recording_preparation;
 pub(crate) mod recordings;
 mod restored_input;
 mod revisions;
+mod schema_upgrade;
 pub(crate) mod speaker_assignment_update;
 pub(crate) mod speaker_completion;
 pub(crate) mod transcript_consolidation;
@@ -140,6 +142,7 @@ const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapsho
 const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
 const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
 const MIGRATION_35: &str = include_str!("migrations/0035_single_meeting_audio.sql");
+const MIGRATION_36: &str = include_str!("migrations/0036_post_analysis_intents.sql");
 const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
 const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
@@ -175,6 +178,7 @@ pub struct Storage {
     restored_inputs: Mutex<restored_input::Registry>,
     pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
+    post_analysis_drain: Mutex<()>,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
@@ -561,6 +565,7 @@ impl Storage {
             restored_inputs: Mutex::new(restored_input::Registry::default()),
             feature_vectors: Mutex::default(),
             execution_progress: Mutex::default(),
+            post_analysis_drain: Mutex::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
@@ -869,7 +874,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
         return Ok(true);
     }
     let version = verify_migration_history(connection)?;
-    if version != MIGRATIONS.len() && !legacy_audio_migration::admits_schema(version) {
+    if version != MIGRATIONS.len() && !schema_upgrade::admits(version) {
         return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
     }
     Ok(false)
@@ -877,7 +882,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
 
 fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        legacy_audio_migration::upgrade_schema(connection)?;
+        schema_upgrade::upgrade(connection)?;
         return Ok(());
     }
     // These trusted SQL definitions construct a NEW current database only.
@@ -941,6 +946,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (33, MIGRATION_33),
     (34, MIGRATION_34),
     (35, MIGRATION_35),
+    (36, MIGRATION_36),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

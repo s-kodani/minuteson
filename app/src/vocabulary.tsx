@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { IconButton } from "./action-icon";
 import { OptionsModal } from "./options-modal";
 import type { ModalReplacement } from "./common-modal";

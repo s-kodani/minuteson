@@ -86,6 +86,7 @@ fn recording_command(
         return Err("入力確認の録音IDが不正です".into());
     }
     let mut command = Command::new(binary);
+    mon_native::process::configure(&mut command, mon_native::process::Purpose::Capture);
     command
         .arg("--output")
         .arg(output)
@@ -606,13 +607,15 @@ impl RecorderController {
                     loop {
                         line.clear();
                         match std::io::Read::by_ref(&mut input)
-                            .take(4097)
+                            .take(mon_native::process::Purpose::Capture.policy().stderr_bytes + 1)
                             .read_until(b'\n', &mut line)
                         {
                             Ok(0) | Err(_) => break,
                             _ => {}
                         }
-                        if line.len() > 4096 {
+                        if line.len() as u64
+                            > mon_native::process::Purpose::Capture.policy().stderr_bytes
+                        {
                             continue;
                         }
                         if let Ok(value) = std::str::from_utf8(&line) {
@@ -770,7 +773,7 @@ impl RecorderController {
         }
         let mut bytes = Vec::new();
         (&file)
-            .take(4097)
+            .take(mon_native::process::Purpose::Capture.policy().stderr_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         if bytes.len() as u64 != metadata.len() {

@@ -161,11 +161,7 @@ struct InputLevelReport: Encodable {
   let system: InputLevelTrack
 
   static func validOwner(_ value: String) -> Bool {
-    guard let uuid = UUID(uuidString: value), uuid.uuidString.lowercased() == value else {
-      return false
-    }
-    let bytes = Array(value.utf8)
-    return bytes[14] == 52 && [56, 57, 97, 98].contains(bytes[19])
+    CaptureCore.validOwner(value)
   }
 
   func publish(to output: URL) throws {

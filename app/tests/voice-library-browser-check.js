@@ -29,7 +29,7 @@ async (page,capturePath) => {
   await player.getByRole('button',{name:'一時停止',exact:true}).waitFor();
   check(await page.evaluate(()=>{
     const f=window.monBrowserFixture,c=f.calls.find(c=>c.command==='prepare_voice_sample_playback'),info=Object.values(f.meetingAudio.sessions)[0];
-    return c.args.sampleId==='voice-a'&&Object.keys(c.args).sort().join(',')==='preparationId,sampleId'&&info.startUs===1_500_000&&info.endUs===4_500_000&&info.trackKind==='mic';
+    return c.args.sampleId==='voice-a'&&Object.keys(c.args).sort().join(',')==='preparationId,sampleId'&&info.startUs===1_500_000&&info.endUs===4_500_000&&info.trackKind==='processed';
   }),'playback did not use only the saved sample identity and interval');
   await player.getByRole('button',{name:'一時停止',exact:true}).click();
   await player.getByRole('button',{name:'再生',exact:true}).waitFor();
@@ -42,7 +42,7 @@ async (page,capturePath) => {
   await sato.getByRole('group',{name:'登録した声の再生',exact:true}).getByRole('button',{name:'一時停止',exact:true}).waitFor();
   check(await library.getByRole('group',{name:'登録した声の再生',exact:true}).count()===1,'multiple sample players remain visible');
   await page.waitForFunction(()=>Object.values(window.monBrowserFixture.meetingAudio.sessions).length===1);
-  check(await page.evaluate(()=>Object.values(window.monBrowserFixture.meetingAudio.sessions)[0].trackKind==='imported'),'another source track was mixed into the imported sample');
+  check(await page.evaluate(()=>Object.values(window.monBrowserFixture.meetingAudio.sessions)[0].trackKind==='processed'),'another source track was mixed into the imported sample');
   await nav.getByRole('button',{name:'会議一覧',exact:true}).click();
   await page.waitForFunction(()=>Object.keys(window.monBrowserFixture.meetingAudio.sessions).length===0);
   await page.getByRole('button',{name:'前の画面へ戻る',exact:true}).click();
@@ -51,7 +51,7 @@ async (page,capturePath) => {
 
   await page.evaluate(()=>{window.monVoiceFixture.failPeople=true;});
   await library.getByRole('button',{name:'ボイス一覧を再読込',exact:true}).click();
-  await library.getByRole('alert').filter({hasText:'合成のボイス一覧取得失敗'}).waitFor();
+  await page.getByRole('alert').filter({hasText:'合成のボイス一覧取得失敗'}).waitFor();
   check(await tanaka.isVisible(),'read failure cleared the previous list');
   await page.evaluate(()=>{window.monVoiceFixture.failPeople=false;window.monVoiceFixture.corruptSample={endUs:999999};});
   await library.getByRole('button',{name:'ボイス一覧を再読込',exact:true}).click();

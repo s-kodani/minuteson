@@ -1,9 +1,10 @@
 //! Meeting-independent voice identities. Embeddings never establish authentication.
 use crate::diarization::{embedding, sherpa::SherpaConfig};
-use crate::local_engine::Fingerprint;
 use crate::storage::{JobKind, JobSnapshot, Storage};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+pub(crate) mod restore;
+pub(crate) mod result;
 
 pub(crate) const EXTRACTOR: &str = "sherpa-1.13.8-mono16k-normalized-v1";
 pub(crate) const MAX_DIMENSION: usize = 4096;
@@ -136,23 +137,9 @@ pub(crate) fn engine(storage: &Storage) -> Result<SherpaConfig, String> {
     {
         return Err("ローカルAI設定で標準プロファイルの話者分離モデルを準備してください".into());
     }
-    let capture = |path: &str| Fingerprint::capture(std::path::Path::new(path), &|| false);
-    let engine = SherpaConfig {
-        executable: capture(&e.executable_path)?,
-        segmentation_model: capture(&e.segmentation_model_path)?,
-        embedding_model: capture(&e.embedding_model_path)?,
-        runtime_libraries: e
-            .runtime_library_paths
-            .iter()
-            .map(|p| capture(p))
-            .collect::<Result<_, _>>()?,
-        threads: e.threads,
-        cluster_threshold_milli: e.cluster_threshold_milli,
-        window_shift_milli: e.window_shift_milli,
-        min_duration_on_ms: e.min_duration_on_ms,
-        min_duration_off_ms: e.min_duration_off_ms,
-        speech_sensitivity_milli: e.speech_sensitivity_milli,
-    };
+    let engine = e.capture(crate::diarization::sherpa::CaptureMode::Transient, &|| {
+        false
+    })?;
     engine.validate_settings(None)?;
     Ok(engine)
 }
@@ -318,36 +305,4 @@ mod tests {
         assert_eq!(similarity(&[1., 0.], &[0., 1.]).unwrap(), 0.);
         assert!(similarity(&[1.], &[1., 0.]).is_err());
     }
-}
-
-// Called only after a newly analyzed meeting becomes current, never after
-// enrollment or registry changes (old meetings are explicitly re-matched).
-pub(crate) fn enqueue_automatic(storage: &Storage, meeting: &str) -> Result<(), String> {
-    if !cfg!(any(target_os = "macos", windows))
-        || storage.voice_people()?.iter().all(|p| p.samples.is_empty())
-    {
-        return Ok(());
-    }
-    let context = storage.voice_context(meeting)?;
-    if context.windows.is_empty()
-        || storage.has_voice_matching(
-            &context.analysis_id,
-            &context.book_hash,
-            &engine(storage)?.embedding_model.sha256,
-        )?
-    {
-        return Ok(());
-    }
-    storage.start_automatic_voice(crate::storage::voice::Start {
-        meeting_id: meeting.into(),
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        analysis_id: context.analysis_id,
-        working_hash: context.working_hash,
-        book_hash: context.book_hash,
-        speaker_id: None,
-        person_id: None,
-        person_name: None,
-        selected_windows: None,
-    })?;
-    Ok(())
 }

@@ -3,7 +3,7 @@ async (page,capturePath=path=>path)=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.addInitScript(()=>{const mac=new URLSearchParams(location.search).get("resident")==="macos";Object.defineProperty(navigator,"platform",{configurable:true,get:()=>mac?"MacIntel":"Win32"});});
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});

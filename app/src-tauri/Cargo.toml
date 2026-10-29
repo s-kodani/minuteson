@@ -12,6 +12,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+mon-contracts = { path = "../../crates/mon-contracts" }
+mon-core = { path = "../../crates/mon-core" }
+mon-native = { path = "../../crates/mon-native" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
@@ -26,40 +29,6 @@ flacenc = { version = "=0.5.1", default-features = false }
 md-5 = "0.10"
 crc = "=3.4.0"
 libc = "0.2"
-
-# Keep test-only symbol tables from inflating the native test launcher.
-# Normal dev/release builds and runtime checks are unchanged.
-[profile.test]
-strip = "symbols"
-debug = 0
-# Reuse one test cache through tools/mon_rust_tests.py. Its 10 GiB post-run
-# budget trims incremental state first, without retaining per-task caches.
-# Explicit partitioning still limits individual code-generation units.
-incremental = true
-codegen-units = 256
-# false still enables local ThinLTO. Disable its very large intermediate
-# bitcode in tests so the latest incremental generation fits the cache budget.
-lto = "off"
-debug-assertions = true
-overflow-checks = true
-
-# Reduce the root package's oversized arm64 test text. All overrides here
-# remain test-only; production profiles and runtime checks stay intact.
-[profile.test.package.mon-desktop]
-opt-level = 1
-
-# Speed up repeated real SQLite work in tests. Bundled C compilation receives
-# this package's OPT_LEVEL too. WAL/FULL, migrations and Rust checks stay intact.
-[profile.test.package.libsqlite3-sys]
-opt-level = 2
-
-[profile.test.package.rusqlite]
-opt-level = 1
-
-# The default sha2 0.10 backend on this Apple Silicon build is software.
-# Keep every physical-byte hash check, but compile its compression rounds fast.
-[profile.test.package.sha2]
-opt-level = 3
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "0.25.1", default-features = false }

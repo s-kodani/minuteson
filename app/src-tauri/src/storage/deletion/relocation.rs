@@ -6,6 +6,7 @@
 use super::intent;
 use super::{database, fs, startup};
 use crate::native_fs::Metadata;
+use crate::storage::deletion::fs::NativeProof as _;
 use crate::storage::Storage;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};

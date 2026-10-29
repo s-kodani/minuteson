@@ -63,13 +63,7 @@ pub struct Segment {
 pub(crate) const WHISPER: &str = "whisper.cpp";
 pub(crate) const TRANSDUCER: &str = "sherpa-onnx-transducer";
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct BackendManifest {
-    pub id: String,
-    /// Slot -> package-relative path; the primary model and VAD have common roles.
-    pub files: BTreeMap<String, String>,
-}
+pub(crate) use mon_contracts::BackendManifest;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BackendPreferences {
@@ -161,7 +155,7 @@ pub(crate) trait AsrAdapter: Sync {
         _hinted: bool,
         _vocabulary: Option<&crate::storage::VocabularySnapshot>,
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<Option<super::guard::Outcome>, String> {
+    ) -> Result<Option<super::guard::Outcome>, mon_contracts::ProcessingError> {
         Ok(self
             .recognize(config, directory, duration, cancelled)?
             .map(|_| super::guard::Outcome {
@@ -309,7 +303,7 @@ impl AsrAdapter for WhisperAdapter {
         hinted: bool,
         vocabulary: Option<&crate::storage::VocabularySnapshot>,
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<Option<super::guard::Outcome>, String> {
+    ) -> Result<Option<super::guard::Outcome>, mon_contracts::ProcessingError> {
         super::guard::run(c, d, t, check, hinted, vocabulary, &|| cancelled())
     }
     fn logical_output(

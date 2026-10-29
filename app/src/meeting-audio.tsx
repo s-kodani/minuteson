@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc.ts";
 import { OptionsModal } from "./options-modal";
 import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";

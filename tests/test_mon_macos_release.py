@@ -47,7 +47,7 @@ class ReleaseTests(unittest.TestCase):
                           "licenseReview": "not_verified", "distributionReady": False,
                           "supplementManifestSha256": release.digest(release.REPOSITORY / "third-party/notices/index.json"),
                           "lockHashes": {name: release.digest(release.REPOSITORY / relative) for name, relative in
-                                         (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
+                                         (("cargo", "Cargo.lock"), ("npm", "app/package-lock.json"))},
                           "packages": [{"name": "synthetic"}], "missingNoticeTexts": ["synthetic"],
                           "noticesSha256": release.digest(self.notice_text), "noticesBytes": self.notice_text.stat().st_size}
         self.file(self.notice_inventory, json.dumps(self.inventory).encode())

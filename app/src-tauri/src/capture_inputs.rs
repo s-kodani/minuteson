@@ -5,7 +5,9 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const MAX_BYTES: u64 = 256 * 1024;
+const PROCESS_POLICY: mon_native::process::Policy =
+    mon_native::process::Purpose::CaptureMetadata.policy();
+const MAX_BYTES: u64 = PROCESS_POLICY.stdout_bytes;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -83,7 +85,7 @@ impl Drop for Probe {
     }
 }
 pub(crate) fn read(binary: &Path) -> Result<InputDevices, String> {
-    read_with_timeout(binary, Duration::from_secs(5))
+    read_with_timeout(binary, PROCESS_POLICY.timeout().expect("metadata deadline"))
 }
 fn read_with_timeout(binary: &Path, timeout: Duration) -> Result<InputDevices, String> {
     parse(&read_report(binary, "--list-input-devices", timeout)?)
@@ -92,11 +94,16 @@ pub(crate) fn read_metadata(binary: &Path, flag: &str) -> Result<Vec<u8>, String
     if !matches!(flag, "--list-input-devices" | "--list-capture-applications") {
         return Err("一覧取得のコマンドが不正です".into());
     }
-    read_report(binary, flag, Duration::from_secs(5))
+    read_report(
+        binary,
+        flag,
+        PROCESS_POLICY.timeout().expect("metadata deadline"),
+    )
 }
 fn read_report(binary: &Path, flag: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     let mut report = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut command = Command::new(binary);
+    mon_native::process::configure(&mut command, mon_native::process::Purpose::CaptureMetadata);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -119,7 +126,7 @@ fn read_report(binary: &Path, flag: &str, timeout: Duration) -> Result<Vec<u8>, 
         if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
-        if start.elapsed() > timeout {
+        if PROCESS_POLICY.expired(start.elapsed(), Some(timeout)) {
             return Err("取得対象一覧の取得が時間上限を超えました。再確認してください".into());
         }
         std::thread::sleep(Duration::from_millis(20));

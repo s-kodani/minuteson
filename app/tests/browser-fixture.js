@@ -150,6 +150,7 @@ mockIPC(async (command, args) => {
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
+    case "get_storage_bootstrap": return {meetingRoot:"/synthetic/meetings",activeMeetingRoot:"/synthetic/meetings",restartRequired:false,modelsRoot:"/synthetic/models",bootstrapPath:"/synthetic/config/bootstrap.json",revision:0,origin:"default",pendingOperationId:null,pendingTarget:null,keptMoves:[]};
     case "get_minutes_markdown": return null;
     case "get_official_model_options": return [];
     case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
@@ -170,7 +171,7 @@ mockIPC(async (command, args) => {
     case "get_model_profiles": return structuredClone(fixture.modelProfiles ?? ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false })));
     case "get_meeting_audio_summary":
       if(fixture.meetingSummaryFailure) throw Error("模擬の保存音声確認失敗");
-      return {schemaVersion:1,durationUs:fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??(meetings.find(m=>m.id===args.meetingId)?.sourceType==="audio_import"?["imported"]:["mic","system","both"])};
+      return {schemaVersion:1,durationUs:fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??["mixed"]};
     case "get_analysis_flow":
       if(fixture.regenerationReadFail)throw Error("模擬解析状態読込失敗");
       return args.meetingId===meetings[0].id?structuredClone(fixture.analysisFlow??null):null;
@@ -234,6 +235,7 @@ mockIPC(async (command, args) => {
       fixture.draft = { ...fixture.draft, payload: fixture.transcriptHistory.pop(), lockVersion: fixture.draft.lockVersion + 1 };
       return stampFixtureDraft(fixture.draft);
     }
+    case "get_asr_preferences":
     case "get_analysis_preferences": return structuredClone(fixture.preferences);
     case "get_vocabulary_book": return structuredClone(fixture.vocabulary[args.meetingId ?? "global"] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 });
     case "get_meeting_vocabulary": return { global: structuredClone(fixture.vocabulary.global), meeting: structuredClone(fixture.vocabulary[args.meetingId] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 }) };
@@ -353,9 +355,9 @@ mockIPC(async (command, args) => {
       const data=fixture.meetingAudio,mode=args.request.mode;
       if(args.request.startReference && fixture.holdPlayback) await new Promise((resolve,reject)=>{fixture.releasePlayback=resolve;if(entry)entry.reject=reject;});
       if(args.request.startReference && fixture.failPlayback) throw Error("音声ファイルのハッシュが保存時と一致しません");
-      const info={token:crypto.randomUUID(),sampleRate:48000,channels:1,totalFrames:Math.ceil(data.endUs*48000/1000000),startUs:0,endUs:data.endUs,trackKind:mode,alignment:"unverified"};
+      const info={token:crypto.randomUUID(),sampleRate:16000,channels:1,totalFrames:Math.ceil(data.endUs*16000/1000000),startUs:0,endUs:data.endUs,trackKind:mode,alignment:"unverified"};
       const gaps=data.gaps.filter(gap=>mode==="both"? ["mic","system"].includes(gap.trackKind):gap.trackKind===mode)
-        .map(gap=>({...structuredClone(gap),startFrame:Math.floor(gap.startUs*48000/1e6),endFrame:Math.ceil(gap.endUs*48000/1e6)}))
+        .map(gap=>({...structuredClone(gap),startFrame:Math.floor(gap.startUs*16000/1e6),endFrame:Math.ceil(gap.endUs*16000/1e6)}))
         .sort((a,b)=>a.startFrame-b.startFrame||a.endFrame-b.endFrame||a.trackKind.localeCompare(b.trackKind));
       if(gaps.length)info.missingRanges=gaps;
       if(data.holdModes.includes(mode)) await new Promise((resolve,reject)=>{if(entry)entry.reject=reject;data.pending.push({mode,preparationId:args.preparationId,token:info.token,release:resolve});});
@@ -378,7 +380,7 @@ mockIPC(async (command, args) => {
       const channels=info?.channels??2;
       const bytes = new ArrayBuffer(12 + frames * channels * 4);
       const view = new DataView(bytes);
-      view.setUint32(0, 48000, true);
+      view.setUint32(0, info?.sampleRate??48000, true);
       view.setUint32(4, channels, true);
       view.setUint32(8, frames, true);
       return bytes; // Silent PCM: browser verification must not produce noise.
@@ -402,4 +404,4 @@ mockIPC(async (command, args) => {
     default: throw new Error(`Unexpected fixture command: ${command}`);
   }
 }, { shouldMockEvents: true });
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

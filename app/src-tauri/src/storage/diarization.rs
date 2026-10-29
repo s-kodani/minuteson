@@ -314,10 +314,7 @@ pub(super) fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<Diariza
 }
 
 pub(super) fn manual_assignment_hash(lineages: &BTreeSet<String>) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(lineages).map_err(|e| e.to_string())?)
-    ))
+    crate::diarization::manual_assignment_hash(lineages)
 }
 
 #[cfg(all(test, unix))]

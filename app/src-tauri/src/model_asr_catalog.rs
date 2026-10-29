@@ -1,4 +1,5 @@
 //! Catalog assembly binds app-built runtime bytes separately from fixed weights.
+use crate::model_download_recipe::RecipeExt;
 use crate::{
     model_download_recipe::{ArchiveMember, DownloadSource, Recipe},
     model_inspection::{PackageFile, Source},

@@ -3,7 +3,7 @@
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const states=(mic,system)=>page.waitForFunction(([m,s])=>document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState===m&&document.querySelector('[data-input-kind="system"]')?.dataset.inputState===s,[mic,system]);

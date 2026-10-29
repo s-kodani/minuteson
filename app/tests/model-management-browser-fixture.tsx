@@ -6,7 +6,9 @@ import { useDataOperation } from "../src/data-operation";
 import { ModelDeletionDialog, useModelDeletion } from "../src/model-deletion";
 import { ModelInspectionPanel } from "../src/model-inspection";
 import { SettingsModalScope } from "../src/settings-modal-scope";
-import { NotificationList } from "../src/toast";
+import { CommonOperationProgress, usePublishProgress } from "../src/operation-progress";
+import { deletionProgress } from "../src/operation-progress-state";
+import { ToastHost, NotificationList } from "../src/toast";
 (window as any).skipModelDownloadFixtureMain = true;
 const { modelDownloadIPC } = await import("./model-download-browser-fixture");
 const f = (window as any).modelDownloadFixture;
@@ -17,7 +19,7 @@ const idle = () => ({ revision: 0, token: null, kind: null, phase: "idle", busy:
 let state: any = idle(), pending = false;
 const empty = { items: [], writeBlocked: false, restartRequired: false, reason: null };
 function preview(entry: any, operationId = crypto.randomUUID()) {
-  return { confirmationId: crypto.randomUUID(), operationId, packageId: entry.packageId, reviewHash: entry.reviewHash, modelName: entry.modelName, modelVersion: entry.modelVersion, modelsRoot: "/synthetic/models", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 1, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: entry.totalBytes, profileReferences: 1, jobReferences: 0, activeJobs: 0, previousProcessedPaths: null, previousPathCount: null, priorDeletionCompleted: false, reservationRoots: [] };
+  return { scopeMode: "directory", targetDirectory: `/synthetic/models/${entry.packageId}`, confirmationId: crypto.randomUUID(), operationId, packageId: entry.packageId, reviewHash: entry.reviewHash, modelName: entry.modelName, modelVersion: entry.modelVersion, modelsRoot: "/synthetic/models", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 1, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: entry.totalBytes, profileReferences: 1, jobReferences: 0, activeJobs: 0, previousProcessedPaths: null, previousPathCount: null, priorDeletionCompleted: false, reservationRoots: [] };
 }
 const snap = () => structuredClone(state);
 f.managementSnapshot = snap;
@@ -87,6 +89,7 @@ function Fixture() {
   const operation = useDataOperation(), [refreshEpoch, setRefreshEpoch] = useState(0), [locked, setLocked] = useState(false);
   f.setManagementLocked = setLocked;
   const deletion = useModelDeletion({ operation, locked, withSavedEdits: async action => { await action(); }, onDeleted: async () => { setRefreshEpoch(n => n + 1); } });
-  return <SettingsModalScope><main><h1>モデル管理の合成検証</h1><ModelInspectionPanel visible locked={locked || !!operation.snapshot?.busy || deletion.protectedNow} recordingActive={false} deletion={deletion} refreshEpoch={refreshEpoch} /><ModelDeletionDialog operation={operation} control={deletion} /><NotificationList visible={false} /></main></SettingsModalScope>;
+  usePublishProgress("model-deletion", [deletionProgress(operation.snapshot)]);
+  return <SettingsModalScope><main><CommonOperationProgress /><ToastHost /><h1>モデル管理の合成検証</h1><ModelInspectionPanel visible locked={locked || !!operation.snapshot?.busy || deletion.protectedNow} recordingActive={false} deletion={deletion} refreshEpoch={refreshEpoch} /><ModelDeletionDialog operation={operation} control={deletion} /><NotificationList visible={false} /></main></SettingsModalScope>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

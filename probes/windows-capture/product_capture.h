@@ -4,6 +4,7 @@
 #include "packet_queue.h"
 #include "input_preparation.h"
 #include "loopback_scope.h"
+#include "synthetic_driver.h"
 #include <avrt.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <tlhelp32.h>
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <limits>
 
 namespace product {
 using Json=nlohmann::json;
@@ -58,18 +60,34 @@ Json process_identity(DWORD pid){
   if(WaitForSingleObject(process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("application is no longer available");
   return Json{{"pid",pid},{"bundleIdentifier",utf8(path)},{"launchTimeUs",(ticks(created)-EPOCH)/10}};
 }
+DWORD capture_parent_pid(){
+  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0));
+  if(snapshot.value==INVALID_HANDLE_VALUE)throw std::runtime_error("capture parent metadata unavailable");
+  PROCESSENTRY32W item{};item.dwSize=sizeof(item);
+  if(Process32FirstW(snapshot.value,&item)){do{if(item.th32ProcessID==GetCurrentProcessId())return item.th32ParentProcessID;}while(Process32NextW(snapshot.value,&item));}
+  throw std::runtime_error("capture parent metadata unavailable");
+}
+Json normalized_catalog(const Json& rows,bool applications){
+  const auto encoded=rows.dump();std::uint32_t indices[128];
+  const auto count=mon_capture_catalog_order(reinterpret_cast<const std::uint8_t*>(encoded.data()),encoded.size(),applications,
+    GetCurrentProcessId(),applications?capture_parent_pid():0,indices,128);
+  if(count<0)throw std::runtime_error("capture catalog exceeds capacity or has invalid identities");
+  Json ordered=Json::array();for(std::ptrdiff_t i=0;i<count;++i)ordered.push_back(rows.at(indices[i]));return ordered;
+}
 Json applications(){
+  const auto self=GetCurrentProcessId(),parent=capture_parent_pid();
   std::set<DWORD> pids;EnumWindows([](HWND window,LPARAM context)->BOOL{if(IsWindowVisible(window)&&GetWindowTextLengthW(window)>0){DWORD pid;GetWindowThreadProcessId(window,&pid);reinterpret_cast<std::set<DWORD>*>(context)->insert(pid);}return TRUE;},reinterpret_cast<LPARAM>(&pids));
-  Json list=Json::array();for(auto pid:pids){if(list.size()>=128)break;try{auto app=process_identity(pid);app["name"]=utf8(fs::path(wide(app["bundleIdentifier"].get<std::string>())).stem().wstring());list.push_back(app);}catch(const std::exception&){}}
-  return Json{{"schemaVersion",1},{"systemPermission","authorized"},{"applications",list}};
+  Json list=Json::array();for(auto pid:pids){if(pid==self||pid==parent)continue;try{auto app=process_identity(pid);app["name"]=utf8(fs::path(wide(app["bundleIdentifier"].get<std::string>())).stem().wstring());list.push_back(app);}catch(const std::exception&){}}
+  return Json{{"schemaVersion",1},{"systemPermission","authorized"},{"applications",normalized_catalog(list,true)}};
 }
 std::wstring endpoint_id(IMMDevice* device){LPWSTR id=nullptr;check(device->GetId(&id),"get endpoint identity");std::wstring value(id);CoTaskMemFree(id);return value;}
 ComPtr<IMMDeviceEnumerator> enumerator(){ComPtr<IMMDeviceEnumerator> e;check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(e.GetAddressOf())),"enumerate audio endpoints");return e;}
 Json microphones(){
   auto e=enumerator();ComPtr<IMMDevice> selected;std::wstring current;if(SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&selected)))current=endpoint_id(selected.Get());
   ComPtr<IMMDeviceCollection> collection;check(e->EnumAudioEndpoints(eCapture,DEVICE_STATE_ACTIVE,&collection),"list microphones");UINT count=0;check(collection->GetCount(&count),"count microphones");Json devices=Json::array();
-  for(UINT i=0;i<count&&i<128;++i){ComPtr<IMMDevice> device;check(collection->Item(i,&device),"read microphone");auto id=endpoint_id(device.Get());std::string name=utf8(id);ComPtr<IPropertyStore> props;if(SUCCEEDED(device->OpenPropertyStore(STGM_READ,&props))){PROPVARIANT value;PropVariantInit(&value);if(SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName,&value))&&value.vt==VT_LPWSTR)name=utf8(value.pwszVal);PropVariantClear(&value);}devices.push_back(Json{{"uid",utf8(id)},{"name",name},{"isDefault",id==current}});}
-  return Json{{"schemaVersion",1},{"microphonePermission","unknown"},{"devices",devices}};
+  if(count>128)throw std::runtime_error("too many input devices");
+  for(UINT i=0;i<count;++i){ComPtr<IMMDevice> device;check(collection->Item(i,&device),"read microphone");auto id=endpoint_id(device.Get());std::string name=utf8(id);ComPtr<IPropertyStore> props;if(SUCCEEDED(device->OpenPropertyStore(STGM_READ,&props))){PROPVARIANT value;PropVariantInit(&value);if(SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName,&value))&&value.vt==VT_LPWSTR)name=utf8(value.pwszVal);PropVariantClear(&value);}devices.push_back(Json{{"uid",utf8(id)},{"name",name},{"isDefault",id==current}});}
+  return Json{{"schemaVersion",1},{"microphonePermission","unknown"},{"devices",normalized_catalog(devices,false)}};
 }
 #include "input_binding.h"
 #include "raw_segments.h"
@@ -191,263 +209,12 @@ class Lane {
   Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);return Json{{"frames",frames},{"sampleRate",frames?Json(48000):Json(nullptr)},{"channels",frames?Json(channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}
 };
-struct Settings {fs::path output;std::string owner,mode="system",uid,scenario,identity;DWORD pid=0,parent=0,synthetic_startup_delay_ms=0;bool test=false,synthetic=false,synthetic_clock_overlap=false,synthetic_clock_cases=false,synthetic_clock_resampling=false,synthetic_clock_drift=false,lease_stdin=false;};
-Settings parse(int argc,wchar_t** argv) {
-  Settings s;
-  for(int i=1;i<argc;++i) {
-    std::wstring flag=argv[i];
-    if(flag==L"--stop-on-file"||flag==L"--until-stopped")continue;
-    if(flag==L"--synthetic"){s.synthetic=true;continue;}
-    if(flag==L"--synthetic-clock-overlap"){s.synthetic_clock_overlap=true;continue;}
-    if(flag==L"--synthetic-clock-cases"){s.synthetic_clock_cases=true;continue;}
-    if(flag==L"--synthetic-clock-resampling"){s.synthetic_clock_resampling=true;continue;}
-    if(flag==L"--synthetic-clock-drift"){s.synthetic_clock_drift=true;continue;}
-    if(i+1>=argc)throw std::runtime_error("missing product capture argument");
-    auto value=std::wstring(argv[++i]);
-    if(flag==L"--output")s.output=value;
-    else if(flag==L"--mode")s.mode=utf8(value);
-    else if(flag==L"--microphone-uid")s.uid=utf8(value);
-    else if(flag==L"--input-level-owner")s.owner=utf8(value);
-    else if(flag==L"--five-second-test"){s.test=true;s.owner=utf8(value);}
-    else if(flag==L"--pid")s.pid=DWORD(std::stoul(value));
-    else if(flag==L"--parent-pid")s.parent=DWORD(std::stoul(value));
-    else if(flag==L"--application-identity")s.identity=utf8(value);
-    else if(flag==L"--scenario")s.scenario=utf8(value);
-    else if(flag==L"--synthetic-startup-delay-ms")s.synthetic_startup_delay_ms=DWORD(std::stoul(value));
-    else if(flag==L"--capture-test-lease-stdin"){if(value!=L"1")throw std::runtime_error("invalid test lease");s.lease_stdin=true;}
-    else if(flag==L"--backend"){if(value!=L"wasapi")throw std::runtime_error("unsupported capture backend");}
-    else throw std::runtime_error("unknown product capture argument");
-  }
-  if(!s.output.is_absolute()||s.owner.size()!=36||s.owner.find_first_not_of("0123456789abcdef-")!=std::string::npos||!s.parent||(s.mode!="system"&&s.mode!="application")||(s.mode=="application")!=bool(s.pid)
-    ||s.synthetic_startup_delay_ms>5000||(!s.synthetic&&(s.synthetic_startup_delay_ms||s.synthetic_clock_overlap||s.synthetic_clock_cases||s.synthetic_clock_resampling||s.synthetic_clock_drift)))
-    throw std::runtime_error("invalid product capture ownership or scope");
-  return s;
-}
+#include "capture_options.h"
+#include "capture_session.h"
 int run(int argc,wchar_t** argv){
   check(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"initialize product capture COM");
   if(argc==2&&std::wstring(argv[1])==L"--list-input-devices"){std::cout<<microphones().dump()<<std::endl;return 0;}
   if(argc==2&&std::wstring(argv[1])==L"--list-capture-applications"){std::cout<<applications().dump()<<std::endl;return 0;}
-  Settings s=parse(argc,argv);Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;std::unique_ptr<Lane> mic_lane,system_lane;
-  IdleSleepGuard awake;
-  auto diagnostics=[&](const char* state,const Json& error){
-    if(mic_lane&&system_lane){auto diagnostic=Json{{"schemaVersion",1},{"ownerId",s.owner},{"state",state},{"error",error},{"qpcUnit","100ns"},{"sampleRate",48000},{"microphone",mic_lane->diagnostics()},{"system",system_lane->diagnostics()}};if(metadata)metadata->observe(L"capture-clock.json",std::move(diagnostic));else atomic_json(s.output/L"capture-clock.json",diagnostic,false);}
-  };
-  try {
-    if(s.lease_stdin){
-      auto handle=GetStdHandle(STD_INPUT_HANDLE);BY_HANDLE_FILE_INFORMATION info{};wchar_t path[32768];
-      auto size=GetFinalPathNameByHandleW(handle,path,32768,0);
-      if(!s.test||GetFileType(handle)!=FILE_TYPE_DISK||!GetFileInformationByHandle(handle,&info))throw std::runtime_error("録音前テストの永続所有ハンドルを取得できません");
-      if(info.nNumberOfLinks!=1||(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))||info.nFileSizeHigh||info.nFileSizeLow||!size||size>=32768||fs::path(path).filename()!=wide("lease-"+s.owner))throw std::runtime_error("録音前テストの永続所有ファイルが一致しません");
-      // GetFinalPathNameByHandle returns an extended path (\\?\), whereas
-      // filesystem canonicalization may remove that prefix. Compare the held
-      // parent directory identities instead of their textual spellings.
-      auto parent_info=[](const fs::path& parent){
-        Handle directory(CreateFileW(parent.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-        BY_HANDLE_FILE_INFORMATION metadata{};
-        if(directory.value==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(directory.value,&metadata)||!(metadata.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(metadata.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))throw std::runtime_error("録音前テストの所有ディレクトリを確認できません");
-        return metadata;
-      };
-      const auto actual=parent_info(fs::path(path).parent_path()),expected=parent_info(s.output.parent_path());
-      if(actual.dwVolumeSerialNumber!=expected.dwVolumeSerialNumber||actual.nFileIndexHigh!=expected.nFileIndexHigh||actual.nFileIndexLow!=expected.nFileIndexLow||ticks(actual.ftCreationTime)!=ticks(expected.ftCreationTime))throw std::runtime_error("録音前テストの永続所有ディレクトリが一致しません");
-    }
-    auto attributes=GetFileAttributesW(s.output.c_str());if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT)||!fs::is_empty(s.output))throw std::runtime_error("capture destination must be an empty ordinary directory");
-    mic_lane=std::make_unique<Lane>(s.output/L"microphone.caf",1,s.test);system_lane=std::make_unique<Lane>(s.output/L"system.caf",2,s.test);auto& mic=*mic_lane;auto& system=*system_lane;
-    mic.holding_for_window=system.holding_for_window=s.test;
-    if(!s.test){mic.raw=std::make_unique<RawSegments>(s.output,s.owner,"microphone",1);system.raw=std::make_unique<RawSegments>(s.output,s.owner,"system",2);}
-    manifest=Json{{"schemaVersion",4},{"captureMode",s.mode},{"backend","wasapi"},{"targetPIDs",s.pid?Json::array({s.pid}):Json::array()},{"targetApplicationIdentity",nullptr},{"microphoneDeviceUID",s.uid.empty()?Json(nullptr):Json(s.uid)},{"recordingOwnerId",s.owner},{"inputDiagnosticsState","reported"},{"state","starting"},{"errors",Json::array()}, {"microphone",mic.track(0)}, {"system",system.track(0)}};
-    manifest["consoleWindowPresent"]=GetConsoleWindow()!=nullptr;
-    manifest["clockDiagnosticsFile"]="capture-clock.json";
-    // Every publication, including initialization failures, must be decodable
-    // by the same strict reader used while the helper is still running.
-    if(s.test)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",nullptr},{"windowEndNs",nullptr},{"firstSavedCaptureNs",nullptr},{"completed",false}};
-    atomic_json(s.output/L"manifest.json",manifest);
-    diagnostics("starting",nullptr);
-    if(s.synthetic_startup_delay_ms)Sleep(s.synthetic_startup_delay_ms);
-    Handle parent(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,s.parent));if(!parent.value)throw std::runtime_error("capture parent unavailable");
-    Handle application_process(s.pid?OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,s.pid):INVALID_HANDLE_VALUE);
-    Json identity=nullptr;if(s.pid){if(!application_process.value||application_process.value==INVALID_HANDLE_VALUE||WaitForSingleObject(application_process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture application is unavailable");identity=process_identity(s.pid);if(Json::parse(s.identity)!=identity)throw std::runtime_error("capture application identity changed");}
-    manifest["targetApplicationIdentity"]=identity;
-    FILETIME wall;GetSystemTimePreciseAsFileTime(&wall);auto utc=(ticks(wall)-EPOCH)/10000;auto before=qpc();
-    MicrophoneChoice choice{s.uid,"fixed",""};
-    std::string selected=s.uid;
-    auto reconnect=[&](Lane& lane,bool microphone){
-      const auto now=GetTickCount64();
-      if(lane.preparation){
-        // Expiry wins over a result first observed after the deadline. Such a
-        // result is never allowed to restart a timed-out or stopped input.
-        if(lane.preparation_schedule.timed_out(now)){
-          lane.cancel_preparation();lane.preparation_schedule.initial_resolved=true;lane.binding.lost("restart_failed");
-        }
-        if(!lane.preparation_schedule.cancelled){
-          if(!microphone&&s.pid){
-            try{if(process_identity(s.pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");}
-            catch(...){lane.cancel_preparation();lane.binding.lost("application_unavailable",true);return;}
-          }
-          if(auto ready=lane.preparation->take()){
-            if(microphone){
-              choice=ready->choice;selected=choice.uid;
-              // The manifest records the initial input, matching the stored
-              // start configuration. Later switches belong to selection
-              // status/history, not a rewrite of that initial identity.
-              if(manifest["microphoneDeviceUID"].is_null()){
-                manifest["microphoneDeviceUID"]=selected;atomic_json(s.output/L"manifest.json",manifest);
-              }
-            }
-            lane.adopt(std::move(*ready));lane.preparation.reset();return;
-          }
-        }
-        if(lane.preparation->finished()){
-          auto error=lane.preparation->error();lane.preparation.reset();lane.preparation_schedule.finish(now);
-          if(error&&!lane.preparation_schedule.cancelled){
-            try{std::rethrow_exception(error);}
-            catch(const InputFailure& failure){lane.binding.lost(failure.result==E_ACCESSDENIED?"permission_unavailable":microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",failure.result==E_ACCESSDENIED||(!microphone&&s.pid));}
-            catch(...){lane.binding.lost(microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",!microphone&&s.pid);}
-          }
-          // Includes cleanup of a timed-out stream; never overlap activations.
-          lane.binding.next_attempt=lane.preparation_schedule.retry_at;
-        }
-        return;
-      }
-      if(lane.started||now<lane.binding.next_attempt||!lane.preparation_schedule.may_start(now))return;
-      lane.preparation_schedule.begin(now);
-      // Capture values only: a cancelled preparation can outlive this run.
-      lane.preparation=std::make_unique<NativePreparation>([microphone,uid=s.uid,pid=s.pid,identity](NativePreparation::Cancellation cancelled){return prepare_input(microphone,uid,pid,identity,cancelled);});
-    };
-    if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();mic.preparation_schedule.initial_resolved=system.preparation_schedule.initial_resolved=true;}
-    else{reconnect(mic,true);reconnect(system,false);}
-    std::uint64_t revision=0,selection_revision=0,synthetic_packet=0,last_diagnostics=0,reported_estimates=0;std::uint64_t start=s.test&&!s.synthetic?0:qpc();
-    if(s.test&&start){mic.holding_for_window=system.holding_for_window=false;mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
-    manifest["state"]=s.test&&!start?"starting":"recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
-    if(s.test&&start)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
-    atomic_json(s.output/L"manifest.json",manifest);
-    metadata=std::make_unique<MetadataWorker>(s.output,s.owner);
-    auto selection=[&]{auto value=microphone_selection_status(s.owner,revision,selection_revision,s.uid,selected,choice,!s.synthetic&&!mic.started);if(!value.is_null())metadata->observe(L"microphone-selection.status.json",std::move(value));};
-    auto publish_status=[&](bool sealed){
-      Json report={{"schemaVersion",3},{"ownerId",s.owner},{"revision",++revision},{"microphone",mic.binding.status()},{"system",system.binding.status()},{"microphoneHistory",mic.binding.history()},{"systemHistory",system.binding.history()}};
-      metadata->publish(std::move(report),sealed);
-    };
-    using SelectionPreparation=InputPreparation<MicrophoneChoice,CaptureApartment>;
-    std::unique_ptr<SelectionPreparation> selection_preparation;
-    PreparationSchedule selection_schedule;
-    std::uint64_t next_status=0;
-    while(true){
-      if(WaitForSingleObject(parent.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture parent exited");
-      if(fs::exists(s.output/L"stop.request"))break;
-      // Writer latency is not a clock change or a WASAPI device failure.
-      if(!s.synthetic&&s.pid&&system.started){try{if(process_identity(s.pid)!=identity)system.detach("application_unavailable",true);}catch(...){system.detach("application_unavailable",true);}}
-      if(s.synthetic){
-        if(synthetic_packet==0&&s.scenario=="system-only")mic.binding.lost("device_disconnected",true);
-        if(s.scenario=="input-recovery"){
-          if(synthetic_packet==25)mic.binding.lost("device_disconnected");
-          if(synthetic_packet==60)mic.binding.connected();
-          if(synthetic_packet==80)system.binding.lost("application_unavailable",true);
-          if(synthetic_packet==120)system.binding.connected();
-        }
-        // Deterministic driver-shaped timestamps for hardware-free regressions.
-        auto time=start+synthetic_packet*100000-(s.synthetic_clock_overlap&&synthetic_packet?10:0);
-        if(s.synthetic_clock_drift)time+=std::min(synthetic_packet,399ULL)*10;
-        auto position=synthetic_packet*480;UINT32 count=480;DWORD flags=s.synthetic_clock_overlap&&synthetic_packet==1?1:0;
-        if(s.synthetic_clock_resampling){time=start+synthetic_packet*75000;position=synthetic_packet*160;count=479;}
-        if(s.synthetic_clock_cases){
-          if(synthetic_packet==1)time=start;
-          if(synthetic_packet==2)time=start-100;
-          if(synthetic_packet==3){time=0;flags|=4;}
-          if(synthetic_packet>=4)position=(synthetic_packet-4)*480;
-          if(synthetic_packet==4)flags|=1;
-          if(synthetic_packet>=7)position+=960;
-        }
-        // Synthetic timestamps advance independently of the scheduler and may
-        // lead the host clock; use their simulated arrival, not real hardware.
-        auto arrival=std::max(qpc(),start+(synthetic_packet+1)*100000);
-        std::vector<float> tone(count,0.125f);if(mic.binding.state=="connected")mic.append(tone.data(),count,time,position,flags,arrival);
-        std::vector<float> silence(count*2,0);if(system.binding.state=="connected")system.append(silence.data(),count,time,position,flags,arrival);++synthetic_packet;
-      }
-      else{
-        // Endpoint/session enumeration can block too. Poll it independently of
-        // PCM writes and stop requests, with one outstanding query and no Lane
-        // references in its worker. An obsolete query cannot select a device.
-        const auto selection_now=GetTickCount64();
-        if(selection_preparation){
-          if(!s.uid.empty()||!mic.started||selection_schedule.timed_out(selection_now)){selection_preparation->cancel();selection_schedule.cancel();}
-          if(!selection_schedule.cancelled){
-            if(auto next=selection_preparation->take()){
-              selection_preparation.reset();selection_schedule.accept();selection_schedule.retry_at=selection_now+PreparationSchedule::retry_ms;
-              if(next->uid!=selected)mic.detach("device_changed");choice=std::move(*next);
-            }
-          }
-          if(selection_preparation&&selection_preparation->finished()){
-            auto error=selection_preparation->error();selection_preparation.reset();selection_schedule.finish(selection_now);
-            if(error&&!selection_schedule.cancelled&&mic.started)mic.detach("device_disconnected");
-          }
-        }
-        if(s.uid.empty()&&mic.started&&!selection_preparation&&selection_schedule.may_start(selection_now)){
-          selection_schedule.begin(selection_now);
-          selection_preparation=std::make_unique<SelectionPreparation>([uid=s.uid,pid=s.pid,identity](auto){return current_microphone_choice(uid,pid,identity);});
-        }
-        for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputFailure& error){lane->detach(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
-        reconnect(mic,true);reconnect(system,false);
-        if(s.test&&!start&&mic.preparation_schedule.initial_resolved&&system.preparation_schedule.initial_resolved){
-          start=qpc();mic.holding_for_window=system.holding_for_window=false;
-          mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;
-          manifest["state"]="recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
-          manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
-          atomic_json(s.output/L"manifest.json",manifest);
-        }
-      }
-      const auto estimates=mic.clock.estimated_packets+system.clock.estimated_packets;
-      if(!last_diagnostics||qpc()-last_diagnostics>=10000000||(estimates&&!reported_estimates)){
-        ULARGE_INTEGER available{};if(!GetDiskFreeSpaceExW(s.output.c_str(),&available,nullptr,nullptr))throw std::runtime_error("保存先の空き容量を確認できません。確定済みの音声は保持しています");if(available.QuadPart<16ULL*1024*1024)throw std::runtime_error("保存先の空き容量が不足しています。確定済みの原音声は保持しています");
-        diagnostics("recording",nullptr);last_diagnostics=qpc();reported_estimates=estimates;
-      }
-      if(GetTickCount64()>=next_status){
-        next_status=GetTickCount64()+250;++revision;
-        metadata->observe(L"input-levels.json",Json{{"schemaVersion",1},{"ownerId",s.owner},{"revision",revision},{"microphone",mic.level()},{"system",system.level()}});
-        publish_status(false);selection();
-      }
-      auto request=s.output/L"microphone-selection.request";
-      if(fs::exists(request)){
-        if(fs::file_size(request)>4096)throw std::runtime_error("microphone selection request exceeds limit");std::ifstream input(request,std::ios::binary);Json next=Json::parse(input);input.close();
-        if(next.at("schemaVersion")!=1||next.at("ownerId")!=s.owner)throw std::runtime_error("microphone selection ownership differs");
-        auto next_revision=next.at("revision").get<std::uint64_t>();if(next_revision>selection_revision){
-          std::string uid=next.at("uid").is_null()?"":next.at("uid").get<std::string>();
-          // A running lane keeps its file and timeline. Restart only its input.
-          if(selection_preparation){selection_preparation->cancel();selection_schedule.cancel();}
-          mic.detach("device_changed");s.uid=uid;selection_revision=next_revision;
-          if(s.synthetic){selected=uid.empty()?"synthetic-microphone":uid;choice={selected,uid.empty()?"systemDefault":"fixed",uid.empty()?"mon_direct_recording":""};mic.binding.connected();}
-          else{mic.binding.next_attempt=0;reconnect(mic,true);}publish_status(false);selection();
-        }
-      }
-      if(fs::exists(s.output/L"stop.request")||(s.synthetic?synthetic_packet>=500:s.test&&start&&qpc()-start>=50000000ULL))break;
-      if(s.synthetic||(!mic.queued()&&!system.queued()))Sleep(10);
-    }
-    if(selection_preparation)selection_preparation->cancel();
-    mic.close();auto mic_closed=std::max(qpc(),mic.clock.parts.empty()?0ULL:mic.clock.parts.back().last_end);system.close();auto closed=std::max(qpc(),system.clock.parts.empty()?0ULL:system.clock.parts.back().last_end);closed=std::max(closed,mic_closed);
-    // Preserve the buffered tail even when an unreturned native preparation
-    // prevents producer-closure proof. Only finish() may publish closed=true.
-    if(mic.raw){mic.raw->seal();system.raw->seal();}
-    if(!mic.acquisition_closed()||!system.acquisition_closed())throw std::runtime_error("音声入力の準備処理の終了を確認できません。確定済み原音声を保持しています。録音を回復してください");
-    if(mic.raw){mic.raw->finish();system.raw->finish();}mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
-    if(!mic.frames&&!system.frames)throw std::runtime_error("マイク・PC音声を取得できませんでした。Windowsのマイク権限と入力機器を確認してください");
-    auto origin=mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
-    manifest["microphone"]=mic.track(origin);manifest["system"]=system.track(origin);manifest["systemAudioUnreceived"]=system.frames==0;
-    manifest["microphoneAudioUnreceived"]=mic.frames==0;
-    if(mic.raw){manifest["microphone"]["rawSegments"]=mic.raw->status();manifest["system"]["rawSegments"]=system.raw->status();manifest["clockMappingSource"]="sealed_raw_v1";}
-    auto uncertainty=std::max(1000000ULL,std::max(mic.clock.max_boundary_adjustment_ticks,system.clock.max_boundary_adjustment_ticks)*100);
-    manifest["timingEstimated"]=(mic.clock.estimated_packets+system.clock.estimated_packets)!=0;
-    // Estimated clocks cannot claim the normal 1 ms precision. Retain a
-    // conservative whole-recording envelope and explicitly label its origin.
-    manifest["captureClock"]=Json{{"domain","query_performance_counter"},{"originUtcMs",static_cast<std::int64_t>(utc)+(static_cast<std::int64_t>(origin)-static_cast<std::int64_t>(before))/10000},{"uncertaintyNs",manifest["timingEstimated"]==true?std::max(uncertainty,(closed-origin)*100+1000000):uncertainty}};
-    manifest["captureEnd"]=Json{{"method","acquisition_closed"},{"microphoneClosedUs",(mic_closed-origin)/10},{"systemClosedUs",(closed-origin)/10},{"endUs",(closed-origin)/10}};
-    manifest["state"]="saved";if(s.test){manifest["captureTest"]["completed"]=true;manifest["captureTest"]["firstSavedCaptureNs"]=origin*100;}
-    if(!journal_persistence.is_null())manifest["inputEventJournalPersistence"]=journal_persistence;
-    metadata.reset();diagnostics("saved",nullptr);atomic_json(s.output/L"manifest.json",manifest);return 0;
-  }catch(const std::exception& error){
-    try{diagnostics("failed",error.what());}catch(...){}
-    if(!manifest.is_null()){
-      manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]="録音異常終了のため履歴の停止時封印を確認できません";
-      if(mic_lane&&system_lane){auto origin=mic_lane->frames?mic_lane->first:system_lane->first;if(system_lane->frames)origin=std::min(origin,system_lane->first);manifest["microphone"]=mic_lane->track(origin);manifest["system"]=system_lane->track(origin);if(mic_lane->raw){manifest["microphone"]["rawSegments"]=mic_lane->raw->status();manifest["system"]["rawSegments"]=system_lane->raw->status();}}
-      manifest["state"]="failed";manifest["errors"]=Json::array({error.what()});try{atomic_json(s.output/L"manifest.json",manifest);}catch(...){}
-    }std::cerr<<error.what()<<std::endl;return 1;
-  }
+  return CaptureSession(parse(argc,argv)).run();
 }
 } // namespace product

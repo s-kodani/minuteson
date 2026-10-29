@@ -19,4 +19,4 @@ mockIPC(async (command, args) => {
   if (modelCommands.has(command)) return modelDownloadIPC(command, args);
   return dataSaveIPC(command, args);
 }, { shouldMockEvents: true });
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

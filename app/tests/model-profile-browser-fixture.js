@@ -72,4 +72,4 @@ mockIPC(async (command, args) => {
   }
   throw Error(`Unexpected model profile fixture command: ${command}`);
 }, { shouldMockEvents: true });
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

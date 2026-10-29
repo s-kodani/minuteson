@@ -45,7 +45,7 @@ def cargo_packages(metadata):
             if any(kind["kind"] in (None, "build") for kind in dependency["dep_kinds"]):
                 pending.append(dependency["pkg"])
     packages = {package["id"]: package for package in metadata["packages"]}
-    return [packages[key] for key in sorted(reached - {root})]
+    return [packages[key] for key in sorted(reached - set(metadata.get("workspace_members", [root])))]
 
 
 def notice_files(base, declared=None):
@@ -131,7 +131,7 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
     index = json.loads(index_bytes)
     if index["schemaVersion"] != 1:
         raise ValueError("unsupported supplemental notice index")
-    cargo_lock = tomllib.loads((repository / "app/src-tauri/Cargo.lock").read_text(encoding="utf8"))
+    cargo_lock = tomllib.loads((repository / "Cargo.lock").read_text(encoding="utf8"))
     locked = {(entry["name"], entry["version"], entry.get("source")): entry for entry in cargo_lock.get("package", [])}
     dependencies = []
     for package in cargo_packages(metadata):
@@ -165,7 +165,7 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
                  "excluded": ["MON-owned code", "Rust standard library/toolchain", ("Apple SDK/system frameworks" if target == "aarch64-apple-darwin" else "Microsoft Windows SDK/system libraries"),
                               "separately obtained AI engines/models/runtime libraries"],
                  "lockHashes": {name: sha((repository / relative).read_bytes()) for name, relative in
-                                (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
+                                (("cargo", "Cargo.lock"), ("npm", "app/package-lock.json"))},
                  "supplementManifestSha256": sha(index_bytes),
                  "packages": [], "missingNoticeTexts": [], "referenceOnlyPackages": []}
     chunks = [b"MON third-party dependency notices\n\n"

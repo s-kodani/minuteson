@@ -46,6 +46,20 @@ final class CaptureOptionsTests: XCTestCase {
     }
   }
 
+  func testSingletonFlagsRejectDuplicateValuesInsteadOfSilentlyReplacingThem() {
+    for arguments in [
+      output,
+      ["--duration", "1", "--duration", "2"],
+      ["--backend", "coreaudio", "--backend", "screencapturekit"],
+      ["--scenario", "first", "--scenario", "second"],
+      ["--mode", "system", "--mode", "system"],
+      ["--stop-on-file", "--stop-on-file"],
+      ["--stop-on-file", "--parent-pid", "123", "--parent-pid", "456"],
+    ] {
+      XCTAssertThrowsError(try Options.parse(output + arguments))
+    }
+  }
+
   func testDefaultAndExplicitProbeDurationRemainBounded() throws {
     let startedAt = ContinuousClock.now
     for (arguments, seconds) in [([], 30.0), (["--duration", "14400"], 14400.0)] {

@@ -1,4 +1,4 @@
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from "react";
 import {useRecordingSession} from "./session";
 import {InputLevelClock} from "./input-level-state";

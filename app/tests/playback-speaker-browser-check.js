@@ -25,7 +25,9 @@ async(page,capturePath,detailUI)=>{
   await page.evaluate(()=>{const f=window.monBrowserFixture;f.trackPlan={tracks:[{id:'meeting-mix',kind:'processed',startUs:0,endUs:15_000_000}]};f.setUtterances(['meeting','unknown'].map(id=>({id,trackId:id==='meeting'?'meeting-mix':'missing',startUs:0,endUs:15_000_000,recognizedText:id,effectiveText:id,attributionState:'assigned',speakerIds:['speaker-a']})));});
   await page.getByRole('button',{name:'会議A',exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='get_meeting_analysis_audio'));
-  for(const kind of ['mic','system','both','processed']){
+  // Wait for the track read to commit, not merely for the IPC invocation.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  for(const kind of ['mixed','processed']){
     await publish({trackKind:kind});await page.locator('[data-utterance-id="meeting"].utterance-playing').waitFor();
     check(JSON.stringify(await emphasized())==='["meeting"]','common meeting time did not follow the selected playback source');
   }

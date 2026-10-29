@@ -1,6 +1,6 @@
 //! Portable download provenance. Validation is not publisher authentication or
 //! permission to download/execute on the current host.
-use crate::model_inspection::{PackageManifest, Target};
+use crate::model_inspection::{PackageManifest, PackageManifestExt, Target};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -14,29 +14,7 @@ pub(crate) fn is_bundled(url: &str) -> bool {
     matches!(url, BUNDLED_WHISPER | BUNDLED_WINDOWS) || url == crate::model_asr_catalog::URI
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Recipe {
-    pub(super) schema_version: u32,
-    pub(super) manifest: PackageManifest,
-    pub(super) sources: Vec<DownloadSource>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct DownloadSource {
-    pub(super) relative_path: String,
-    pub(super) url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) archive: Option<ArchiveMember>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct ArchiveMember {
-    pub(super) format: String,
-    pub(super) expected_size: u64,
-    pub(super) expected_hash: String,
-    pub(super) member_path: String,
-}
+pub(crate) use mon_contracts::{ArchiveMember, DownloadSource, Recipe};
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Review {
@@ -53,8 +31,22 @@ pub(crate) struct Review {
     pub(crate) installed: bool,
     pub(crate) ready: bool,
 }
-impl Recipe {
-    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, String> {
+pub(crate) trait RecipeExt: Sized {
+    fn parse(bytes: &[u8]) -> Result<Self, String>;
+    fn review(&self) -> Result<Review, String>;
+    fn ensure_placement_record_fits(&self) -> Result<(), String>;
+    fn bytes(&self) -> Result<Vec<u8>, String>;
+    fn hash(&self) -> Result<String, String>;
+    fn validate(&self) -> Result<u64, String>;
+    fn validate_for(&self, target: Target) -> Result<u64, String>;
+    fn transfer_bytes(&self) -> Result<u64, String>;
+    fn has_bundled(&self) -> bool;
+    fn bundled_bytes(&self) -> Result<u64, String>;
+    fn archive_bytes(&self) -> Result<u64, String>;
+    fn origin(&self, operation_id: &str) -> Result<DownloadOrigin, String>;
+}
+impl RecipeExt for Recipe {
+    fn parse(bytes: &[u8]) -> Result<Self, String> {
         if bytes.is_empty() || bytes.len() > MAX_RECIPE {
             return Err("ダウンロード定義は64KiB以内で指定してください".into());
         }
@@ -63,7 +55,7 @@ impl Recipe {
         recipe.validate()?;
         Ok(recipe)
     }
-    pub(crate) fn review(&self) -> Result<Review, String> {
+    fn review(&self) -> Result<Review, String> {
         self.validate()?;
         self.ensure_placement_record_fits()?;
         Ok(Review {
@@ -136,17 +128,17 @@ impl Recipe {
         }
         Ok(())
     }
-    pub(crate) fn bytes(&self) -> Result<Vec<u8>, String> {
+    fn bytes(&self) -> Result<Vec<u8>, String> {
         let bytes = serde_json::to_vec(self).map_err(|_| "ダウンロード定義を符号化できません")?;
         if bytes.len() > MAX_RECIPE {
             return Err("ダウンロード定義が64KiBを超えています".into());
         }
         Ok(bytes)
     }
-    pub(crate) fn hash(&self) -> Result<String, String> {
+    fn hash(&self) -> Result<String, String> {
         Ok(format!("{:x}", Sha256::digest(self.bytes()?)))
     }
-    pub(crate) fn validate(&self) -> Result<u64, String> {
+    fn validate(&self) -> Result<u64, String> {
         self.validate_for(Target::current()?)
     }
     fn validate_for(&self, target: Target) -> Result<u64, String> {
@@ -263,7 +255,7 @@ impl Recipe {
         self.bytes()?;
         Ok(total)
     }
-    pub(crate) fn transfer_bytes(&self) -> Result<u64, String> {
+    fn transfer_bytes(&self) -> Result<u64, String> {
         let mut seen = std::collections::BTreeSet::new();
         let mut total = 0_u64;
         for (file, source) in self.manifest.files.iter().zip(&self.sources) {
@@ -282,10 +274,10 @@ impl Recipe {
         }
         Ok(total)
     }
-    pub(crate) fn has_bundled(&self) -> bool {
+    fn has_bundled(&self) -> bool {
         self.sources.iter().any(|s| is_bundled(&s.url))
     }
-    pub(crate) fn bundled_bytes(&self) -> Result<u64, String> {
+    fn bundled_bytes(&self) -> Result<u64, String> {
         Ok(self
             .sources
             .iter()
@@ -293,7 +285,7 @@ impl Recipe {
             .and_then(|s| s.archive.as_ref())
             .map_or(0, |a| a.expected_size))
     }
-    pub(crate) fn archive_bytes(&self) -> Result<u64, String> {
+    fn archive_bytes(&self) -> Result<u64, String> {
         let mut seen = std::collections::BTreeSet::new();
         self.sources
             .iter()
@@ -304,7 +296,7 @@ impl Recipe {
                     .ok_or_else(|| "アーカイブ容量の上限は32GiBです".into())
             })
     }
-    pub(crate) fn origin(&self, operation_id: &str) -> Result<DownloadOrigin, String> {
+    fn origin(&self, operation_id: &str) -> Result<DownloadOrigin, String> {
         Ok(DownloadOrigin {
             operation_id: operation_id.into(),
             recipe_hash: self.hash()?,

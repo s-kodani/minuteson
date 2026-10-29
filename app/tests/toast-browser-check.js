@@ -97,7 +97,8 @@ async page => {
 
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("button", { name: "保存を再試行", exact: true }).waitFor();
   await page.evaluate(() => window.toastFixture.detach()); await host.getByRole("button", { name: "保存を再試行", exact: true }).waitFor({ state: "hidden" });
-  check(await host.getByRole("alert").isVisible() && await page.evaluate(() => window.toastFixture.retryCalls) === 2, "detaching operation discarded the notice or left a stale command");
+  await host.getByRole("alert").waitFor();
+  check(await page.evaluate(() => window.toastFixture.retryCalls) === 2, "detaching operation executed a stale command");
   await clear(); results.push("unmounting an operation removes its stale action without executing it or silently dismissing its important notification");
 
   for (const [width, height] of [[1280, 820], [960, 640], [360, 640]]) {

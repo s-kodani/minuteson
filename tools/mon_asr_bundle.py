@@ -4,6 +4,11 @@ import io
 import json
 from pathlib import Path
 import tarfile
+# Support both direct CLI execution and file-based release/test imports.
+import importlib.util
+_catalog_spec = importlib.util.spec_from_file_location("mon_model_catalog", Path(__file__).with_name("mon_model_catalog.py"))
+mon_model_catalog = importlib.util.module_from_spec(_catalog_spec)
+_catalog_spec.loader.exec_module(mon_model_catalog)
 
 URI = 'mon-bundled://asr-v1/asr-runtime.tar'
 def digest(path):
@@ -54,8 +59,8 @@ def append_windows_choices(package):
     for choice in choices:
         for source in choice['recipe']['sources']:
             if source['url']==windows_uri:source['archive'].update(archive)
-    for template in json.loads((root/'app/model-catalog/asr-transducer.json').read_text()):
-        choice=copy.deepcopy(template);choice['id']='windows-'+choice['id'];recipe=choice['recipe'];manifest=recipe['manifest'];manifest['target']='windows_x86_64'
+    for template in mon_model_catalog.compile_target('windows_x86_64', 'asr'):
+        choice=copy.deepcopy(template);recipe=choice['recipe'];manifest=recipe['manifest']
         pairs=[(f,s) for f,s in zip(manifest['files'],recipe['sources']) if f['role']!='runtime_library']
         files=[];sources=[]
         for path in sorted(asr.rglob('*')):

@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "./startup-ready-mocks";
 import { emit } from "@tauri-apps/api/event";
 import { ModelInspectionPanel } from "../src/model-inspection";
-import { NotificationList } from "../src/toast";
+import { ToastHost, NotificationList } from "../src/toast";
 import { parseDownloadDefinition, downloadDigest, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
@@ -80,7 +80,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
   }
   if (command === "get_model_placements") return structuredClone(f.entries);
   if (command === "get_model_profiles") return structuredClone(f.profiles);
-  if (command === "get_analysis_preferences") return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
+  if (["get_analysis_preferences", "get_asr_preferences"].includes(command)) return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
   if (command === "get_diarization_preferences") {
     if (f.mode === "threadReadFailure") throw Error("模擬CPU設定読込失敗");
     return { lockVersion: f.preferenceVersions["sherpa-onnx"], payload: { standard: structuredClone(f.settingsByEngine["sherpa-onnx"]), highAccuracy: structuredClone(f.settingsByEngine["sherpa-onnx"]) } };
@@ -166,7 +166,7 @@ function Fixture() {
   const [locked, setLocked] = useState(false), [visible, setVisible] = useState(true), [busy, setBusy] = useState(false), [parent, setParent] = useState(false);
   f.setLocked = setLocked; f.setVisible = setVisible; f.setParent = setParent; f.busy = busy;
   const compact = new URLSearchParams(location.search).get("compact") === "1";
-  return <main><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>
+  return <main><ToastHost/><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>
     <output aria-label="合成取得操作数">合成のみ：取得 {f.calls.filter(call => call.command === "start_model_download").length} · コピー {f.calls.filter(call => call.command === "place_downloaded_model").length} · CPU {f.calls.filter(call => call.command === "check_model_compatibility").length} · 適用 {f.calls.filter(call => call.command === "apply_model_profile_application").length}</output>
     {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button>
       <button onClick={() => { f.readMissing = true; }}>合成の実体照合失敗</button><button onClick={() => { f.readMissing = false; }}>合成の実体照合復帰</button>

@@ -8,9 +8,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const HTTP_MARKER: &str = "MON_HTTP_STATUS:";
-const MAX_ERROR: usize = 8192;
-const DEADLINE: Duration = Duration::from_secs(3600);
+use mon_native::transport::{configure_curl, Diagnostics, DEADLINE};
 
 struct OwnedChild {
     child: Child,
@@ -34,38 +32,8 @@ fn nonblocking(fd: RawFd) -> Result<(), String> {
 
 fn command(url: &str, protocol: &str) -> Command {
     let mut command = Command::new("/usr/bin/curl");
-    // --disable MUST be the first option: never read ~/.curlrc. Do not inherit
-    // certificate overrides, proxy credentials, DYLD variables or cookies.
-    // HTTPS-only redirects allow model hosts' CDN transfers, not downgrades.
-    command.env_clear().env("LC_ALL", "C").args([
-        "--disable",
-        "--globoff",
-        // stdout is a pipe; deliver small partial bodies before completion so
-        // progress and mid-stream cancellation do not wait for stdio buffering.
-        "--no-buffer",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--proto",
-        protocol,
-        "--proto-redir",
-        protocol,
-        "--location",
-        "--max-redirs",
-        "5",
-        "--connect-timeout",
-        "15",
-        "--max-time",
-        "3600",
-        "--speed-limit",
-        "1024",
-        "--speed-time",
-        "30",
-        "--write-out",
-        "%{stderr}MON_HTTP_STATUS:%{http_code}\n",
-        "--url",
-        url,
-    ]);
+    mon_native::process::configure(&mut command, mon_native::process::Purpose::SystemTool);
+    configure_curl(&mut command, url, protocol);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -129,7 +97,7 @@ fn transfer(
     let mut status = None;
     let mut count = 0_u64;
     let mut digest = Sha256::new();
-    let mut error_bytes = Vec::new();
+    let mut diagnostics = Diagnostics::default();
     let mut buffer = [0_u8; 65_536];
     loop {
         if cancelled() {
@@ -164,10 +132,8 @@ fn transfer(
             match error.read(&mut buffer) {
                 Ok(0) => error_eof = true,
                 Ok(n) => {
-                    if error_bytes.len() + n > MAX_ERROR {
-                        return Err("ダウンロード通信状態が上限を超えています".into());
-                    }
-                    error_bytes.extend_from_slice(&buffer[..n]);
+                    diagnostics.push(&buffer[..n]);
+                    diagnostics.check().map_err(str::to_owned)?;
                 }
                 Err(e)
                     if matches!(
@@ -205,13 +171,9 @@ fn transfer(
             return Err("ダウンロード通信を待機できません".into());
         }
     }
-    // Never return curl's stderr: it can include URL/CDN tokens, proxy or server
-    // data. Only a fixed terminal marker and successful full HTTP 200 are used.
-    if !status.unwrap().success()
-        || !String::from_utf8_lossy(&error_bytes).ends_with(&format!("{HTTP_MARKER}200\n"))
-    {
-        return Err("配布元の通信・証明書・HTTP応答を確認できません。自動再試行はしません".into());
-    }
+    diagnostics
+        .complete_http(status.unwrap().success())
+        .map_err(str::to_owned)?;
     if count != expected_size || format!("{:x}", digest.finalize()) != expected_hash {
         return Err("ダウンロード本文の容量・SHA-256が一致しません".into());
     }

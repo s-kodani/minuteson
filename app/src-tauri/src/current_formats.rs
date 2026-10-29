@@ -1,25 +1,27 @@
 //! The only writable/readable application contracts. No implicit upgrades.
 use serde_json::Value;
-pub(crate) const TRANSCRIPTION: u32 = 4;
-pub(crate) const DIARIZATION: u32 = 3;
-pub(crate) const MINUTES: u32 = 9;
-pub(crate) const VOICE: u32 = 4;
-pub(crate) const COMPLETION: u32 = 2;
+pub(crate) const TRANSCRIPTION: u32 = mon_contracts::JobKind::Transcription.format();
+pub(crate) const DIARIZATION: u32 = mon_contracts::JobKind::Diarization.format();
+pub(crate) const MINUTES: u32 = mon_contracts::JobKind::MinutesGeneration.format();
+pub(crate) const VOICE: u32 = mon_contracts::JobKind::VoiceMatching.format();
+pub(crate) const COMPLETION: u32 = mon_contracts::JobKind::SpeakerCompletion.format();
 pub(crate) const CAPTURE: u32 = 4;
 pub(crate) const TRANSCRIPT_DRAFT: u32 = 4;
 pub(crate) const EDIT_RECOVERY: u32 = 4;
-pub(crate) const BACKUP: u32 = 5;
+pub(crate) const BACKUP: u32 = 6;
 pub(crate) const OPTIMIZATION: u32 = 1;
 
 pub(crate) fn job(kind: &str, parameters: &Value) -> Result<(), String> {
-    let (value, expected) = match kind {
-        "transcription" => (&parameters["schemaVersion"], TRANSCRIPTION),
-        "diarization" => (&parameters["schemaVersion"], DIARIZATION),
-        "minutes_generation" => (&parameters["generation"]["schemaVersion"], MINUTES),
-        "voice_registration" | "voice_matching" => (&parameters["voice"]["schemaVersion"], VOICE),
-        "speaker_completion" => (&parameters["completion"]["schemaVersion"], COMPLETION),
-        _ => return Ok(()),
+    // Retired kinds remain historical records and are never acquired. All
+    // currently executable kinds share the contract's metadata.
+    let Ok(kind) = kind.parse::<mon_contracts::JobKind>() else {
+        return Ok(());
     };
+    let expected = kind.format();
+    let value = kind
+        .parameter_path()
+        .iter()
+        .fold(parameters, |value, key| &value[*key]);
     if value.as_u64() != Some(u64::from(expected)) {
         return Err(format!(
             "非対応の{kind}ジョブ形式です。最新形式で新しく実行してください"
@@ -75,7 +77,7 @@ mod tests {
                 db.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
                     .get::<_, u32>(0))
                     .unwrap(),
-                35
+                36
             );
             assert!(
                 db.query_row("SELECT count(*) FROM model_reference_files", [], |r| r

@@ -2,7 +2,7 @@
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const panel=()=>page.locator(".capture-test-dialog");
@@ -78,7 +78,7 @@ async page=>{
 
     await boot();await page.evaluate(()=>{window.closeFixture.testAbsentStart=true;window.closeFixture.testReconcileFailure=true;});await start().click();await accept().click();
     await failedConfirmation().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
-    await page.waitForFunction(()=>window.closeFixture.notificationHistory().some(n=>n.message.includes("開始要求の受付結果が未確認")));
+    await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
     const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);
     check(await count("start_capture_test")===1&&await start().isDisabled()&&await normal().isDisabled(),"unknown absence allowed replay");
     results.push("missing result after an uncertain start stays unknown and blocks new recording without guessing that audio stopped");
@@ -149,7 +149,7 @@ async page=>{
     check(await count("start_capture_test")===0,"restarted app accepted test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("application restart during edit flushing rejects test before admission without falling back to whole-system capture");
 
-    await boot();await page.evaluate(()=>window.closeFixture.captureInputs.microphonePermission="denied");await start().click();await page.getByRole("alert").filter({hasText:"選択したマイクまたは権限"}).first().waitFor();
+    await boot();await page.evaluate(()=>window.closeFixture.captureInputs.microphonePermission="denied");await start().click();await page.getByRole("region",{name:"録音前の5秒テスト",exact:true}).getByRole("status").filter({hasText:"選択したマイクまたは権限"}).waitFor();
     check(await count("start_capture_test")===0&&await modal().count()===0,"denied microphone prompted/started test");
     results.push("fresh denied microphone permission prevents test admission without choosing another device");
 

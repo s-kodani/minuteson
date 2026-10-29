@@ -43,7 +43,7 @@ async (page) => {
 
   await boot(); await page.evaluate(() => window.__mon.plainMode = "failure"); await review();
   await dialog().getByRole("button", { name:"保存して続ける", exact:true }).click();
-  await dialog().getByRole("alert").waitFor();
+  await dialog().getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();
   check(await finished() === 0 && await saved() === 1, "failed human save closed app or retried implicitly");
   await dialog().locator(":scope > .common-modal-dismiss-row > [data-dialog-cancel]").click();
   await page.waitForFunction(() => document.activeElement === document.querySelector('textarea[aria-label="議事録のMarkdown本文"]'));

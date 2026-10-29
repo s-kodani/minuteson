@@ -192,7 +192,7 @@ pub(super) fn run(
     guarded: bool,
     vocabulary: Option<&VocabularySnapshot>,
     cancelled: &impl Fn() -> bool,
-) -> Result<Option<Outcome>, String> {
+) -> Result<Option<Outcome>, mon_contracts::ProcessingError> {
     let Some(first) = whisper::run_unit_with_suppression(
         config,
         directory,
@@ -219,9 +219,9 @@ pub(super) fn run(
         }));
     }
     if config.prompt.is_empty() {
-        return Err(format!(
-            "{}ヒントなしの文字起こしに反復を検出しました。異常な区間は採用していません",
-            super::QUALITY_FAILURE_PREFIX
+        return Err(mon_contracts::ProcessingError::quality(
+            "ヒントなしの文字起こしに反復を検出しました。異常な区間は採用していません",
+            problems.iter().map(|r| format!("{r:?}")).collect(),
         ));
     }
     if cancelled() {
@@ -244,9 +244,12 @@ pub(super) fn run(
         return Ok(None);
     };
     if !reasons(&second, None).is_empty() {
-        return Err(format!(
-            "{}ヒントなしで再認識しても反復が残りました。異常な区間は採用していません",
-            super::QUALITY_FAILURE_PREFIX
+        return Err(mon_contracts::ProcessingError::quality(
+            "ヒントなしで再認識しても反復が残りました。異常な区間は採用していません",
+            reasons(&second, None)
+                .iter()
+                .map(|r| format!("{r:?}"))
+                .collect(),
         ));
     }
     Ok(Some(Outcome {

@@ -51,9 +51,9 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
         assert_eq!(trusted_schema(&db).is_ok(), current);
         assert_eq!(
             initialize_database(&mut db).is_ok(),
-            current || version == 34
+            current || matches!(version, 34 | 35)
         );
-        if version == 34 {
+        if matches!(version, 34 | 35) {
             assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
         } else {
             assert_eq!(schema(&db).unwrap(), before);
@@ -76,29 +76,46 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
 }
 
 #[test]
-fn pre_audio_migration_receipt_is_readable_but_never_current_deletion_consent() {
-    let previous = database(34);
-    let objects = schema(&previous).unwrap();
-    let hash = digest(&serde_json::to_vec(&objects).unwrap());
-    let known = saved_schema(current_schema().unwrap(), &hash).unwrap();
-    assert_eq!(known.version, 34);
-    assert_eq!(known.targets.len() + 2, TARGETS.len());
-    let mut scope = empty_scope();
-    scope.schema_hash = hash;
-    scope
-        .tables
-        .retain(|t| known.targets.iter().any(|(name, _)| *name == t.name));
-    let original = scope.encode().unwrap();
-    let mut db = database(MIGRATIONS.len());
-    scope.validate_format(&db).unwrap();
-    verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
-    assert!(scope.validate_current(&db).unwrap_err().contains("旧版"));
-    let tx = db.transaction().unwrap();
-    assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
-    tx.rollback().unwrap();
-    assert_eq!(scope.encode().unwrap(), original);
-    scope.schema_hash = "a".repeat(64);
-    assert!(scope.validate_format(&db).is_err());
+fn pre_followup_migration_receipts_are_readable_but_never_current_deletion_consent() {
+    for (version, expected_missing) in [
+        (
+            34,
+            vec![
+                "post_analysis_intents",
+                "audio_upgrade_progress",
+                "meeting_audio_commits",
+            ],
+        ),
+        (35, vec!["post_analysis_intents"]),
+    ] {
+        let previous = database(version);
+        let objects = schema(&previous).unwrap();
+        let hash = digest(&serde_json::to_vec(&objects).unwrap());
+        let known = saved_schema(current_schema().unwrap(), &hash).unwrap();
+        assert_eq!(known.version, version);
+        let missing = TARGETS
+            .iter()
+            .filter(|(name, _)| !known.targets.iter().any(|(kept, _)| kept == name))
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>();
+        assert_eq!(missing, expected_missing);
+        let mut scope = empty_scope();
+        scope.schema_hash = hash;
+        scope
+            .tables
+            .retain(|t| known.targets.iter().any(|(name, _)| *name == t.name));
+        let original = scope.encode().unwrap();
+        let mut db = database(MIGRATIONS.len());
+        scope.validate_format(&db).unwrap();
+        verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
+        assert!(scope.validate_current(&db).unwrap_err().contains("旧版"));
+        let tx = db.transaction().unwrap();
+        assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
+        tx.rollback().unwrap();
+        assert_eq!(scope.encode().unwrap(), original);
+        scope.schema_hash = "a".repeat(64);
+        assert!(scope.validate_format(&db).is_err());
+    }
 }
 
 #[test]

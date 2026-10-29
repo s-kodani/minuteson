@@ -172,6 +172,52 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
 }
 
 #[test]
+fn schema35_format5_backup_is_verified_before_additive_restore_to_schema36() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    meeting(&storage, "legacy35-source");
+    let (path, _) = write(&storage, output.path());
+    let source = verified(&path, output.path());
+    // With no intents, the portable row stream is byte-identical to schema35;
+    // the explicit table/version declaration reconstructs the trusted old schema.
+    let mut manifest = source.manifest.clone();
+    let intent = manifest
+        .tables
+        .iter()
+        .find(|t| t.name == "post_analysis_intents")
+        .unwrap();
+    assert_eq!(intent.row_count, 0);
+    manifest
+        .tables
+        .retain(|t| t.name != "post_analysis_intents");
+    manifest.format_version = 5;
+    manifest.schema_version = 35;
+    let old = output.path().join("schema35.monbackup");
+    pack(&old, &manifest, &payloads(&source));
+    let checked = verified(&old, output.path());
+    assert_eq!(verify_migration_history(&checked.database).unwrap(), 35);
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let prepared = target
+        .prepare_additive_restore(&old, &|| false, &|_| {})
+        .unwrap();
+    prepared
+        .publish(
+            &target,
+            &prepared.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(target.list_meetings().unwrap().len(), 1);
+    assert_eq!(
+        verify_migration_history(&target.connection.lock().unwrap()).unwrap(),
+        36
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn archive_preserves_audio_options_text_markdown_and_model_metadata_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
@@ -1104,4 +1150,67 @@ fn replacing_large_backup_is_streamed_without_markdown_size_limit() {
         .set_len(65 * 1024 * 1024)
         .unwrap();
     assert!(crate::exports::Destination::selected(&storage.root, &markdown).is_err());
+}
+
+#[test]
+fn followup_history_rejects_host_paths_and_diagnostics_even_with_a_rebound_spec_hash() {
+    let (_root, storage, meeting, spec, plan) =
+        crate::storage::speaker_completion::tests::fixture();
+    {
+        let mut db = storage.connection.lock().unwrap();
+        let tx = db.transaction().unwrap();
+        crate::storage::post_analysis::record_after_completion(
+            &tx,
+            &spec,
+            &plan,
+            spec.input_analysis_id.as_deref().unwrap(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    let output = tempfile::tempdir().unwrap();
+    let (path, _) = write(&storage, output.path());
+    let archive = verified(&path, output.path());
+    let table = archive
+        .manifest
+        .tables
+        .iter()
+        .find(|table| table.name == "post_analysis_intents")
+        .unwrap();
+    let index = |name: &str| {
+        table
+            .columns
+            .iter()
+            .position(|column| column.name == name)
+            .unwrap()
+    };
+    let spec_index = index("spec_json");
+    let hash_index = index("spec_hash");
+    let error_index = index("error_message");
+    for diagnostic in [false, true] {
+        edit_database(&archive, &path, |row| {
+            if row["table"] != "post_analysis_intents" {
+                return;
+            }
+            if diagnostic {
+                row["cells"][error_index] =
+                    json!({"type":"text","value":"/Users/source/private-diagnostic"});
+            } else {
+                let mut value: Value =
+                    serde_json::from_str(row["cells"][spec_index]["value"].as_str().unwrap())
+                        .unwrap();
+                value["execution"]["engine"]["executable"]["path"] =
+                    json!("/Users/source/private-engine");
+                let text = value.to_string();
+                let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+                row["cells"][spec_index] = json!({"type":"text","value":text});
+                row["cells"][hash_index] = json!({"type":"text","value":hash});
+            }
+        });
+        let error = read(&mut File::open(&path).unwrap(), output.path(), &|| false)
+            .err()
+            .unwrap();
+        assert!(error.contains("端末固有"), "{error}");
+    }
+    assert!(storage.load_current_analysis(&meeting).unwrap().is_some());
 }

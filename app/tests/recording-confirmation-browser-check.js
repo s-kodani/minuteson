@@ -44,7 +44,7 @@ async (page, capturePath = path => path)=>{
   if(notifyQuit)await page.evaluate(id=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"main-close-requested",payload:{quit:true,afterRecording:id}}),frozen.decision.id);
   await route.fulfill({contentType:"application/json",body:JSON.stringify(error?{error}:{value})});
  });
- await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{const response=await route.fetch();const body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/recording-confirmation-browser-fixture.js");</script>');await route.fulfill({response,body});});
+ await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{const response=await route.fetch();const body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/recording-confirmation-browser-fixture.js");</script>');await route.fulfill({response,body});});
  await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.recordingFixture);
  const mini=await context.newPage(), modal=await context.newPage();
  let stage="setup";

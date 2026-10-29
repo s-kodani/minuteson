@@ -190,8 +190,14 @@ impl Directory {
         Ok(())
     }
     pub(crate) fn sync(&self) -> Result<(), String> {
+        self.sync_namespace().map(|_| ())
+    }
+    pub(crate) fn sync_namespace(
+        &self,
+    ) -> Result<mon_native::durability::NamespaceDurability, String> {
         self.verify()?;
-        self.file.sync_all().map_err(|e| e.to_string())
+        mon_native::durability::directory_sync_result(self.file.sync_all())
+            .map_err(|e| e.to_string())
     }
     pub(crate) fn path(&self) -> &Path {
         &self.path

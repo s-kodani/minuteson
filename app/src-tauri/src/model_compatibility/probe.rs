@@ -238,18 +238,20 @@ fn run(
         }
         Engine::Sherpa => {
             wave(directory)?;
-            let config = crate::diarization::sherpa::SherpaConfig {
+            let config = crate::diarization::sherpa::SherpaConfig::from_fingerprints(
                 executable,
-                segmentation_model: one(record, package, Role::Segmentation)?,
-                embedding_model: one(record, package, Role::SpeakerEmbedding)?,
-                runtime_libraries: fingerprints(record, package, Role::RuntimeLibrary),
-                threads: 1,
-                cluster_threshold_milli: 500,
-                window_shift_milli: 500,
-                min_duration_on_ms: 300,
-                min_duration_off_ms: 500,
-                speech_sensitivity_milli: 0,
-            };
+                one(record, package, Role::Segmentation)?,
+                one(record, package, Role::SpeakerEmbedding)?,
+                fingerprints(record, package, Role::RuntimeLibrary),
+                crate::diarization::sherpa::SherpaSettings {
+                    threads: 1,
+                    cluster_threshold_milli: 500,
+                    window_shift_milli: 500,
+                    min_duration_on_ms: 300,
+                    min_duration_off_ms: 500,
+                    speech_sensitivity_milli: 0,
+                },
+            );
             crate::diarization::sherpa::run_track(
                 &config,
                 None,

@@ -4,8 +4,14 @@ import type { DataAvailability } from "./data-operation-state";
 /** Older native builds only report the general data-operation admission. */
 export function deletionAvailability(value: DataAvailability | null) {
   return value?.deletionAvailable === undefined
-    ? { available: !!value?.available, reason: value?.reason ?? null }
-    : { available: value.deletionAvailable, reason: value.deletionReason ?? null };
+    ? { available: !!value?.available, reason: value?.reason ?? null, ...(value?.reasonCode !== undefined ? { reasonCode: value.reasonCode } : {}) }
+    : { available: value.deletionAvailable, reason: value.deletionReason ?? null, ...(value.deletionReasonCode !== undefined ? { reasonCode: value.deletionReasonCode } : {}) };
+}
+
+/** Only an explicit native restart code can admit the restricted recovery read.
+ * The translated explanation is display text and never authorizes recovery. */
+export function permitsDeletionRecovery(value: Pick<DataAvailability, "reasonCode"> | null, restartRequired: boolean | undefined): boolean {
+  return !!restartRequired && value?.reasonCode === "relocation_restart_required";
 }
 
 /** Explain the same gates used by deletion admission; never authorize a write. */

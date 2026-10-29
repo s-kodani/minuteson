@@ -89,110 +89,122 @@ pub fn focus(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn get_recording_confirmation(window: WebviewWindow) -> Result<StopDecision, String> {
-    if !matches!(window.label(), "main" | "recorder" | LABEL) {
-        return Err("録音画面から状態を確認してください".into());
-    }
-    Ok(session_changed(
-        window.app_handle(),
-        &window.state::<SessionStore>().snapshot(),
-    ))
+pub fn get_recording_confirmation(
+    window: WebviewWindow,
+) -> Result<StopDecision, mon_contracts::AppError> {
+    let result: Result<StopDecision, String> = (|| {
+        if !matches!(window.label(), "main" | "recorder" | LABEL) {
+            return Err("録音画面から状態を確認してください".into());
+        }
+        Ok(session_changed(
+            window.app_handle(),
+            &window.state::<SessionStore>().snapshot(),
+        ))
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_recording_confirmation", message)
+    })
 }
 #[tauri::command]
 pub fn request_recording_confirmation(
     window: WebviewWindow,
     quit: Option<bool>,
     anchor: Option<PopupAnchor>,
-) -> Result<StopDecision, String> {
-    if !matches!(window.label(), "main" | "recorder") {
-        return Err("録音画面から確認してください".into());
-    }
-    let app = window.app_handle();
-    let recording = app.state::<SessionStore>().snapshot();
-    session_changed(app, &recording);
-    let title = recording
-        .meeting_id
-        .as_deref()
-        .map(|id| app.state::<Storage>().get_meeting(id))
-        .transpose()?
-        .flatten()
-        .map(|meeting| meeting.title)
-        .unwrap_or_else(|| "現在の録音".into());
-    let store = app.state::<StopDecisionStore>();
-    let (value, created) = if quit.unwrap_or(false) {
-        store.request_for_exit(&recording, window.label(), title, true)?
-    } else {
-        store.request(&recording, window.label(), title)?
-    };
-    if !value.visible() {
-        emit(app, &value);
-        return Ok(value);
-    }
-    let present = || -> Result<(), String> {
-        // Read-only help cannot cover a confirmation or steal its focus back.
-        crate::recorder_info::hide(app, false)?;
-        let popup = app
-            .get_webview_window(LABEL)
-            .ok_or("録音確認ウィンドウがありません")?;
-        if created {
-            let monitor = window
-                .current_monitor()
-                .map_err(|e| e.to_string())?
-                .ok_or("録音画面のモニターを確認できません")?;
-            let area = monitor.work_area();
-            let (width, height) =
-                fitted_size((area.size.width, area.size.height), monitor.scale_factor())?;
-            let source = window.outer_position().map_err(|e| e.to_string())?;
-            let source_size = window.outer_size().map_err(|e| e.to_string())?;
-            // CSS coordinates belong to the source WebView. Its active DPI can
-            // differ from the selected monitor during a display transition.
-            let source_scale = window.scale_factor().unwrap_or(monitor.scale_factor());
-            let anchor = physical_anchor(&window, anchor, source_scale);
-            let (x, y) = popup_position(
-                (area.position.x, area.position.y),
-                (area.size.width, area.size.height),
-                (source.x, source.y),
-                (source_size.width, source_size.height),
-                anchor,
-                (width, height),
-                window.label() == "recorder",
-                monitor.scale_factor(),
-            );
-            popup
-                .set_position(PhysicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-            popup
-                .set_size(PhysicalSize::new(width, height))
-                .map_err(|e| e.to_string())?;
+) -> Result<StopDecision, mon_contracts::AppError> {
+    let result: Result<StopDecision, String> = (|| {
+        if !matches!(window.label(), "main" | "recorder") {
+            return Err("録音画面から確認してください".into());
         }
-        popup.set_always_on_top(true).map_err(|e| e.to_string())?;
-        popup.show().map_err(|e| e.to_string())?;
-        popup.set_focus().map_err(|e| e.to_string())?;
-        // A panel failure must not block the stop confirmation itself.
-        let _ = crate::recorder_panel::synchronize(app);
-        Ok(())
-    };
-    if let Err(error) = present() {
-        if created {
-            if let Some(id) = value.id.as_deref() {
-                let _ = app.state::<StopDecisionStore>().dismiss(id);
+        let app = window.app_handle();
+        let recording = app.state::<SessionStore>().snapshot();
+        session_changed(app, &recording);
+        let title = recording
+            .meeting_id
+            .as_deref()
+            .map(|id| app.state::<Storage>().get_meeting(id))
+            .transpose()?
+            .flatten()
+            .map(|meeting| meeting.title)
+            .unwrap_or_else(|| "現在の録音".into());
+        let store = app.state::<StopDecisionStore>();
+        let (value, created) = if quit.unwrap_or(false) {
+            store.request_for_exit(&recording, window.label(), title, true)?
+        } else {
+            store.request(&recording, window.label(), title)?
+        };
+        if !value.visible() {
+            emit(app, &value);
+            return Ok(value);
+        }
+        let present = || -> Result<(), String> {
+            // Read-only help cannot cover a confirmation or steal its focus back.
+            crate::recorder_info::hide(app, false)?;
+            let popup = app
+                .get_webview_window(LABEL)
+                .ok_or("録音確認ウィンドウがありません")?;
+            if created {
+                let monitor = window
+                    .current_monitor()
+                    .map_err(|e| e.to_string())?
+                    .ok_or("録音画面のモニターを確認できません")?;
+                let area = monitor.work_area();
+                let (width, height) =
+                    fitted_size((area.size.width, area.size.height), monitor.scale_factor())?;
+                let source = window.outer_position().map_err(|e| e.to_string())?;
+                let source_size = window.outer_size().map_err(|e| e.to_string())?;
+                // CSS coordinates belong to the source WebView. Its active DPI can
+                // differ from the selected monitor during a display transition.
+                let source_scale = window.scale_factor().unwrap_or(monitor.scale_factor());
+                let anchor = physical_anchor(&window, anchor, source_scale);
+                let (x, y) = popup_position(
+                    (area.position.x, area.position.y),
+                    (area.size.width, area.size.height),
+                    (source.x, source.y),
+                    (source_size.width, source_size.height),
+                    anchor,
+                    (width, height),
+                    window.label() == "recorder",
+                    monitor.scale_factor(),
+                );
+                popup
+                    .set_position(PhysicalPosition::new(x, y))
+                    .map_err(|e| e.to_string())?;
+                popup
+                    .set_size(PhysicalSize::new(width, height))
+                    .map_err(|e| e.to_string())?;
             }
-        }
-        let current = app.state::<StopDecisionStore>().snapshot();
-        emit(app, &current);
-        if created {
-            restore(app, &current, false);
-        }
-        return Err(format!(
+            popup.set_always_on_top(true).map_err(|e| e.to_string())?;
+            popup.show().map_err(|e| e.to_string())?;
+            popup.set_focus().map_err(|e| e.to_string())?;
+            // A panel failure must not block the stop confirmation itself.
+            let _ = crate::recorder_panel::synchronize(app);
+            Ok(())
+        };
+        if let Err(error) = present() {
+            if created {
+                if let Some(id) = value.id.as_deref() {
+                    let _ = app.state::<StopDecisionStore>().dismiss(id);
+                }
+            }
+            let current = app.state::<StopDecisionStore>().snapshot();
+            emit(app, &current);
+            if created {
+                restore(app, &current, false);
+            }
+            return Err(format!(
             "録音確認を表示できません。新しい停止は送っていません。確認ウィンドウの状態を再確認してください: {error}"
         ));
-    }
-    let current = session_changed(app, &app.state::<SessionStore>().snapshot());
-    if !current.visible() {
-        restore(app, &current, false);
-    }
-    emit(app, &current);
-    Ok(current)
+        }
+        let current = session_changed(app, &app.state::<SessionStore>().snapshot());
+        if !current.visible() {
+            restore(app, &current, false);
+        }
+        emit(app, &current);
+        Ok(current)
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("request_recording_confirmation", message)
+    })
 }
 #[tauri::command]
 pub async fn decide_recording_confirmation(
@@ -200,16 +212,22 @@ pub async fn decide_recording_confirmation(
     id: String,
     stop: bool,
     expected_preparing: bool,
-) -> Result<StopDecision, String> {
-    if window.label() != LABEL {
-        return Err("録音確認ウィンドウから決定してください".into());
+) -> Result<StopDecision, mon_contracts::AppError> {
+    let result: Result<StopDecision, String> = async move {
+        if window.label() != LABEL {
+            return Err("録音確認ウィンドウから決定してください".into());
+        }
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            decide_recording_confirmation_blocking(&app, &id, stop, expected_preparing)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        decide_recording_confirmation_blocking(&app, &id, stop, expected_preparing)
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("decide_recording_confirmation", message)
     })
-    .await
-    .map_err(|e| e.to_string())?
 }
 fn decide_recording_confirmation_blocking(
     app: &AppHandle,

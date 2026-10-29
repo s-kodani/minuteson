@@ -113,7 +113,8 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
                 &next.id,
                 &crate::test_support::never_cancelled,
                 &|_| {},
-            ),
+            )
+            .map_err(|e| e.to_string()),
             Engine::Sherpa => crate::diarization::process(
                 &f.storage,
                 &next.id,
@@ -366,7 +367,8 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
                 &job.id,
                 &crate::test_support::never_cancelled,
                 &progress,
-            ),
+            )
+            .map_err(|e| e.to_string()),
             Engine::Sherpa => crate::diarization::process(
                 &f.storage,
                 &job.id,
@@ -530,7 +532,8 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
                 &next.id,
                 &crate::test_support::never_cancelled,
                 &|_| {},
-            ),
+            )
+            .map_err(|e| e.to_string()),
             Engine::Sherpa => crate::diarization::process(
                 &f.storage,
                 &next.id,

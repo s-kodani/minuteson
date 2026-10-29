@@ -1,7 +1,6 @@
-//! Streaming Windows import for PCM WAV and strictly verified FLAC. The
+//! Shared streaming import for PCM WAV and strictly verified FLAC. The
 //! meeting-mix WAV reader intentionally remains restricted to its fixed format.
 use super::*;
-#[cfg(windows)]
 use std::io::BufWriter;
 use std::io::SeekFrom;
 struct Wave {
@@ -144,7 +143,6 @@ impl Wave {
         Ok(value)
     }
 }
-#[cfg(windows)]
 pub(super) fn decode(
     input: &Path,
     output: Option<&Path>,
@@ -194,11 +192,15 @@ pub(super) fn decode(
     info.validate()?;
     let mut writer = output
         .map(|p| {
-            let f = File::options()
-                .write(true)
-                .create_new(true)
-                .open(p)
-                .map_err(|e| e.to_string())?;
+            let mut options = File::options();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let f = options.open(p).map_err(|e| e.to_string())?;
+            #[cfg(windows)]
             crate::windows_files::set_private(p)?;
             Ok::<_, String>(BufWriter::new(f))
         })

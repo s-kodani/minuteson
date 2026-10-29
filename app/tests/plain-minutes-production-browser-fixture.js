@@ -6,7 +6,7 @@ const data=window.__mon, copy=value=>structuredClone(value);
 const op=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 data.plain={m1:{meetingId:"m1",markdown:"# 点検会議\n\n- 点検日を確認する\n\n人間の保存済み追記\n",lockVersion:1,contentHash:"a".repeat(64),operationId:op(1),updatedAt:1}};
 if(window.__monMarkdownIntervalFixture)data.plain.m1.markdown="# 点検会議\n\n[点検区間](audio:00:00:01.000001-00:00:03.999999)\n\n[範囲外](audio:00:01:00-00:01:01) [逆順](audio:00:00:04-00:00:03) [外部](https://example.com)\n";
-data.audioSummary={schemaVersion:1,durationUs:60000000,modes:window.__monMarkdownIntervalFixture?["mic"]:[]};
+data.audioSummary={schemaVersion:1,durationUs:60000000,modes:["mixed"]};
 data.intervalMode="success";data.intervalCalls=[];data.intervalRelease=()=>{};
 if(new URLSearchParams(location.search).get("empty")==="1")data.plain={};
 data.plainMode="success";data.startMode="success";data.plainCalls=[];data.plainRelease=()=>{};
@@ -36,11 +36,11 @@ bridge.invoke=async(cmd,args={})=>{
     if(data.intervalMode==="failure")throw Error("合成の音声検証失敗");
     const r=args.request;
     const start=cmd==="prepare_meeting_playback"?0:r.startUs,end=cmd==="prepare_meeting_playback"?data.audioSummary.durationUs:r.endUs;
-    const first=Math.ceil(start*48000/1000000),last=Math.ceil(end*48000/1000000);
+    const first=Math.ceil(start*16000/1000000),last=Math.ceil(end*16000/1000000);
     const token=`interval-${intervalSequence}`;
-    data.playbacks[token]={totalFrames:last-first,sampleRate:48000};
-    return {token,sampleRate:48000,channels:1,totalFrames:last-first,startUs:start,endUs:end,trackKind:r.mode,alignment:"unverified",
-      ...(data.intervalMode==="gap"?{missingRanges:[{trackKind:"mic",startUs:start,endUs:2000000,startFrame:0,endFrame:96000-first,reasonCode:"capture_timestamp_gap"}]}:{}),
+    data.playbacks[token]={totalFrames:last-first,sampleRate:16000};
+    return {token,sampleRate:16000,channels:1,totalFrames:last-first,startUs:start,endUs:end,trackKind:r.mode,alignment:"unverified",
+      ...(data.intervalMode==="gap"?{missingRanges:[{trackKind:"mic",startUs:start,endUs:2000000,startFrame:0,endFrame:32000-first,reasonCode:"capture_timestamp_gap"}]}:{}),
       ...(data.intervalMode==="wrong"?{endUs:end+1}:{})};
   }
   if(cmd==="read_playback_chunk"||cmd==="close_playback"||cmd==="cancel_playback_preparation")data.intervalCalls.push({cmd,args:copy(args)});
@@ -107,4 +107,4 @@ bridge.invoke=async(cmd,args={})=>{
   if(/^(get_minutes_(versions|preview|draft|evidence_source|transcript_page|exports)|save_minutes_draft|adopt_minutes_candidate|restore_minutes_version|start_minutes_generation|prepare_minutes_)/.test(cmd))throw Error(`obsolete minutes command: ${cmd}`);
   return originalInvoke(cmd,args);
 };
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

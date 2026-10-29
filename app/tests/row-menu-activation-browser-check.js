@@ -6,7 +6,7 @@ async (page, capturePath, detailUI) => {
   const menu = () => page.getByRole("menu", { name: "既存会議の操作", exact: true });
   const open = () => menu().getByRole("menuitem", { name: "開く", exact: true });
   const remove = () => menu().getByRole("menuitem", { name: "既存会議を削除", exact: true });
-  const dialog = () => page.getByRole("dialog", { name: "会議の完全削除を確認", exact: true });
+  const dialog = () => page.getByRole("dialog", { name: "会議を削除", exact: true });
   const back = async () => { await page.getByRole("navigation", { name: "画面の移動" }).getByRole("button", { name: "前の画面へ戻る", exact: true }).click(); await trigger().waitFor(); };
   const show = async () => { await detailUI.openMeetingRow(); await menu().waitFor(); await page.waitForFunction(() => !document.querySelector('[role="menuitem"][aria-label="既存会議を削除"]').disabled); };
 
@@ -34,19 +34,18 @@ async (page, capturePath, detailUI) => {
     results.push(`${key} activation opens the meeting and returns to its list`);
   }
 
-  await show(); await remove().click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  await show(); await remove().click(); await dialog().waitFor(); await dialog().getByText("削除対象フォルダー", { exact: true }).waitFor();
   check(await menu().isHidden() && (await calls("review_meeting_deletion")).length === 1 && (await calls("start_data_operation")).length === 0, "delete item bypassed review or failed to hide the popup");
-  check(await dialog().getByRole("button", { name: "会議を削除する", exact: true }).isDisabled(), "deletion does not require consent");
-  await dialog().getByRole("button", { name: "削除せず閉じる", exact: true }).click(); await dialog().waitFor({ state: "hidden" });
+  check(await dialog().getByText("削除対象フォルダー", {exact:true}).isVisible(), "deletion target directory is missing");
+  await dialog().getByRole("button", { name: "キャンセル", exact: true }).click(); await dialog().waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "既存会議の操作");
   check((await calls("start_data_operation")).length === 0 && await page.evaluate(() => window.deletionFixture.deleted) === 0, "cancelling deleted synthetic data");
   results.push("delete opens one confirmation and cancellation restores the ellipsis without deleting");
 
   await show(); await page.keyboard.press("End"); await page.keyboard.press("Enter"); await dialog().waitFor();
-  await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  await dialog().getByText("削除対象フォルダー", { exact: true }).waitFor();
   await page.screenshot({ path: capturePath("row-menu-delete-confirmation.png") });
-  await dialog().getByRole("checkbox", { name: "対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。", exact: true }).check();
-  await dialog().getByRole("button", { name: "会議を削除する", exact: true }).click();
+  await dialog().getByRole("button", { name: "削除", exact: true }).click();
   await page.waitForFunction(() => window.deletionFixture.deleted === 1 && window.dataFixture.meetings.length === 1);
   await trigger().waitFor({ state: "hidden" });
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("button", { name: "残す会議の操作", exact: true }).isVisible(), "confirmed deletion repeated or removed another meeting");

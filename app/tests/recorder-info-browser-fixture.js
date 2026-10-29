@@ -11,4 +11,4 @@ mockIPC(async (command, args) => {
   }
   return dataSaveIPC(command, args);
 }, { shouldMockEvents: true });
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

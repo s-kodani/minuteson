@@ -1,0 +1,4 @@
+module MONCaptureCore {
+  header "../../../../crates/mon-capture-ffi/include/mon_capture.h"
+  export *
+}

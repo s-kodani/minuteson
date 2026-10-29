@@ -63,4 +63,4 @@ mockIPC(async(command,args)=>{
     default:throw Error(`Unexpected import fixture command: ${command}`);
   }
 },{shouldMockEvents:true});
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

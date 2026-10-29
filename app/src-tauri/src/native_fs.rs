@@ -236,15 +236,19 @@ pub(crate) fn symlink_metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
     }
 }
 pub(crate) fn sync_directory(path: &Path) -> Result<(), String> {
+    sync_directory_state(path).map(|_| ())
+}
+pub(crate) fn sync_directory_state(
+    path: &Path,
+) -> Result<mon_native::durability::NamespaceDurability, String> {
     #[cfg(unix)]
     {
-        File::open(path)
-            .and_then(|f| f.sync_all())
+        mon_native::durability::directory_sync_result(File::open(path).and_then(|f| f.sync_all()))
             .map_err(|e| e.to_string())
     }
     #[cfg(windows)]
     {
-        crate::windows_files::sync_directory(path)
+        crate::windows_files::sync_directory_state(path)
     }
 }
 pub(crate) fn sync_path(path: impl AsRef<Path>) -> Result<(), String> {
@@ -268,6 +272,18 @@ pub(crate) fn sync_file(path: &Path) -> Result<(), String> {
 pub(crate) fn remove_owned(path: &Path, observed: &Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {
+        use std::os::unix::fs::MetadataExt;
+        let current = std::fs::symlink_metadata(path)?;
+        if current.dev() != observed.dev()
+            || current.ino() != observed.ino()
+            || current.created()? != observed.created()?
+            || current.file_type() != observed.file_type()
+            || (!current.is_dir() && current.nlink() != 1)
+        {
+            return Err(io::Error::other(
+                "削除対象の実体・リンク数が変更されています",
+            ));
+        }
         if observed.is_dir() {
             std::fs::remove_dir(path)
         } else {
@@ -278,5 +294,27 @@ pub(crate) fn remove_owned(path: &Path, observed: &Metadata) -> io::Result<()> {
     {
         crate::windows_files::remove_owned(path, &observed.identity, observed.is_dir())
             .map_err(io::Error::other)
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    #[test]
+    fn stale_observations_and_shared_files_cannot_authorize_removal() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("owned");
+        std::fs::write(&path, b"first").unwrap();
+        let observed = super::symlink_metadata(&path).unwrap();
+        std::fs::rename(&path, temp.path().join("retained")).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        assert!(super::remove_owned(&path, &observed).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        let observed = super::symlink_metadata(&path).unwrap();
+        std::fs::hard_link(&path, temp.path().join("alias")).unwrap();
+        assert!(super::remove_owned(&path, &observed).is_err());
+        std::fs::remove_file(temp.path().join("alias")).unwrap();
+        let observed = super::symlink_metadata(&path).unwrap();
+        super::remove_owned(&path, &observed).unwrap();
+        assert!(!path.exists());
     }
 }

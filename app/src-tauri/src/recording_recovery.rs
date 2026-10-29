@@ -120,11 +120,17 @@ pub(crate) fn run(app: &tauri::AppHandle) {
     }
 }
 #[tauri::command]
-pub(crate) fn get_recording_recovery(window: WebviewWindow) -> Result<Snapshot, String> {
-    if window.label() != "main" {
-        return Err("録音回復の状態はメイン画面だけで確認できます".into());
-    }
-    Ok(window.state::<Recovery>().snapshot())
+pub(crate) fn get_recording_recovery(
+    window: WebviewWindow,
+) -> Result<Snapshot, mon_contracts::AppError> {
+    let result: Result<Snapshot, String> = (|| {
+        if window.label() != "main" {
+            return Err("録音回復の状態はメイン画面だけで確認できます".into());
+        }
+        Ok(window.state::<Recovery>().snapshot())
+    })();
+    result
+        .map_err(|message| mon_contracts::AppError::from_command("get_recording_recovery", message))
 }
 
 #[cfg(test)]

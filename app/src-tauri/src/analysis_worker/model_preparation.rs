@@ -82,9 +82,12 @@ impl AnalysisController {
         if cancelled()
             || recording_active
             || import_blocked
-            || self.shutdown.load(Ordering::SeqCst)
-            || state.blocks_worker()
-            || !state.meeting_deletions.is_empty()
+            || !state
+                .admission(
+                    Request::new(Kind::ModelPreparation, Scope::ModelCatalog),
+                    self.shutdown.load(Ordering::SeqCst),
+                )
+                .can_reserve()
         {
             return Err("AI処理・録音・取り込み・モデル準備・バックアップ・復元・終了処理が停止してからモデルを準備してください".into());
         }
@@ -146,12 +149,7 @@ impl Drop for ModelPreparationLease<'_> {
     fn drop(&mut self) {
         let mut state = self.owner.state.lock().unwrap_or_else(|e| e.into_inner());
         // A stale guard can never release a newer preparation operation.
-        if state
-            .model_preparation
-            .as_ref()
-            .is_some_and(|cancel| Arc::ptr_eq(cancel, &self.cancel))
-        {
-            state.model_preparation = None;
+        if operation::release_owned(&mut state.model_preparation, &self.cancel) {
             self.owner.idle.notify_all();
         }
     }

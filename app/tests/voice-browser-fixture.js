@@ -11,7 +11,7 @@ bridge.invoke=async(command,args={})=>{
   if(command==="get_analysis_notification_jobs"){const result=await original(command,args);return result.filter(j=>!j.kind.startsWith("voice_"));}
   if(command==="prepare_markdown_interval_playback"){
     data.calls.push({command,args:copy(args)});const r=args.request;
-    const info={token:"voice-preview",sampleRate:48000,channels:1,totalFrames:Math.ceil(r.endUs*48000/1e6)-Math.ceil(r.startUs*48000/1e6),startUs:r.startUs,endUs:r.endUs,trackKind:r.mode,alignment:"unverified"};data.meetingAudio.sessions[info.token]=info;return info;
+    const info={token:"voice-preview",sampleRate:16000,channels:1,totalFrames:Math.ceil(r.endUs*16000/1e6)-Math.ceil(r.startUs*16000/1e6),startUs:r.startUs,endUs:r.endUs,trackKind:r.mode,alignment:"unverified"};data.meetingAudio.sessions[info.token]=info;return info;
   }
   if(command==="get_voice_people"){if(state.failPeople)throw Error("合成のボイス一覧取得失敗");return copy(state.people);}
   if(command==="prepare_voice_sample_playback"){
@@ -24,7 +24,7 @@ bridge.invoke=async(command,args={})=>{
     const sample=state.people.flatMap(p=>p.samples).find(s=>s.id===args.sampleId);
     if(!sample||!sample.sourceAvailable)throw Error("登録元の音声がありません");
     if(entry?.cancelled)throw Error("取消済みの音声準備");
-    const info={token:crypto.randomUUID(),sampleRate:48000,channels:1,totalFrames:Math.ceil(sample.endUs*48000/1e6)-Math.floor(sample.startUs*48000/1e6),startUs:sample.startUs,endUs:sample.endUs,trackKind:sample.trackKind??"mic",alignment:"unverified",...state.corruptSample};
+    const info={token:crypto.randomUUID(),sampleRate:16000,channels:1,totalFrames:Math.ceil(sample.endUs*16000/1e6)-Math.floor(sample.startUs*16000/1e6),startUs:sample.startUs,endUs:sample.endUs,trackKind:"processed",alignment:"unverified",...state.corruptSample};
     data.meetingAudio.sessions[info.token]=info;if(entry)entry.token=info.token;return info;
   }
   if(command==="get_voice_context"){

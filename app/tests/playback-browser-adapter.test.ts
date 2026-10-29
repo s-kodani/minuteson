@@ -36,14 +36,14 @@ test("playback fixture starts missing preferences with a valid schema and refuse
 
 test("cancellation driver uses the initial bar and modal without restoring deleted header controls", () => {
   const driver=readFileSync(new URL("./playback-cancellation-browser-check.js",import.meta.url),"utf8");
-  const runner=readFileSync(new URL("./run-browser-checks.mjs",import.meta.url),"utf8");
+  const runner=readFileSync(new URL("./browser/regression.spec.mjs",import.meta.url),"utf8");
   assert.doesNotMatch(driver,/会議全体を再生|表示テーマ|編集を開始|getByText\("再生トラック"/);
   assert.match(driver,/const start=player.getByRole\("button",\{name:"再生",exact:true\}\)/);
   assert.match(driver,/const settings=page.getByRole\("dialog",\{name:"再生設定",exact:true\}\)/);
   assert.match(driver,/detailUI.applyPlaybackTheme\(theme\)/);
-  assert.match(runner,/detailUI.applyPlaybackTheme=theme=>\(\$\{applyPlaybackFixtureTheme.toString\(\)\}\)\(page,theme\)/);
+  assert.match(runner,/applyPlaybackTheme: theme => applyPlaybackFixtureTheme\(page, theme\)/);
   assert.match(driver,/register_playback_preparation"\)===0/);
-  assert.match(driver,/settings.press\("Escape"\);await settings.waitFor\(\{state:"hidden"\}\)/);
+  assert.match(driver,/settings.press\("Escape"\);\s*await settings.waitFor\(\{state:"hidden"\}\)/);
 });
 
 test("manual playback fixture exposes protocol faults and ownership without changing active reservations", () => {

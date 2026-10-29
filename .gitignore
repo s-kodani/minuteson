@@ -19,6 +19,7 @@ app/src-tauri/icons/android/
 app/src-tauri/icons/ios/
 .playwright-cli/
 /output/
+/app/output/
 /plain-minutes-interval.png
 /simple-models.png
 

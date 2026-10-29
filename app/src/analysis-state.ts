@@ -1,3 +1,4 @@
+import type { JobKind, JobState, PauseReason } from "./generated/contracts";
 import type { VadOptions } from "./vad-state.ts";
 export interface EnginePreferences {
   vadOptions?: VadOptions;
@@ -44,13 +45,13 @@ export interface AnalysisJob {
   executionProgress?: ExecutionProgress | null;
   createdAt?: number;
   id: string;
-  kind: string;
-  state: string;
+  kind: JobKind;
+  state: JobState;
   completedUnits: number;
   totalUnits: number | null;
   errorCode: string | null;
   outputAnalysisId: string | null;
-  pauseReason: string | null;
+  pauseReason: PauseReason | null;
   specHash: string;
   retryOfJobId: string | null;
   attempt: number;

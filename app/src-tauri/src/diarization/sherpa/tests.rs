@@ -28,6 +28,84 @@ fn config(directory: &Path) -> SherpaConfig {
     }
 }
 
+#[test]
+fn shared_capture_builder_preserves_settings_fingerprints_and_cancellation() {
+    let directory = tempfile::tempdir().unwrap();
+    let expected = config(directory.path());
+    let library = directory.path().join("native-library");
+    std::fs::write(&library, b"library fixture").unwrap();
+    let settings = SherpaSettings {
+        threads: 3,
+        cluster_threshold_milli: 700,
+        window_shift_milli: 250,
+        min_duration_on_ms: 125,
+        min_duration_off_ms: 800,
+        speech_sensitivity_milli: 0,
+    };
+    let paths = [
+        expected.executable.path.as_path(),
+        expected.segmentation_model.path.as_path(),
+        expected.embedding_model.path.as_path(),
+    ];
+    let first = SherpaConfig::capture(
+        paths,
+        &[library.as_path()],
+        settings,
+        CaptureMode::Transient,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let second = SherpaConfig::capture(
+        paths,
+        &[library.as_path()],
+        settings,
+        CaptureMode::Retained,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert_eq!(first, second);
+    assert_eq!(
+        (
+            first.threads,
+            first.cluster_threshold_milli,
+            first.window_shift_milli,
+            first.min_duration_on_ms,
+            first.min_duration_off_ms,
+            first.speech_sensitivity_milli
+        ),
+        (3, 700, 250, 125, 800, 0)
+    );
+    assert_eq!(first.executable, expected.executable);
+    assert_eq!(first.segmentation_model, expected.segmentation_model);
+    assert_eq!(first.embedding_model, expected.embedding_model);
+    assert_eq!(
+        first.runtime_libraries[0],
+        Fingerprint::capture(&library, &crate::test_support::never_cancelled).unwrap()
+    );
+    assert!(SherpaConfig::capture(paths, &[], settings, CaptureMode::Transient, &|| true).is_err());
+    // The sensitivity field is retained for legacy serialization, but only
+    // the standard value is currently supported at every builder boundary.
+    assert!(SherpaConfig::capture(
+        paths,
+        &[],
+        SherpaSettings {
+            speech_sensitivity_milli: 100,
+            ..settings
+        },
+        CaptureMode::Transient,
+        &crate::test_support::never_cancelled,
+    )
+    .is_err());
+    assert!(SherpaConfig::capture(
+        paths,
+        &[library.as_path(); 17],
+        settings,
+        CaptureMode::Transient,
+        &crate::test_support::never_cancelled
+    )
+    .is_err());
+}
+
 fn output(config: &SherpaConfig, count: Option<u32>, rows: &str) -> Vec<u8> {
     format!("{}\nStarted\n{rows}", config.expected_header(count)).into_bytes()
 }

@@ -1,0 +1,3675 @@
+{
+  "schemaVersion": 1,
+  "commands": [
+    {
+      "name": "get_window_environment",
+      "handler": "window_environment::get_window_environment",
+      "roles": [
+        "main",
+        "recorder",
+        "recorder-info",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<WindowEnvironment,mon_contracts::AppError>",
+          "ok": "WindowEnvironment",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_internal_logs",
+      "handler": "internal_logs::get_internal_logs",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "query",
+            "wireName": "query",
+            "type": "Query",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Page,mon_contracts::AppError>",
+          "ok": "Page",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_recovery",
+      "handler": "recording_recovery::get_recording_recovery",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_startup_report",
+      "handler": "startup_attention::get_startup_report",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Report,mon_contracts::AppError>",
+          "ok": "Report",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_startup_reset_preview",
+      "handler": "startup_reset::get_startup_reset_preview",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Preview,mon_contracts::AppError>",
+          "ok": "Preview",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "choose_startup_reset_backup_directory",
+      "handler": "startup_reset::choose_startup_reset_backup_directory",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<PathBuf>,mon_contracts::AppError>",
+          "ok": "Option<PathBuf>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_startup_reset",
+      "handler": "startup_reset::start_startup_reset",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "archive",
+            "wireName": "archive",
+            "type": "bool",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_startup_reset_state",
+      "handler": "startup_reset::get_startup_reset_state",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "quit_blocked_startup",
+      "handler": "startup_attention::quit_blocked_startup",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "retry_startup",
+      "handler": "startup_instance::retry_startup",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_residency_state",
+      "handler": "residency::get_residency_state",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Report,mon_contracts::AppError>",
+          "ok": "Report",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "hide_main_to_background",
+      "handler": "residency::hide_main_to_background",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_official_model_options",
+      "handler": "model_official_catalog::get_official_model_options",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_model_download",
+      "handler": "model_download_ipc::start_model_download",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "definition",
+            "wireName": "definition",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_recipe_hash",
+            "wireName": "expectedRecipeHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_download_lifetime",
+      "handler": "model_download_ipc::get_model_download_lifetime",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_download_catalog",
+      "handler": "model_download_ipc::get_model_download_catalog",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "read_model_download",
+      "handler": "model_download_ipc::read_model_download",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "download_id",
+            "wireName": "downloadId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_recipe_hash",
+            "wireName": "expectedRecipeHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "place_downloaded_model",
+      "handler": "model_download_ipc::place_downloaded_model",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "download_id",
+            "wireName": "downloadId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_recipe_hash",
+            "wireName": "expectedRecipeHash",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_review_hash",
+            "wireName": "expectedReviewHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_downloaded_model_placement_result",
+      "handler": "model_download_ipc::get_downloaded_model_placement_result",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "package_id",
+            "wireName": "packageId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "download_id",
+            "wireName": "downloadId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_recipe_hash",
+            "wireName": "expectedRecipeHash",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_review_hash",
+            "wireName": "expectedReviewHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_model_inspection",
+      "handler": "cancel_model_inspection",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_placements",
+      "handler": "get_model_placements",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<model_placement::CatalogEntry>,mon_contracts::AppError>",
+          "ok": "Vec<model_placement::CatalogEntry>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_profiles",
+      "handler": "get_model_profiles",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<storage::model_profiles::ProfileView>,mon_contracts::AppError>",
+          "ok": "Vec<storage::model_profiles::ProfileView>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "preview_model_profile_application",
+      "handler": "preview_model_profile_application",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "profile",
+            "wireName": "profile",
+            "type": "storage::model_profiles::ProfileName",
+            "optional": false
+          },
+          {
+            "name": "package_id",
+            "wireName": "packageId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_review_hash",
+            "wireName": "expectedReviewHash",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "check_operation_id",
+            "wireName": "checkOperationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "diarization_threads",
+            "wireName": "diarizationThreads",
+            "type": "Option<u32>",
+            "optional": true
+          },
+          {
+            "name": "diarization_cluster_threshold_milli",
+            "wireName": "diarizationClusterThresholdMilli",
+            "type": "Option<u32>",
+            "optional": true
+          },
+          {
+            "name": "whisper_vad_options",
+            "wireName": "whisperVadOptions",
+            "type": "Option<transcription::vad::VadOptions>",
+            "optional": true
+          },
+          {
+            "name": "diarization_speech_sensitivity_milli",
+            "wireName": "diarizationSpeechSensitivityMilli",
+            "type": "Option<i32>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<storage::model_profiles::ApplyPreview,mon_contracts::AppError>",
+          "ok": "storage::model_profiles::ApplyPreview",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "apply_model_profile_application",
+      "handler": "apply_model_profile_application",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "preview",
+            "wireName": "preview",
+            "type": "storage::model_profiles::ApplyPreview",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::model_profiles::ProfileView,mon_contracts::AppError>",
+          "ok": "storage::model_profiles::ProfileView",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "check_model_compatibility",
+      "handler": "check_model_compatibility",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "package_id",
+            "wireName": "packageId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_review_hash",
+            "wireName": "expectedReviewHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<model_compatibility::CheckSummary,mon_contracts::AppError>",
+          "ok": "model_compatibility::CheckSummary",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_audio_import",
+      "handler": "get_audio_import",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<import_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "import_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "select_audio_import",
+      "handler": "select_audio_import",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "path",
+            "wireName": "path",
+            "type": "Option<std::path::PathBuf>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<import_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "import_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_audio_import",
+      "handler": "start_audio_import",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "import_controller::StartRequest",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<import_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "import_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_audio_import",
+      "handler": "cancel_audio_import",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<import_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "import_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_data_operation",
+      "handler": "get_data_operation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_deletion_items",
+      "handler": "get_deletion_items",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::deletion::operations::Listing,mon_contracts::AppError>",
+          "ok": "storage::deletion::operations::Listing",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_meeting_deletion",
+      "handler": "review_meeting_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_pending_deletion",
+      "handler": "review_pending_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_deletion_paths",
+      "handler": "get_deletion_paths",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "confirmation_id",
+            "wireName": "confirmationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "offset",
+            "wireName": "offset",
+            "type": "usize",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::deletion::operations::PathPage,mon_contracts::AppError>",
+          "ok": "storage::deletion::operations::PathPage",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_deletion_items",
+      "handler": "get_model_deletion_items",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::deletion::models::operations::Listing,mon_contracts::AppError>",
+          "ok": "storage::deletion::models::operations::Listing",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_model_body_deletion",
+      "handler": "review_model_body_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "package_id",
+            "wireName": "packageId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_review_hash",
+            "wireName": "expectedReviewHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_pending_model_deletion",
+      "handler": "review_pending_model_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_deletion_paths",
+      "handler": "get_model_deletion_paths",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "confirmation_id",
+            "wireName": "confirmationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "offset",
+            "wireName": "offset",
+            "type": "usize",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::deletion::models::operations::PathPage,mon_contracts::AppError>",
+          "ok": "storage::deletion::models::operations::PathPage",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_audio_deletion_items",
+      "handler": "get_audio_deletion_items",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::deletion::audio::operations::Listing,mon_contracts::AppError>",
+          "ok": "storage::deletion::audio::operations::Listing",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_meeting_audio_deletion",
+      "handler": "review_meeting_audio_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_pending_audio_deletion",
+      "handler": "review_pending_audio_deletion",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_audio_deletion_paths",
+      "handler": "get_audio_deletion_paths",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "confirmation_id",
+            "wireName": "confirmationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "offset",
+            "wireName": "offset",
+            "type": "usize",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::deletion::audio::operations::PathPage,mon_contracts::AppError>",
+          "ok": "storage::deletion::audio::operations::PathPage",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_storage_bootstrap",
+      "handler": "get_storage_bootstrap",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<bootstrap::View,mon_contracts::AppError>",
+          "ok": "bootstrap::View",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "review_storage_move",
+      "handler": "review_storage_move",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_data_operation_availability",
+      "handler": "get_data_operation_availability",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<DataAvailability,mon_contracts::AppError>",
+          "ok": "DataAvailability",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting_deletion_availability",
+      "handler": "get_meeting_deletion_availability",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_ids",
+            "wireName": "meetingIds",
+            "type": "Vec<String>",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Vec<storage::meeting_access::Availability>,mon_contracts::AppError>",
+          "ok": "Vec<storage::meeting_access::Availability>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "list_restored_meeting_ids",
+      "handler": "list_restored_meeting_ids",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<String>,mon_contracts::AppError>",
+          "ok": "Vec<String>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "select_data_operation",
+      "handler": "select_data_operation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "kind",
+            "wireName": "kind",
+            "type": "data_controller::Kind",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_data_operation",
+      "handler": "start_data_operation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "data_controller::Request",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_data_operation",
+      "handler": "cancel_data_operation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
+          "ok": "data_controller::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_snapshot",
+      "handler": "get_recording_snapshot",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "RecordingSnapshot",
+          "ok": "RecordingSnapshot",
+          "error": null
+        }
+      }
+    },
+    {
+      "name": "get_recording_levels",
+      "handler": "get_recording_levels",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_levels::InputLevels,mon_contracts::AppError>",
+          "ok": "input_levels::InputLevels",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_writes",
+      "handler": "get_recording_writes",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<recording_writes::Snapshot,mon_contracts::AppError>",
+          "ok": "recording_writes::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_input_status",
+      "handler": "get_recording_input_status",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_status::Snapshot,mon_contracts::AppError>",
+          "ok": "input_status::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_input_history_status",
+      "handler": "get_recording_input_history_status",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_status::persistence::Snapshot,mon_contracts::AppError>",
+          "ok": "input_status::persistence::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "record_input_diagnostic_log",
+      "handler": "input_status::diagnostics::record_input_diagnostic_log",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "stage",
+            "wireName": "stage",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "message",
+            "wireName": "message",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_archived_recording_input_notices",
+      "handler": "get_archived_recording_input_notices",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "after_session_id",
+            "wireName": "afterSessionId",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<NoticeReply<input_status::archived::Page>,mon_contracts::AppError>",
+          "ok": "NoticeReply<input_status::archived::Page>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_archived_recording_input_notice_rows",
+      "handler": "get_archived_recording_input_notice_rows",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "targets",
+            "wireName": "targets",
+            "type": "Vec<input_status::archived::Target>",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<NoticeReply<input_status::archived::SelectedRows>,mon_contracts::AppError>",
+          "ok": "NoticeReply<input_status::archived::SelectedRows>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "acknowledge_archived_recording_input_notice",
+      "handler": "acknowledge_archived_recording_input_notice",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "input_status::archived::Acknowledge",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<NoticeReply<input_status::Receipt>,mon_contracts::AppError>",
+          "ok": "NoticeReply<input_status::Receipt>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "receive_recording_input_notice",
+      "handler": "receive_recording_input_notice",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "notice_id",
+            "wireName": "noticeId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "recipient_id",
+            "wireName": "recipientId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "generation",
+            "wireName": "generation",
+            "type": "Option<u64>",
+            "optional": true
+          },
+          {
+            "name": "receive_id",
+            "wireName": "receiveId",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<input_status::Receipt,mon_contracts::AppError>",
+          "ok": "input_status::Receipt",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "render_recording_input_notice",
+      "handler": "render_recording_input_notice",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "notice_id",
+            "wireName": "noticeId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "recipient_id",
+            "wireName": "recipientId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "generation",
+            "wireName": "generation",
+            "type": "u64",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_status::Receipt,mon_contracts::AppError>",
+          "ok": "input_status::Receipt",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "close_recording_input_notice",
+      "handler": "close_recording_input_notice",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "notice_id",
+            "wireName": "noticeId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "recipient_id",
+            "wireName": "recipientId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "generation",
+            "wireName": "generation",
+            "type": "u64",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_status::Receipt,mon_contracts::AppError>",
+          "ok": "input_status::Receipt",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_capture_test_snapshot",
+      "handler": "get_capture_test_snapshot",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<Option<capture_test::Snapshot>,mon_contracts::AppError>",
+          "ok": "Option<capture_test::Snapshot>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "reconcile_capture_test_start",
+      "handler": "reconcile_capture_test_start",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<capture_test::Snapshot>,mon_contracts::AppError>",
+          "ok": "Option<capture_test::Snapshot>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_capture_test",
+      "handler": "start_capture_test",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "capture_test::Request",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<capture_test::Snapshot,mon_contracts::AppError>",
+          "ok": "capture_test::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_capture_test",
+      "handler": "cancel_capture_test",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<capture_test::Snapshot,mon_contracts::AppError>",
+          "ok": "capture_test::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "discard_capture_test",
+      "handler": "discard_capture_test",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_capture_test_levels",
+      "handler": "get_capture_test_levels",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<input_levels::InputLevels,mon_contracts::AppError>",
+          "ok": "input_levels::InputLevels",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_capture_test_playback",
+      "handler": "prepare_capture_test_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "run_id",
+            "wireName": "runId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "track_kind",
+            "wireName": "trackKind",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_application_close_activity",
+      "handler": "get_application_close_activity",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<ApplicationCloseActivity,mon_contracts::AppError>",
+          "ok": "ApplicationCloseActivity",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "capture_available",
+      "handler": "capture_available",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<bool,mon_contracts::AppError>",
+          "ok": "bool",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_capture_inputs",
+      "handler": "get_capture_inputs",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<capture_inputs::InputDevices,mon_contracts::AppError>",
+          "ok": "capture_inputs::InputDevices",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_capture_applications",
+      "handler": "get_capture_applications",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<capture_scope::Applications,mon_contracts::AppError>",
+          "ok": "capture_scope::Applications",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_recording",
+      "handler": "start_recording",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "microphone_uid",
+            "wireName": "microphoneUid",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "capture_scope",
+            "wireName": "captureScope",
+            "type": "capture_scope::CaptureScope",
+            "optional": false
+          },
+          {
+            "name": "new_title",
+            "wireName": "newTitle",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "num_speakers",
+            "wireName": "numSpeakers",
+            "type": "Option<u32>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<RecordingSnapshot,mon_contracts::AppError>",
+          "ok": "RecordingSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "select_recording_microphone",
+      "handler": "select_recording_microphone",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "microphone_uid",
+            "wireName": "microphoneUid",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<u64,mon_contracts::AppError>",
+          "ok": "u64",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_microphone_selection",
+      "handler": "get_recording_microphone_selection",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<recorder::MicrophoneSelectionStatus,mon_contracts::AppError>",
+          "ok": "recorder::MicrophoneSelectionStatus",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recording_confirmation",
+      "handler": "recording_confirmation_window::get_recording_confirmation",
+      "roles": [
+        "main",
+        "recorder",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<StopDecision,mon_contracts::AppError>",
+          "ok": "StopDecision",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "request_recording_confirmation",
+      "handler": "recording_confirmation_window::request_recording_confirmation",
+      "roles": [
+        "main",
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "quit",
+            "wireName": "quit",
+            "type": "Option<bool>",
+            "optional": true
+          },
+          {
+            "name": "anchor",
+            "wireName": "anchor",
+            "type": "Option<PopupAnchor>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<StopDecision,mon_contracts::AppError>",
+          "ok": "StopDecision",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "decide_recording_confirmation",
+      "handler": "recording_confirmation_window::decide_recording_confirmation",
+      "roles": [
+        "main",
+        "recorder",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "id",
+            "wireName": "id",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "stop",
+            "wireName": "stop",
+            "type": "bool",
+            "optional": false
+          },
+          {
+            "name": "expected_preparing",
+            "wireName": "expectedPreparing",
+            "type": "bool",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<StopDecision,mon_contracts::AppError>",
+          "ok": "StopDecision",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "hide_recorder_panel",
+      "handler": "hide_recorder_panel",
+      "roles": [
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "open_main_window",
+      "handler": "open_main_window",
+      "roles": [
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recorder_info",
+      "handler": "recorder_info::get_recorder_info",
+      "roles": [
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<bool,mon_contracts::AppError>",
+          "ok": "bool",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_recorder_operation_notices",
+      "handler": "recorder_operation_notices::get_recorder_operation_notices",
+      "roles": [
+        "main",
+        "recorder",
+        "recorder-info",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "publish_recorder_operation_notice",
+      "handler": "recorder_operation_notices::publish_recorder_operation_notice",
+      "roles": [
+        "recorder",
+        "recorder-info",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "source",
+            "wireName": "source",
+            "type": "Source",
+            "optional": false
+          },
+          {
+            "name": "expected_revision",
+            "wireName": "expectedRevision",
+            "type": "u64",
+            "optional": false
+          },
+          {
+            "name": "message",
+            "wireName": "message",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "dismiss_recorder_operation_notice",
+      "handler": "recorder_operation_notices::dismiss_recorder_operation_notice",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "source",
+            "wireName": "source",
+            "type": "Source",
+            "optional": false
+          },
+          {
+            "name": "expected_revision",
+            "wireName": "expectedRevision",
+            "type": "u64",
+            "optional": false
+          },
+          {
+            "name": "event_id",
+            "wireName": "eventId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "show_recorder_info",
+      "handler": "recorder_info::show_recorder_info",
+      "roles": [
+        "recorder"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<bool,mon_contracts::AppError>",
+          "ok": "bool",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "close_recorder_info",
+      "handler": "recorder_info::close_recorder_info",
+      "roles": [
+        "recorder",
+        "recorder-info"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<bool,mon_contracts::AppError>",
+          "ok": "bool",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "list_meetings",
+      "handler": "list_meetings",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<Meeting>,mon_contracts::AppError>",
+          "ok": "Vec<Meeting>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting",
+      "handler": "get_meeting",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "id",
+            "wireName": "id",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<Meeting>,mon_contracts::AppError>",
+          "ok": "Option<Meeting>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "rename_meeting",
+      "handler": "rename_meeting",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "id",
+            "wireName": "id",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "title",
+            "wireName": "title",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Meeting,mon_contracts::AppError>",
+          "ok": "Meeting",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_current_analysis",
+      "handler": "get_current_analysis",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<AnalysisView>,mon_contracts::AppError>",
+          "ok": "Option<AnalysisView>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "consolidate_transcript",
+      "handler": "consolidate_transcript",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::transcript_consolidation::Request",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::transcript_consolidation::Reply,mon_contracts::AppError>",
+          "ok": "storage::transcript_consolidation::Reply",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_voice_matching_preferences",
+      "handler": "get_voice_matching_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::voice_preferences::Snapshot,mon_contracts::AppError>",
+          "ok": "storage::voice_preferences::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_speaker_completion_preferences",
+      "handler": "get_speaker_completion_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::completion_preferences::Snapshot,mon_contracts::AppError>",
+          "ok": "storage::completion_preferences::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_speaker_completion_preferences",
+      "handler": "save_speaker_completion_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "storage::completion_preferences::CompletionPreferences",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::completion_preferences::Snapshot,mon_contracts::AppError>",
+          "ok": "storage::completion_preferences::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_voice_matching_preferences",
+      "handler": "save_voice_matching_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "storage::voice_preferences::VoiceMatchingPreferences",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::voice_preferences::Snapshot,mon_contracts::AppError>",
+          "ok": "storage::voice_preferences::Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_transcript_draft",
+      "handler": "get_transcript_draft",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<TranscriptDraft>,mon_contracts::AppError>",
+          "ok": "Option<TranscriptDraft>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "begin_transcript_draft",
+      "handler": "begin_transcript_draft",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "analysis_id",
+            "wireName": "analysisId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<TranscriptDraft,mon_contracts::AppError>",
+          "ok": "TranscriptDraft",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_transcript_draft",
+      "handler": "save_transcript_draft",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "draft_id",
+            "wireName": "draftId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "TranscriptDraftPayload",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<TranscriptDraft,mon_contracts::AppError>",
+          "ok": "TranscriptDraft",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_utterance_playback",
+      "handler": "prepare_utterance_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "analysis_id",
+            "wireName": "analysisId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "utterance_id",
+            "wireName": "utteranceId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "register_playback_preparation",
+      "handler": "register_playback_preparation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_playback_preparation",
+      "handler": "cancel_playback_preparation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "finish_playback_preparation",
+      "handler": "finish_playback_preparation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "playback_token",
+            "wireName": "playbackToken",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_meeting_playback",
+      "handler": "prepare_meeting_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::MeetingPlaybackRequest",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting_audio_summary",
+      "handler": "get_meeting_audio_summary",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::MeetingAudioSummary,mon_contracts::AppError>",
+          "ok": "storage::MeetingAudioSummary",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_markdown_interval_playback",
+      "handler": "prepare_markdown_interval_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::MeetingIntervalRequest",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_draft_utterance_playback",
+      "handler": "prepare_draft_utterance_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::DraftUtteranceAudioRequest",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "read_playback_chunk",
+      "handler": "read_playback_chunk",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "offset_frames",
+            "wireName": "offsetFrames",
+            "type": "u64",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<tauri::ipc::Response,mon_contracts::AppError>",
+          "ok": "tauri::ipc::Response",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "close_playback",
+      "handler": "close_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "finish_main_close",
+      "handler": "finish_main_close",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "quit",
+            "wireName": "quit",
+            "type": "bool",
+            "optional": false
+          },
+          {
+            "name": "expected",
+            "wireName": "expected",
+            "type": "Option<application_close::CloseExpectations>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_flow",
+      "handler": "get_analysis_flow",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<storage::analysis_flows::AnalysisFlow>,mon_contracts::AppError>",
+          "ok": "Option<storage::analysis_flows::AnalysisFlow>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_transcription_regeneration_target",
+      "handler": "get_transcription_regeneration_target",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::analysis_flows::regeneration::Admission,mon_contracts::AppError>",
+          "ok": "storage::analysis_flows::regeneration::Admission",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "regenerate_transcription",
+      "handler": "regenerate_transcription",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::analysis_flows::regeneration::Request",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::analysis_flows::AnalysisFlow,mon_contracts::AppError>",
+          "ok": "storage::analysis_flows::AnalysisFlow",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_ready_analysis_flows",
+      "handler": "get_ready_analysis_flows",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<storage::analysis_flows::AnalysisFlow>,mon_contracts::AppError>",
+          "ok": "Vec<storage::analysis_flows::AnalysisFlow>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "publish_regenerated_transcription",
+      "handler": "publish_regenerated_transcription",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "flow_id",
+            "wireName": "flowId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "confirmed_target",
+            "wireName": "confirmedTarget",
+            "type": "Option<storage::analysis_flows::regeneration::Target>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<storage::analysis_flows::regeneration::Publication,mon_contracts::AppError>",
+          "ok": "storage::analysis_flows::regeneration::Publication",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_analysis_flow",
+      "handler": "start_analysis_flow",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::analysis_flows::AnalysisFlow,mon_contracts::AppError>",
+          "ok": "storage::analysis_flows::AnalysisFlow",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_preparations",
+      "handler": "get_analysis_preparations",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<analysis_preparation::Progress>,mon_contracts::AppError>",
+          "ok": "Vec<analysis_preparation::Progress>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting_analysis_audio",
+      "handler": "get_meeting_analysis_audio",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::RecordedAudioPlan,mon_contracts::AppError>",
+          "ok": "storage::RecordedAudioPlan",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "continue_analysis_flow",
+      "handler": "continue_analysis_flow",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::analysis_flows::AnalysisFlow,mon_contracts::AppError>",
+          "ok": "storage::analysis_flows::AnalysisFlow",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_markdown_minutes_generation",
+      "handler": "start_markdown_minutes_generation",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "generation::StartRequest",
+            "optional": false
+          },
+          {
+            "name": "expected",
+            "wireName": "expected",
+            "type": "Option<storage::minutes_markdown::MarkdownStamp>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<storage::JobSnapshot,mon_contracts::AppError>",
+          "ok": "storage::JobSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_minutes_markdown",
+      "handler": "get_minutes_markdown",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<storage::minutes_markdown::MarkdownDocument>,mon_contracts::AppError>",
+          "ok": "Option<storage::minutes_markdown::MarkdownDocument>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_minutes_markdown",
+      "handler": "save_minutes_markdown",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::minutes_markdown::SaveMarkdownRequest",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::minutes_markdown::MarkdownDocument,mon_contracts::AppError>",
+          "ok": "storage::minutes_markdown::MarkdownDocument",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "export_plain_minutes_markdown",
+      "handler": "export_plain_minutes_markdown",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::markdown_exports::MarkdownExportRequest",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<storage::ExportRecord>,mon_contracts::AppError>",
+          "ok": "Option<storage::ExportRecord>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_plain_minutes_export_status",
+      "handler": "get_plain_minutes_export_status",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::markdown_exports::MarkdownExportRequest",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<ExportStatus,mon_contracts::AppError>",
+          "ok": "ExportStatus",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_minutes_preferences",
+      "handler": "get_minutes_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::MinutesPreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::MinutesPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_minutes_prompt_preferences",
+      "handler": "get_minutes_prompt_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot,mon_contracts::AppError,>",
+          "ok": "storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_minutes_prompt_preferences",
+      "handler": "save_minutes_prompt_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "storage::minutes_prompt_preferences::MinutesPromptPreferences",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot,mon_contracts::AppError,>",
+          "ok": "storage::minutes_prompt_preferences::MinutesPromptPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_voice_people",
+      "handler": "get_voice_people",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<storage::voice::Person>,mon_contracts::AppError>",
+          "ok": "Vec<storage::voice::Person>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "prepare_voice_sample_playback",
+      "handler": "prepare_voice_sample_playback",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "sample_id",
+            "wireName": "sampleId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "preparation_id",
+            "wireName": "preparationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<PlaybackInfo,mon_contracts::AppError>",
+          "ok": "PlaybackInfo",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_voice_context",
+      "handler": "get_voice_context",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::voice::Context,mon_contracts::AppError>",
+          "ok": "storage::voice::Context",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "start_voice_job",
+      "handler": "start_voice_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "request",
+            "wireName": "request",
+            "type": "storage::voice::Start",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<VoiceStartReply,mon_contracts::AppError>",
+          "ok": "VoiceStartReply",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "manage_voice_person",
+      "handler": "manage_voice_person",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "person_id",
+            "wireName": "personId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "expected_version",
+            "wireName": "expectedVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "name",
+            "wireName": "name",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "sample_id",
+            "wireName": "sampleId",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "decide_voice_match",
+      "handler": "decide_voice_match",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "analysis_id",
+            "wireName": "analysisId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "speaker_id",
+            "wireName": "speakerId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "person_id",
+            "wireName": "personId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "expected_working_hash",
+            "wireName": "expectedWorkingHash",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "retry_voice_job",
+      "handler": "retry_voice_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "job_id",
+            "wireName": "jobId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::JobSnapshot,mon_contracts::AppError>",
+          "ok": "storage::JobSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_jobs",
+      "handler": "get_analysis_jobs",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Vec<storage::JobSnapshot>,mon_contracts::AppError>",
+          "ok": "Vec<storage::JobSnapshot>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_notification_jobs",
+      "handler": "get_analysis_notification_jobs",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "watched_job_ids",
+            "wireName": "watchedJobIds",
+            "type": "Vec<String>",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Vec<storage::NotificationJob>,mon_contracts::AppError>",
+          "ok": "Vec<storage::NotificationJob>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_notification_output",
+      "handler": "get_analysis_notification_output",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "job_id",
+            "wireName": "jobId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::NotificationOutput,mon_contracts::AppError>",
+          "ok": "storage::NotificationOutput",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "pause_analysis_job",
+      "handler": "pause_analysis_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "job_id",
+            "wireName": "jobId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::JobSnapshot,mon_contracts::AppError>",
+          "ok": "storage::JobSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "resume_analysis_job",
+      "handler": "resume_analysis_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "job_id",
+            "wireName": "jobId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::JobSnapshot,mon_contracts::AppError>",
+          "ok": "storage::JobSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_analysis_job",
+      "handler": "cancel_analysis_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "job_id",
+            "wireName": "jobId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::JobSnapshot,mon_contracts::AppError>",
+          "ok": "storage::JobSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_asr_preferences",
+      "handler": "get_asr_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::PreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::PreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_asr_backends",
+      "handler": "get_asr_backends",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<transcription::asr::Descriptor>,mon_contracts::AppError>",
+          "ok": "Vec<transcription::asr::Descriptor>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_preferences",
+      "handler": "get_analysis_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::PreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::PreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_ui_preferences",
+      "handler": "get_ui_preferences",
+      "roles": [
+        "main",
+        "recorder",
+        "recorder-info",
+        "recording-confirmation"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::UiPreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::UiPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_ui_preferences",
+      "handler": "save_ui_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "storage::UiPreferences",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::UiPreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::UiPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_diarization_preferences",
+      "handler": "get_diarization_preferences",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::DiarizationPreferencesSnapshot,mon_contracts::AppError>",
+          "ok": "storage::DiarizationPreferencesSnapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_vocabulary_book",
+      "handler": "get_vocabulary_book",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "Option<String>",
+            "optional": true
+          }
+        ],
+        "response": {
+          "type": "Result<storage::VocabularyBook,mon_contracts::AppError>",
+          "ok": "storage::VocabularyBook",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting_vocabulary",
+      "handler": "get_meeting_vocabulary",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::VocabularyView,mon_contracts::AppError>",
+          "ok": "storage::VocabularyView",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "save_vocabulary_book",
+      "handler": "save_vocabulary_book",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
+            "name": "expected_lock_version",
+            "wireName": "expectedLockVersion",
+            "type": "i64",
+            "optional": false
+          },
+          {
+            "name": "payload",
+            "wireName": "payload",
+            "type": "Vec<storage::VocabularyEntry>",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::VocabularyBook,mon_contracts::AppError>",
+          "ok": "storage::VocabularyBook",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_analysis_versions",
+      "handler": "get_analysis_versions",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<storage::VersionState,mon_contracts::AppError>",
+          "ok": "storage::VersionState",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    }
+  ]
+}

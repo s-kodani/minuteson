@@ -1,6 +1,7 @@
 //! A single native-owned resource ID, not general local URL support. Index reads
 //! are bounded/read-only; acquisition binds the whole recipe again, holds the
 //! no-link resource handles, and checks every byte without executing anything.
+use crate::model_download_recipe::RecipeExt;
 use crate::model_download_recipe::{ArchiveMember, DownloadSource, Recipe, BUNDLED_WHISPER};
 use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role, Source, Target};
 use serde::{Deserialize, Serialize};

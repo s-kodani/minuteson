@@ -2,6 +2,7 @@
 //! owned admission. They cannot recreate Source, Destination, or delete consent.
 use super::*;
 use crate::bootstrap::placement::NativeHistoryAdmission;
+use crate::storage::deletion::fs::NativeProof as _;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

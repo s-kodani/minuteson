@@ -41,7 +41,7 @@ async (page,capturePath)=>{
   await page.getByRole("button",{name:"設定",exact:true}).click();
   await page.locator('.content h1').filter({hasText:/^設定$/}).waitFor();
   check(await page.getByRole("button",{name:"本文と再生の表示設定",exact:true}).count()===0,"removed display settings remain");
-  check(await page.locator('.theme-settings select').count()===1,"settings should retain only the theme selector");
+  check(await page.locator('.theme-settings select').count()===2,"settings should expose color and display mode selectors");
   check(await page.locator('.toast-host .toast-body p').filter({hasText:/操作を実行中|編集の保存を確認中/}).count()===0,"settings navigation shows a routine progress toast");
   results.push("settings keeps its theme selector without the removed reading panel or routine navigation notifications");
   await page.locator('.sidebar').getByRole("button",{name:"会議一覧",exact:true}).click();

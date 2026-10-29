@@ -38,8 +38,8 @@ test("startup recovery reports validate retained reasons and preserve old report
   assert.throws(() => acceptStartupReport({ ...ready, recovery }, { ...ready, recovery: pending }));
 });
 test("main entry gates workspace providers without a frontend activation handshake", () => {
-  const root = source("../src/main.tsx"), ui = source("../src/startup-attention.tsx");
-  assert.ok(root.includes("<StartupGate>{desktopWindow}</StartupGate>"));
+  const root = source("../src/bootstrap.tsx"), ui = source("../src/startup-attention.tsx");
+  assert.ok(root.includes("<StartupGate><ThemeProvider><MainDesktopWindow /></ThemeProvider></StartupGate>"));
   assert.ok(ui.includes('state.report?.phase === "ready" ? <>'));
   assert.deepEqual([...ui.matchAll(/invoke\("([^"]+)"/gu)].map(m => m[1]), ["get_startup_report", "retry_startup", "quit_blocked_startup"]);
   assert.doesNotMatch(ui, /ThemeProvider|setInterval|localStorage|\.reload\(/u);
@@ -47,7 +47,7 @@ test("main entry gates workspace providers without a frontend activation handsha
 test("native dispatch guard runs before any generated command and admission refusal precedes workers", () => {
   const native = source("../src-tauri/src/lib.rs");
   const dispatch = native.split(".invoke_handler(|invoke|")[1];
-  assert.ok(dispatch.indexOf(".admit_command(") < dispatch.indexOf("tauri::generate_handler!"));
+  assert.ok(dispatch.indexOf(".admit_command(") < dispatch.indexOf('include!("command_handler.rs")'));
   const refusal = native.split("Err(failure) =>")[1].split("#[cfg(not(target_os")[0];
   assert.ok(refusal.includes("startup_attention::show(app.handle());")); assert.ok(refusal.includes("return Ok(());"));
   assert.ok(native.indexOf("startup_attention::admit_storage") < native.indexOf("ImportController::recover(app.handle())"));

@@ -13,68 +13,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) const MANIFEST: &str = "mon-model.json";
 const MAX_MANIFEST: usize = 65_536;
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct PackageManifest {
-    pub schema_version: u32,
-    pub engine: Engine,
-    pub engine_version: String,
-    pub model_name: String,
-    pub model_version: String,
-    pub quantization: Option<String>,
-    pub license_ref: String,
-    pub target: Target,
-    pub files: Vec<PackageFile>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend: Option<crate::transcription::asr::BackendManifest>,
-}
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub(crate) enum Engine {
-    #[serde(rename = "whisper.cpp")]
-    Whisper,
-    #[serde(rename = "asr")]
-    Asr,
-    #[serde(rename = "sherpa-onnx")]
-    Sherpa,
-    #[serde(rename = "llama.cpp")]
-    Llama,
-}
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Target {
-    MacosAarch64,
-    WindowsX86_64,
-}
-impl Target {
-    pub(crate) fn current() -> Result<Self, String> {
-        match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("macos", "aarch64") => Ok(Self::MacosAarch64),
-            ("windows", "x86_64") => Ok(Self::WindowsX86_64),
-            _ => Err("このOS・CPUはモデル取り込みの対応対象外です".into()),
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Role {
-    Executable,
-    RuntimeLibrary,
-    Notice,
-    Asr,
-    AsrAsset,
-    Vad,
-    Segmentation,
-    SpeakerEmbedding,
-    Llm,
-}
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct PackageFile {
-    pub relative_path: String,
-    pub role: Role,
-    pub expected_size: Option<u64>,
-    pub expected_hash: Option<String>,
-}
+pub(crate) use mon_contracts::{Engine, PackageFile, PackageManifest, Role, Target};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
@@ -132,8 +71,11 @@ pub(crate) fn relative(value: &str) -> bool {
                     && matches!(stem.as_bytes()[3], b'1'..=b'9'))
         })
 }
-impl PackageManifest {
-    pub(crate) fn validate(&self, target: Target) -> Result<(), String> {
+pub(crate) trait PackageManifestExt {
+    fn validate(&self, target: Target) -> Result<(), String>;
+}
+impl PackageManifestExt for PackageManifest {
+    fn validate(&self, target: Target) -> Result<(), String> {
         if self.schema_version != 1
             || self.target != target
             || !text(&self.engine_version, 128)

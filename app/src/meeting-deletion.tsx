@@ -1,6 +1,7 @@
+import { useDeletionExchange } from "./deletion-exchange-hook";
 import { DirectoryDeletionConfirmation } from "./directory-deletion-confirmation";
 import {useDeletionNoticeWait} from "./deletion-notice-wait";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { rowMenuReturnTarget } from "./row-menu";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
@@ -10,7 +11,7 @@ import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operati
 import { type DeletionReceipt } from "./deletion-state";
 import { stopMeetingPlayback } from "./playback-barrier";
 import { useMeetingDeletionAvailability } from "./meeting-deletion-availability";
-import { deletionReviewReason } from "./deletion-review-reason";
+import { deletionReviewReason, permitsDeletionRecovery } from "./deletion-review-reason";
 
 export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted, meetingIds }: {
   meetingIds: string[];
@@ -21,12 +22,10 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const noticeWaiting=useDeletionNoticeWait();
   const latest = useRef({ operation, locked, withSavedEdits, onDeleted }); latest.current = { operation, locked, withSavedEdits, onDeleted };
   const availability = useMeetingDeletionAvailability(meetingIds);
-  const [rpcBusy, setRpcBusy] = useState(false), running = useRef(false);
-  const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
-  const [error, setError] = useState(""), [toast, setToast] = useState("");
+  const { exchange, rpcBusy, running, unknown, setUnknown, error, setError, pending, choice, run } = useDeletionExchange("meeting_deletion_not_started");
+  const [open, setOpen] = useState(false);
+  const [toast, setToast] = useState("");
   const [toastEvent, setToastEvent] = useState("");
-  const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
-  const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -37,19 +36,13 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const canInspect = isTauri() && operation.deletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
   // Restart normally forbids all work. A canonical pending deletion alone can
   // use its restricted native resume lane; it never enables ordinary writes.
-  const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
+  const sharedAvailable = !!operation.availability?.available || (permitsDeletionRecovery(operation.availability, listing?.restartRequired));
   const canReviewPending = canInspect && (sharedAvailable || (!listing?.restartRequired && !s?.restartRequired));
   const canReviewMeeting = canInspect && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
   const canReviewMeetingId = (id: string) => canReviewMeeting && availability.rows.get(id)?.available === true;
   const reviewUnavailableReason = canReviewMeeting ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.deletionSupported, locked, protectedNow, sharedAvailable });
   const meetingReviewReason = (id: string) => !canReviewMeeting ? reviewUnavailableReason : availability.error || availability.rows.get(id)?.blockers.map(b => b.reason).join(" ") || (availability.rows.has(id) ? null : "削除できる状態か確認しています。");
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
-  const run = async (action: () => Promise<void>) => {
-    if (running.current) return;
-    running.current = true; setRpcBusy(true); setError("");
-    try { await action(); } catch (cause) { setError(String(cause)); }
-    finally { running.current = false; setRpcBusy(false); }
-  };
   const protect = async (action: () => Promise<void>) => {
     // Pending receipts already fenced writes. Initial review/publication flush
     // edits before that fence; recovery never attempts to rewrite deleted rows.
@@ -61,23 +54,16 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
     await protect(async () => {
       await stopMeetingPlayback(pendingReview ? preview?.meetingId ?? listing?.items.find(item => item.operationId === id)?.meetingId ?? "" : id); opener.current = active; setOpen(false); setToast("");
-      choice.current = { id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 };
-      try {
+      await exchange.review({ id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 }, async () => {
         latest.current.operation.accept(await invoke<DataSnapshot>(pendingReview ? "review_pending_deletion" : "review_meeting_deletion", pendingReview ? { operationId: id } : { meetingId: id }));
-        choice.current = null; setUnknown(false);
-      } catch (cause) {
-        if (typeof cause === "string" && cause.startsWith("meeting_deletion_not_started:")) { choice.current = null; setUnknown(false); void availability.refresh(); throw Error(cause.slice("meeting_deletion_not_started:".length)); }
-        setUnknown(true); throw Error(`確認の受付を確定できません。削除は実行せず、同じ確認の状態を読み直してください: ${String(cause)}`);
-      }
+      }, () => { void availability.refresh(); });
     });
   };
   const send = async (request: DataRequest, revision: number) => {
-    pending.current = { request, revision };
-    try { latest.current.operation.accept(await invoke<DataSnapshot>("start_data_operation", { request })); pending.current = null; setUnknown(false); setOpen(false); }
-    catch (cause) {
-      if (typeof cause === "string" && cause.startsWith("meeting_deletion_not_started:")) { pending.current = null; setUnknown(false); void availability.refresh(); throw Error(cause.slice("meeting_deletion_not_started:".length)); }
-      setUnknown(true); throw Error(`受付結果を確定できません。別の削除を始めず、同じ操作の結果を確認してください: ${String(cause)}`);
-    }
+    await exchange.send(request, revision, async () => {
+      latest.current.operation.accept(await invoke<DataSnapshot>("start_data_operation", { request }));
+      setOpen(false);
+    }, () => { void availability.refresh(); });
   };
   const submit = async (action: DataRequest["action"]) => {
     if (!canResolve || (preview?.scopeMode === "directory" && action === "publish" && !open)) return;
@@ -114,11 +100,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   useEffect(() => {
     if (!s || s.kind !== "deletion") { setOpen(false); return; }
     if (s.busy || receipt) setOpen(false);
-    if (unknown) {
-      const c = choice.current, p = pending.current;
-      if ((c && s.revision > c.revision && (s.busy || ["failed", "cancelled", "attention"].includes(s.phase) || (c.pending ? preview?.operationId === c.id : preview?.meetingId === c.id)))
-        || (p && s.token === p.request.token && s.revision > p.revision && (s.busy || ["completed", "failed", "cancelled", "attention"].includes(s.phase) || (s.phase === "ready" && preview?.confirmationId !== p.request.confirmationId)))) { pending.current = null; choice.current = null; setUnknown(false); }
-    }
+    if (unknown && exchange.reconcile(s, preview?.confirmationId, (now, c) => now.kind === "deletion" && now.revision > c.revision && (now.busy || ["failed", "cancelled", "attention"].includes(now.phase) || (c.pending ? now.deletionPreview?.operationId === c.id : now.deletionPreview?.meetingId === c.id)))) { }
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
       completed.current = s.token; setToastEvent(s.token ?? ""); setError("");

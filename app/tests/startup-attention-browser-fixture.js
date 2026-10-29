@@ -3,7 +3,7 @@
 import "../src/style.css";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-window.isTauri = true; mockWindows("main");
+window.isTauri = true; mockWindows(new URLSearchParams(location.search).get("window")??"main");
 const variant = new URLSearchParams(location.search).get("fixture") ?? "blocked";
 const report = { schemaVersion: 1, phase: "blocked", failure: { stage: "storage_admission", message: "一時領域台帳が不正です。<img src=x onerror=alert(1)>\n元の音声を保持します。", messageTruncated: false, meetingRoot: "/safe/会議保存先", configRoot: "/safe/起動設定" } };
 const f = window.startupFixture = { calls: [], report, readFail: variant === "read-fail", quitFail: false, delay: false, pendingRead: null, pendingQuit: null };
@@ -18,6 +18,7 @@ if (variant === "selection") f.report.failure = { ...report.failure, stage: "sto
 if (variant === "invalid") f.report = { schemaVersion: 1, phase: "ready", failure: report.failure };
 if (variant === "long") f.report.failure = { ...report.failure, message: "長い起動診断を保持します。".repeat(250), messageTruncated: true };
 mockIPC(async (command, args) => {
+  if (command === "get_window_environment") return {schemaVersion:1,role:new URLSearchParams(location.search).get("window")??"main",platform:f.report.platform??"macos",capabilities:{voiceIdentity:true}};
   if (command === "plugin:window|title") return document.title;
   if (command === "plugin:window|is_maximized") return false;
   f.calls.push({ command, args });
@@ -35,4 +36,4 @@ if (variant.startsWith("transition-")) {
     createElement("main", { "aria-label": "通常画面" }, "通常画面")));
   setTimeout(() => { f.report = variant === "transition-ready"
     ? { schemaVersion: 1, phase: "ready", failure: null } : structuredClone(report); }, 600);
-} else await import("../src/main.tsx");
+} else await import("../src/bootstrap.tsx");

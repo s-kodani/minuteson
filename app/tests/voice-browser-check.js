@@ -10,7 +10,7 @@ async(page,capturePath)=>{
   check(await page.evaluate(()=>window.monVoiceFixture.requests.length)===0,'typing registers a voice');
   await dialog.getByRole('button',{name:'候補1の登録区間を再生して確認',exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='prepare_markdown_interval_playback'));
-  check(await page.evaluate(()=>{const r=window.monBrowserFixture.calls.find(c=>c.command==='prepare_markdown_interval_playback').args.request;return r.mode==='mic'&&r.startUs===0&&r.endUs===15000000;}),'voice preview mixes a different track or plays outside the selected interval');
+  check(await page.evaluate(()=>{const r=window.monBrowserFixture.calls.find(c=>c.command==='prepare_markdown_interval_playback').args.request;return r.mode==='mixed'&&r.startUs===0&&r.endUs===15000000;}),'voice preview mixes a different track or plays outside the selected interval');
   await page.evaluate(()=>window.monVoiceFixture.failStart=true);await dialog.getByRole('button',{name:'声を登録',exact:true}).click();await dialog.getByRole('alert').waitFor();check(await dialog.getByRole('textbox',{name:'人物名',exact:true}).isEnabled(),'definitive rejection locks enrollment inputs');
   await page.evaluate(()=>{window.monVoiceFixture.failStart=false;window.monVoiceFixture.loseResponse=true;});await dialog.getByRole('button',{name:'声を登録',exact:true}).click();await dialog.getByRole('button',{name:'同じ登録を再送して確認',exact:true}).waitFor();
   await dialog.getByRole('button',{name:'同じ登録を再送して確認',exact:true}).click();await dialog.waitFor({state:'hidden'});

@@ -63,65 +63,9 @@ impl FixedData<'_, '_> {
             Ok((new, hash))
         };
         let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        let rebased = match job.kind.as_str() {
-            "speaker_completion" => {
-                let mut v = value;
-                if v["completionResult"].as_bool().is_none() {
-                    return Err("話者補完の再開情報が不正です".into());
-                }
-                if let Some(job) = v["jobId"].as_str() {
-                    v["jobId"] = json!(self.ids.get("processing_jobs", meeting, job)?);
-                }
-                if let Some(id) = v["outputAnalysisId"].as_str() {
-                    v["outputAnalysisId"] =
-                        json!(self.ids.get("analysis_revisions", meeting, id)?);
-                }
-                if let Some(rows) = v["decisions"].as_array_mut() {
-                    for d in rows {
-                        let lineage = d["lineage"].as_str().ok_or("話者補完の発言がありません")?;
-                        d["lineage"] =
-                            json!(self.ids.get("utterance_lineage", meeting, lineage)?);
-                        for key in ["speakerId", "bodyBest"] {
-                            if let Some(id) = d[key].as_str() {
-                                d[key] = json!(self.ids.get("speakers", meeting, id)?);
-                            }
-                        }
-                    }
-                }
-                v
-            }
-            "voice_registration" | "voice_matching" => {
-                if value.get("voiceResult").and_then(Value::as_bool).is_none() {
-                    return Err("声の処理の再開情報が不正です".into());
-                }
-                value
-            }
-            "transcription" => crate::transcription::restore_checkpoint_references(
-                &checkpoint_job,
-                value,
-                &mut map,
-            )?,
-            "diarization" => {
-                crate::diarization::restore_checkpoint_references(&checkpoint_job, value, &mut map)?
-            }
-            "minutes_generation" => {
-                let text: String = source
-                    .query_row(
-                        "SELECT parameters_json FROM processing_jobs WHERE id=?1",
-                        params![old_job],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                let parameters: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                crate::generation::restore_checkpoint_references(
-                    &checkpoint_job,
-                    parameters["generation"].clone(),
-                    value,
-                    &mut map,
-                )?
-            }
-            _ => return Err("未対応の復元チェックポイントです".into()),
-        };
+        let parameters = self.source_job_spec(meeting, old_job)?.parameters;
+        let rebased =
+            crate::job_codec::checkpoint(&checkpoint_job, &parameters, value, self, &mut map)?;
         let json = serde_json::to_string(&rebased).map_err(|e| e.to_string())?;
         if json.len() > 1024 * 1024 {
             return Err("復元チェックポイントが容量上限を超えています".into());

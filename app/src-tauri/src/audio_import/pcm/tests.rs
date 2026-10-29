@@ -131,24 +131,28 @@ fn malformed_valid_bits_and_float_nonfinite_values_are_rejected() {
     assert!(read(&truncated_extension).is_err());
 }
 
-#[cfg(windows)]
 #[test]
-fn windows_decoder_publishes_valid24_in32_as_float_caf() {
+fn shared_decoder_publishes_valid24_in32_as_float_caf() {
     let root = tempfile::tempdir().unwrap();
-    let input = root.path().join("valid24-in32.wav");
-    let output = root.path().join("decoded.caf");
+    let directory = root.path().canonicalize().unwrap();
+    let input = directory.join("valid24-in32.wav");
+    let output = directory.join("decoded.caf");
     let raw: Vec<_> = [i32::MIN, -1073741824, 0, 1073741824]
         .iter()
         .flat_map(|s| s.to_le_bytes())
         .collect();
-    std::fs::write(&input, fixture(32, Some(24), 1, &raw)).unwrap();
+    let original = fixture(32, Some(24), 1, &raw);
+    std::fs::write(&input, &original).unwrap();
     let info = decode(&input, Some(&output), &|| false).unwrap();
     assert_eq!(info.frames, 4);
     assert_eq!(info.sample_rate, 48000);
-    let caf = std::fs::read(output).unwrap();
+    let caf = std::fs::read(&output).unwrap();
     let expected: Vec<_> = [-1.0f32, -0.5, 0.0, 0.5]
         .iter()
         .flat_map(|s| s.to_le_bytes())
         .collect();
     assert!(caf.ends_with(&expected));
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    assert!(decode(&input, Some(&output), &|| false).is_err());
+    assert_eq!(std::fs::read(&output).unwrap(), caf);
 }

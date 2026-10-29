@@ -97,7 +97,7 @@ fn resident_snapshot_is_path_free_and_worker_tampering_is_rejected() {
 }
 #[test]
 fn resident_pause_terminates_an_inflight_request_within_the_stop_budget() {
-    let (_tmp,root,snapshot) = fixture("import sys,json,os,time\nfor line in sys.stdin:\n r=json.loads(line)\n if r['op']=='infer':\n  open(r['directory']+'/pid','w').write(str(os.getpid()))\n  time.sleep(120)\n");
+    let (_tmp,root,snapshot) = fixture("import sys,json,os,time\nfor line in sys.stdin:\n r=json.loads(line)\n if r['op']=='infer':\n  with open(r['directory']+'/pid.next','w') as f: f.write(str(os.getpid()))\n  os.replace(r['directory']+'/pid.next',r['directory']+'/pid')\n  time.sleep(120)\n");
     let start_time;
     let pid;
     {

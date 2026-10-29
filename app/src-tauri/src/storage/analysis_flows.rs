@@ -155,6 +155,7 @@ impl Storage {
         old: &AnalysisFlow,
         confirmed_target: Option<&regeneration::Target>,
     ) -> Result<regeneration::Publication, String> {
+        let followup = super::post_analysis::prepare(self);
         let mut db = self
             .connection
             .lock()
@@ -261,6 +262,10 @@ impl Storage {
         if changed != 1 {
             return Err("文字起こしの保存先が変更されています".into());
         }
+        let completion_enabled = super::jobs::read_fixed_input(&tx, &diar.id)?.0.parameters
+            ["diarization"]["completionAfter"]
+            == true;
+        super::post_analysis::record(&tx, &old.meeting_id, output, completion_enabled, &followup)?;
         let flow = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(regeneration::Publication::Published { flow })

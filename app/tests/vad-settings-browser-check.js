@@ -19,7 +19,7 @@ async function(page) {
   check(await apply.isDisabled(),'unchanged settings can be applied');
   await field('発話判定の閾値').fill('');
   check(await apply.isDisabled(),'blank allowed');
-  await panel.getByRole('alert').waitFor();
+  await page.getByRole('alert').waitFor();
   await reset.click();
   await field('最大発話区間（秒）').fill('1');
   await field('最小発話時間（ms）').fill('2000');

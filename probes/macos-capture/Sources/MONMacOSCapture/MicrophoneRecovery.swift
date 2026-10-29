@@ -32,13 +32,13 @@ struct MicrophoneRecovery {
   }
 
   private(set) var uid: String?
-  private var epoch: UInt64 = 0
-  private var interruptions: UInt64 = 0
-  private var state = "reconnecting"
+  private var lifecycle = CaptureLifecycle()
+  private var epoch: UInt64 { lifecycle.epoch }
+  private var interruptions: UInt64 { lifecycle.interruptions }
+  private var state: String { lifecycle.state }
   private var reason: String?
   private var binding: Binding?
-  private var interrupted = false
-  private var stopped = false
+  private var stopped: Bool { lifecycle.stopped }
   private(set) var history = InputEventHistory()
   private let observe: InputEventJournal.Observer?
 
@@ -71,10 +71,11 @@ struct MicrophoneRecovery {
     else { throw ProbeError.capture("microphone recovery binding is invalid") }
     // An unavailable initial attempt may precede any device binding. Keep
     // recovered status counters monotonic without inventing a device or PCM.
-    epoch = max(epoch, interruptions) + 1
+    guard lifecycle.begin() else {
+      throw ProbeError.capture("microphone recovery capacity exceeded")
+    }
     let token = Binding(uid: device.uid, objectID: device.objectID, epoch: epoch)
     binding = token
-    state = "reconnecting"
     observe?(status, history)
     return token
   }
@@ -83,9 +84,8 @@ struct MicrophoneRecovery {
     guard !stopped, binding == token, state == "reconnecting" else {
       throw ProbeError.capture("microphone recovery result belongs to an obsolete input")
     }
-    state = "connected"
+    guard lifecycle.connect() else { throw ProbeError.capture("microphone recovery is stopped") }
     reason = nil
-    interrupted = false
     if interruptions > 0 { history.append("recovered", status: status) }
     observe?(status, history)
   }
@@ -121,12 +121,7 @@ struct MicrophoneRecovery {
 
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
     guard !stopped else { return }
-    let first = !interrupted
-    if !interrupted {
-      interruptions += 1
-      interrupted = true
-    }
-    state = unavailable ? "unavailable" : "disconnected"
+    guard let first = lifecycle.interrupt(unavailable: unavailable) else { return }
     self.reason = reason
     binding = nil
     if first { history.append("interrupted", status: status) }
@@ -134,9 +129,9 @@ struct MicrophoneRecovery {
   }
 
   mutating func stop() {
-    stopped = true
+    lifecycle.stop()
     binding = nil
-    state = "stopped"
+    reason = nil
     observe?(status, history)
   }
 }

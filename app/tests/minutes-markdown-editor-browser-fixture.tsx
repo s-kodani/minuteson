@@ -1,5 +1,6 @@
 // Synthetic memory only. No Tauri bridge, DB, AI process or audio playback.
 import { createRoot } from "react-dom/client";
+import { ToastHost } from "../src/toast";
 import { MinutesMarkdownEditor } from "../src/minutes-markdown-editor";
 import { MarkdownSaveController, type MarkdownDocument, type MarkdownSaveRequest } from "../src/minutes-markdown-state";
 import "../src/style.css";
@@ -22,5 +23,5 @@ const controller=new MarkdownSaveController(document.meetingId,async request=>{
 });
 controller.load(document);fixture.controller=controller;
 Object.assign(window,{plainMinutesFixture:fixture});
-createRoot(documentElement()).render(<main style={{height:"100dvh",display:"flex",flexDirection:"column",padding:24}}><MinutesMarkdownEditor meetingId={document.meetingId} controller={controller} durationUs={10_000_000} onPlay={interval=>fixture.plays.push(interval)} /></main>);
+createRoot(documentElement()).render(<><ToastHost/><main style={{height:"100dvh",display:"flex",flexDirection:"column",padding:24}}><MinutesMarkdownEditor meetingId={document.meetingId} controller={controller} durationUs={10_000_000} onPlay={interval=>fixture.plays.push(interval)} /></main></>);
 function documentElement(){return window.document.getElementById("root")!;}

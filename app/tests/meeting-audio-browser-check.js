@@ -1,33 +1,53 @@
-// Current player/settings; fixture IPC serves silent PCM, never native capture.
-async(page,capturePath,detailUI)=>{
-  const results=[],check=(v,m)=>{if(!v)throw Error(m);};
-  const dock=page.getByRole('region',{name:'会議の共通音声プレーヤー',exact:true});
-  const player=dock.getByRole('group',{name:'会議全体の音声再生',exact:true});
-  const slider=player.getByRole('slider',{name:'会議全体の再生位置',exact:true});
-  const speed=player.getByRole('combobox',{name:'速度',exact:true});
-  const settings=()=>page.getByRole('dialog',{name:'再生設定',exact:true});
-  const mode=()=>settings().getByRole('combobox',{name:'会議全体の再生トラック',exact:true});
-  const nav=page.locator('.sidebar');
-  const boot=async(source='recording')=>{await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);await page.evaluate(s=>window.monBrowserFixture.setMeetingSource('meeting-0',s),source);await page.getByRole('button',{name:'会議A',exact:true}).click();await player.waitFor();};
-  const openSettings=async()=>{if(!await settings().isVisible()){await dock.getByRole('button',{name:'再生設定',exact:true}).click();await settings().waitFor();}};
-  const choose=async value=>{await openSettings();await mode().selectOption(value);await settings().getByRole('button',{name:'確認を閉じる',exact:true}).click();};
-  const play=async()=>{await player.getByRole('button',{name:'再生',exact:true}).click();await player.getByRole('button',{name:'一時停止',exact:true}).waitFor();};
-  const pause=async()=>{await player.getByRole('button',{name:'一時停止',exact:true}).click();await player.getByRole('button',{name:'再生',exact:true}).waitFor();};
-  const count=c=>page.evaluate(c=>window.monBrowserFixture.calls.filter(x=>x.command===c).length,c);
-  const error=()=>page.locator('.toast-host').getByRole('alert').filter({hasText:'音声を再生できません'});
-  const release=async index=>{const token=await page.evaluate(i=>{const p=window.monBrowserFixture.meetingAudio.pending[i];p.release();return p.token;},index);await page.waitForFunction(t=>window.monBrowserFixture.calls.some(c=>c.command==='close_playback'&&c.args.token===t),token);};
-  await boot();await openSettings();check(await mode().locator('option').count()===3&&await mode().inputValue()==='both','recorded modes are incorrect');await mode().selectOption('mic');await mode().selectOption('both');await settings().getByRole('button',{name:'確認を閉じる',exact:true}).click();check(await count('prepare_meeting_playback')===0,'idle selection prepared audio');results.push('recorded meetings expose three modes in the sole settings menu without preparing idle audio');
-  await play();await pause();check(await slider.getAttribute('max')==='172800000'&&!(await dock.innerText()).includes('同期未検証'),'whole timeline is not 60 minutes or grows a status row');results.push('whole-meeting playback has its own range and no extra synchronization row');
-  check(await page.evaluate(async()=>{const {toasts}=await import('/src/toast.tsx');return [...toasts.getSnapshot(),...toasts.getHistorySnapshot()].every(t=>!t.key.includes('playback-alignment')&&!t.message.includes('同期未検証'));}),'meeting playback published an unwanted synchronization toast or history entry');results.push('unverified alignment emits neither a toast nor a notification history entry');
-  await slider.fill('960000');await speed.selectOption('1.5');await choose('system');await player.getByRole('button',{name:'再生',exact:true}).waitFor();check(await slider.inputValue()==='960000'&&await speed.inputValue()==='1.5'&&(await player.innerText()).includes('PC音声'),'paused mode switch reset position rate or track');results.push('paused mode changes preserve frame rate and paused state');
-  await play();await choose('mic');await player.getByRole('button',{name:'一時停止',exact:true}).waitFor();await pause();check(Number(await slider.inputValue())>=960000&&await speed.inputValue()==='1.5','playing switch restarted the timeline');results.push('playing mode changes resume at the current meeting position');
-  await slider.fill('1440000');await speed.selectOption('0.75');await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=['system']);await choose('system');await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);await choose('both');await player.getByRole('button',{name:'再生',exact:true}).waitFor();await release(0);check(await slider.inputValue()==='1440000'&&await speed.inputValue()==='0.75'&&(await player.innerText()).includes('マイク＋PC音声'),'late track response replaced the new checkpoint');results.push('rapid track changes retain the latest checkpoint and close stale native tokens');
-  await boot();await page.evaluate(()=>window.monBrowserFixture.meetingAudio.failModes=['both']);await player.getByRole('button',{name:'再生',exact:true}).click();await error().waitFor();check(await count('read_playback_chunk')===0,'rejected audio was played');results.push('native rejection stays a notification and never plays unverified audio');
-  await boot();await page.evaluate(()=>window.monBrowserFixture.meetingAudio.corrupt={trackKind:'mic'});await player.getByRole('button',{name:'再生',exact:true}).click();await error().waitFor();await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='close_playback'));check(await count('read_playback_chunk')===0,'wrong-kind output was played');results.push('invalid output contract is closed before any PCM read');
-  await boot();await play();await pause();await slider.fill('1920000');await page.evaluate(()=>window.monBrowserFixture.meetingAudio.endUs=7200000000);await choose('system');await error().filter({hasText:'最初から選び直してください'}).waitFor();results.push('changed source duration refuses checkpoint reuse rather than silently clamping');
-  await boot('audio_import');await openSettings();check(await mode().locator('option').count()===1&&await mode().inputValue()==='imported','imported audio fabricated microphone/system modes');await settings().getByRole('button',{name:'確認を閉じる',exact:true}).click();await play();await pause();await slider.fill('960000');await speed.selectOption('1.25');await player.evaluate(e=>window.meetingAudioNode=e);
-  for(const width of [1280,960,360])for(const theme of ['light','dark']){await page.setViewportSize({width,height:800});await detailUI.applyPlaybackTheme(theme);check(await slider.inputValue()==='960000'&&await speed.inputValue()==='1.25'&&await player.evaluate(e=>e===window.meetingAudioNode),'layout or theme remounted/reset the player');check(await dock.evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.getBoundingClientRect().bottom<=innerHeight+1),'dock overflows');await page.screenshot({path:capturePath(`meeting-${width}-${theme}.png`)});}
-  results.push('imported audio has one truthful mode and stable controls in both themes and all widths');
-  await nav.getByRole('button',{name:'設定',exact:true}).click();await dock.waitFor({state:'hidden'});await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='close_playback'));results.push('leaving the meeting releases playback without auto-resuming in settings');
-  return {passed:results.length,results};
+// The former per-input track selector was replaced by one canonical meeting WAV.
+async (page, capturePath, detailUI) => {
+  const results = [], check = (value, message) => { if (!value) throw Error(message); };
+  const dock = page.getByRole('region', { name: '会議の共通音声プレーヤー', exact: true });
+  const player = dock.getByRole('group', { name: '会議全体の音声再生', exact: true });
+  const slider = player.getByRole('slider', { name: '会議全体の再生位置', exact: true });
+  const speed = player.getByRole('combobox', { name: '速度', exact: true });
+  const count = command => page.evaluate(command => window.monBrowserFixture.calls.filter(call => call.command === command).length, command);
+  const error = () => page.getByRole('alert').filter({ hasText: '音声を再生できません' });
+  const boot = async (source = 'recording') => {
+    await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
+    await page.evaluate(source => window.monBrowserFixture.setMeetingSource('meeting-0', source), source);
+    await page.getByRole('button', { name: '会議A', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.meeting-playback-dock .audio-player button[aria-label="再生"]')?.disabled);
+    await player.waitFor();
+  };
+  const play = async () => { await player.getByRole('button', { name: '再生', exact: true }).click(); await player.getByRole('button', { name: '一時停止', exact: true }).waitFor(); };
+  const pause = async () => { await player.getByRole('button', { name: '一時停止', exact: true }).click(); await player.getByRole('button', { name: '再生', exact: true }).waitFor(); };
+  for (const source of ['recording', 'audio_import']) {
+    await boot(source);
+    await dock.getByRole('button', { name: '再生設定', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '再生設定', exact: true });
+    check(await settings.getByRole('combobox').count() === 0 && (await settings.innerText()).includes('保存した会議音声'), 'canonical source fabricated selectable input tracks');
+    await settings.getByRole('button', { name: '確認を閉じる', exact: true }).click();
+    check(await count('prepare_meeting_playback') === 0, 'settings prepared audio without playback');
+    await play(); await pause();
+    check(await slider.getAttribute('max') === '57600000', 'meeting timeline is not the complete 16 kHz hour');
+    check(await page.evaluate(() => window.monBrowserFixture.calls.find(call => call.command === 'prepare_meeting_playback').args.request.mode) === 'mixed', 'source did not request canonical meeting audio');
+    await slider.fill('320000'); await speed.selectOption('1.5');
+    await player.evaluate(element => window.meetingAudioNode = element);
+    for (const width of [1280, 960, 360]) for (const theme of ['light', 'dark']) {
+      await page.setViewportSize({ width, height: 800 }); await detailUI.applyPlaybackTheme(theme);
+      check(await slider.inputValue() === '320000' && await speed.inputValue() === '1.5' && await player.evaluate(element => element === window.meetingAudioNode), 'layout or theme reset playback');
+      check(await dock.evaluate(element => element.scrollWidth <= element.clientWidth + 1 && element.getBoundingClientRect().bottom <= innerHeight + 1), 'playback dock overflowed');
+      await page.screenshot({ path: capturePath(`canonical-${source}-${width}-${theme}.png`) });
+    }
+    results.push(`${source}: canonical audio uses the entire 16 kHz timeline and preserves position, speed and node across themes and widths`);
+  }
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await boot(); await page.evaluate(() => window.monBrowserFixture.meetingAudio.failModes = ['mixed']);
+  await player.getByRole('button', { name: '再生', exact: true }).click(); await error().waitFor();
+  check(await count('read_playback_chunk') === 0, 'native rejection read PCM');
+  await boot(); await page.evaluate(() => window.monBrowserFixture.meetingAudio.corrupt = { trackKind: 'mic' });
+  await player.getByRole('button', { name: '再生', exact: true }).click(); await error().waitFor();
+  await page.waitForFunction(() => window.monBrowserFixture.calls.some(call => call.command === 'close_playback'));
+  check(await count('read_playback_chunk') === 0, 'invalid output read PCM');
+  results.push('native refusal and a noncanonical response never read PCM; invalid tokens are released');
+  await boot(); await play(); await pause();
+  await page.locator('.sidebar').getByRole('button', { name: '設定', exact: true }).click(); await dock.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => window.monBrowserFixture.calls.some(call => call.command === 'close_playback'));
+  results.push('leaving the meeting releases playback without resuming in settings');
+  return { passed: results.length, results };
 }

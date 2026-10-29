@@ -16,7 +16,7 @@ class NoticeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.file("app/src-tauri/Cargo.lock", "version = 4\n")
+        self.file("Cargo.lock", "version = 4\n")
         self.file("app/package-lock.json", "npm lock")
         self.file("third-party/notices/index.json", json.dumps({"schemaVersion": 1, "files": [], "packages": []}))
         self.file("crate/Cargo.toml", "manifest")
@@ -170,7 +170,7 @@ class NoticeTests(unittest.TestCase):
 
     def supplement(self, kind="license_text"):
         self.file("crate/.cargo_vcs_info.json", json.dumps({"git": {"sha1": "a" * 40}, "path_in_vcs": "crate"}))
-        self.file("app/src-tauri/Cargo.lock", 'version = 4\n[[package]]\nname = "crate"\nversion = "1.0"\n'
+        self.file("Cargo.lock", 'version = 4\n[[package]]\nname = "crate"\nversion = "1.0"\n'
                   f'source = "{notices.REGISTRY}"\nchecksum = "' + "1" * 64 + '"\n')
         package = next(p for p in self.metadata["packages"] if p["id"] == "crate")
         package["source"] = notices.REGISTRY

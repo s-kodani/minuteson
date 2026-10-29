@@ -95,7 +95,7 @@ test("a newly opened sibling replaces the exit entry and missing replacement tar
 });
 test("visible-control shared settings driver covers retained fields and confirmation cancellation", () => {
   const driver = readFileSync(new URL("./settings-modal-browser-check.js", import.meta.url),"utf8");
-  const runner = readFileSync(new URL("./run-browser-checks.mjs", import.meta.url),"utf8");
+  const runner = readFileSync(new URL("./browser-suites.mjs", import.meta.url),"utf8");
   assert.match(runner,/\["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"\]/);
   assert.match(driver,/i<2/); assert.match(driver,/実行回数 0/);
   assert.match(driver,/dialog\[open\]/); assert.match(driver,/確認をキャンセル/);

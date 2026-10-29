@@ -42,13 +42,13 @@ async page => {
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="review");
   await page.waitForFunction(()=>!document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.failCurrentRead=true;await f.emitNotification();});
-  const current=page.getByRole("alert").filter({hasText:"模擬現在の状態読込失敗"});
+  const current=page.getByRole("status").filter({hasText:"文字起こしの状態を確認中です。"});
   await current.waitFor();
   await page.evaluate(()=>window.monBrowserFixture.emitNotification());
   check(await current.isVisible(),"current read failure was suppressed");
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.failCurrentRead=false;await f.emitNotification();});
   await current.waitFor({state:"hidden"});
-  results.push("current read failures remain visible and are resolved only after read recovery");
+  results.push("read failures expose the current verification status until a successful read recovers it");
 
   await page.evaluate(()=>{window.monBrowserFixture.failAction=true;});
   if(await tools.isVisible())await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();

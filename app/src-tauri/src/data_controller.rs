@@ -10,6 +10,7 @@ use crate::storage::deletion::models::operations as model_deletion;
 #[cfg(any(unix, windows))]
 use crate::storage::deletion::operations as deletion;
 use crate::storage::Storage;
+use mon_contracts::{AppError, DeletionKind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{
@@ -616,7 +617,8 @@ impl DataController {
         Ok(snapshot)
     }
 
-    pub(crate) fn start(app: &AppHandle, request: Request) -> Result<Snapshot, String> {
+    pub(crate) fn start(app: &AppHandle, request: Request) -> Result<Snapshot, AppError> {
+        let request_id = request.token.clone();
         #[cfg(any(unix, windows))]
         let mut deletion_admission = None;
         #[cfg(any(unix, windows))]
@@ -662,13 +664,31 @@ impl DataController {
         }
         #[cfg(any(unix, windows))]
         let lease = if let Some(operation) = model_admission {
-            work::Admission::acquire_model_deletion(app, operation.as_deref())?
+            work::Admission::acquire_model_deletion(app, operation.as_deref()).map_err(|e| {
+                AppError::not_started(
+                    DeletionKind::Model,
+                    e,
+                    operation.clone().or_else(|| Some(request_id.clone())),
+                )
+            })?
         } else if let Some(operation) = audio_admission {
-            work::Admission::acquire_audio_deletion(app, operation.as_deref())
-                .map_err(|e| format!("audio_deletion_not_started:{e}"))?
+            work::Admission::acquire_audio_deletion(app, operation.as_deref()).map_err(|e| {
+                AppError::not_started(
+                    DeletionKind::Audio,
+                    e,
+                    operation.clone().or_else(|| Some(request_id.clone())),
+                )
+            })?
         } else if let Some((meeting, operation)) = deletion_admission {
-            work::Admission::acquire_meeting_deletion(app, &meeting, operation.as_deref())
-                .map_err(|e| format!("meeting_deletion_not_started:{e}"))?
+            work::Admission::acquire_meeting_deletion(app, &meeting, operation.as_deref()).map_err(
+                |e| {
+                    AppError::not_started(
+                        DeletionKind::Meeting,
+                        e,
+                        operation.clone().or_else(|| Some(request_id.clone())),
+                    )
+                },
+            )?
         } else {
             work::Admission::acquire(app)?
         };
@@ -680,7 +700,7 @@ impl DataController {
             Self::launch(app, token, cancel, lease, work);
             Ok(snapshot)
         } else {
-            app.state::<Self>().snapshot()
+            app.state::<Self>().snapshot().map_err(AppError::from)
         }
     }
 
@@ -689,7 +709,7 @@ impl DataController {
         app: &AppHandle,
         id: String,
         pending: bool,
-    ) -> Result<Snapshot, String> {
+    ) -> Result<Snapshot, AppError> {
         let meeting = if pending {
             app.state::<Storage>().deletion_operation_meeting(&id)?
         } else {
@@ -700,7 +720,9 @@ impl DataController {
             &meeting,
             pending.then_some(id.as_str()),
         )
-        .map_err(|e| format!("meeting_deletion_not_started:{e}"))?;
+        .map_err(|e| {
+            AppError::not_started(DeletionKind::Meeting, e, pending.then(|| id.clone()))
+        })?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Deletion)?;
         let token = snapshot
             .token
@@ -739,13 +761,14 @@ impl DataController {
     pub(crate) fn review_audio_deletion(
         app: &AppHandle,
         target: work::AudioTarget,
-    ) -> Result<Snapshot, String> {
+    ) -> Result<Snapshot, AppError> {
         let operation = match &target {
             work::AudioTarget::Pending(id) => Some(id.as_str()),
             _ => None,
         };
-        let lease = work::Admission::acquire_audio_deletion(app, operation)
-            .map_err(|e| format!("audio_deletion_not_started:{e}"))?;
+        let lease = work::Admission::acquire_audio_deletion(app, operation).map_err(|e| {
+            AppError::not_started(DeletionKind::Audio, e, operation.map(str::to_owned))
+        })?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::AudioDeletion)?;
         let token = snapshot
             .token
@@ -784,12 +807,16 @@ impl DataController {
     pub(crate) fn review_model_deletion(
         app: &AppHandle,
         target: work::ModelTarget,
-    ) -> Result<Snapshot, String> {
+    ) -> Result<Snapshot, AppError> {
+        let operation = match &target {
+            work::ModelTarget::Pending(id) => Some(id.clone()),
+            _ => None,
+        };
         let root = app.state::<Storage>().native_models_root().to_owned();
         let (snapshot, cancel, previous) = app
             .state::<Self>()
             .begin(Kind::ModelDeletion)
-            .map_err(|e| format!("model_deletion_not_started:{e}"))?;
+            .map_err(|e| AppError::not_started(DeletionKind::Model, e, operation))?;
         let token = snapshot
             .token
             .clone()

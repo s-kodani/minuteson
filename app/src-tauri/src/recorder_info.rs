@@ -82,65 +82,74 @@ pub fn hide(app: &AppHandle, explicit: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_recorder_info(window: WebviewWindow) -> Result<bool, String> {
-    if window.label() != "recorder" {
-        return Err("録音パネルから説明の状態を確認してください".into());
-    }
-    window
-        .app_handle()
-        .get_webview_window(LABEL)
-        .ok_or("録音の説明画面がありません")?
-        .is_visible()
-        .map_err(|e| e.to_string())
+pub fn get_recorder_info(window: WebviewWindow) -> Result<bool, mon_contracts::AppError> {
+    let result: Result<bool, String> = (|| {
+        if window.label() != "recorder" {
+            return Err("録音パネルから説明の状態を確認してください".into());
+        }
+        window
+            .app_handle()
+            .get_webview_window(LABEL)
+            .ok_or("録音の説明画面がありません")?
+            .is_visible()
+            .map_err(|e| e.to_string())
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("get_recorder_info", message))
 }
 
 #[tauri::command]
-pub fn show_recorder_info(window: WebviewWindow) -> Result<bool, String> {
-    let app = window.app_handle();
-    if !may_open(
-        window.label(),
-        window.is_visible().unwrap_or(false),
-        app.state::<StopDecisionStore>().snapshot().visible(),
-    ) {
-        return Err("録音パネルから説明を開いてください。停止確認中は説明を開けません".into());
-    }
-    let popup = app
-        .get_webview_window(LABEL)
-        .ok_or("録音の説明画面がありません")?;
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| e.to_string())?
-        .ok_or("録音パネルのモニターを確認できません")?;
-    let area = monitor.work_area();
-    let panel = window.outer_position().map_err(|e| e.to_string())?;
-    let size = window.outer_size().map_err(|e| e.to_string())?;
-    let (x, y, width, height) = placement(
-        (area.position.x, area.position.y),
-        (area.size.width, area.size.height),
-        (panel.x, panel.y, size.width, size.height),
-        monitor.scale_factor(),
-    )?;
-    popup
-        .set_size(PhysicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    popup
-        .set_position(PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    popup.show().map_err(|e| e.to_string())?;
-    if let Err(error) = focus_content(&popup) {
-        let _ = hide(app, false);
-        return Err(format!("録音の説明画面に移れません: {error}"));
-    }
-    Ok(true)
+pub fn show_recorder_info(window: WebviewWindow) -> Result<bool, mon_contracts::AppError> {
+    let result: Result<bool, String> = (|| {
+        let app = window.app_handle();
+        if !may_open(
+            window.label(),
+            window.is_visible().unwrap_or(false),
+            app.state::<StopDecisionStore>().snapshot().visible(),
+        ) {
+            return Err("録音パネルから説明を開いてください。停止確認中は説明を開けません".into());
+        }
+        let popup = app
+            .get_webview_window(LABEL)
+            .ok_or("録音の説明画面がありません")?;
+        let monitor = window
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .ok_or("録音パネルのモニターを確認できません")?;
+        let area = monitor.work_area();
+        let panel = window.outer_position().map_err(|e| e.to_string())?;
+        let size = window.outer_size().map_err(|e| e.to_string())?;
+        let (x, y, width, height) = placement(
+            (area.position.x, area.position.y),
+            (area.size.width, area.size.height),
+            (panel.x, panel.y, size.width, size.height),
+            monitor.scale_factor(),
+        )?;
+        popup
+            .set_size(PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+        popup
+            .set_position(PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        popup.show().map_err(|e| e.to_string())?;
+        if let Err(error) = focus_content(&popup) {
+            let _ = hide(app, false);
+            return Err(format!("録音の説明画面に移れません: {error}"));
+        }
+        Ok(true)
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("show_recorder_info", message))
 }
 
 #[tauri::command]
-pub fn close_recorder_info(window: WebviewWindow) -> Result<bool, String> {
-    if !matches!(window.label(), "recorder" | LABEL) {
-        return Err("録音の説明画面から閉じてください".into());
-    }
-    hide(window.app_handle(), true)?;
-    Ok(false)
+pub fn close_recorder_info(window: WebviewWindow) -> Result<bool, mon_contracts::AppError> {
+    let result: Result<bool, String> = (|| {
+        if !matches!(window.label(), "recorder" | LABEL) {
+            return Err("録音の説明画面から閉じてください".into());
+        }
+        hide(window.app_handle(), true)?;
+        Ok(false)
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("close_recorder_info", message))
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ set -eu
 
 probe_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$probe_dir"
+sh "$probe_dir/build-core.sh"
 SWIFTPM_MODULECACHE_OVERRIDE=${SWIFTPM_MODULECACHE_OVERRIDE:-$probe_dir/.build/module-cache/swift}
 CLANG_MODULE_CACHE_PATH=${CLANG_MODULE_CACHE_PATH:-$probe_dir/.build/module-cache/clang}
 export SWIFTPM_MODULECACHE_OVERRIDE CLANG_MODULE_CACHE_PATH

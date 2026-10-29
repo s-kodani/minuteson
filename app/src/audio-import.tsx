@@ -1,4 +1,6 @@
-import { invoke,isTauri } from "@tauri-apps/api/core";
+import { observeSnapshots } from "./snapshot-resource";
+import { browserFocus, browserSchedule } from "./snapshot-browser";
+import { invoke,isTauri } from "./ipc.ts";
 import { IconButton } from "./action-icon";
 import { ScopedModal } from "./scoped-modal";
 import { useSettingsModalScope } from "./settings-modal-scope";
@@ -37,7 +39,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   const [openFailed,setOpenFailed]=useState(false);
   const progress = importProgress(snapshot);
   usePublishProgress("audio-import", [progress]);
-  const accept=(next:ImportSnapshot)=>setSnapshot(current=>acceptImport(current,next));
+  const accept=(next:ImportSnapshot)=>{ const value=acceptImport(snapshotRef.current,next); snapshotRef.current=value; setSnapshot(value); };
   snapshotRef.current=snapshot;
   const inputRef = useRef({ title, terms, numSpeakers });
   inputRef.current = { title, terms, numSpeakers };
@@ -45,8 +47,12 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
     mounted.current=true;
     if(!isTauri())return;
     let disposed=false;const stops:(()=>void)[]=[];
-    const refresh=()=>void invoke<ImportSnapshot>("get_audio_import").then(value=>{if(!disposed)accept(value);}).catch(cause=>{if(!disposed)setError(String(cause));});
-    void listen<ImportSnapshot>("audio-import-changed",event=>{if(!disposed)accept(event.payload);}).then(stop=>{if(disposed)stop();else{stops.push(stop);refresh();}}).catch(cause=>setError(String(cause)));
+    const observation = observeSnapshots<ImportSnapshot>({
+      read: async () => { const value = await invoke<ImportSnapshot>("get_audio_import"); if(!disposed) accept(value); },
+      subscribe: read => listen<ImportSnapshot>("audio-import-changed", event => read(event.payload)),
+      accept, error: cause => setError(String(cause)),
+      intervalMs: 1000, schedule: browserSchedule, focus: browserFocus,
+    });
     void getCurrentWebview().onDragDropEvent(event=>{
       if(disposed)return;
       setHover(event.payload.type==="enter"||event.payload.type==="over");
@@ -55,8 +61,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
       }
     }).then(stop=>{if(disposed)stop();else stops.push(stop);}).catch(cause=>setError(`音声ドロップを接続できません: ${String(cause)}`));
     // Catch missed events and lost RPC responses using revisioned native state.
-    const timer=window.setInterval(refresh,1000);window.addEventListener("focus",refresh);
-    return ()=>{disposed=true;mounted.current=false;stops.forEach(stop=>stop());window.clearInterval(timer);window.removeEventListener("focus",refresh);};
+    return ()=>{disposed=true;mounted.current=false;observation.stop();stops.forEach(stop=>stop());};
   },[]);
   useEffect(()=>{
     const id=snapshot?.saved?.meetingId;

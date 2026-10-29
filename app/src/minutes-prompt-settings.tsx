@@ -1,6 +1,6 @@
 import { InfoPopover } from "./info-popover";
 import { IconButton } from "./action-icon";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useActionConfirmation } from "./confirmation-service";

@@ -27,6 +27,14 @@ int main(){
     product::CapturePacket extra;extra.frames=1;
     bool overflow=false;try{bounded.push(std::move(extra));}catch(const std::runtime_error&){overflow=true;}
     require(overflow&&bounded.pop()->frames==product::PacketQueue::max_frames,"overflow replaced already captured audio");
+    product::PacketQueue bytes;
+    product::CapturePacket large;large.frames=1;large.samples.resize(16*1024*1024/sizeof(float));
+    bytes.push(std::move(large));
+    product::CapturePacket one;one.frames=1;one.samples.push_back(0.25f);
+    overflow=false;try{bytes.push(std::move(one));}catch(const std::runtime_error&){overflow=true;}
+    require(overflow&&bytes.pop()->samples.size()==16*1024*1024/sizeof(float),"byte overflow discarded accepted audio");
+    product::CapturePacket released;released.frames=1;released.samples.push_back(0.5f);bytes.push(std::move(released));
+    require(bytes.pop()->samples[0]==0.5f,"popped bytes did not release budget");
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

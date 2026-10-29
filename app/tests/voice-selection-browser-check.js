@@ -27,7 +27,8 @@ async(page,capturePath)=>{
   check(await boxes.count()===3,'last candidate page missing');
   await boxes.nth(0).check();
   await dialog.getByRole('button',{name:'候補21の登録区間を再生して確認',exact:true}).click();
-  check(await page.evaluate(()=>{const r=window.monBrowserFixture.calls.filter(c=>c.command==='prepare_markdown_interval_playback').at(-1)?.args.request;return r.startUs===600e6&&r.endUs===602e6&&r.mode==='mic';}),'preview differs from selected interval');
+  await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='prepare_markdown_interval_playback'));
+  check(await page.evaluate(()=>{const r=window.monBrowserFixture.calls.filter(c=>c.command==='prepare_markdown_interval_playback').at(-1)?.args.request;return r.startUs===600e6&&r.endUs===602e6&&r.mode==='mixed';}),'preview differs from selected interval');
   await dialog.getByRole('textbox',{name:'人物名',exact:true}).fill('シオツキ');
   await page.evaluate(()=>{window.monVoiceFixture.loseResponse=true;});
   await dialog.getByRole('button',{name:'声を登録',exact:true}).click();

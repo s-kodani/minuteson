@@ -50,11 +50,11 @@ test("synchronous navigation still passes the save barrier and completes", async
 });
 
 test("workspace reports the actual phase without removing busy and duplicate-operation guards", () => {
-  const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
-  assert.match(main, /navigationBusy = navigationPhase !== "idle"/);
-  assert.match(main, /if \(navigating.current\) return;\s*navigating.current = true/);
+  const main = readFileSync(new URL("../src/saved-navigation.ts", import.meta.url), "utf8");
+  assert.match(main, /busy: phase !== "idle"/);
+  assert.match(main, /if \(running.current\) return;\s*running.current = true/);
   assert.match(main, /await runAfterSaving\(\(\) => flushPendingEdits\(reason\), action, reportPhase\)/);
-  assert.match(main, /reason === "transcription"\) flushSync\(\(\) => setNavigationPhase\(phase\)\)/);
+  assert.match(main, /reason === "transcription"\) flushSync\(\(\) => setPhase\(next\)\)/);
   assert.match(main, /reason: "leave" \| "tab" \| "transcription" = "leave"/);
   assert.doesNotMatch(main, /編集の保存を確認中|操作を実行中|navigation-progress/);
   assert.doesNotMatch(main, /setNavigationBusy/);

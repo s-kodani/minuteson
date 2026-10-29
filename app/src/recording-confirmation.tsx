@@ -1,4 +1,6 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { observeSnapshots } from "./snapshot-resource";
+import { browserFocus, browserSchedule } from "./snapshot-browser";
+import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { acceptRecordingDecision, recordingDecisionVisible, type RecordingDecision } from "./recording-confirmation-state";
@@ -17,18 +19,22 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     current.current=value;setSnapshot(value);setConnected(true);setReadError("");
   };
   const refresh=async()=>{
+    const before = current.current;
     try{accept(await invoke<RecordingDecision>("get_recording_confirmation"));}
-    catch(cause){if(mounted.current){setConnected(false);setReadError(String(cause));}throw cause;}
+    catch(cause){if(mounted.current && current.current === before){setConnected(false);setReadError(String(cause));}throw cause;}
   };
   const refreshRef=useRef(refresh);refreshRef.current=refresh;
   useEffect(()=>{
     mounted.current=true;if(!isTauri())return;
-    let disposed=false, reading=false;const stops:(()=>void)[]=[];
-    const read=async()=>{if(disposed||reading)return;reading=true;try{await refreshRef.current();}catch{}finally{reading=false;}};
-    void listen<RecordingDecision>("recording-confirmation-changed",event=>{if(!disposed)try{accept(event.payload);}catch(cause){setConnected(false);setReadError(String(cause));}}).then(stop=>{if(disposed)stop();else{stops.push(stop);void read();}}).catch(()=>void read());
+    let disposed=false; const stops:(()=>void)[]=[];
+    const observation = observeSnapshots<RecordingDecision>({
+      read: () => refreshRef.current(),
+      subscribe: read => listen<RecordingDecision>("recording-confirmation-changed", event => read(event.payload)),
+      accept, error: cause => { setConnected(false); setReadError(String(cause)); },
+      intervalMs: 500, schedule: browserSchedule, focus: browserFocus,
+    });
     if(origin)void listen<string>("recording-confirmation-request-error",event=>{if(!disposed&&typeof event.payload==="string")setError(event.payload);}).then(stop=>{if(disposed)stop();else stops.push(stop);}).catch(cause=>{if(!disposed)setReadError(String(cause));});
-    const timer=window.setInterval(()=>void read(),500);window.addEventListener("focus",read);
-    return()=>{disposed=true;mounted.current=false;stops.forEach(stop=>stop());window.clearInterval(timer);window.removeEventListener("focus",read);};
+    return()=>{disposed=true;mounted.current=false;observation.stop();stops.forEach(stop=>stop());};
   },[]);
   useEffect(()=>{
     if(snapshot?.phase!=="cancelled"||snapshot.origin!==origin||!opener.current)return;

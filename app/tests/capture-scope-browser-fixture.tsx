@@ -2,6 +2,7 @@
 import {mockIPC,mockWindows} from "./startup-ready-mocks.ts";
 import {createRoot} from "react-dom/client";
 import {useState} from "react";
+import { ToastHost } from "../src/toast";
 import {CaptureApplicationSelection,useCaptureScope} from "../src/capture-applications";
 import "../src/style.css";
 const f=(window as any).scopeFixture={
@@ -25,7 +26,7 @@ function Fixture(){
   f.toggleMeeting=()=>setMeeting(value=>value==="meeting-one"?"meeting-two":"meeting-one");
   const control=useCaptureScope(enabled,meeting);
   return <main className="status-card" style={{maxWidth:760,margin:"24px auto"}}>
-    <h1>録音の取得範囲</h1><CaptureApplicationSelection control={control} locked={locked||!enabled}/>
+    <ToastHost /><h1>録音の取得範囲</h1><CaptureApplicationSelection control={control} locked={locked||!enabled}/>
     <output aria-label="選択した取得条件">{JSON.stringify(control.scope)}</output>
     <div className="card-actions"><button onClick={()=>setLocked(!locked)}>確認状態を切替</button><button onClick={()=>setEnabled(!enabled)}>画面の有効状態を切替</button><button onClick={()=>setMeeting(meeting==="meeting-one"?"meeting-two":"meeting-one")}>会議を切替</button></div>
   </main>;

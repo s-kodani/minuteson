@@ -308,13 +308,20 @@ fn require_main(label: &str) -> Result<(), String> {
     }
 }
 #[tauri::command]
-pub(crate) async fn get_internal_logs(window: WebviewWindow, query: Query) -> Result<Page, String> {
-    require_main(window.label())?;
-    query.validate()?;
-    let service = window.state::<LogService>().inner().clone();
-    tauri::async_runtime::spawn_blocking(move || service.query(query))
-        .await
-        .map_err(|e| e.to_string())?
+pub(crate) async fn get_internal_logs(
+    window: WebviewWindow,
+    query: Query,
+) -> Result<Page, mon_contracts::AppError> {
+    let result: Result<Page, String> = async move {
+        require_main(window.label())?;
+        query.validate()?;
+        let service = window.state::<LogService>().inner().clone();
+        tauri::async_runtime::spawn_blocking(move || service.query(query))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    .await;
+    result.map_err(|message| mon_contracts::AppError::from_command("get_internal_logs", message))
 }
 
 pub(crate) fn report_error(category: &str, message: &str) {
@@ -393,7 +400,7 @@ pub(crate) fn runtime(value: &impl Serialize) {
 pub(crate) fn job(job: &crate::storage::JobSnapshot) {
     transition(
         Context {
-            category: job.kind.clone(),
+            category: job.kind.to_string(),
             meeting_id: Some(job.meeting_id.clone()),
             job_id: Some(job.id.clone()),
             operation_id: Some(job.operation_id.clone()),

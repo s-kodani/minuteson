@@ -28,4 +28,4 @@ for (const [name, action] of [
   button.onclick = () => { action(); void f.changed({}); };
   controls.append(button);
 }
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

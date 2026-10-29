@@ -49,4 +49,4 @@ mockIPC(async (command, args) => {
   if (command === "close_playback") return null;
   return audioDeletionIPC(command, args);
 }, { shouldMockEvents: true });
-await import("../src/main.tsx");
+await import("../src/bootstrap.tsx");

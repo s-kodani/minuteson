@@ -4,6 +4,28 @@ use crate::saved_artifact::{RestoreAssets, Role};
 use serde_json::{json, Value};
 use std::path::Path;
 
+pub(crate) fn restore_parameters(
+    meeting: &str,
+    original: &Value,
+    value: &mut Value,
+    resolver: &impl crate::job_codec::Resolver,
+) -> Result<(), String> {
+    if let Some(source) = original.get("source") {
+        let source: crate::storage::RecordedAudioPlan =
+            serde_json::from_value(source.clone()).map_err(|e| e.to_string())?;
+        let known: Option<crate::storage::KnownInput> = original
+            .get("knownInput")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        value["source"] =
+            serde_json::to_value(resolver.audio_plan(meeting, &source, known.as_ref())?)
+                .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn restore_saved_results(
     job: &JobSnapshot,
     old: &JobSpec,

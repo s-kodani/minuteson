@@ -2,6 +2,7 @@
 //! Normal names are never unlinked; only exact, journaled reserved names are.
 use super::super::{hash_file, usages, Entry, Observation};
 use super::{active, read_with_progress, Prepared};
+use crate::storage::deletion::fs::NativeProof as _;
 use crate::storage::deletion::fs::{Directory, Proof};
 use crate::{
     analysis_worker::data_maintenance::DataMaintenanceLease,

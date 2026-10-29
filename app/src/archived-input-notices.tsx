@@ -1,5 +1,5 @@
 import {unpackNoticeReply} from "./archived-input-state";
-import {invoke,isTauri} from "@tauri-apps/api/core";
+import {invoke,isTauri} from "./ipc.ts";
 import {listen} from "@tauri-apps/api/event";
 import {getCurrentWindow} from "@tauri-apps/api/window";
 import {ArchivedInputScheduler} from "./archived-input-scheduler";

@@ -3,7 +3,7 @@ async page=>{
   const root=new URL(page.url()).origin,results=[];
   const check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(url=>url.origin===root&&url.pathname==="/",async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   const state=async value=>page.waitForFunction(v=>["microphone","system"].every(k=>document.querySelector(`[data-input-kind="${k}"]`)?.dataset.inputState===v),value);

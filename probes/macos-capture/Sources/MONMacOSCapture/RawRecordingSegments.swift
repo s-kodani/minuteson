@@ -31,11 +31,11 @@ final class RawRecordingSegments: @unchecked Sendable {
       guard fsync($0) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
   }
-  static let maximumSegments = 32_768
+  static let maximumSegments = CaptureCore.maximumSegments
   // Bound both affine maps and nanosecond witnesses within the 65KiB entry.
   static let maximumClockSegments = 128
-  static let maximumPendingBytes = 16 * 1024 * 1024
-  static let maximumPendingNanoseconds: Int64 = 500_000_000
+  static let maximumPendingBytes = CaptureCore.maximumPendingBytes
+  static let maximumPendingNanoseconds = CaptureCore.maximumPendingNanoseconds
   private struct Payload: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
     let observation: CaptureClockObservation
@@ -43,15 +43,6 @@ final class RawRecordingSegments: @unchecked Sendable {
     let sourceEpoch: UInt64
     let bytes: Int
     let durationNanoseconds: Int64
-  }
-  private struct Tip: Encodable {
-    let schemaVersion = 2
-    let ownerId: String
-    let lane: String
-    let sealedSegments: Int
-    let sealedFrames: Int64
-    let lastEntrySHA256: String?
-    let producerClosed: Bool
   }
   private struct Entry: Encodable {
     let schemaVersion = 2
@@ -106,14 +97,16 @@ final class RawRecordingSegments: @unchecked Sendable {
   private let lock = NSLock()
   private var pendingBytes = 0
   private var pendingNanoseconds: Int64 = 0
+  private var pendingPackets = 0
   private var accepting = true
   private var failure: String?
   private var closed = false
-  private var sealedCount = 0
-  private var sealedFrames: Int64 = 0
-  private var sealedClockSegments = 0
-  private var sealedMetadataBytes = 0
-  private var previousHash: String?
+  private var prefix = CaptureRawPrefix()
+  private var sealedCount: Int { prefix.segments }
+  private var sealedFrames: Int64 { prefix.frames }
+  private var sealedClockSegments: Int { prefix.clockMaps }
+  private var sealedMetadataBytes: Int { prefix.metadataBytes }
+  private var previousHash: String? { prefix.hash }
   // Only accessed by the serial writer queue, including finish().
   private var active: Active?
 
@@ -135,10 +128,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     self.maximumTotalClockSegments = maximumTotalClockSegments
     directory = try InputEventJournalFile.pin(output)
     do {
-      let data = try Self.encode(
-        Tip(
-          ownerId: owner, lane: lane, sealedSegments: 0, sealedFrames: 0,
-          lastEntrySHA256: nil, producerClosed: false))
+      let data = try CaptureRawPrefix().tip(owner: owner, lane: lane, closed: false)
       pointer = try InputEventJournalFile(
         output: output, initial: data, leaf: lane == "microphone" ? .rawMicrophone : .rawSystem,
         storageIO: tipStorageIO)
@@ -194,18 +184,21 @@ final class RawRecordingSegments: @unchecked Sendable {
     let bytes = frames * Int(buffer.format.channelCount) * 4
     let rate = Int64(buffer.format.sampleRate)
     // Round each reservation up: repeated fractional nanoseconds must never
-    // admit more PCM than the half-second pending limit. requireFormat bounds
+    // admit more PCM than the shared pending limit. requireFormat bounds
     // frames and the integer rate, so this numerator cannot overflow Int64.
     let duration = (Int64(frames) * 1_000_000_000 + rate - 1) / rate
     try lock.withLock {
-      guard accepting, failure == nil, pendingBytes <= Self.maximumPendingBytes - bytes,
-        pendingNanoseconds <= Self.maximumPendingNanoseconds - duration
+      guard accepting, failure == nil,
+        CaptureCore.permitsPending(
+          bytes: pendingBytes, nanoseconds: pendingNanoseconds,
+          packets: pendingPackets, nextBytes: bytes, nextNanoseconds: duration)
       else {
         failure = failure ?? "raw_segment_callback_rejected"
         throw ProbeError.capture("raw segment writer is closed, failed or over capacity")
       }
       pendingBytes += bytes
       pendingNanoseconds += duration
+      pendingPackets += 1
       do {
         guard
           let copy = AVAudioPCMBuffer(
@@ -232,6 +225,7 @@ final class RawRecordingSegments: @unchecked Sendable {
             lock.withLock {
               pendingBytes -= payload.bytes
               pendingNanoseconds -= payload.durationNanoseconds
+              pendingPackets -= 1
             }
           }
           beforeAppend()
@@ -245,6 +239,7 @@ final class RawRecordingSegments: @unchecked Sendable {
       } catch {
         pendingBytes -= bytes
         pendingNanoseconds -= duration
+        pendingPackets -= 1
         failure = "raw_segment_callback_copy_failed"
         throw error
       }
@@ -367,7 +362,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard sealedClockSegments <= maximumTotalClockSegments - maps.count else {
       throw ProbeError.capture("raw segment total clock capacity exceeded")
     }
-    let header = Self.header(rate: segment.rate, channels: segment.channels, frames: segment.frames)
+    let header = try Self.header(
+      rate: segment.rate, channels: segment.channels, frames: segment.frames)
     guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment header seek failed")
     }
@@ -417,11 +413,7 @@ final class RawRecordingSegments: @unchecked Sendable {
         audioBytes: size, audioSHA256: Self.hex(whole.finalize()),
         previousEntrySHA256: previousHash))
     let entryName = String(format: "raw-%@-%08d.json", lane, sequence)
-    // Keep the producer's entries plus tip within the reader's 32MiB entry
-    // budget. Reserve 1KiB for bounded tip fields and producerClosed update.
-    guard sealedMetadataBytes <= 32 * 1024 * 1024 - 1024 - entry.count else {
-      throw ProbeError.capture("raw segment total metadata capacity exceeded")
-    }
+    let plan = try lock.withLock { try prefix.prepare(entry) }
     let descriptor = try create(entryName)
     defer { close(descriptor) }
     var identity = stat()
@@ -436,7 +428,6 @@ final class RawRecordingSegments: @unchecked Sendable {
     }
     try storageIO.synchronize(descriptor)
     try storageIO.synchronize(directory)
-    let nextHash = Self.hex(SHA256.hash(data: entry))
     guard lseek(descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment entry seek failed")
     }
@@ -455,32 +446,20 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard Data(entryRead) == entry else { throw ProbeError.capture("raw segment entry changed") }
     try requireUnmodified(descriptor, frozen: entryFrozen)
     try requireUnmodified(segment.descriptor, frozen: frozen)
-    let nextTip = try Self.encode(
-      Tip(
-        ownerId: owner, lane: lane, sealedSegments: sequence,
-        sealedFrames: lock.withLock { sealedFrames } + segment.frames,
-        lastEntrySHA256: nextHash, producerClosed: false))
+    let nextTip = plan.tip
     try pointer.replace(nextTip)
     try require(descriptor, name: entryName, identity: identity, size: Int64(entry.count))
     try require(segment.descriptor, name: segment.name, identity: segment.identity, size: size)
     try requireUnmodified(descriptor, frozen: entryFrozen)
     try requireUnmodified(segment.descriptor, frozen: frozen)
     lock.withLock {
-      previousHash = nextHash
-      sealedCount = sequence
-      sealedFrames += segment.frames
+      prefix = plan.prefix
     }
-    sealedClockSegments += maps.count
-    sealedMetadataBytes += entry.count
     active = nil
   }
 
   private func tip(producerClosed: Bool) throws -> Data {
-    try Self.encode(
-      Tip(
-        ownerId: owner, lane: lane, sealedSegments: lock.withLock { sealedCount },
-        sealedFrames: lock.withLock { sealedFrames }, lastEntrySHA256: previousHash,
-        producerClosed: producerClosed))
+    try lock.withLock { try prefix.tip(owner: owner, lane: lane, closed: producerClosed) }
   }
   private func create(_ name: String) throws -> Int32 {
     let descriptor = openat(
@@ -546,27 +525,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     default: return fallback
     }
   }
-  private static func header(rate: Int64, channels: Int, frames: Int64) -> Data {
-    var data = Data("caff".utf8)
-    func big<T: FixedWidthInteger>(_ value: T) {
-      var value = value.bigEndian
-      withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
-    }
-    big(UInt16(1))
-    big(UInt16(0))
-    data.append(Data("desc".utf8))
-    big(UInt64(32))
-    big(Double(rate).bitPattern)
-    data.append(Data("lpcm".utf8))
-    // Float32, little-endian (CAF-specific flags), interleaved, one frame/packet.
-    big(UInt32(3))
-    big(UInt32(channels * 4))
-    big(UInt32(1))
-    big(UInt32(channels))
-    big(UInt32(32))
-    data.append(Data("data".utf8))
-    big(UInt64(4 + frames * Int64(channels) * 4))
-    big(UInt32(0))
-    return data
+  private static func header(rate: Int64, channels: Int, frames: Int64) throws -> Data {
+    try CaptureCore.cafHeader(rate: rate, channels: channels, frames: frames)
   }
 }

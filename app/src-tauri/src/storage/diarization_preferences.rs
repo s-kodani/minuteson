@@ -19,6 +19,37 @@ pub(crate) struct DiarizationEnginePreferences {
     )]
     pub speech_sensitivity_milli: i32,
 }
+impl DiarizationEnginePreferences {
+    pub(crate) fn capture(
+        &self,
+        mode: crate::diarization::sherpa::CaptureMode,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<crate::diarization::sherpa::SherpaConfig, String> {
+        use crate::diarization::sherpa::{SherpaConfig, SherpaSettings};
+        SherpaConfig::capture(
+            [
+                Path::new(&self.executable_path),
+                Path::new(&self.segmentation_model_path),
+                Path::new(&self.embedding_model_path),
+            ],
+            &self
+                .runtime_library_paths
+                .iter()
+                .map(|p| Path::new(p))
+                .collect::<Vec<_>>(),
+            SherpaSettings {
+                threads: self.threads,
+                cluster_threshold_milli: self.cluster_threshold_milli,
+                window_shift_milli: self.window_shift_milli,
+                min_duration_on_ms: self.min_duration_on_ms,
+                min_duration_off_ms: self.min_duration_off_ms,
+                speech_sensitivity_milli: self.speech_sensitivity_milli,
+            },
+            mode,
+            cancelled,
+        )
+    }
+}
 impl Default for DiarizationEnginePreferences {
     fn default() -> Self {
         Self {

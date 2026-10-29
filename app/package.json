@@ -11,7 +11,11 @@
     "tauri:qa:build": "tauri build --config src-tauri/tauri.qa.conf.json",
     "tauri:release:build": "python3 ../tools/mon_macos_release.py",
     "tauri:windows:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1",
-    "tauri:windows:qa:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Qa"
+    "tauri:windows:qa:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Qa",
+    "test:browser": "node tests/run-browser-checks.mjs",
+    "test:browser:list": "playwright test --list",
+    "generate:contracts": "node scripts/gen-contracts.mjs",
+    "check:contracts": "node scripts/gen-contracts.mjs --check"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -22,11 +26,15 @@
     "sonner": "2.0.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "esbuild": "^0.28.2",
+    "json-schema-to-typescript": "^16.0.0",
     "typescript": "^5.8.0",
-    "vite": "^7.0.0"
+    "vite": "7.3.7"
   }
 }

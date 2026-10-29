@@ -27,7 +27,7 @@ async page=>{
   await ready();
   results.push("scope and target controls are immutable while confirmation is locked");
   const before=await app().inputValue();await page.evaluate(()=>{window.scopeFixture.failed=true;});await refresh().click();
-  await page.getByRole("alert").waitFor();check(await selected()===null&&await app().inputValue()===before,"metadata failure substituted scope or target");
+  await page.getByRole("alert").filter({hasText:"模擬アプリ一覧取得失敗"}).waitFor();check(await selected()===null&&await app().inputValue()===before,"metadata failure substituted scope or target");
   await page.evaluate(()=>{window.scopeFixture.failed=false;});await refresh().click();await ready();check((await selected()).application.pid===123,"explicit retry lost selected identity");
   results.push("metadata failure blocks application readiness without erasing choice; explicit retry restores exact target");
   await page.evaluate(()=>{window.scopeFixture.hold=true;});await refresh().click();await page.waitForFunction(()=>window.scopeFixture.pending.length===1);
@@ -36,7 +36,7 @@ async page=>{
   await scope().selectOption("application");await ready();check(await selected()===null&&await app().locator("option").count()===1,"late lookup chose vanished target or fell back to global scope");
   results.push("late application catalog after explicit global switch cannot restore a vanished target");
   await page.evaluate(()=>{window.scopeFixture.catalog.applications=[{pid:456,bundleIdentifier:"com.example.meeting",launchTimeUs:1_791_100_000_000_001,name:"会議アプリ"}];window.scopeFixture.catalog.systemPermission="permissionRequired";});await refresh().click();await ready();
-  check(await page.getByText(/macOSのシステム設定/).isVisible()&&await selected()===null,"permission required fabricated successful input or chose another app");
+  check(await page.getByRole("alert").filter({hasText:/macOSのシステム設定/}).isVisible()&&await selected()===null,"permission required fabricated successful input or chose another app");
   results.push("permission-needed metadata gives manual guidance without fabricating input or choosing an alternate");
   await app().selectOption(await key(456));await page.evaluate(()=>{window.scopeFixture.hold=true;});await refresh().click();await page.waitForFunction(()=>window.scopeFixture.pending.length===1);
   await page.evaluate(()=>{window.scopeFixture.catalog.applications=[];});

@@ -171,7 +171,7 @@ pub(crate) fn validate_registry(db: &Connection) -> Result<(), String> {
     }
     Ok(())
 }
-fn book_hash(db: &Connection) -> Result<String, String> {
+pub(super) fn book_hash(db: &Connection) -> Result<String, String> {
     validate_registry(db)?;
     let mut bytes = serde_json::to_vec(&people(db)?).map_err(|e| e.to_string())?;
     for sql in ["SELECT id,hex(vector) FROM voice_samples ORDER BY id","SELECT id,model_hash,extractor_version,threshold,margin,evaluation_hash FROM voice_policies ORDER BY id"] {
@@ -183,7 +183,7 @@ fn book_hash(db: &Connection) -> Result<String, String> {
     }
     Ok(jobs::hash_bytes(b"mon-voice-book-v1", &bytes))
 }
-fn working(
+pub(super) fn working(
     tx: &Transaction<'_>,
     meeting: &str,
 ) -> Result<(AnalysisView, Option<TranscriptDraft>, String), String> {
@@ -456,12 +456,24 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())
     }
     pub(crate) fn start_voice(&self, request: Start) -> Result<JobSnapshot, String> {
-        self.start_voice_observed(request, false)
+        self.start_voice_observed(request, false, None)
     }
     pub(crate) fn start_automatic_voice(&self, request: Start) -> Result<JobSnapshot, String> {
-        self.start_voice_observed(request, true)
+        self.start_voice_observed(request, true, None)
     }
-    fn start_voice_observed(&self, request: Start, automatic: bool) -> Result<JobSnapshot, String> {
+    pub(crate) fn start_automatic_voice_intent(
+        &self,
+        request: Start,
+        intent: &post_analysis::Intent,
+    ) -> Result<JobSnapshot, String> {
+        self.start_voice_observed(request, true, Some(intent))
+    }
+    fn start_voice_observed(
+        &self,
+        request: Start,
+        automatic: bool,
+        intent: Option<&post_analysis::Intent>,
+    ) -> Result<JobSnapshot, String> {
         self.require_data_writable()?;
         Uuid::parse_str(&request.operation_id).map_err(|_| "声の処理の操作IDが不正です")?;
         // Read-back of an uncertain submission must not create a second person/job.
@@ -488,17 +500,29 @@ impl Storage {
                 return jobs::load_job(&db, &id)?.ok_or("声の処理がありません".into());
             }
         }
-        let engine = voice::engine(self)?;
-        let extractor = crate::diarization::embedding::ExtractorConfig::capture(
-            &crate::diarization::known::helper_path()?,
-            &engine,
-        )?;
-        let managed = self.prepare_model_selection(
-            "standard",
-            model_profiles::jobs::Execution::Sherpa(&engine),
-            &|| false,
-        )?;
-        let runtime = crate::local_engine::resident::prepare(self.root(), "sherpa")?;
+        let (engine, extractor, managed, runtime) = if let Some(intent) = intent {
+            let fixed = intent.execution()?;
+            fixed.engine.verify(&|| false)?;
+            (
+                fixed.engine.clone(),
+                fixed.extractor.clone(),
+                fixed.managed.clone(),
+                fixed.runtime.clone(),
+            )
+        } else {
+            let engine = voice::engine(self)?;
+            let extractor = crate::diarization::embedding::ExtractorConfig::capture(
+                &crate::diarization::known::helper_path()?,
+                &engine,
+            )?;
+            let managed = self.prepare_model_selection(
+                "standard",
+                model_profiles::jobs::Execution::Sherpa(&engine),
+                &|| false,
+            )?;
+            let runtime = crate::local_engine::resident::prepare(self.root(), "sherpa")?;
+            (engine, extractor, managed, runtime)
+        };
         let source = self.recorded_analysis_input(&request.meeting_id)?.0;
         let mut db = self
             .connection
@@ -508,6 +532,9 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let (view, _, hash) = working(&tx, &request.meeting_id)?;
+        if let Some(intent) = intent {
+            intent.check(&tx, &view.id, &hash)?;
+        }
         if view.id != request.analysis_id
             || hash != request.working_hash
             || book_hash(&tx)? != request.book_hash
@@ -562,7 +589,11 @@ impl Storage {
             matching_options: if registration {
                 None
             } else {
-                Some(super::voice_preferences::load(&tx)?.payload)
+                Some(if let Some(intent) = intent {
+                    intent.policy.matching
+                } else {
+                    super::voice_preferences::load(&tx)?.payload
+                })
             },
             matching_policy: (!registration).then(voice::MatchingPolicy::fixed),
             schema_version: crate::current_formats::VOICE,
@@ -593,6 +624,9 @@ impl Storage {
             total_units: Some(1),
         };
         let job = jobs::enqueue_in_transaction(&tx, &spec)?;
+        if let Some(intent) = intent {
+            intent.enqueued(&tx, &job.id, false)?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(job)
     }

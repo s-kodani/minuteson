@@ -17,10 +17,13 @@ enum MaintenanceScope {
     ModelDeletion,
 }
 
-pub(crate) struct ExportAdmissionLease(Arc<Mutex<State>>);
+pub(crate) struct ExportAdmissionLease {
+    state: Arc<Mutex<State>>,
+    owner: Arc<AtomicBool>,
+}
 pub(super) struct NoticeWriter {
     pub(super) cancel: Arc<AtomicBool>,
-    meeting: Option<String>,
+    pub(super) meeting: Option<String>,
 }
 pub(crate) struct NoticeStorageLease {
     state: Arc<Mutex<State>>,
@@ -52,10 +55,15 @@ impl AnalysisController {
     }
     pub(crate) fn notice_storage_paused(&self, meeting: Option<&str>) -> bool {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.data_maintenance.is_some()
-            || state.storage_restart_required
-            || self.shutdown.load(Ordering::SeqCst)
-            || meeting.is_some_and(|id| state.meeting_deletions.contains_key(id))
+        !state
+            .admission(
+                Request::new(
+                    Kind::Notice,
+                    meeting.map_or(Scope::Unscoped, Scope::Meeting),
+                ),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .can_reserve()
     }
     pub(crate) fn require_storage_restart(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -72,37 +80,43 @@ impl AnalysisController {
     pub(crate) fn deletion_operation_blocker(&self) -> Result<Option<String>, String> {
         self.operation_blocker(true)
     }
+    pub(crate) fn data_operation_blocker_kind(&self) -> Result<Option<Kind>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "解析ロックを取得できません")?;
+        let mut request = Request::new(Kind::GlobalMaintenance, Scope::Global);
+        request.drain_notices = true;
+        Ok(state
+            .admission(request, self.shutdown.load(Ordering::SeqCst))
+            .blocker())
+    }
+    pub(crate) fn blocker_message(kind: Kind) -> &'static str {
+        match kind {
+            Kind::Shutdown => "終了処理中",
+            Kind::Restart => "保存先の切替後は終了して再起動が必要です",
+            Kind::GlobalMaintenance => "バックアップ／復元中",
+            Kind::ModelDeletion => "モデルの削除確認・処理中",
+            Kind::MeetingDeletion => "会議の削除確認・処理中",
+            Kind::Recording => "録音開始・録音処理中",
+            Kind::Import => "音声取り込み中",
+            Kind::ModelPreparation => "AIモデルの検査・準備中",
+            Kind::Export => "Markdownの書き出し中",
+            Kind::Notice => "録音通知履歴の確認・更新中",
+            Kind::Worker => "AI処理中",
+        }
+    }
     fn operation_blocker(&self, ignore_notice_writers: bool) -> Result<Option<String>, String> {
         let state = self
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        Ok(if self.shutdown.load(Ordering::SeqCst) {
-            Some("終了処理中")
-        } else if state.storage_restart_required {
-            Some("保存先の切替後は終了して再起動が必要です")
-        } else if state.data_maintenance.is_some() {
-            Some("バックアップ／復元中")
-        } else if state.model_deletion.is_some() {
-            Some("モデルの削除確認・処理中")
-        } else if !state.meeting_deletions.is_empty() {
-            Some("会議の削除確認・処理中")
-        } else if state.recording_intent {
-            Some("録音開始・録音処理中")
-        } else if state.import_intent {
-            Some("音声取り込み中")
-        } else if state.model_preparation.is_some() {
-            Some("AIモデルの検査・準備中")
-        } else if state.export_intent {
-            Some("Markdownの書き出し中")
-        } else if !ignore_notice_writers && !state.notice_writers.is_empty() {
-            Some("録音通知履歴の確認・更新中")
-        } else if state.busy {
-            Some("AI処理中")
-        } else {
-            None
-        }
-        .map(str::to_owned))
+        let mut request = Request::new(Kind::GlobalMaintenance, Scope::Global);
+        request.drain_notices = ignore_notice_writers;
+        Ok(state
+            .admission(request, self.shutdown.load(Ordering::SeqCst))
+            .blocker()
+            .map(|kind| Self::blocker_message(kind).to_owned()))
     }
 
     /// Startup reset can replace a refused/restart-fenced database, while
@@ -150,21 +164,21 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        Ok(if self.shutdown.load(Ordering::SeqCst) {
-            Some("終了処理中")
-        } else if state.storage_restart_required {
-            Some("保存先の切替後は終了して再起動が必要です")
-        } else if state.data_maintenance.is_some()
-            || state.model_deletion.is_some()
-            || !state.meeting_deletions.is_empty()
-        {
-            Some("別のデータ操作が進行中です")
-        } else if state.model_preparation.is_some() {
-            Some("AIモデルの検査・準備中")
-        } else {
-            None
-        }
-        .map(str::to_owned))
+        Ok(state
+            .admission(
+                Request::new(Kind::MeetingDeletion, Scope::Global),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .blocker()
+            .map(|kind| {
+                match kind {
+                    Kind::Shutdown => "終了処理中",
+                    Kind::Restart => "保存先の切替後は終了して再起動が必要です",
+                    Kind::ModelPreparation => "AIモデルの検査・準備中",
+                    _ => "別のデータ操作が進行中です",
+                }
+                .to_owned()
+            }))
     }
 
     pub(crate) fn begin_meeting_deletion(
@@ -186,12 +200,12 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if self.shutdown.load(Ordering::SeqCst)
-            || state.storage_restart_required
-            || state.data_maintenance.is_some()
-            || state.model_deletion.is_some()
-            || state.model_preparation.is_some()
-            || !state.meeting_deletions.is_empty()
+        if !state
+            .admission(
+                Request::new(Kind::MeetingDeletion, Scope::Meeting(meeting)),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .can_reserve()
         {
             return Err("別のデータ操作・モデル準備・終了処理の完了後に削除してください".into());
         }
@@ -278,20 +292,15 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
+        let mut request = Request::new(Kind::GlobalMaintenance, Scope::Global);
+        request.resume_after_restart = deletion_resume;
+        request.drain_notices = wait_notices;
         if cancelled()
             || recording_active
             || import_blocked
-            || self.shutdown.load(Ordering::SeqCst)
-            || state.busy
-            || (state.storage_restart_required && !deletion_resume)
-            || state.recording_intent
-            || state.import_intent
-            || state.model_preparation.is_some()
-            || state.data_maintenance.is_some()
-            || state.model_deletion.is_some()
-            || !state.meeting_deletions.is_empty()
-            || state.export_intent
-            || (!wait_notices && !state.notice_writers.is_empty())
+            || !state
+                .admission(request, self.shutdown.load(Ordering::SeqCst))
+                .can_reserve()
         {
             return Err("AI処理・録音・取り込み・モデル準備・書き出し・終了処理が停止してからバックアップ／復元してください".into());
         }
@@ -382,19 +391,14 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "モデル削除の所有を取得できません")?;
+        let mut request = Request::new(Kind::ModelDeletion, Scope::ModelCatalog);
+        request.resume_after_restart = deletion_resume;
         if cancelled()
             || recording_active
             || import_blocked
-            || self.shutdown.load(Ordering::SeqCst)
-            || (state.storage_restart_required && !deletion_resume)
-            || state.busy
-            || state.recording_intent
-            || state.import_intent
-            || state.model_preparation.is_some()
-            || state.data_maintenance.is_some()
-            || state.model_deletion.is_some()
-            || !state.meeting_deletions.is_empty()
-            || state.export_intent
+            || !state
+                .admission(request, self.shutdown.load(Ordering::SeqCst))
+                .can_reserve()
         {
             return Err("AI処理・録音・取り込み・モデル準備・データ操作・書き出し・終了処理が停止してからモデルを削除してください".into());
         }
@@ -416,16 +420,22 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if state.data_maintenance.is_some()
-            || state.model_deletion.is_some()
-            || state.export_intent
-            || state.storage_restart_required
-            || self.shutdown.load(Ordering::SeqCst)
+        if !state
+            .admission(
+                Request::new(Kind::Export, Scope::Global),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .can_reserve()
         {
             return Err("バックアップ・復元・書き出し・終了処理が進行中です".into());
         }
+        let owner = Arc::new(AtomicBool::new(false));
         state.export_intent = true;
-        Ok(ExportAdmissionLease(self.state.clone()))
+        state.export_owner = Some(owner.clone());
+        Ok(ExportAdmissionLease {
+            state: self.state.clone(),
+            owner,
+        })
     }
     // Companion-file writes may coexist with inference/recording, but not with
     // data copying, meeting/audio deletion or root cutover. Model deletion is
@@ -452,10 +462,15 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "通知履歴の共有所有を取得できません")?;
-        if state.data_maintenance.is_some()
-            || state.storage_restart_required
-            || self.shutdown.load(Ordering::SeqCst)
-            || meeting.is_some_and(|id| state.meeting_deletions.contains_key(id))
+        if !state
+            .admission(
+                Request::new(
+                    Kind::Notice,
+                    meeting.map_or(Scope::Unscoped, Scope::Meeting),
+                ),
+                self.shutdown.load(Ordering::SeqCst),
+            )
+            .can_reserve()
         {
             return Ok(None);
         }
@@ -488,7 +503,7 @@ impl NoticeStorageLease {
             || !state
                 .notice_writers
                 .iter()
-                .any(|w| Arc::ptr_eq(&w.cancel, &self.cancel))
+                .any(|w| operation::same_owner(&w.cancel, &self.cancel))
         {
             return Err("通知履歴の共有所有は終了しました".into());
         }
@@ -500,7 +515,7 @@ impl Drop for NoticeStorageLease {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .notice_writers
-            .retain(|w| !Arc::ptr_eq(&w.cancel, &self.cancel));
+            .retain(|w| !operation::same_owner(&w.cancel, &self.cancel));
         self.idle.notify_all();
     }
 }
@@ -544,7 +559,9 @@ impl DataMaintenanceLease {
             MaintenanceScope::Meeting(id) => state.meeting_deletions.get(id),
             MaintenanceScope::ModelDeletion => state.model_deletion.as_ref(),
         };
-        if self.cancelled() || !owner.is_some_and(|active| Arc::ptr_eq(active, &self.cancel)) {
+        if self.cancelled()
+            || !owner.is_some_and(|active| operation::same_owner(active, &self.cancel))
+        {
             return Err("削除に必要な共有実行排他を保持していません。対象を保持します".into());
         }
         Ok(())
@@ -561,7 +578,7 @@ impl Drop for DataMaintenanceLease {
             if state
                 .meeting_deletions
                 .get(meeting)
-                .is_some_and(|active| Arc::ptr_eq(active, &self.cancel))
+                .is_some_and(|active| operation::same_owner(active, &self.cancel))
             {
                 state.meeting_deletions.remove(meeting);
                 self.idle.notify_all();
@@ -572,11 +589,7 @@ impl Drop for DataMaintenanceLease {
             MaintenanceScope::ModelDeletion => &mut state.model_deletion,
             MaintenanceScope::Meeting(_) => return,
         };
-        if owner
-            .as_ref()
-            .is_some_and(|cancel| Arc::ptr_eq(cancel, &self.cancel))
-        {
-            *owner = None;
+        if operation::release_owned(owner, &self.cancel) {
             self.idle.notify_all();
         }
     }
@@ -584,9 +597,9 @@ impl Drop for DataMaintenanceLease {
 
 impl Drop for ExportAdmissionLease {
     fn drop(&mut self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .export_intent = false;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if operation::release_owned(&mut state.export_owner, &self.owner) {
+            state.export_intent = false;
+        }
     }
 }

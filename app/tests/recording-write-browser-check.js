@@ -2,7 +2,7 @@
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');await route.fulfill({response,body});
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');await route.fulfill({response,body});
   });
   const panel=()=>page.getByRole("region",{name:"録音の書込み",exact:true});
   const states=(a,b)=>page.waitForFunction(([a,b])=>{const t=document.querySelectorAll('[data-write-state]');return t.length===2&&t[0].dataset.writeState===a&&t[1].dataset.writeState===b;},[a,b]);

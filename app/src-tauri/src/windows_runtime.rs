@@ -1,5 +1,6 @@
 //! Fixed Windows runtime resources. Only recipes shipped with this app may
 //! reference the private runtime URI; callers cannot select arbitrary files.
+use crate::model_download_recipe::RecipeExt;
 use crate::{
     model_download_recipe::{Recipe, BUNDLED_WINDOWS},
     model_inspection::Source,

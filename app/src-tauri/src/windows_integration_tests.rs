@@ -1,5 +1,6 @@
 //! Native Windows integration tests use owned temporary recordings only.
 //! The helper's synthetic mode supplies deterministic PCM, never the microphone.
+use crate::model_download_recipe::RecipeExt;
 use crate::{model_download_recipe::Recipe, model_placement::fs::Directory, Storage};
 use std::{
     fs,

@@ -80,9 +80,14 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
             ("speakers", "lineage_id") => Some(Rule::SpeakerLineage),
             ("utterances", "lineage_id") => Some(Rule::UtteranceLineage),
             ("speaker_segments", "overlap_group_id") => Some(Rule::Overlap),
-            (_, "operation_id" | "start_operation_id" | "stop_operation_id") => {
-                Some(Rule::Operation)
-            }
+            (
+                _,
+                "operation_id"
+                | "start_operation_id"
+                | "stop_operation_id"
+                | "completion_operation_id"
+                | "matching_operation_id",
+            ) => Some(Rule::Operation),
             ("export_records", "source_draft_id") => Some(Rule::Entity("working_drafts")),
             _ => None,
         };

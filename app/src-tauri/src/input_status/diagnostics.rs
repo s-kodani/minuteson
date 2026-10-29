@@ -60,20 +60,25 @@ pub(crate) fn record_input_diagnostic_log(
     stage: String,
     session_id: Option<String>,
     message: Option<String>,
-) -> Result<(), String> {
-    validate(
-        window.label(),
-        &stage,
-        session_id.as_deref(),
-        message.as_deref(),
-    )?;
-    read_result(
-        &format!("ui-{stage}"),
-        session_id.as_deref(),
-        None,
-        message.as_deref(),
-    );
-    Ok(())
+) -> Result<(), mon_contracts::AppError> {
+    let result: Result<(), String> = (|| {
+        validate(
+            window.label(),
+            &stage,
+            session_id.as_deref(),
+            message.as_deref(),
+        )?;
+        read_result(
+            &format!("ui-{stage}"),
+            session_id.as_deref(),
+            None,
+            message.as_deref(),
+        );
+        Ok(())
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("record_input_diagnostic_log", message)
+    })
 }
 
 #[cfg(test)]

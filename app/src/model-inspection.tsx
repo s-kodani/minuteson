@@ -7,7 +7,7 @@ import { bytesLabel } from "./import-state";
 import { VadSettings } from "./vad-settings";
 import { checkedVadOptions, defaultVadOptions, type VadOptions } from "./vad-state";
 import type { AnalysisPreferences, EnginePreferences } from "./analysis-state";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { usePublishProgress } from "./operation-progress";

@@ -14,6 +14,31 @@ pub(crate) struct Request {
     pub operation_id: String,
 }
 
+pub(crate) fn restore_request(
+    meeting: &str,
+    value: &serde_json::Value,
+    resolver: &impl crate::job_codec::Resolver,
+) -> Result<serde_json::Value, String> {
+    use crate::job_codec::ReferenceDomain as Domain;
+    let mut request: Request = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+    if request.meeting_id != meeting {
+        return Err("話者補完の要求会議が一致しません".into());
+    }
+    request.expected_content_hash = resolver.hash(
+        Domain::Analysis,
+        meeting,
+        &request.analysis_id,
+        &request.expected_content_hash,
+    )?;
+    request.analysis_id = resolver.id(Domain::Analysis, meeting, &request.analysis_id)?;
+    request.operation_id = resolver.id(Domain::Operation, meeting, &request.operation_id)?;
+    request.meeting_id = resolver.id(Domain::Meeting, meeting, meeting)?;
+    if let Some(draft) = &mut request.expected_draft {
+        draft.id = resolver.id(Domain::Draft, meeting, &draft.id)?;
+    }
+    serde_json::to_value(request).map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Reply {

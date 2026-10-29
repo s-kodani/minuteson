@@ -82,22 +82,41 @@ pub(crate) fn available(path: &Path) -> Result<u64, String> {
     Ok(bytes)
 }
 pub(crate) fn sync_directory(path: &Path) -> Result<(), String> {
+    sync_directory_state(path).map(|_| ())
+}
+pub(crate) fn sync_directory_state(
+    path: &Path,
+) -> Result<mon_native::durability::NamespaceDurability, String> {
     let _parents = parents(path)?;
-    let expected = Identity::at(path)?;
-    // NTFS FlushFileBuffers needs write access and BACKUP_SEMANTICS, including
-    // for directories. A read-only std File is insufficient.
-    let file = OpenOptions::new()
+    let held = directory(path)?;
+    let expected = Identity::file(&held)?;
+    // Ordinary users/filesystems may reject directory flushes. Retain the
+    // opened read handle and return an explicit weaker namespace guarantee.
+    let opened = OpenOptions::new()
         .read(true)
         .write(true)
         .share_mode(7)
         .custom_flags(0x02000000 | 0x00200000)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_dir() || Identity::file(&file)? != expected {
+        .open(path);
+    let result = match opened {
+        Ok(file) => {
+            if !file.metadata().map_err(|e| e.to_string())?.is_dir()
+                || Identity::file(&file)? != expected
+            {
+                return Err("同期するフォルダーの実体が変更されています".into());
+            }
+            file.sync_all()
+        }
+        Err(error) => Err(error),
+    };
+    let durability =
+        mon_native::durability::windows_directory_sync_result(result).map_err(|e| e.to_string())?;
+    if Identity::at(path)? != expected || Identity::file(&held)? != expected {
         return Err("同期するフォルダーの実体が変更されています".into());
     }
-    file.sync_all().map_err(|e| e.to_string())
+    Ok(durability)
 }
+
 pub(crate) fn local_ntfs(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{

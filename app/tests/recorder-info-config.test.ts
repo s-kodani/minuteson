@@ -16,8 +16,8 @@ test("explanation has its own role and does not mount recording or editing provi
   const cap = JSON.parse(source("../src-tauri/capabilities/recorder-info.json"));
   assert.deepEqual(cap.windows, ["recorder-info"]);
   assert.deepEqual(cap.permissions, ["core:default", "core:event:allow-listen", "recorder-info-commands"]);
-  const ui = source("../src/main.tsx");
-  assert.ok(ui.includes("isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider"));
+  const ui = source("../src/bootstrap.tsx");
+  assert.ok(ui.includes('role === "recorder-info" ? <RecorderInfoWindow /> : <RecordingInputProvider'));
   const popup = source("../src/recorder-info.tsx").split("export function RecorderInfoWindow()")[1];
   assert.doesNotMatch(popup, /invoke\("(?:stop_recording|start_recording|save_|delete_|decide_recording_confirmation)/);
 });

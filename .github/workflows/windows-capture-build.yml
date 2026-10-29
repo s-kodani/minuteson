@@ -13,6 +13,13 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> probes/windows-capture/build/capture-core
       - name: Prepare fixed capture protocol dependency
         run: python tools/mon_windows_capture_dependencies.py
       - name: Configure x64 probe
@@ -20,4 +27,4 @@ jobs:
       - name: Build Release probe
         run: cmake --build probes/windows-capture/build --config Release
       - name: Validate packet clock without audio hardware
-        run: ctest --test-dir probes/windows-capture/build -C Release --output-on-failure
+        run: ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error

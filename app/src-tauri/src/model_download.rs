@@ -2,10 +2,8 @@
 //! IPC callers must hold the model-preparation
 //! lease for the whole operation (including child teardown and durable IO).
 //! Download recipes are explicit untrusted input, not an authenticated catalog.
-#[cfg(target_os = "macos")]
-mod archive;
-#[cfg(windows)]
-#[path = "model_download/archive_windows.rs"]
+use crate::model_download_recipe::RecipeExt;
+#[cfg(any(target_os = "macos", windows))]
 mod archive;
 pub(crate) mod catalog;
 mod reuse;

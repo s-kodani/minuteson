@@ -1,4 +1,4 @@
-import { invoke,isTauri } from "@tauri-apps/api/core";
+import { invoke,isTauri } from "./ipc.ts";
 import { useEffect,useState } from "react";
 import { transcriptTrackKinds } from "./transcript-track-kinds";
 

@@ -1,6 +1,5 @@
 //! Local file import. Paths never become permanent analysis dependencies.
 mod mp3;
-#[cfg(any(windows, test))]
 mod pcm;
 use crate::audio::VerifiedAudio;
 use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
@@ -12,6 +11,8 @@ use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
+const PROCESS_POLICY: mon_native::process::Policy = mon_native::process::Purpose::Import.policy();
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -144,7 +145,6 @@ pub(crate) fn decode(
     if &header == b"ID3" || (header[0] == 0xff && header[1] & 0xe0 == 0xe0) {
         return mp3::decode(input, output, cancelled);
     }
-    #[cfg(windows)]
     if &header == b"RIF" || &header == b"fLa" {
         return pcm::decode(input, output, cancelled);
     }
@@ -154,7 +154,7 @@ pub(crate) fn decode(
         .prefix(".mon-import-report-")
         .tempfile_in(scratch)
         .map_err(|e| e.to_string())?;
-    let mut launch = OwnedCommand::new(&helper.path)?;
+    let mut launch = OwnedCommand::for_purpose(&helper.path, mon_native::process::Purpose::Import)?;
     launch
         .command
         .arg("--import-audio")
@@ -177,14 +177,14 @@ pub(crate) fn decode(
             .metadata()
             .map_err(|e| e.to_string())?
             .len()
-            > 16384
+            > PROCESS_POLICY.stdout_bytes
         {
             return Err("音声検証の応答が大きすぎます".into());
         }
         if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
-        if started.elapsed() > Duration::from_secs(3600) {
+        if PROCESS_POLICY.expired(started.elapsed(), None) {
             return Err("音声の復号が時間上限を超えました".into());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -196,13 +196,13 @@ pub(crate) fn decode(
         .metadata()
         .map_err(|e| e.to_string())?
         .len();
-    if length == 0 || length > 16384 {
+    if length == 0 || length > PROCESS_POLICY.stdout_bytes {
         return Err("音声検証の結果がありません".into());
     }
     let mut file = report.as_file().try_clone().map_err(|e| e.to_string())?;
     file.rewind().map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.take(16385)
+    file.take(PROCESS_POLICY.stdout_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if !status.success() {

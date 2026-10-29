@@ -1,5 +1,6 @@
 //! Read-only model deletion census. No consent, deletion permit or DB mutation.
 use super::fs::{Directory, Identity, Proof};
+use crate::storage::deletion::fs::NativeProof as _;
 use crate::{model_inspection::MANIFEST, model_placement::PlacementRecord, storage::Storage};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};

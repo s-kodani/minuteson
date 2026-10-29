@@ -45,7 +45,7 @@ export const audioDeletionIPC = async (command, args) => {
     if (d.listFail) throw Error("模擬音声削除一覧失敗");
     return { items: structuredClone(d.items), writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? "音声削除のため書込停止" : null };
   }
-  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です" };
+  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required" };
   if (command === "get_current_analysis") { d.analysisReads++; return structuredClone(analysis); }
   if (command === "get_transcript_draft") { d.draftReads++; return stampFixtureDraft(d.draft); }
   if (command === "save_transcript_draft") {
@@ -155,4 +155,4 @@ export const audioDeletionIPC = async (command, args) => {
   return dataSaveIPC(command, args);
 };
 mockIPC(audioDeletionIPC, { shouldMockEvents: true });
-if (!window.skipAudioDeletionFixtureMain) await import("../src/main.tsx");
+if (!window.skipAudioDeletionFixtureMain) await import("../src/bootstrap.tsx");

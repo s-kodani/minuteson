@@ -252,7 +252,7 @@ fn private_meeting_transcription_reaches_the_last_unit() {
                 whisper::parse_output(&fs::read(outcome.selected).unwrap(), &model, duration)
                     .unwrap()
             }
-            Err(error) if error.starts_with(super::super::QUALITY_FAILURE_PREFIX) => {
+            Err(error) if error.is_quality_rejection() => {
                 let path = run(
                     &config,
                     &model,
@@ -360,6 +360,7 @@ fn private_authorized_meeting_regeneration_commits_the_completed_transcript() {
                     j.state, j.completed_units, j.total_units
                 )
             })
+            .map_err(|e| e.to_string())
         } else {
             crate::diarization::process(&store, &job.id, &|| false, &|j| {
                 eprintln!("authorized meeting speaker processing: {}", j.state)

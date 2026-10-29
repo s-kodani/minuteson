@@ -27,7 +27,9 @@ pub(in crate::storage) fn deletion_schema(
 
 pub(super) fn upgrade_schema(db: &mut Connection) -> Result<(), Box<dyn Error>> {
     let version = super::verify_migration_history(db)?;
-    if version == super::MIGRATIONS.len() {
+    // This bridge still ends at 35, even when the application adds later
+    // migrations. Repeating the completed one-shot bridge stays idempotent.
+    if version == 35 || version == super::MIGRATIONS.len() {
         return Ok(());
     }
     if !admits_schema(version) {
@@ -35,17 +37,7 @@ pub(super) fn upgrade_schema(db: &mut Connection) -> Result<(), Box<dyn Error>> 
     }
     // Snapshot the legacy DB before changing even the schema. SQLite backup
     // includes committed WAL pages; copying meetings.sqlite3 alone does not.
-    let path: String = db.query_row(
-        "SELECT file FROM pragma_database_list WHERE name='main'",
-        [],
-        |r| r.get(0),
-    )?;
-    if !path.is_empty() {
-        let snapshot = Path::new(&path).with_file_name("before-single-wav.sqlite3");
-        if !snapshot.exists() {
-            db.backup("main", &snapshot, None)?;
-        }
-    }
+    super::schema_upgrade::save_snapshot(db, "before-single-wav.sqlite3")?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute_batch(super::MIGRATION_35)?;
     tx.execute(

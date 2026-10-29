@@ -1,4 +1,5 @@
 use super::*;
+use crate::model_download_recipe::RecipeExt;
 use crate::storage::model_profiles::portable::history::Bundle;
 use serde_json::json;
 

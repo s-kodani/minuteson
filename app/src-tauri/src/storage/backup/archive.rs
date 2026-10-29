@@ -459,7 +459,10 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
     if let Some(p) = m.voice_matching_preferences {
         p.validate()?;
     }
-    if m.format_version != crate::current_formats::BACKUP || m.schema_version != MIGRATIONS.len() {
+    if !((m.format_version == crate::current_formats::BACKUP
+        && m.schema_version == MIGRATIONS.len())
+        || (m.format_version == 5 && m.schema_version == 35))
+    {
         return Err("現在の形式ではないバックアップは復元できません".into());
     }
     if !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
@@ -774,6 +777,9 @@ fn validate_portability(
     if invalid {
         return Err("バックアップに端末固有の診断情報が残っています".into());
     }
+    if manifest.schema_version>=36 && db.query_row("SELECT EXISTS(SELECT 1 FROM post_analysis_intents WHERE error_message IS NOT NULL)",[],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
+        return Err("バックアップに後続処理の端末固有診断が残っています".into());
+    }
     let mut statement = db
         .prepare("SELECT destination_path FROM export_records")
         .map_err(|e| e.to_string())?;
@@ -816,7 +822,7 @@ fn validate_portability(
         "SELECT capture_config_json FROM recording_sessions",
         "SELECT plan_json FROM analysis_flows WHERE plan_json IS NOT NULL",
         "SELECT checkpoint_json FROM job_checkpoints",
-    ] {
+    ].into_iter().chain((manifest.schema_version>=36).then_some("SELECT spec_json FROM post_analysis_intents")) {
         let mut statement = db.prepare(sql).map_err(|e|e.to_string())?;
         let mut rows = statement.query([]).map_err(|e|e.to_string())?;
         while let Some(row) = rows.next().map_err(|e|e.to_string())? { check_json(row.get::<_,String>(0).map_err(|e|e.to_string())?.as_bytes(),false)?; }

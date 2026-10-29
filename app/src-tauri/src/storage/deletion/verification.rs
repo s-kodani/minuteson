@@ -1,6 +1,7 @@
 //! Operation-local content proofs. Windows pins deny writes but allow our
 //! journaled rename/unlink; other platforms always perform the complete hash.
 use super::fs::{Directory, Proof};
+use crate::storage::deletion::fs::NativeProof as _;
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, collections::VecDeque, fs::File, io::Read};
 

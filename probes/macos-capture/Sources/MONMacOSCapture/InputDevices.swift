@@ -30,9 +30,7 @@ enum InputDevices {
   }
 
   static func validUID(_ uid: String) -> Bool {
-    !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && uid.utf8.count <= 1024
-      && !uid.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) })
+    CaptureCore.validUID(uid)
   }
 
   // Metadata only: no engine, input tap, permission request or audio file.
@@ -70,9 +68,7 @@ enum InputDevices {
     }
     return CaptureInputDevices(
       microphonePermission: permission,
-      devices: devices.sorted {
-        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-      })
+      devices: try CaptureCore.catalogOrder(devices, applications: false).map { devices[$0] })
   }
 
   static func choose(_ uid: String?, from devices: [CaptureInputDevice]) throws

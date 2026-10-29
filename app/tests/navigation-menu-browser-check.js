@@ -3,7 +3,7 @@ async page => {
   const route = /^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/;
   await page.context().route(route, async request => {
     const response = await request.fetch();
-    const body = (await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const body = (await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await request.fulfill({ response, body });
   });
   await page.goto("http://127.0.0.1:1420/"); await page.waitForFunction(() => !!window.closeFixture);
@@ -16,7 +16,7 @@ async page => {
   const refresh = page.getByRole("button", { name: "マイク一覧を再確認", exact: true });
   check(await refresh.locator("svg").count() === 1 && await refresh.innerText() === "", "microphone refresh is not an icon-only control");
   results.push("microphone refresh is one labelled icon with its original action");
-  await page.getByRole("button", { name: "AIモデルの設定を開く", exact: true }).click();
+  await page.getByRole("button", { name: "AIモデルの設定", exact: true }).click();
   await page.getByRole("heading", { name: "設定", exact: true }).waitFor();
   await back().click(); await title.waitFor();
   await page.waitForFunction(() => !document.querySelector('[aria-label="録音するマイク"]').disabled);

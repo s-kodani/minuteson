@@ -27,140 +27,7 @@ impl FixedData<'_, '_> {
         input_analysis: Option<&str>,
         original: &Value,
     ) -> Result<Value, String> {
-        let mut value = original.clone();
-        if !value.is_object() {
-            return Err("固定条件はオブジェクトである必要があります".into());
-        }
-        if let Some(request) = original.get("assignmentRequest").filter(|v| !v.is_null()) {
-            let mut r: crate::storage::transcript_consolidation::Request =
-                serde_json::from_value(request.clone()).map_err(|e| e.to_string())?;
-            if r.meeting_id != meeting {
-                return Err("話者補完の要求会議が一致しません".into());
-            }
-            r.expected_content_hash = self.resolve(
-                "analysis_revisions",
-                meeting,
-                &r.analysis_id,
-                &r.expected_content_hash,
-            )?;
-            r.analysis_id = self
-                .ids
-                .get("analysis_revisions", meeting, &r.analysis_id)?;
-            r.operation_id = self.ids.get("operation", meeting, &r.operation_id)?;
-            r.meeting_id = self.ids.get("meetings", "", meeting)?;
-            if let Some(d) = &mut r.expected_draft {
-                d.id = self.ids.get("working_drafts", meeting, &d.id)?;
-            }
-            value["assignmentRequest"] = serde_json::to_value(r).map_err(|e| e.to_string())?;
-        }
-        if let Some(completion) = original.get("completion") {
-            let mut plan: crate::speaker_completion::Plan =
-                serde_json::from_value(completion.clone()).map_err(|e| e.to_string())?;
-            let source = self.analysis_audio_plan(
-                meeting,
-                &serde_json::to_value(&plan.source).map_err(|e| e.to_string())?,
-                Some(&plan.known),
-            )?;
-            plan.source = serde_json::from_value(source).map_err(|e| e.to_string())?;
-            for w in &mut plan.references {
-                w.speaker_id = self.ids.get("speakers", meeting, &w.speaker_id)?;
-                w.track_id = self.ids.get("audio_tracks", meeting, &w.track_id)?;
-            }
-            for t in &mut plan.targets {
-                t.lineage = self.ids.get("utterance_lineage", meeting, &t.lineage)?;
-                t.body.track_id = self.ids.get("audio_tracks", meeting, &t.body.track_id)?;
-            }
-            // Source working hash is retained as historical evidence. A fresh
-            // completion operation is required after additive restore.
-            value["completion"] = serde_json::to_value(plan).map_err(|e| e.to_string())?;
-        }
-        if let Some(voice) = original.get("voice") {
-            let mut plan: crate::voice::Plan =
-                serde_json::from_value(voice.clone()).map_err(|e| e.to_string())?;
-            for window in &mut plan.windows {
-                window.speaker_id = self.ids.get("speakers", meeting, &window.speaker_id)?;
-                window.track_id = self.ids.get("audio_tracks", meeting, &window.track_id)?;
-            }
-            if let Some(person) = plan.person_id.as_deref() {
-                let exists: bool = self
-                    .ids
-                    .source()
-                    .database
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM voice_people WHERE id=?1)",
-                        [person],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                // Enrollment history survives explicit deletion of its person.
-                // It cannot resurrect that person or prevent a later backup.
-                plan.person_id = if exists {
-                    Some(self.ids.get("voice_people", "", person)?)
-                } else {
-                    None
-                };
-            }
-            // The registry/editor hashes belong to the source environment.
-            // Restored historical voice jobs require a fresh reviewed operation.
-            value["voice"] = serde_json::to_value(plan).map_err(|e| e.to_string())?;
-            value["voiceRequest"] = Value::Null;
-        }
-        if let Some(source) = original.get("source") {
-            let known: Option<crate::storage::transcription::known::KnownInput> = original
-                .get("knownInput")
-                .filter(|value| !value.is_null())
-                .map(|value| serde_json::from_value(value.clone()))
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            value["source"] = self.analysis_audio_plan(meeting, source, known.as_ref())?;
-        }
-        if let Some(request) = original.get("request") {
-            value["request"] = self.request(meeting, request)?;
-        }
-        if let Some(vocabulary) = original.get("vocabulary").filter(|v| !v.is_null()) {
-            value["vocabulary"] = self.vocabulary(meeting, vocabulary)?;
-        }
-        if let Some(diarization) = original.get("diarization") {
-            let source = diarization
-                .get("source")
-                .ok_or("話者分離の固定音声がありません")?;
-            let known: Option<crate::storage::KnownInput> = diarization
-                .get("knownInput")
-                .filter(|value| !value.is_null())
-                .map(|value| serde_json::from_value(value.clone()))
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            value["diarization"]["source"] =
-                self.analysis_audio_plan(meeting, source, known.as_ref())?;
-            let mut tracks: Vec<crate::diarization::TrackSettings> =
-                serde_json::from_value(diarization["tracks"].clone()).map_err(|e| e.to_string())?;
-            for track in &mut tracks {
-                track.track_id = self.ids.get("audio_tracks", meeting, &track.track_id)?;
-            }
-            value["diarization"]["tracks"] =
-                serde_json::to_value(tracks).map_err(|e| e.to_string())?;
-            let input = input_analysis.ok_or("話者分離の固定入力がありません")?;
-            let old = self.manual_lineages(meeting, input)?;
-            let hash = super::super::super::diarization::manual_assignment_hash(&old)?;
-            if diarization
-                .get("manualAssignmentHash")
-                .and_then(Value::as_str)
-                != Some(&hash)
-            {
-                return Err("話者分離の固定割り当てが元版と一致しません".into());
-            }
-            let new = old
-                .iter()
-                .map(|id| self.ids.get("utterance_lineage", meeting, id))
-                .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-            value["diarization"]["manualAssignmentHash"] = json!(
-                super::super::super::diarization::manual_assignment_hash(&new)?
-            );
-        }
-        if serde_json::to_vec(&value).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
-            return Err("再構成した固定条件が容量上限を超えています".into());
-        }
-        Ok(value)
+        crate::job_codec::parameters(meeting, input_analysis, original, self)
     }
 
     fn manual_lineages(
@@ -438,5 +305,71 @@ impl FixedData<'_, '_> {
             return Err("再構成した解析条件が容量上限を超えています".into());
         }
         Ok((value, input))
+    }
+}
+
+impl crate::job_codec::Resolver for FixedData<'_, '_> {
+    fn id(
+        &self,
+        domain: crate::job_codec::ReferenceDomain,
+        meeting: &str,
+        id: &str,
+    ) -> Result<String, String> {
+        self.ids.get(
+            domain.name(),
+            if domain.global() { "" } else { meeting },
+            id,
+        )
+    }
+    fn hash(
+        &self,
+        domain: crate::job_codec::ReferenceDomain,
+        meeting: &str,
+        id: &str,
+        hash: &str,
+    ) -> Result<String, String> {
+        self.resolve(
+            domain.name(),
+            if domain.global() { "" } else { meeting },
+            id,
+            hash,
+        )
+    }
+    fn audio_plan(
+        &self,
+        meeting: &str,
+        plan: &RecordedAudioPlan,
+        known: Option<&crate::storage::KnownInput>,
+    ) -> Result<RecordedAudioPlan, String> {
+        let value = self.analysis_audio_plan(
+            meeting,
+            &serde_json::to_value(plan).map_err(|e| e.to_string())?,
+            known,
+        )?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+    fn person_exists(&self, id: &str) -> Result<bool, String> {
+        self.ids
+            .source()
+            .database
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM voice_people WHERE id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    fn manual_lineages(
+        &self,
+        meeting: &str,
+        input: &str,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        FixedData::manual_lineages(self, meeting, input)
+    }
+    fn request(&self, meeting: &str, value: &Value) -> Result<Value, String> {
+        FixedData::request(self, meeting, value)
+    }
+    fn vocabulary(&self, meeting: &str, value: &Value) -> Result<Value, String> {
+        FixedData::vocabulary(self, meeting, value)
     }
 }

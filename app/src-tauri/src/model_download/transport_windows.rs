@@ -1,6 +1,7 @@
 //! System curl and bounded pipe streaming. No PowerShell, curlrc, inherited
 //! credentials, or unchecked Content-Length. Child ownership uses Job Objects.
 use crate::local_engine::OwnedCommand;
+use mon_native::transport::{configure_curl, Diagnostics, DEADLINE};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
@@ -22,39 +23,11 @@ pub(super) fn fetch(
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), String> {
     super::validate_url(url)?;
-    let mut launch = OwnedCommand::new(&system_tool("curl.exe")?)?;
-    launch
-        .command
-        .env_clear()
-        .env(
-            "SystemRoot",
-            std::env::var_os("SystemRoot").unwrap_or_default(),
-        )
-        .args([
-            "--disable",
-            "--globoff",
-            "--no-buffer",
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--location",
-            "--max-redirs",
-            "5",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "3600",
-            "--speed-limit",
-            "1024",
-            "--speed-time",
-            "30",
-            "--url",
-            url,
-        ]);
+    let mut launch = OwnedCommand::for_purpose(
+        &system_tool("curl.exe")?,
+        mon_native::process::Purpose::SystemTool,
+    )?;
+    configure_curl(&mut launch.command, url, "=https");
     stream(
         launch,
         expected_size,
@@ -62,10 +35,10 @@ pub(super) fn fetch(
         output,
         cancelled,
         progress,
-        Duration::from_secs(3600),
+        DEADLINE,
     )
 }
-pub(super) fn stream(
+fn stream(
     mut launch: OwnedCommand,
     expected_size: u64,
     expected_hash: &str,
@@ -100,22 +73,37 @@ pub(super) fn stream(
             }
         }
     });
-    let diagnostics = Arc::new(Mutex::new(Vec::new()));
+    let diagnostics = Arc::new(Mutex::new(Diagnostics::default()));
     let errors = diagnostics.clone();
     let error_reader = std::thread::spawn(move || {
         let mut buffer = [0u8; 4096];
-        while let Ok(n @ 1..) = stderr.read(&mut buffer) {
-            if let Ok(mut text) = errors.lock() {
-                let take = n.min(8192usize.saturating_sub(text.len()));
-                text.extend_from_slice(&buffer[..take]);
+        loop {
+            match stderr.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Ok(mut text) = errors.lock() {
+                        text.push(&buffer[..n]);
+                    }
+                }
+                Err(_) => {
+                    if let Ok(mut text) = errors.lock() {
+                        text.read_failed();
+                    }
+                    break;
+                }
             }
         }
     });
     let start = Instant::now();
-    let result = (|| {
+    let result: Result<(), String> = (|| {
         let mut count = 0u64;
         let mut hash = Sha256::new();
         loop {
+            diagnostics
+                .lock()
+                .map_err(|_| "通信状態を確認できません")?
+                .check()
+                .map_err(str::to_owned)?;
             if cancelled() {
                 return Err("モデルの取得・展開を中断しました。途中ファイルは保持します".into());
             }
@@ -147,7 +135,7 @@ pub(super) fn stream(
             std::thread::sleep(Duration::from_millis(25));
         };
         if !status.success() {
-            return Err(format!("取得・展開プロセスが失敗しました: {status}"));
+            return Err(mon_native::transport::HTTP_FAILURE.into());
         }
         if count != expected_size || format!("{:x}", hash.finalize()) != expected_hash {
             return Err("取得ファイルの容量・SHA-256が確認内容と一致しません".into());
@@ -159,20 +147,11 @@ pub(super) fn stream(
     drop(child);
     let _ = reader.join();
     let _ = error_reader.join();
-    result.map_err(|e: String| {
-        let detail = diagnostics
-            .lock()
-            .map(|v| {
-                String::from_utf8_lossy(&v)
-                    .chars()
-                    .take(1000)
-                    .collect::<String>()
-            })
-            .unwrap_or_default();
-        if detail.is_empty() {
-            e
-        } else {
-            format!("{e}: {detail}")
-        }
-    })
+    result?;
+    let completion = diagnostics
+        .lock()
+        .map_err(|_| "通信状態を確認できません")?
+        .complete_http(true)
+        .map_err(str::to_owned);
+    completion
 }

@@ -9,18 +9,21 @@ struct InputFailure : std::runtime_error {
 void acquisition(HRESULT result,const char* operation){if(FAILED(result))throw InputFailure(result,operation);}
 struct Binding {
   std::string state="reconnecting";Json reason=nullptr;
-  std::uint64_t epoch=0,interruptions=0,sequence=0,next_attempt=0;
+  MonCaptureLifecycle lifecycle{};
+  std::uint64_t sequence=0,next_attempt=0;
   Json events=Json::array();
-  Json status() const {return Json{{"state",state},{"sourceEpoch",epoch},{"interruptions",interruptions},{"reason",reason}};}
+  Json status() const {return Json{{"state",state},{"sourceEpoch",lifecycle.epoch},{"interruptions",lifecycle.interruptions},{"reason",reason}};}
   Json history() const {return Json{{"lastSequence",sequence},{"droppedThrough",sequence>64?sequence-64:0},{"events",events}};}
   void event(const char* kind){if(events.size()==64)events.erase(events.begin());events.push_back(Json{{"sequence",++sequence},{"kind",kind},{"status",status()}});}
   void lost(const char* why,bool unavailable=false){
+    const auto first=mon_capture_lifecycle(&lifecycle,unavailable?4:3);if(first<0)return;
     state=unavailable?"unavailable":"disconnected";reason=why;
-    if(sequence%2==0){++interruptions;event("interrupted");}
-    next_attempt=GetTickCount64()+1000;
+    if(first)event("interrupted");
+    next_attempt=GetTickCount64()+mon_capture_limit(10)/1000000;
   }
-  void connected(){epoch=std::max(epoch+1,interruptions+1);state="connected";reason=nullptr;if(sequence%2)event("recovered");}
-  void stopped(){state="stopped";reason=nullptr;}
+  void began(){if(mon_capture_lifecycle(&lifecycle,1)<0)throw std::runtime_error("capture binding capacity exceeded");state="reconnecting";}
+  void connected(){if(lifecycle.epoch==0||lifecycle.phase!=0)began();if(mon_capture_lifecycle(&lifecycle,2)<0)throw std::runtime_error("capture binding is stopped");state="connected";reason=nullptr;if(sequence%2)event("recovered");}
+  void stopped(){mon_capture_lifecycle(&lifecycle,5);state="stopped";reason=nullptr;}
 };
 struct IdleSleepGuard {
   IdleSleepGuard(){if(!SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED))throw std::runtime_error("録音中のスリープ抑止を開始できません");}

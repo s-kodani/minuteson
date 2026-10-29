@@ -1,5 +1,5 @@
 import { IconButton } from "./action-icon";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ToastNotice } from "./toast";

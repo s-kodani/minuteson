@@ -2,7 +2,7 @@
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
   await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
@@ -14,10 +14,10 @@ async page=>{
   results.push("archived input events reach Sonner while retained diagnostics have no workspace banner");
   await page.getByRole("button",{name:"通知一覧",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"通知一覧",exact:true});await dialog.waitFor();
-  await dialog.getByText(/マイク通知の保持不足 2件/).first().waitFor();
+  await dialog.getByText(/マイクの接続通知を2件残せませんでした/).first().waitFor();
   await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0].delivery.rendered));
-  const diagnostic=dialog.locator(".toast-card").filter({hasText:"マイク通知の保持不足 2件"});
-  check((await diagnostic.innerText()).includes("取得履歴がありません"),"historical diagnostics missing from list");
+  const diagnostic=dialog.locator(".toast-card").filter({hasText:"マイクの接続通知を2件残せませんでした"});
+  check((await diagnostic.innerText()).includes("録音中の接続記録が見つからず"),"historical diagnostics missing from list");
   results.push("actual toast/list visibility acknowledges delivery; retained history and losses appear only in the list");
   const mic=dialog.locator(".toast-card").filter({hasText:"マイクの取得が中断していました"});
   await mic.getByRole("button",{name:"注意通知を削除",exact:true}).click();

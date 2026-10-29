@@ -112,9 +112,9 @@ async (page) => {
   await boot(); await open(); await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
   const selectFailure = page.getByRole("dialog", { name: "取り込み入力の破棄と選び直しを確認", exact: true });
   await selectFailure.waitFor(); await page.evaluate(() => window.monImportFixture.failSelect = true);
-  await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await selectFailure.getByRole("alert").waitFor();
+  await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await selectFailure.getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
   check(await count("select_audio_import") === 2 && await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).isDisabled(), "swallowed selection failure completed or repeated");
-  await selectFailure.getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal().getByRole("alert").waitFor();
+  await selectFailure.getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal().getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
   check(await count("start_audio_import") === 0 && await count("cancel_audio_import") === 0, "failed selection started or cancelled import");
   results.push("navigation helper cannot swallow accepted selection failure into success; retained error without import admission or automatic retry");
   return { passed: results.length, results };

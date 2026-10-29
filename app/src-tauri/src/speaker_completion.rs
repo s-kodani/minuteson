@@ -8,6 +8,8 @@ use crate::voice::{self, Window};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
+pub(crate) mod restore;
+pub(crate) mod result;
 
 pub(crate) const ALGORITHM: &str = "missing_turn_body_only_v3";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -353,12 +355,6 @@ pub(crate) fn process(
     }
     result
 }
-pub(crate) fn enqueue_automatic(storage: &Storage, meeting: &str) -> Result<(), String> {
-    if storage.enqueue_completion(meeting)?.is_none() {
-        voice::enqueue_automatic(storage, meeting)?;
-    }
-    Ok(())
-}
 pub(crate) fn retry(
     storage: &Storage,
     job_id: &str,
@@ -374,13 +370,8 @@ pub(crate) fn retry(
 
 // Only new producer specs opt into automatic completion. Restoring/resuming an
 // older analysis never retroactively changes its attribution behavior.
-pub(crate) fn after_analysis(storage: &Storage, meeting: &str) -> Result<(), String> {
-    let enabled = storage.completion_opt_in(meeting)?;
-    if enabled {
-        enqueue_automatic(storage, meeting)
-    } else {
-        voice::enqueue_automatic(storage, meeting)
-    }
+pub(crate) fn after_analysis(storage: &Storage, _meeting: &str) -> Result<(), String> {
+    storage.drain_post_analysis(&|| false)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 import { InfoPopover } from "./info-popover";
-import {invoke} from "@tauri-apps/api/core";
+import {invoke} from "./ipc.ts";
 import {useEffect,useRef,useState} from "react";
 import {BrowserAudioClock} from "./transcript-audio";
 import {ChunkPlayer,type PlaybackInfo} from "./playback";

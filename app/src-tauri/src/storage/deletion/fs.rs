@@ -1,5 +1,5 @@
 //! Existing-object, descriptor-relative reads. No creation, unlink or adoption.
-use serde::{Deserialize, Serialize};
+pub(super) use mon_native::identity::{Identity, Proof};
 use std::ffi::{CStr, CString};
 use std::fs::{File, Metadata};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -161,45 +161,14 @@ mod sqlite_lock_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct Identity {
-    device: u64,
-    inode: u64,
-    birth_seconds: u64,
-    birth_nanos: u32,
-    mode: u32,
-}
 #[cfg(target_os = "macos")]
 fn same_persistent(a: &Identity, b: &Identity) -> bool {
-    a.inode == b.inode
-        && a.birth_seconds == b.birth_seconds
-        && a.birth_nanos == b.birth_nanos
-        && a.mode == b.mode
+    a.same_persistent(b)
 }
-impl Identity {
-    #[cfg(target_os = "macos")]
-    pub(super) fn registered(&self) -> Result<(u64, u64, u64), String> {
-        Ok((
-            self.device,
-            self.inode,
-            self.birth_seconds
-                .checked_mul(1_000_000_000)
-                .and_then(|n| n.checked_add(self.birth_nanos.into()))
-                .ok_or("実体の時刻が範囲外です")?,
-        ))
-    }
-    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
-        let kind = if directory {
-            libc::S_IFDIR
-        } else {
-            libc::S_IFREG
-        };
-        if self.birth_nanos >= 1_000_000_000 || self.mode & libc::S_IFMT as u32 != kind as u32 {
-            return Err("管理対象の実体記録の形式が不正です".into());
-        }
-        Ok(())
-    }
+pub(crate) trait NativeProof: Sized {
+    fn read(m: &Metadata) -> Result<Self, String>;
+}
+impl NativeProof for Identity {
     fn read(m: &Metadata) -> Result<Self, String> {
         let birth = m
             .created()
@@ -215,51 +184,8 @@ impl Identity {
         })
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct Proof {
-    pub(super) identity: Identity,
-    pub size: u64,
-    links: u64,
-    modified_seconds: i64,
-    modified_nanos: i64,
-    change_seconds: i64,
-    change_nanos: i64,
-}
-impl Proof {
-    // Folder scope binds the object, not the contents or mutable timestamps.
-    pub(super) fn directory_scope(&self) -> Self {
-        Self {
-            identity: self.identity.clone(),
-            size: 0,
-            links: 1,
-            modified_seconds: 0,
-            modified_nanos: 0,
-            change_seconds: 0,
-            change_nanos: 0,
-        }
-    }
-    pub(super) fn matches_after_rename(&self, original: &Self) -> bool {
-        self.identity == original.identity
-            && self.size == original.size
-            && self.links == original.links
-            && self.modified_seconds == original.modified_seconds
-            && self.modified_nanos == original.modified_nanos
-    }
-    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
-        self.identity.validate(directory)?;
-        if self.links == 0
-            || (!directory && self.links != 1)
-            || !(0..1_000_000_000).contains(&self.modified_nanos)
-            || !(0..1_000_000_000).contains(&self.change_nanos)
-            || self.size > i64::MAX as u64
-        {
-            return Err("管理対象の変更・容量・リンク記録が不正です".into());
-        }
-        Ok(())
-    }
-    pub(super) fn read(m: &Metadata) -> Result<Self, String> {
+impl NativeProof for Proof {
+    fn read(m: &Metadata) -> Result<Self, String> {
         Ok(Self {
             identity: Identity::read(m)?,
             size: m.len(),

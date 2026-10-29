@@ -1,8 +1,10 @@
 import { createPortal } from "react-dom";
 import { IconButton } from "./action-icon";
 import { InfoPopover } from "./info-popover";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, isTauri } from "./ipc.ts";
+import { subscribeInvalidations } from "./native-snapshots";
+import { observeInvalidations } from "./snapshot-resource";
+import { browserFocus, browserSchedule } from "./snapshot-browser";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushPendingEdits } from "./draft-save";
 import { IssueNotice } from "./toast";
@@ -37,15 +39,10 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   useEffect(() => {
     alive.current = true;
     if (!isTauri()) return;
-    let disposed = false, pending: Promise<void> | null = null, again = false;
+    let disposed = false;
     let previousFlow: string | undefined;
-    const stops: (() => void)[] = [];
-    const refresh = (): Promise<void> => {
-      if (disposed) return Promise.resolve();
-      if (pending) { again = true; return pending; }
-      pending = (async () => { do {
-        again = false;
-        try {
+    const resource = observeInvalidations({
+      read: async () => {
           const next = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
           if (disposed) return;
           // The first read is saved history, not a newly failed operation.
@@ -65,14 +62,13 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
           // A recovered read clears only read failures, never an action error.
           // Otherwise a late failed poll survives a successful new generation.
           setRefreshError("");
-        } catch (cause) { if (!disposed) setRefreshError(String(cause)); }
-      } while (again && !disposed); })().finally(() => { pending = null; });
-      return pending;
-    };
-    refreshRef.current = refresh;
-    for (const event of ["analysis-flow-changed", "analysis-job-changed"]) void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else stops.push(stop); });
-    void refresh(); const timer = window.setInterval(() => void refresh(), 3000);
-    return () => { alive.current = false; disposed = true; stops.forEach(stop => stop()); window.clearInterval(timer); };
+      },
+      subscribe: notify => subscribeInvalidations(["analysis-flow-changed", "analysis-job-changed"], notify),
+      error: cause => { if (!disposed) setRefreshError(String(cause)); },
+      intervalMs: 3000, schedule: browserSchedule, focus: browserFocus,
+    });
+    refreshRef.current = async () => { await resource.refresh(); };
+    return () => { alive.current = false; disposed = true; resource.stop(); };
   }, [meetingId]);
   const run = async (action: () => Promise<void>, allowDuringRecording = false) => {
     if (running.current || locked || recordingActive && !allowDuringRecording) return;

@@ -19,7 +19,11 @@ const admission=new URLSearchParams(location.search).get("admission");
 const f=window.modelAdmissionFixture={calls:[],failListing:false,refuse:false,loseReply:false,modelOnly:false,locked:false,recordingActive:false,availability:null,otherProgress:[],
   change:async patch=>{await base.changed(patch);},render:()=>render(),
 };
+f.finishReview = async () => {
+  await base.changed({phase:"ready",busy:false,progress:null,retryAllowed:true,modelDeletionPreview:{scopeMode:"directory",targetDirectory:`/synthetic/models/${packageId}`,confirmationId:crypto.randomUUID(),operationId:crypto.randomUUID(),packageId,reviewHash:"a".repeat(64),modelName:"削除確認用の合成モデル",modelVersion:"1",modelsRoot:"/synthetic/models",phase:"review",pending:false,executeAllowed:true,resumeReason:null,keepAllowed:false,reconfirmationAllowed:false,includeUnregisteredRecorded:null,pathCount:1,processedPaths:0,fileCount:1,missingCount:0,changedCount:0,unregisteredCount:0,bytes:1024,profileReferences:0,jobReferences:0,activeJobs:0,previousProcessedPaths:null,previousPathCount:null,priorDeletionCompleted:false,reservationRoots:[]}});
+};
 if(admission==="notice")f.availability={available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:true,deletionReason:null};
+
 if(admission==="legacy")f.availability={available:true,reason:null};
 mockIPC(async(command,args)=>{
   f.calls.push({command,args:structuredClone(args)});
