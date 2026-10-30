@@ -1,13 +1,18 @@
 async (page, baseUrl="http://127.0.0.1:1420")=>{
   if(typeof baseUrl!=="string")baseUrl="http://127.0.0.1:1420";
   const results=[];
+  const expand = async () => {
+    const button = page.locator('.common-operation-progress .progress-disclosure');
+    await button.waitFor();
+    if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
+  };
   const button=()=>page.getByRole("button",{name:/削除確認用の合成モデル.*をローカルから削除/});
   const assertNoAvailabilityRetry=async()=>{if(await page.getByRole("button",{name:"削除できる状態か再確認",exact:true}).count())throw Error("removed availability retry button is still present");};
   const boot=async(query="")=>{await page.goto(`${baseUrl}/tests/model-deletion-enabled-browser.html?resident=windows${query}`);await button().waitFor();await page.waitForFunction(()=>!document.querySelector(".deletion-trigger")?.disabled);};
   await boot();
   await button().click();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText(/検査の読取り/).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText(/検査の読取り/).waitFor();
   if(!await page.evaluate(()=>window.modelAdmissionFixture.calls.some(c=>c.command==="review_model_body_deletion"&&c.args.packageId==="11111111-1111-4111-8111-111111111111")))throw Error("wrong deletion target");
   results.push("Windows idle model button starts native target review and shows measured inspection bytes in shared progress");
   await page.evaluate(()=>window.modelAdmissionFixture.finishReview());
@@ -26,7 +31,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await page.waitForFunction(()=>window.modelAdmissionFixture.calls.filter(c=>c.command==="get_model_deletion_items").length>2);
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
   await button().click();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
   results.push("model support does not depend on meeting deletion response fields");
   await boot();
   await page.evaluate(()=>window.modelAdmissionFixture.refuse=true);
@@ -37,7 +42,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await boot();
   await page.evaluate(()=>window.modelAdmissionFixture.loseReply=true);
   await button().click();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
   await page.evaluate(()=>window.modelAdmissionFixture.finishReview());
   await page.getByRole("dialog",{name:"モデルを削除",exact:true}).getByRole("button",{name:"キャンセル",exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
@@ -45,7 +50,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   results.push("lost review response is reconciled and never auto-replayed");
   await boot("&admission=notice");
   await button().click();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
   await page.evaluate(()=>window.modelAdmissionFixture.finishReview());
   await page.getByRole("dialog",{name:"モデルを削除",exact:true}).getByRole("button",{name:"キャンセル",exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
@@ -64,7 +69,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   results.push("AI, model preparation, recording and exclusive blockers retain their actual reasons");
   await boot("&admission=legacy");
   await button().click();
-  await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
+  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
   results.push("older native admission replies remain compatible");
   await boot();
   await page.evaluate(async()=>{
@@ -76,14 +81,14 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
       progress:{stage:"deleting_files",completed:7,total:10,unit:"paths"}});
   });
   const progress=page.locator(".common-operation-progress");
-  await progress.getByText("週次会議",{exact:true}).waitFor();
-  await progress.getByText("確認した項目を削除中",{exact:true}).waitFor();
-  await progress.getByText("7 / 10 項目",{exact:true}).waitFor();
+  await expand(); await progress.getByText("週次会議",{exact:true}).waitFor();
+  await expand(); await progress.getByText("確認した項目を削除中",{exact:true}).waitFor();
+  await expand(); await progress.getByText("7 / 10 項目",{exact:true}).waitFor();
   if(await progress.locator(".operation-progress-percent").count() || await progress.locator("progress").getAttribute("value")!==null || /経過時間/.test(await progress.innerText()))throw Error("deletion invented a global percentage or elapsed time");
   await page.evaluate(()=>window.modelAdmissionFixture.change({phase:"cancelling"}));
-  await progress.getByText("安全な停止を待機中",{exact:true}).waitFor();
+  await expand(); await progress.getByText("安全な停止を待機中",{exact:true}).waitFor();
   await page.evaluate(()=>window.modelAdmissionFixture.change({phase:"cancelled",busy:false}));
-  await progress.getByText("回復する会議",{exact:true}).waitFor();
+  await expand(); await progress.getByText("回復する会議",{exact:true}).waitFor();
   results.push("meeting deletion and safe stopping take header priority with target and measured counts until completion");
   return results;
 }

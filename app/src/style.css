@@ -383,12 +383,22 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .operation-progress-paused progress { opacity:.55; animation:none; }
 .operation-progress-queued progress:indeterminate { animation:none; background:var(--input-border); }
 .main-column:has(> .common-operation-progress) { position:relative; }
-.common-operation-progress { --floating-progress-gap:12px; position:absolute; top:76px; left:24px; right:24px; z-index:20; min-width:0; margin:0; padding:0; background:transparent; border:0; pointer-events:none; }
-.common-operation-progress .operation-progress { margin:0; padding:12px 14px; background:var(--raised); border:1px solid var(--border); border-radius:12px; box-shadow:0 4px 14px rgb(0 0 0 / 7%); }
-/* Keep initial controls below the overlay using the page's own transparent spacing. */
-.main-column:has(> .common-operation-progress) > .meeting-detail-status::before { content:""; flex:0 0 100%; height:var(--floating-progress-space,108px); }
-.main-column:has(> .common-operation-progress) > .meeting-detail-status { max-height:calc(20dvh + var(--floating-progress-space,108px)); }
-.main-column:has(> .common-operation-progress):not(:has(> .meeting-detail-status)) > .content::before { content:""; display:block; height:var(--floating-progress-space,108px); }
+.common-operation-progress { --floating-progress-gap:12px; container-type:inline-size; position:absolute; top:76px; left:24px; right:24px; z-index:20; min-width:0; margin:0; padding:0; background:transparent; border:0; pointer-events:none; }
+.common-operation-progress .operation-progress { margin:0; padding:8px 14px; background:var(--raised); border:1px solid var(--border); border-radius:12px; box-shadow:0 4px 14px rgb(0 0 0 / 7%); pointer-events:auto; }
+.common-operation-progress [hidden] { display:none; }
+.common-operation-progress .progress-disclosure { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:0; padding:0; border:0; border-radius:2px; background:transparent; color:var(--text); font-size:13px; line-height:18px; text-align:left; }
+.progress-disclosure strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.progress-disclosure svg { flex:none; }
+.common-operation-progress progress { height:3px; margin-top:6px; }
+.common-operation-progress .operation-progress-heading { margin-top:8px; }
+.common-operation-progress .progress-footer { margin-top:12px; padding-top:8px; border-top:1px solid var(--border); }
+/* Keep the disclosure button across the whole row, behind the progress meter. */
+@container (min-width:600px) {
+  .common-operation-progress[data-expanded="false"] .operation-progress { display:grid; grid-template-columns:fit-content(min(40%, 260px)) minmax(80px, 1fr) 16px; column-gap:12px; align-items:center; padding-top:6px; padding-bottom:6px; }
+  .common-operation-progress[data-expanded="false"] .progress-disclosure { grid-column:1 / -1; grid-row:1; display:grid; grid-template-columns:subgrid; }
+  .common-operation-progress[data-expanded="false"] .progress-disclosure svg { grid-column:3; }
+  .common-operation-progress[data-expanded="false"] progress { grid-column:2; grid-row:1; margin:0; pointer-events:none; }
+}
 .job-nav-count { margin-left:auto; min-width:20px; font-size:11px; font-variant-numeric:tabular-nums; color:var(--secondary-text); }
 .job-list { min-width:0; }
 .job-list h1 { margin-top:0; }
@@ -418,6 +428,6 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .minutes-prompt-settings > div { margin-top: 18px; }
 .minutes-prompt-settings p { color: var(--muted); font-size: 13px; line-height: 1.7; }
 
-.common-operation-progress .progress-jobs-link { pointer-events:auto; margin-top:6px; background:var(--raised); }
+.common-operation-progress .progress-jobs-link { min-height:24px; padding:0; border:0; background:transparent; font-weight:500; text-align:left; }
 
 .capture-test-error,.confirmation-error { color:var(--danger-text); overflow-wrap:anywhere; }

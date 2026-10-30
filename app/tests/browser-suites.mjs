@@ -1,5 +1,7 @@
 // Shared manifest for local and CI synthetic-browser regression tests.
 export const browserSuites = [
+  ["compact-progress", "browser-fixture.js", "compact-progress-browser-check.js"],
+  ["operation-progress", null, "operation-progress-browser-check.js"],
   ["canonical-playback", "canonical-playback-browser-fixture.tsx", "canonical-playback-browser-check.js"],
   ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
   ["internal-logs", null, "internal-logs-browser-check.js"],

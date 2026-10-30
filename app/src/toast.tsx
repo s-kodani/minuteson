@@ -189,7 +189,14 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     fit(); window.addEventListener("resize", fit);
     const observer = new ResizeObserver(fit);
     const column = anchor.current?.closest('.main-column'); if (column) observer.observe(column);
-    const layoutChanges = new MutationObserver(fit); if (column) layoutChanges.observe(column, { childList: true, subtree: true });
+    let progress: Element | null = null;
+    const observeProgress = () => {
+      const next = column?.querySelector('.common-operation-progress') ?? null;
+      if (next !== progress) { if (progress) observer.unobserve(progress); progress = next; if (progress) observer.observe(progress); }
+      fit();
+    };
+    observeProgress();
+    const layoutChanges = new MutationObserver(observeProgress); if (column) layoutChanges.observe(column, { childList: true, subtree: true });
     const player = document.querySelector('.meeting-playback-dock, .toast-fixture-player'); if (player) observer.observe(player);
     return () => { window.removeEventListener("resize", fit); observer.disconnect(); layoutChanges.disconnect(); };
   }, []);
