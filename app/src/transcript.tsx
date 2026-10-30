@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";
 import { IconButton } from "./action-icon";
-import { IssueNotice } from "./toast";
+import { IssueNotice, ToastNotice } from "./toast";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
 import { IdentificationBadge } from "./speaker-identification";
@@ -55,8 +55,9 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
     },
   ));
   const [snapshot, setSnapshot] = useState(() => queue.snapshot());
-  const [copyStatus, setCopyStatus] = useState("");
+  const [copyStatus, setCopyStatus] = useState<{ message: string; level: "success" | "error"; eventId: string } | null>(null);
   const copying = useRef(false);
+  const composingInput = useRef(false);
   const [copyBusy, setCopyBusy] = useState(false);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [texts, setTexts] = useState<Record<string, string>>({});
@@ -200,9 +201,10 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
   },[analysis,view,consolidationPossible,loading,busy,locked,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
   const copyTranscript = async () => {
     if (copying.current || disabled || !analysis) return;
-    copying.current = true; setCopyBusy(true); setCopyStatus("");
+    copying.current = true; setCopyBusy(true);
     try {
       await writeTranscriptClipboard(async () => {
+        if (composingInput.current) throw Error("日本語入力を確定してからコピーしてください。");
         await barrier.current();
         if (!mounted.current || analysisRef.current !== analysis) throw Error("文字起こしが変更されました。もう一度コピーしてください。");
         const saved = queue.snapshot();
@@ -210,11 +212,11 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
         const projected = projectTranscript(analysis, saved.draft?.baseAnalysisId === analysis.id ? saved.payload : null);
         return transcriptCopyText(projected);
       });
-      if (mounted.current) setCopyStatus("文字起こしをコピーしました。");
-    } catch (cause) { if (mounted.current) setCopyStatus(`コピーできませんでした: ${String(cause)}`); }
+      if (mounted.current) setCopyStatus({ message: "文字起こしをコピーしました。", level: "success", eventId: crypto.randomUUID() });
+    } catch (cause) { if (mounted.current) setCopyStatus({ message: `コピーできませんでした: ${String(cause)}`, level: "error", eventId: crypto.randomUUID() }); }
     finally { copying.current = false; if (mounted.current) setCopyBusy(false); }
   };
-  const copyAction = <><IconButton label="文字起こしをコピー" icon="copy" disabled={disabled || copyBusy || !view?.utterances.length} onClick={() => void copyTranscript()} />{copyStatus && <span className="transcript-copy-status" role="status">{copyStatus}</span>}</>;
+  const copyAction = <IconButton label="文字起こしをコピー" icon="copy" disabled={disabled || copyBusy || !view?.utterances.length} onClick={() => void copyTranscript()} />;
   const openText = (utterance: Utterance) => { if (editable) setTexts(current => Object.hasOwn(current, utterance.id) ? current : { ...current, [utterance.id]: utterance.effectiveText }); };
   const cancelText = (id: string) => { if (!disabled && !snapshot.error && !snapshot.dirty) {
     const row = document.activeElement?.closest<HTMLElement>("[data-utterance-id]");
@@ -299,8 +301,9 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
     }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=transcriptRefresh;setError(String(cause));}});
     return()=>{disposed=true;};
   },[transcriptRefresh,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
-  return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集">
+  return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
     {actionsHost ? createPortal(copyAction, actionsHost) : <div className="transcript-actions">{copyAction}</div>}
+    <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
     {!loading && !analysis && !error && <p className="transcript-state">文字起こしはまだありません。</p>}
     {analysis && <TranscriptSplit active={visible} speakers={<WorkspacePanel content={speakerMount} label="話者一覧" active={visible} query="(max-width: 760px)" />}>

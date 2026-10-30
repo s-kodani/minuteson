@@ -2,8 +2,28 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SavedEditsCancelled } from "../src/confirmed-action.ts";
 import { ConfirmationController } from "../src/confirmation-state.ts";
-const options = (action: () => Promise<void>) => ({ title: "削除を確認", target: "固定した対象", message: "削除した入力は復元できません。", confirmLabel: "削除する", action });
+const options = (action: (value?: number | null) => Promise<void>) => ({ title: "削除を確認", target: "固定した対象", message: "削除した入力は復元できません。", confirmLabel: "削除する", action });
 const controller = () => new ConfirmationController<object, object>();
+test("speaker selection remains editable only until acceptance and the latest choice is frozen exactly once", async () => {
+  const c = controller(); const selected: (number | null)[] = []; const accepted: (number | null | undefined)[] = [];
+  let release!: () => void;
+  const result = c.request({}, null, null, { ...options(async value => { accepted.push(value); await new Promise<void>(resolve => { release = resolve; }); }), speakerCount: null, onSpeakerCountChange: value => selected.push(value) });
+  const id = c.getSnapshot()!.id;
+  for (const invalid of [0, 101, 1.5, NaN]) c.setSpeakerCount(id, invalid);
+  c.setSpeakerCount("stale", 3); assert.equal(c.getSnapshot()!.speakerCount, null);
+  c.setSpeakerCount(id, 5); assert.equal(c.getSnapshot()!.speakerCount, 5);
+  const execution = c.execute(id); c.setSpeakerCount(id, 7); await c.execute(id);
+  assert.deepEqual(selected, [5]); assert.deepEqual(accepted, [5]); assert.equal(c.getSnapshot()!.speakerCount, 5);
+  release(); await execution; assert.equal(await result, "completed");
+});
+test("cancelled speaker selection can be reused without starting work and automatic is explicit null", async () => {
+  const c = controller(); let count: number | null = null; const accepted: (number | null | undefined)[] = [];
+  const request = () => c.request({}, null, null, { ...options(async value => { accepted.push(value); }), speakerCount: count, onSpeakerCountChange: value => { count = value; } });
+  const cancelled = request(); c.setSpeakerCount(c.getSnapshot()!.id, 4); c.cancel(c.getSnapshot()!.id);
+  assert.equal(await cancelled, "cancelled"); assert.deepEqual(accepted, []);
+  const again = request(); assert.equal(c.getSnapshot()!.speakerCount, 4); c.setSpeakerCount(c.getSnapshot()!.id, null);
+  await c.execute(c.getSnapshot()!.id); assert.equal(await again, "completed"); assert.deepEqual(accepted, [null]);
+});
 test("explicit edit cancellation settles as cancelled without reporting completed or unknown work",async()=>{
   const c=controller();let errors=0;
   const result=c.request({},null,null,{...options(async()=>{throw new SavedEditsCancelled();}),onError:()=>{errors++;}});

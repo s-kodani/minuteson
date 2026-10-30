@@ -10,8 +10,7 @@ test("meeting title precedes tabs and all fixed chrome participates in dock sizi
 });
 test("meeting actions align with tabs in normal flow and wrapped navigation is measured", () => {
   const main=source("main.tsx"), css=source("prototype-alignment.css");
-  assert.match(main,/className="meeting-detail-actions" ref=\{setMeetingActionsHost\}/);
-  assert.match(main,/triggerHost=\{meetingActionsHost\}/);
+  assert.match(main,/className="meeting-detail-actions"><RowMenu/);
   assert.match(main,/navigation\?\.getBoundingClientRect\(\)\.height/);
   assert.match(css,/\.meeting-detail-navigation \{[^}]*align-items:center; flex-wrap:wrap; gap:8px 16px;/);
   assert.match(css,/\.meeting-detail-navigation>\.meeting-detail-tabs \{ flex:1 1 162px;/);

@@ -3,13 +3,8 @@ async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const editor = page.getByRole("region", {name:"文字起こし編集",exact:true});
   await page.getByRole("button", {name:"会議A",exact:true}).click();
-  await page.getByRole("button", {name:"再生設定",exact:true}).click();
-  const modal = page.getByRole("dialog", {name:"再生設定",exact:true});
-  await modal.waitFor();
-  check(await modal.getByRole("combobox").count() === 0, "canonical playback must not expose removed track selection");
-  check(await modal.getByRole("checkbox").count() === 0, "removed following control remains");
-  await modal.getByRole("button", {name:"確認を閉じる",exact:true}).click();
-  results.push("playback settings have no removed display controls");
+  check(await page.getByRole("button", {name:"再生設定",exact:true}).count() === 0, "removed playback settings remain");
+  results.push("playback has no retired settings entry");
   await editor.getByRole("button", {name:"00:00:00の発言を編集",exact:true}).click();
   const input = editor.getByRole("textbox", {name:"00:00:00の発言",exact:true});
   await input.fill("未保存の点検日を保持する");

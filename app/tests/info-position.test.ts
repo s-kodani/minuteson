@@ -18,6 +18,14 @@ test("visual viewport offsets, zoom and classic scrollbar widths are respected",
   assert.ok(p.top >= 208 && p.top + Math.min(180, p.maxHeight) <= 592);
   assert.equal(p.side, "above");
 });
+test("wide log details use their requested width while staying inside narrow viewports", () => {
+  for (const width of [240, 680, 1200]) {
+    const p = infoPosition({ left: width - 72, right: width - 8, top: 500, bottom: 532 }, { left: 0, top: 0, width, height: 640 }, 900, 680);
+    assert.equal(p.width, Math.min(680, width - 16));
+    assert.ok(p.left >= 8 && p.left + p.width <= width - 8);
+    assert.ok(p.top >= 8 && p.top + p.maxHeight <= 632);
+  }
+});
 test("every tested edge and long-content placement remains inside the visible bounds", () => {
   for (const width of [240, 345, 960]) for (const height of [180, 640, 900]) for (const x of [8, width / 2, width - 40]) for (const y of [8, height / 2, height - 40]) for (const contentHeight of [80, 180, 2000]) {
     const p = infoPosition({ left: x, right: x + 32, top: y, bottom: y + 32 }, { left: 0, top: 0, width, height }, contentHeight);

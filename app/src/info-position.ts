@@ -2,9 +2,9 @@ export type InfoRect = { left: number; top: number; right: number; bottom: numbe
 export type InfoViewport = { left: number; top: number; width: number; height: number };
 
 // Use the visible viewport, not vw (which includes classic scrollbars).
-export function infoPosition(anchor: InfoRect, viewport: InfoViewport, contentHeight: number) {
+export function infoPosition(anchor: InfoRect, viewport: InfoViewport, contentHeight: number, preferredWidth = 320) {
   const margin = 8, gap = 8;
-  const width = Math.min(320, Math.max(1, viewport.width - margin * 2));
+  const width = Math.min(preferredWidth, Math.max(1, viewport.width - margin * 2));
   const leftEdge = viewport.left + margin, rightEdge = viewport.left + viewport.width - margin;
   const topEdge = viewport.top + margin, bottomEdge = viewport.top + viewport.height - margin;
   const below = Math.max(0, bottomEdge - anchor.bottom - gap);

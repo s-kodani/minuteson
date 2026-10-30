@@ -1,7 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "./ipc.ts";
-import { OptionsModal } from "./options-modal";
-import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";
 import { meetingPlaybackModes, preferredMeetingPlaybackMode, type MeetingPlaybackMode, type MeetingPlaybackStartReference } from "./meeting-playback-state";
 import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
@@ -54,21 +52,6 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, ch
   const playReference = (reference: MeetingPlaybackStartReference) => available && summary
     ? audio.startMeetingAt(mode, reference, summary.durationUs) : Promise.resolve();
   return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, locked, summaryError, durationUs:available?summary!.durationUs:null, changeMode, playReference }}>
-    {children}{active && audio.controls}
+    {children}{active && <><IssueNotice scope={meetingId ?? "meeting"} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{audio.controls}</>}
   </MeetingAudioContext.Provider>;
-}
-
-export function MeetingAudioControls({ meetingId, locked, host }: {
-  meetingId: string; sourceType: "recording" | "audio_import"; locked: boolean; host: HTMLElement | null;
-}) {
-  const audio = useMeetingAudio(meetingId);
-  if (!audio) return null;
-  const { mode, canPlay:available, summaryError } = audio;
-  return <><IssueNotice scope={meetingId} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{host && createPortal(<div className="meeting-audio-actions">
-    <OptionsModal label="再生設定" icon="more" className="meeting-audio-settings"><div className="meeting-audio-settings-fields">
-      <p>保存した会議音声を再生します。</p>
-      <button type="button" className="small-secondary" disabled={locked || !available || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議の先頭に戻す</button>
-      <p>同じ会議音声を発言・議事録からも再生します。開始時刻から、停止操作または音声末尾まで再生を続けます。</p>
-    </div></OptionsModal>
-  </div>, host)}</>;
 }

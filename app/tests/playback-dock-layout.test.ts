@@ -50,10 +50,9 @@ test("playback status never adds a visible dock row, and preparation retains a s
   assert.match(player,/max=\{info\?\.totalFrames \?\? 1\} step=\{1\}/);
 });
 
-test("return to full meeting is explicit, paused and stays in the playback settings modal", () => {
+test("meeting playback retains its paused start contract without an extra settings modal", () => {
   const meeting=source("meeting-audio.tsx"), player=source("transcript-audio.tsx");
-  assert.match(meeting,/<OptionsModal label="再生設定" icon="more"/);
-  assert.match(meeting,/disabled=\{locked \|\| !available \|\| audio.preparing\} onClick=\{\(\) => void audio.startMeeting\(mode, false, false\)\}/);
+  assert.doesNotMatch(meeting,/OptionsModal|再生設定/);
   assert.match(player,/const startMeeting = \(mode: MeetingPlaybackMode, preserve = false, playing = true\)/);
   assert.match(player,/: \{ frame:0, rate:current.rate, playing \}/);
   assert.match(player,/if \(!meeting \|\| restore\?\.playing !== false\) await player.play\(\)/);

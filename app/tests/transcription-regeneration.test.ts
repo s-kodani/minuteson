@@ -23,7 +23,7 @@ test("a successful edit barrier runs one publication after the saved input",asyn
 });
 test("regeneration is explicit, retains unknown acceptance identity and never requests meeting model overrides",()=>{
   const view=source("analysis.tsx");
-  assert.match(view,/title: "文字起こしを再生成"/);
+  assert.match(view,/title: initial \? "文字起こしを生成" : "文字起こしを再生成"/);
   assert.match(view,/get_transcription_regeneration_target/);
   assert.match(view,/regeneration.current = request/);
   assert.match(view,/saved\?\.id === request.operationId/);

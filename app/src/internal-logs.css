@@ -25,10 +25,10 @@
 .internal-log-level { display:block; margin-top:3px; color:var(--muted); }
 .internal-log-level-error { color:var(--danger-text); }
 .internal-log-level-warn { color:var(--warning-text); }
-.internal-log-selected { background:var(--raised); }
+.internal-logs-table tr:has(.info-trigger[aria-expanded=true]) { background:var(--raised); }
 .internal-logs-empty { padding:24px; font-size:13px; color:var(--muted); }
-.common-modal.internal-log-detail { width:min(760px,calc(100% - 48px)); max-width:760px; }
-.internal-log-detail h2 { font-size:15px; margin:0 0 12px; }
+.info-popover.internal-log-detail { max-width:680px; }
+.internal-logs .info-text-trigger { width:auto; height:auto; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--secondary-text); font-size:12px; }
 .internal-log-detail dl { display:grid; grid-template-columns:90px minmax(0,1fr); gap:6px 12px; font-size:12px; }
 .internal-log-detail dt { color:var(--muted); }
 .internal-log-detail dd { margin:0; overflow-wrap:anywhere; }

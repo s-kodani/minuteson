@@ -30,12 +30,12 @@ async (page, _capturePath, detailUI) => {
   await page.keyboard.press("Home"); await page.keyboard.press("Space");
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length === 200);
   results.push("underlined tabs expose selection and a labelled panel, with keyboard activation");
-  for (const name of ["自動更新を一時停止","更新","表示中ログをコピー"]) {
+  for (const name of ["自動更新を一時停止","更新","表示中ログをコピー","最新ログへ移動"]) {
     const button = toolbar.getByRole("button", {name,exact:true});
     check(await button.innerText() === "" && await button.locator("svg").count() === 1 && await button.getAttribute("title") === name, "toolbar icon is missing its accessible name or tooltip");
   }
   check(await toolbar.evaluate(el => { const centers = [...el.children].map(child => { const r=child.getBoundingClientRect(); return r.y+r.height/2; }); return Math.max(...centers)-Math.min(...centers)<2; }), "toolbar is not one row at normal width");
-  check(await toolbar.locator("button").allTextContents().then(text => text.length === 4 && text[3] === "最新ログを表示"), "toolbar button order changed");
+  check(await toolbar.locator("button").count() === 4 && await toolbar.locator("button").nth(3).getAttribute("aria-label") === "最新ログへ移動", "toolbar button order changed");
   check(await logs.getByRole("button", {name:"古いログを読み込む",exact:true}).count() === 0, "manual history button remains");
   await setTheme("light"); await page.screenshot({path:"output/playwright/internal-logs-light.png"});
   await setTheme("dark"); await page.screenshot({path:"output/playwright/internal-logs-dark.png"});
@@ -86,7 +86,7 @@ async (page, _capturePath, detailUI) => {
   const endCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
   await top(); await page.waitForTimeout(1200);
   check(await page.evaluate(() => window.internalLogsFixture.calls.length) === endCalls, "exhausted history kept requesting");
-  await toolbar.getByRole("button", {name:"最新ログを表示",exact:true}).click();
+  await toolbar.getByRole("button", {name:"最新ログへ移動",exact:true}).click();
   await logs.getByText("読んでいる途中の追記", {exact:true}).waitFor();
   check(await rows().count() === 200 && await toolbar.getByRole("button",{name:"自動更新を一時停止",exact:true}).count() === 1, "latest did not resume newest view");
   results.push("oldest boundary stops paging, the 1000-row cap holds, and latest resumes live following");
@@ -94,19 +94,29 @@ async (page, _capturePath, detailUI) => {
   await logs.getByText(/using device MTL0/).first().waitFor();
   check(await page.evaluate(() => window.logMarkupExecuted) === undefined, "raw HTML executed");
   const details = page.getByRole("dialog", {name:"ログ詳細",exact:true});
-  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  const detailTrigger = logs.getByRole("button", {name:/のログ詳細/});
+  await detailTrigger.hover();
   await details.getByText("job-synthetic", {exact:true}).waitFor();
-  check(await details.evaluate(el => el.contains(document.activeElement)), "details did not receive focus");
+  check(await details.getAttribute("aria-modal") === "false" && await page.locator("dialog[open]").count() === 0, "details opened a blocking modal");
+  await details.hover();
+  await page.waitForTimeout(250);
+  check(await details.isVisible(), "moving into details closed the hover popup");
+  check(await details.locator("pre").innerText().then(text => text.includes("会議本文🦀")), "details lost complete raw text");
+  check(await details.evaluate(el => { const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight; }), "details overflow the viewport");
   await page.screenshot({path:"output/playwright/internal-logs-detail.png"});
   await page.keyboard.press("Escape"); await details.waitFor({state:"hidden"});
-  check(await logs.getByRole("button", {name:/のログ詳細/}).evaluate(el => el===document.activeElement), "closing details lost trigger focus");
-  await logs.getByRole("button", {name:/のログ詳細/}).click();
-  await details.getByRole("button", {name:"詳細を閉じる",exact:true}).click();
+  check(await detailTrigger.evaluate(el => el===document.activeElement), "closing details lost trigger focus");
+  await toolbar.getByRole("button", {name:"更新",exact:true}).focus();
+  await detailTrigger.focus();
+  await details.waitFor();
+  check(await detailTrigger.evaluate(el => el === document.activeElement), "focus popup stole keyboard focus");
+  await details.getByRole("button", {name:"ログ詳細の説明を閉じる",exact:true}).click();
   await details.waitFor({state:"hidden"});
-  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  await detailTrigger.hover();
+  await details.waitFor();
   const bounds=await details.boundingBox();
   await page.mouse.click(bounds.x-8,bounds.y+20); await details.waitFor({state:"hidden"});
-  results.push("details use a modal with raw text, focus containment, Escape, close and backdrop dismissal");
+  results.push("details open on hover and keyboard focus without a modal, preserve raw text and close with Escape or outside interaction");
   await logs.getByRole("button", { name: "表示中ログをコピー", exact: true }).click();
   await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("status").filter({hasText:"1件のログをコピーしました。"}).waitFor();
   check((await page.evaluate(() => navigator.clipboard.readText())).includes("会議本文🦀"), "copy lost raw output");
@@ -228,17 +238,18 @@ async (page, _capturePath, detailUI) => {
   await page.evaluate(() => window.internalLogsFixture.release());
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length===400);
   results.push("history loading queues behind a live poll and discards its paused acknowledgement");
-  // A detail snapshot remains readable even after its row leaves the cap.
+  // An anchored popup closes when its row leaves the visible history cap.
   await reset(); await open(); await engine.click();
   await logs.getByText(/using device MTL0/).first().waitFor();
-  await logs.getByRole("button", {name:/のログ詳細/}).click();
+  await engine.focus();
+  await logs.getByRole("button", {name:/のログ詳細/}).hover();
+  await details.getByText(/会議本文🦀/).waitFor();
   await page.evaluate(() => {for(let i=0;i<1100;i++)window.internalLogsFixture.add({kind:"engine",level:"raw",message:`新着エンジンログ ${i}`});});
   await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length===1000 && !document.querySelector('.internal-logs tr[data-log-id="1101"]'));
-  await details.getByText(/会議本文🦀/).waitFor();
-  check(await details.evaluate(el => el.contains(document.activeElement)), "detail snapshot lost modal focus on trimming");
-  await page.keyboard.press("Escape"); await details.waitFor({state:"hidden"});
-  check(await list.evaluate(el => el===document.activeElement), "removed detail trigger did not fall back to the log list");
-  results.push("detail snapshot survives automatic row eviction and closes with a usable fallback focus");
+  await details.waitFor({state:"hidden"});
+  check(await engine.evaluate(el => el === document.activeElement), "hover details stole focus before row eviction");
+  check(await page.locator("dialog[open]").count() === 0, "evicted row left a modal behind");
+  results.push("hover details close on automatic row eviction while preserving the existing keyboard focus");
   results.push("filter disclosure, keyboard, retained values and narrow layout", "sidebar and history", "initial page and pagination cap", "pause/resume", "raw details, copy and inert markup", "text, ID and level filtering", "fetch failure retains rows", "storage loss notices", "reading position", "stale filter replies", "date/category filters", "unsaved edit protection", "history recovery after live row trimming");
   return {passed:results.length,results};
   } catch (cause) { throw Error(`After ${results.length} checks (${results.at(-1)??"startup"}): ${String(cause)}`); }

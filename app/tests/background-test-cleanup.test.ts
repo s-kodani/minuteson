@@ -20,7 +20,7 @@ test("failure-job retries and landing management dialogs are not app features",(
   assert.doesNotMatch(src("minutes.tsx"),/OptionsModal|retry_minutes_generation|retryOperations|議事録の操作/);
   assert.match(src("minutes.tsx"),/>議事録を生成<\/button>/);
   assert.doesNotMatch(src("analysis.tsx"),/retry_transcription|retry_diarization|retryOperations|>再試行<\/button>/);
-  assert.match(src("main.tsx"),/=> !detail \? null : <OptionsModal/);
+  assert.doesNotMatch(src("main.tsx"),/会議管理・録音・解析操作|renderMeetingTools/);
   assert.doesNotMatch(src("main.tsx"),/landing-tools|その他の操作/);
   assert.doesNotMatch(src("main.tsx"),/const createMeeting|音声なしの会議を作成/);
 });

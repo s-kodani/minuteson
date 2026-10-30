@@ -260,7 +260,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   <section className="analysis-card local-ai-settings" aria-label="ローカルAI詳細設定" hidden={!visible}>
     <h2>ローカルAI詳細設定</h2>
     <section className="ai-settings-group" aria-label="発話検知設定"><h3>発話検知設定</h3>
-    {whisperPreferences && <p>{backends.find(b => b.id === (whisperPreferences.backend?.id ?? "whisper.cpp"))?.vocabularyDescription}</p>}
+    <p>音声から発話区間を検出する設定です。無音の扱いや発話の区切りを調整できます。</p>
     {selectedWhisper && whisperPreferences && <VadSettings
       value={whisperPreferences.vadOptions ?? { ...defaultVadOptions, enabled: !!whisperPreferences.vadModelPath }}
       overlapAvailable={backends.find(b => b.id === (whisperPreferences.backend?.id ?? "whisper.cpp"))?.supportsVadOverlap ?? true}

@@ -1,0 +1,37 @@
+async(page)=>{
+  const check=(value,message)=>{if(!value)throw Error(message);},results=[];
+  await page.getByRole("navigation",{name:"メインナビゲーション"}).getByRole("button",{name:"設定",exact:true}).click();
+  const trigger=page.getByRole("button",{name:"クレジット",exact:true});
+  await trigger.scrollIntoViewIfNeeded();
+  check(await page.evaluate(()=>window.creditsFixture.calls===0),"credits loaded before opening");
+  await trigger.click();
+  const modal=page.getByRole("dialog",{name:"クレジット",exact:true});
+  await modal.getByRole("alert").waitFor();
+  check((await modal.innerText()).includes("合成クレジット読込エラー"),"failure missing inside modal");
+  await page.evaluate(()=>{window.creditsFixture.fail=false;});
+  await modal.getByRole("button",{name:"再試行",exact:true}).click();
+  await modal.getByRole("heading",{name:"主要な利用技術",exact:true}).waitFor();
+  await modal.getByText("React",{exact:true}).waitFor();
+  await modal.getByText("Qwen2.5-1.5B-Instruct",{exact:true}).waitFor();
+  check(await page.evaluate(()=>window.creditsFixture.calls===2),"retry count incorrect");
+  results.push("settings link loads lazily; native errors and explicit retry stay inside credits modal");
+  await modal.getByText("ライブラリ一覧（80件）",{exact:true}).click();
+  await modal.getByText("dependency-79",{exact:true}).scrollIntoViewIfNeeded();
+  await modal.getByText("dependency-79",{exact:true}).waitFor();
+  const summary=modal.getByText("依存ライブラリの通知文",{exact:true});
+  await summary.scrollIntoViewIfNeeded();await summary.click();
+  const notice=modal.locator(".credits-notice pre");
+  await notice.waitFor();
+  await notice.evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  check((await notice.innerText()).includes("<script>window.creditMarkupExecuted=true</script>"),"notice not preserved exactly");
+  check(await page.evaluate(()=>!window.creditMarkupExecuted),"notice executed markup");
+  check(await notice.evaluate(element=>element.scrollTop>0),"long notice cannot scroll");
+  results.push("versions, licenses, models, dependencies and long notices remain readable without interpreting markup");
+  await page.keyboard.press("Escape");await modal.waitFor({state:"hidden"});
+  check(await trigger.evaluate(element=>element===document.activeElement),"focus did not return to credits link");
+  await trigger.click();await modal.waitFor();
+  check(await page.evaluate(()=>window.creditsFixture.calls===2),"reopening reloaded static credits unnecessarily");
+  await modal.getByRole("button",{name:"クレジットを閉じる",exact:true}).click();
+  results.push("Escape and close button dismiss; focus returns to settings link and reopening reuses loaded credits");
+  return results;
+}

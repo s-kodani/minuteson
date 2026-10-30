@@ -76,6 +76,8 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
   const { starting, captureBusy, setCaptureBusy, setCaptureError, setCaptureTestError, microphoneRequest, setMicrophoneRequest } = controller;
   const root = useRef(context);
   root.current = context;
+  const speakerCount = useRef<{ owner: string | null; value: number | null }>({ owner: captureOwner, value: null });
+  if (speakerCount.current.owner !== captureOwner) speakerCount.current = { owner: captureOwner, value: null };
   useEffect(()=>{
     if(microphoneRequest&&(microphoneRequest.owner!==microphoneSession||microphoneSelection?.requestRevision!==undefined&&microphoneSelection.requestRevision>=microphoneRequest.revision))setMicrophoneRequest(null);
   },[microphoneSession,microphoneRequest,microphoneSelection?.requestRevision]);
@@ -107,11 +109,10 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
       if(!microphone)throw Error("マイクまたは権限を再確認してください。録音は開始していません。");
       const applications=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
       checkedCaptureScope(scope,applications);
-      const application=captureApplicationScope(scope,applications);
-      const countsMessage=local?`\n録音後の会議全体の話者数: ${local.numSpeakers===null?"自動":"最大"+local.numSpeakers+"人"}。`:"";
-      const scopeMessage=scope.mode==="system"?"PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。":`PC音声は選択したアプリ（${application?.name}）を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。終了・再起動時は全体取得や別アプリに切り替えません。`;
       if (!expected || expected.lifecycle !== "draft" || expected.sourceType != null || !ownerUnchanged()) throw Error("録音対象の会議を再確認してください。");
-      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphoneUID===null?"自動（会議アプリの使用マイクを優先し、不明なときはOSの既定入力）":microphone.name}。${scopeMessage}` + countsMessage + (expectedTest ? "\n前のテスト音声の再生を停止し、一時音声を破棄してから録音を開始します。保存済み会議の音声は変更しません。" : "") + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.mode===microphoneMode&&(microphoneUID===null||root.current.captureInputs.uid===microphoneUID)&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
+      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "", speakerCount: speakerCount.current.value,
+        onSpeakerCountChange: value => { if (speakerCount.current.owner === owner) speakerCount.current.value = value; },
+        validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.mode===microphoneMode&&(microphoneUID===null||root.current.captureInputs.uid===microphoneUID)&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: (numSpeakers = null) => withConfirmedEdits(withSavedEdits, async () => {
         const [meeting, recording, currentImport, currentInputs, currentApplications] = await Promise.all([invoke<CaptureMeeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null)]);
         assertCloseRecording(recording);
         assertCloseImport(currentImport);
@@ -124,8 +125,8 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         const currentTest=await captureTest.client.refresh();
         if((currentTest?.runId??null)!==(expectedTest?.runId??null)||currentTest?.busy)throw Error("録音前テストの対象・状態が変更されました。録音は開始していません。");
         await captureTest.finish();
-        if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true}:current);
-        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers:local?.numSpeakers??null });
+        if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true,numSpeakers}:current);
+        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers });
         const accepted=await invoke<CaptureMeeting | null>("get_meeting", { id: expected.id });
         if(!accepted||accepted.id!==expected.id)throw Error("録音の会議保存結果を確認できません。開始は再送していません。");
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");
@@ -169,10 +170,10 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
       checkedCaptureScope(scope,apps);
       const app=captureApplicationScope(scope,apps);
       return await startConfirm({opener:source,inlineErrors:true,title:"5秒の録音前テストを開始しますか？",target:`${microphone.name} ／ ${scope.mode==="system"?"PCの再生音全体":app?.name}`,confirmLabel:"5秒テストを開始する",
-        message:"マイクとPCの音を一時保存します。参加者の同意と録音権限を確認してください。入力の初期化が終わってから5秒録音し、停止後に各音声を再生できます。会議・解析結果は作りません。解析とモデル準備は安全な停止を待ちます。"+
-          (captureInputs.mode==="automatic"?"この5秒テストはOSの既定マイクを確認します。通常録音で会議アプリの別のマイクが選ばれた場合、その入力の検証にはなりません。":"")+
-          (scope.mode==="system"?"PC音声には通知音や他の動画の音も含まれます。":"選択したアプリを取得します。ブラウザの他のタブの音も含まれる場合があります。終了・再起動時に別アプリへ切り替えません。")+
-          (previous?"前のテスト音声は再生を停止して破棄します。":"")+(importNeedsConsent(importing)?"確認した音声取り込みを安全に取り消し、元ファイルと保存済み会議を保持します。":""),
+        message:"選択したマイクとPC音声を5秒間録音し、再生して確認できます。テスト音声は一時保存されます。"+
+          (captureInputs.mode==="automatic"?"\nマイクはOSの既定入力を使います。":"")+
+          (previous?"\n前のテスト音声は破棄します。":"")+
+          (importNeedsConsent(importing)?"\n進行中の取り込みは取り消します。元ファイルは残ります。":""),
         validate:()=>sameInputs()&&!root.current.baseWriteLocked&&root.current.state.kind==="ready"&&["idle","error"].includes(root.current.state.snapshot.phase),
         action:()=>withConfirmedEdits(withSavedEdits,async()=>{
           const [recording,currentImport,inputs,applications]=await Promise.all([

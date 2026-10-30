@@ -2,6 +2,7 @@
 #[rustfmt::skip]
 pub const COMMANDS: &[&str] = &[
     "get_window_environment",
+    "get_credits",
     "get_internal_logs",
     "get_recording_recovery",
     "get_startup_report",

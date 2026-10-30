@@ -42,13 +42,23 @@ async (page, capturePath, detailUI) => {
   check((await calls("start_data_operation")).length === 0 && await page.evaluate(() => window.deletionFixture.deleted) === 0, "cancelling deleted synthetic data");
   results.push("delete opens one confirmation and cancellation restores the ellipsis without deleting");
 
-  await show(); await page.keyboard.press("End"); await page.keyboard.press("Enter"); await dialog().waitFor();
+  await show(); await open().click();
+  const detailTrigger=page.getByRole("button",{name:"会議の操作",exact:true});
+  await detailTrigger.click();
+  const detailMenu=page.getByRole("menu",{name:"会議の操作",exact:true});
+  await detailMenu.getByRole("menuitem",{name:"既存会議を削除",exact:true}).click();await dialog().waitFor();
+  await dialog().getByRole("button",{name:"キャンセル",exact:true}).click();await dialog().waitFor({state:"hidden"});
+  check(await page.getByRole("tab",{name:"文字起こし",exact:true}).isVisible()&&await detailTrigger.evaluate(e=>e===document.activeElement),"detail delete cancellation left the meeting or lost its opener");
+  results.push("detail delete cancellation preserves the meeting and restores its popup trigger");
+  await detailTrigger.click();await detailMenu.getByRole("menuitem",{name:"既存会議を削除",exact:true}).click();await dialog().waitFor();
   await dialog().getByText("削除対象フォルダー", { exact: true }).waitFor();
   await page.screenshot({ path: capturePath("row-menu-delete-confirmation.png") });
   await dialog().getByRole("button", { name: "削除", exact: true }).click();
   await page.waitForFunction(() => window.deletionFixture.deleted === 1 && window.dataFixture.meetings.length === 1);
   await trigger().waitFor({ state: "hidden" });
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("button", { name: "残す会議の操作", exact: true }).isVisible(), "confirmed deletion repeated or removed another meeting");
-  results.push("keyboard delete and explicit consent execute once and remove only the synthetic target");
+    await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();
+  check(await page.getByRole("tab",{name:"文字起こし",exact:true}).count()===0,"deleted meeting detail stayed open");
+  results.push("detail delete executes once, removes only the target and returns to the meeting list");
   return { passed: results.length, results };
 }

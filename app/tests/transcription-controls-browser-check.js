@@ -19,7 +19,8 @@ async page => {
   await page.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await page.getByRole("textbox", { name: "00:00:00の発言", exact: true }).fill("コピーする編集本文");
   await page.getByRole("button", { name: "文字起こしをコピー", exact: true }).click();
-  await page.getByText("文字起こしをコピーしました。", { exact: true }).waitFor();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("status").filter({hasText:"文字起こしをコピーしました。"}).waitFor();
+  check(await page.locator(".transcript-copy-status").count() === 0, "copy status remains beside button");
   check(await page.evaluate(() => window.monBrowserFixture.copiedText === "[00:00:00] 田中：コピーする編集本文\n[00:00:20] 田中、佐藤：はい、確認します。"), "copy omitted edited/full text");
   await page.getByRole("searchbox", { name: "発言を検索", exact: true }).fill("コピーする");
   await page.getByRole("button", { name: "文字起こしをコピー", exact: true }).click();
@@ -30,7 +31,10 @@ async page => {
   await page.getByRole("textbox", { name: "00:00:00の発言", exact: true }).fill("保存に失敗する入力");
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; });
   await page.getByRole("button", { name: "文字起こしをコピー", exact: true }).click();
-  await page.getByText(/^コピーできませんでした:/).waitFor();
+  const saveNotice = page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"文字起こしの保存:"});
+  await saveNotice.waitFor();
+  await page.locator(".toast-card").filter({hasText:"文字起こしの保存:"}).getByRole("button", {name:"エラー通知を閉じる",exact:true}).click();
+  await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"コピーできませんでした:"}).waitFor();
   check(await page.evaluate(() => window.monBrowserFixture.copiedText) === savedCopy, "save failure changed clipboard");
   check(await page.getByRole("textbox", { name: "00:00:00の発言", exact: true }).inputValue() === "保存に失敗する入力", "save failure discarded input");
   // Reload the synthetic data so the failed draft cannot affect control tests.
@@ -90,5 +94,5 @@ async page => {
   await changed.getByRole("button", { name: "確認を閉じる", exact: true }).click();
   await page.setViewportSize({ width: 760, height: 800 });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "header overflows narrow viewport");
-  return "PASS: edited/full copy, save failure retention, pause/resume/cancel in both stages, confirmation dismissal, saved transcript retention, queued/pausing/interrupted states, stale confirmation, narrow layout";
+  return {passed:10,copyToasts:true,editedFullCopy:true,saveFailureRetention:true,jobControls:true,staleConfirmation:true,narrowLayout:true};
 }

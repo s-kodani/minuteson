@@ -16,6 +16,18 @@ async (page, capturePath, detailUI) => {
   check(await trigger.evaluate(element => element === document.activeElement), "confirmation returned to the hidden menu item instead of the ellipsis");
   check(await page.evaluate(() => !window.dataFixture.calls.some(call => call.command === "start_data_operation")), "cancelling confirmation changed data");
   results.push("cancelling returns focus to the stable ellipsis without changing any audio or meeting");
+  await page.getByRole("button",{name:"既存会議",exact:true}).click();
+  const detailTrigger=page.getByRole("button",{name:"会議の操作",exact:true});await detailTrigger.click();
+  const detailMenu=page.getByRole("menu",{name:"会議の操作",exact:true});
+  await detailMenu.getByRole("menuitem",{name:"既存会議の音声だけを削除",exact:true}).click();await modal.waitFor();
+  await page.keyboard.press("Escape");await modal.waitFor({state:"hidden"});
+  check(await page.getByRole("tab",{name:"文字起こし",exact:true}).isVisible(),"audio cancellation left detail");
+  await detailTrigger.click();await detailMenu.getByRole("menuitem",{name:"既存会議の音声だけを削除",exact:true}).click();await modal.waitFor();
+  await modal.getByRole("button",{name:"削除",exact:true}).click();
+  await page.waitForFunction(()=>window.audioDeletionFixture.deleted===1);await modal.waitFor({state:"hidden"});
+  check(await page.getByRole("tab",{name:"文字起こし",exact:true}).isVisible()&&await page.locator(".meeting-title-row h1").innerText()==="既存会議","audio deletion left the meeting detail");
+  check(await page.evaluate(()=>window.dataFixture.calls.filter(c=>c.command==="start_data_operation").length)===1,"audio deletion sent duplicate requests");
+  results.push("detail audio deletion preserves the meeting detail after cancellation and confirmed deletion");
   return { passed: results.length, results };
   } catch (cause) { throw Error(`${cause}; body=${await page.locator('body').innerText()}; calls=${JSON.stringify(await page.evaluate(() => window.dataFixture.calls.filter(c => /review|start_|stop_|flush/u.test(c.command))))}`); }
 }

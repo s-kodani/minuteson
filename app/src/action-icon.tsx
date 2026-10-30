@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "microphone" | "monitor" | "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "copy" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "microphone" | "monitor" | "voice" | "filter" | "logs" | "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "copy" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bottom" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
@@ -30,6 +30,7 @@ export function ActionIcon({ name }: { name: ActionIconName }) {
     {name === "next" && <path d="m9 5 7 7-7 7" />}
     {name === "settings" && <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" fill="var(--surface)" /><circle cx="15" cy="17" r="3" fill="var(--surface)" /></>}
     {name === "download" && <><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></>}
+    {name === "bottom" && <path d="M12 3v12m-5-5 5 5 5-5M4 21h16" />}
     {name === "bold" && <path d="M6 12h7a4 4 0 0 1 0 8H6V4h6a4 4 0 0 1 0 8" strokeWidth="2.4" />}
     {name === "italic" && <path d="M10 4h9M5 20h9M15 4 9 20" />}
     {(["heading1", "heading2", "heading3"] as ActionIconName[]).includes(name) && <path d="M3 5v14M12 5v14M3 12h9" />}

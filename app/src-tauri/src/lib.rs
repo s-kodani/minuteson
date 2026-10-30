@@ -12,6 +12,7 @@ mod capture_manifest;
 mod capture_scope;
 mod capture_test;
 mod command_roles;
+mod credits;
 mod current_formats;
 mod data_controller;
 mod diarization;

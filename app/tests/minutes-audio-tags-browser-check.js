@@ -62,12 +62,8 @@ async page => {
   await player().getByRole('button',{name:'一時停止',exact:true}).click();
   await player().getByRole('combobox',{name:'速度',exact:true}).selectOption('1.5');
   const beforeMode=await slider().inputValue();
-  await page.getByRole('button',{name:'再生設定',exact:true}).click();
-  const settings=page.getByRole('dialog',{name:'再生設定',exact:true});
-  check(await settings.getByRole('combobox').count()===0,'canonical settings expose retired input tracks');
-  await settings.getByRole('button',{name:'確認を閉じる',exact:true}).click();
-  await player().getByRole('button',{name:'再生',exact:true}).waitFor();
-  check(await slider().inputValue()===beforeMode,'opening settings reset reference playback position');
+  check(await page.getByRole('button',{name:'再生設定',exact:true}).count()===0,'removed playback settings remain');
+  check(await slider().inputValue()===beforeMode,'checking playback controls reset reference position');
   await page.getByRole('tab',{name:'文字起こし',exact:true}).click();
   const row=page.locator('[data-utterance-id="u"]');
   await row.getByRole('button',{name:'音声を再生',exact:true}).click();await ready();

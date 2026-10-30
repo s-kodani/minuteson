@@ -29,11 +29,11 @@ async (page, capturePath, detailUI) => {
     results.push("metadata-only catalog starts in automatic mode without pinning the OS default or starting recording");
 
     stage="explicit-cancel";await input().selectOption("usb-123");await start().click();await modal().waitFor();
-    check((await modal().innerText()).includes("ヘッドセットのマイク")&&(await modal().innerText()).includes("PC音声は全体取得"),"confirmation omitted actual microphone or scope");
+    check(await modal().getByRole("combobox",{name:"会議全体の話者数",exact:true}).isVisible(),"confirmation omitted speaker selection");
     check(await input().isDisabled()&&await refresh().isDisabled(),"selection remained mutable during consent");
     await page.keyboard.press("Escape");await modal().waitFor({state:"hidden"});
     check(await count("start_recording")===0&&await input().inputValue()==="usb-123","declining started capture or erased choice");
-    results.push("explicit microphone and global PC scope are reviewed; cancellation keeps the selected UID without capture");
+    results.push("speaker confirmation locks microphone settings; cancellation keeps the selected UID without capture");
 
     stage="exact-start";await start().click();await accept().dblclick();await modal().waitFor({state:"hidden"});
     check(await count("start_recording")===1&&await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_recording").args.microphoneUid==="usb-123"),"start lost stable UID or repeated request");

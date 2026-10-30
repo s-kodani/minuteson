@@ -8,12 +8,10 @@ import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 import {RecordingWriteStatus,RecordingWriteValue,useRecordingWrites} from "./recording-write-status";
 import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
-import {SpeakerCountSelect} from "./speaker-count-select";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onNumSpeakers,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onSettings:()=>void;onConfirmResult:()=>void;
-  onNumSpeakers:(counts:RecordingPreparation["numSpeakers"])=>void;
   inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
@@ -56,11 +54,6 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     </>:<>
       {inputs}
       <div className="recording-preparation-options">
-      {preparation&&<>
-        <div className="speaker-count-fields">
-          <SpeakerCountSelect label="会議全体の話者数" help="録音終了後の話者分離に使います。人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。会議全体の最大人数を指定してください。" value={preparation.numSpeakers} disabled={locked||preparation.submitted} onChange={onNumSpeakers}/>
-        </div>
-      </>}
       {test}
       </div>
       <button type="button" className="recording-settings-link" disabled={locked} onClick={onSettings}>AIモデルの設定<ActionIcon name="next"/></button>

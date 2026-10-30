@@ -9,20 +9,26 @@ const dismissals = new Set<() => void>();
 // A confirmation takes precedence; do not move focus away from its controls.
 export function closeInfoPopovers() { dismissals.forEach(close => close()); }
 
-export function InfoPopover({ label, children, details }: { label: string; children: ReactNode; details?: ReactNode }) {
+export function InfoPopover({ label, children, details, triggerText, triggerLabel, popupClassName = "", maxWidth = 320, openOnFocus = false, lazy = false }: {
+  label: string; children: ReactNode; details?: ReactNode; triggerText?: string; triggerLabel?: string;
+  popupClassName?: string; maxWidth?: number; openOnFocus?: boolean; lazy?: boolean;
+}) {
   const id = useId(), titleId = `${id}-title`, detailsId = `${id}-details`;
   const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [mode, setMode] = useState<"hover" | "pinned" | null>(null), [expanded, setExpanded] = useState(false);
+  const [mode, setMode] = useState<"hover" | "focus" | "pinned" | null>(null), [expanded, setExpanded] = useState(false);
   const open = mode !== null, currentMode = useRef(mode); currentMode.current = mode;
   const hoverTimer = useRef<number | undefined>(undefined), leaveTimer = useRef<number | undefined>(undefined);
   const clearTimers = () => { window.clearTimeout(hoverTimer.current); window.clearTimeout(leaveTimer.current); hoverTimer.current = leaveTimer.current = undefined; };
   const liveClose = useRef<(restore: boolean) => void>(() => {});
   const position = useRef<() => void>(() => {});
+  const restoringFocus = useRef(false);
   liveClose.current = restore => {
     clearTimers(); currentMode.current = null; setMode(null);
     const button = trigger.current;
-    if (restore && button?.isConnected && !button.matches(":disabled") && button.getClientRects().length && !button.closest("[hidden], [inert], dialog:not([open])")) button.focus({ preventScroll: true });
+    if (restore && button?.isConnected && !button.matches(":disabled") && button.getClientRects().length && !button.closest("[hidden], [inert], dialog:not([open])")) {
+      restoringFocus.current = true; button.focus({ preventScroll: true }); restoringFocus.current = false;
+    }
   };
   useLayoutEffect(() => {
     const dismiss = () => liveClose.current(false);
@@ -68,9 +74,9 @@ export function InfoPopover({ label, children, details }: { label: string; child
       if (!button.isConnected || !button.getClientRects().length || button.matches(":disabled") || button.closest("[hidden], [inert], dialog:not([open])")) { close(false); return; }
       const rect = button.getBoundingClientRect(), view = viewport();
       if (rect.bottom <= view.top || rect.top >= view.top + view.height || rect.right <= view.left || rect.left >= view.left + view.width) { close(false); return; }
-      element.style.width = `${Math.min(320, Math.max(1, view.width - 16))}px`;
+      element.style.width = `${Math.min(maxWidth, Math.max(1, view.width - 16))}px`;
       const height = element.scrollHeight + element.offsetHeight - element.clientHeight;
-      const placement = infoPosition(rect, view, height);
+      const placement = infoPosition(rect, view, height, maxWidth);
       Object.assign(element.style, { left: `${placement.left}px`, top: `${placement.top}px`, maxHeight: `${placement.maxHeight}px` });
       element.dataset.side = placement.side;
     };
@@ -97,6 +103,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
     const focusChanged = () => {
       const modal = topOpenModal();
       if (modal && !modal.contains(button)) close(false);
+      else if (currentMode.current === "focus" && document.activeElement !== button && !element.contains(document.activeElement)) close(false);
     };
     const resize = new ResizeObserver(place); resize.observe(element); resize.observe(button);
     const hidden = new MutationObserver(() => { focusChanged(); place(); });
@@ -122,14 +129,16 @@ export function InfoPopover({ label, children, details }: { label: string; child
       window.visualViewport?.removeEventListener("resize", place);
       window.visualViewport?.removeEventListener("scroll", place);
     };
-  }, [open]);
+  }, [open, maxWidth]);
   useLayoutEffect(() => { if (open) position.current(); });
   return <div className="info-shell">
-    <button ref={trigger} type="button" className="info-trigger" aria-label={`${label}の説明を開く`} aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onPointerEnter={enter} onPointerLeave={leave} onClick={toggle}><span aria-hidden="true">ⓘ</span></button>
-    <div ref={popup} id={id} popover="manual" role="dialog" aria-modal="false" aria-labelledby={titleId} className="info-popover" onPointerEnter={enter} onPointerLeave={leave} onFocusCapture={() => { if (currentMode.current === "hover") { clearTimers(); currentMode.current = "pinned"; setMode("pinned"); } }}>
+    <button ref={trigger} type="button" className={`info-trigger${triggerText ? " small-secondary info-text-trigger" : ""}`} aria-label={triggerLabel ?? `${label}の説明を開く`} aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onPointerEnter={enter} onPointerLeave={leave} onFocus={() => {
+      if (openOnFocus && !restoringFocus.current && !currentMode.current) { clearTimers(); currentMode.current = "focus"; setMode("focus"); }
+    }} onClick={toggle}>{triggerText ?? <span aria-hidden="true">ⓘ</span>}</button>
+    {(!lazy || open) && <div ref={popup} id={id} popover="manual" role="dialog" aria-modal="false" aria-labelledby={titleId} className={`info-popover ${popupClassName}`} onPointerEnter={enter} onPointerLeave={leave} onFocusCapture={() => { if (currentMode.current === "hover") { clearTimers(); currentMode.current = "pinned"; setMode("pinned"); } }}>
       <div className="info-popover-head"><h3 id={titleId}>{label}</h3><button ref={closeButton} type="button" className="info-close icon-button" aria-label={`${label}の説明を閉じる`} title="説明を閉じる" onClick={() => liveClose.current(true)}><ActionIcon name="close" /></button></div>
-      <div className="info-popover-content">{children}</div>
+      <div className="info-popover-content">{!lazy || open ? children : null}</div>
       {details && <><a href={`#${detailsId}`} aria-expanded={expanded} aria-controls={detailsId} onClick={event => { event.preventDefault(); setExpanded(value => !value); }}>{expanded ? "詳しい説明を閉じる" : "詳しい説明"}</a><div id={detailsId} className="info-details" hidden={!expanded}>{details}</div></>}
-    </div>
+    </div>}
   </div>;
 }

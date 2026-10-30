@@ -1,0 +1,19 @@
+.settings-credits { margin:32px 0 12px; text-align:center; }
+.credits-link { border:0; background:none; padding:6px; color:var(--primary-strong); font:inherit; font-size:13px; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.credits-link:hover { color:var(--text); }
+.common-modal.credits-modal { width:min(900px,calc(100% - 48px)); max-width:900px; }
+.credits-modal h2 { margin:0 0 24px; }
+.credits-modal h3 { margin:24px 0 12px; font-size:15px; }
+.credits-content { min-width:0; }
+.credits-list { list-style:none; padding:0; margin:0; }
+.credits-list>li { border-bottom:1px solid var(--border); padding:12px 0; min-width:0; }
+.credits-entry-heading { display:flex; flex-wrap:wrap; gap:5px 12px; align-items:baseline; font-size:13px; overflow-wrap:anywhere; }
+.credits-entry-heading>span { color:var(--muted); font-size:12px; }
+.credits-license,.credits-description { font-size:12px; line-height:1.7; color:var(--secondary-text); overflow-wrap:anywhere; margin:6px 0; }
+.credits-modal summary { cursor:pointer; font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.credits-sources { color:var(--muted); margin-top:6px; }
+.credits-sources ul { padding-left:18px; }
+.credits-sources li { overflow-wrap:anywhere; font-size:11px; line-height:1.6; }
+.credits-notice { padding:10px 0; border-bottom:1px solid var(--border); }
+.credits-notice pre { max-height:45vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--border); border-radius:6px; background:var(--raised); font:11px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.credits-error { font-size:13px; overflow-wrap:anywhere; }

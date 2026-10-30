@@ -4,14 +4,16 @@ export type ConfirmationPhase = "choosing" | "running" | "failed";
 export type ConfirmationOutcome = "cancelled" | "completed" | "unconfirmed";
 export type ConfirmationOptions = {
   title: string; target: string; message: string; confirmLabel: string;
-  action: () => Promise<void>;
+  action: (numSpeakers?: number | null) => Promise<void>;
+  speakerCount?: number | null;
+  onSpeakerCountChange?: (value: number | null) => void;
   validate?: () => boolean;
   onError?: (cause: unknown) => void;
   inlineErrors?: boolean;
   progressAction?: { label: string; action: () => Promise<void> };
   alternativeAction?: { label: string; action: () => Promise<void> };
 };
-export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel" | "inlineErrors"> & {
+export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel" | "inlineErrors" | "speakerCount"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
   phase: ConfirmationPhase; error: string;
@@ -33,8 +35,15 @@ export class ConfirmationController<Parent, Opener> {
     if (this.snapshot) return Promise.resolve<ConfirmationOutcome>("cancelled");
     return new Promise<ConfirmationOutcome>(resolve => {
       this.pending = { options, resolve };
-      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, inlineErrors: options.inlineErrors, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
+      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, inlineErrors: options.inlineErrors, speakerCount: options.speakerCount, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
     });
+  }
+  setSpeakerCount(id: string, value: number | null) {
+    const view = this.snapshot, pending = this.pending;
+    if (!view || view.id !== id || view.phase !== "choosing" || view.speakerCount === undefined || !pending
+      || value !== null && (!Number.isInteger(value) || value < 1 || value > 100)) return;
+    this.publish({ ...view, speakerCount: value });
+    pending.options.onSpeakerCountChange?.(value);
   }
   cancel(id: string) {
     if (this.snapshot?.id !== id || this.snapshot.phase === "running") return;
@@ -67,7 +76,8 @@ export class ConfirmationController<Parent, Opener> {
     this.publish({ ...view, phase: "running" });
     try {
       if (pending.options.validate && !pending.options.validate()) throw Error("対象や利用条件が変更されています。この確認を閉じ、最新の内容を再確認してください。変更処理は開始していません。");
-      await (alternative ? pending.options.alternativeAction!.action : pending.options.action)();
+      if (alternative) await pending.options.alternativeAction!.action();
+      else await pending.options.action(view.speakerCount);
       this.finish("completed");
     } catch (cause) {
       if (this.pending !== pending || !this.snapshot) return;

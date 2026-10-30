@@ -4,7 +4,6 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "./ipc.ts";
 import { copyLogText, logCategories, logElapsed, logStates, mergeLogEntries, type InternalLogEntry, type InternalLogFilter, type InternalLogPage } from "./internal-logs-state";
 import { IconButton } from "./action-icon";
-import { CommonModal } from "./common-modal";
 import "./internal-logs.css";
 
 type Mode = "initial" | "newer" | "older";
@@ -18,14 +17,13 @@ export function InternalLogs() {
   const [kind, setKind] = useState<"process" | "engine">("process");
   const [category, setCategory] = useState(""), [level, setLevel] = useState(""), [relatedId, setRelatedId] = useState(""), [text, setText] = useState("");
   const [from, setFrom] = useState(""), [to, setTo] = useState("");
-  const [entries, setEntries] = useState<InternalLogEntry[]>([]), [detail, setDetail] = useState<InternalLogEntry | null>(null);
+  const [entries, setEntries] = useState<InternalLogEntry[]>([]);
   const [paused, setPaused] = useState(false), [following, setFollowing] = useState(true);
   const [loading, setLoading] = useState(true), [error, setError] = useState(""), [copyStatus, setCopyStatus] = useState<{message:string;level:"success"|"error";eventId:string}|null>(null);
   const [pageStatus, setPageStatus] = useState<InternalLogPage["status"] | null>(null);
   const [hasOlder, setHasOlder] = useState(false), [gap, setGap] = useState(false), [trimmed, setTrimmed] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const pausedRef = useRef(paused), followingRef = useRef(following), scroll = useRef<HTMLDivElement>(null);
-  const detailTrigger = useRef<HTMLButtonElement | null>(null);
   const failedMode = useRef<Mode | null>(null);
   const topArmed = useRef(true);
   const scrollUpdate = useRef<{ bottom: true } | { id: string | undefined; offset: number; top: number } | null>(null);
@@ -45,7 +43,7 @@ export function InternalLogs() {
     let buffer: InternalLogEntry[] = [];
     const queryFilter = JSON.parse(activeFilter) as InternalLogFilter;
     scrollUpdate.current = null; failedMode.current = null; topArmed.current = true;
-    setEntries([]); setDetail(null); setPageStatus(null); setGap(false); setTrimmed(false); setHasOlder(false); setError(""); setCopyStatus(null); setLoadingOlder(false);
+    setEntries([]); setPageStatus(null); setGap(false); setTrimmed(false); setHasOlder(false); setError(""); setCopyStatus(null); setLoadingOlder(false);
     followingRef.current = true; setFollowing(true);
     const invalid = queryFilter.from !== undefined && queryFilter.to !== undefined && queryFilter.from > queryFilter.to;
     const current = () => alive && currentFilter.current === activeFilter;
@@ -163,7 +161,7 @@ export function InternalLogs() {
       <IconButton label={paused ? "自動更新を再開" : "自動更新を一時停止"} icon={paused ? "play" : "pause"} aria-pressed={paused} disabled={paused && unavailable} onClick={() => { if (paused) latest(); else { pausedRef.current = true; setPaused(true); } }} />
       <IconButton label="更新" icon="refresh" disabled={unavailable} onClick={() => void request.current(failedMode.current ?? "newer")} />
       <IconButton label="表示中ログをコピー" icon="copy" disabled={!entries.length || filterKey !== activeFilter} onClick={() => void copy()} />
-      <button type="button" className="small-secondary" disabled={unavailable} onClick={latest}>最新ログを表示</button>
+      <IconButton label="最新ログへ移動" icon="bottom" disabled={unavailable} onClick={latest} />
       <span className="internal-logs-count" role="status">{loading ? "取得中…" : `${entries.length} 件表示中`}{paused ? " · 自動更新停止中（収集は継続）" : " · 自動更新中"}{!following && " · 自動スクロール停止中"}</span>
     </div>
     <ToastNotice scope="internal-logs" type="clipboard" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
@@ -171,7 +169,7 @@ export function InternalLogs() {
     {pageStatus?.storageError && <p role="status" className="internal-logs-notice">ログの保存・収集で問題が発生しました：{pageStatus.storageError}</p>}
     {!!pageStatus?.droppedEntries && <p role="status" className="internal-logs-notice">この起動中に保存失敗・過負荷により{pageStatus.droppedEntries}件のログを記録できませんでした。</p>}
     {(gap || pageStatus?.historyTruncated) && <p role="status" className="internal-logs-notice">保持期間または容量上限により、古いログの一部は残っていません。</p>}
-    {trimmed && <p role="status" className="internal-logs-notice">画面の上限1,000件を超えたため、一部のログを表示から外しました。「最新ログを表示」で読み直せます。</p>}
+    {trimmed && <p role="status" className="internal-logs-notice">画面の上限1,000件を超えたため、一部のログを表示から外しました。「最新ログへ移動」で読み直せます。</p>}
     <div className="internal-logs-scroll" ref={scroll} tabIndex={0} aria-label="ログ一覧" onScroll={() => {
       const element = scroll.current;
       if (element) {
@@ -186,22 +184,20 @@ export function InternalLogs() {
     }}>
       <div className="internal-logs-history-status" role="status">{loadingOlder ? "古いログを読み込んでいます…" : failedMode.current === "older" ? "古いログを読み込めませんでした。更新ボタンで再試行できます。" : loading ? "ログを取得しています…" : hasOlder ? "上端までスクロールすると古いログを読み込みます。" : "これより古いログはありません。"}</div>
       <table className="internal-logs-table"><thead><tr><th>日時</th><th>処理</th><th>{kind === "process" ? "状態／重要度" : "出力元"}</th><th>経過時間</th><th>メッセージ</th><th>詳細</th></tr></thead>
-        <tbody>{entries.map(entry => <tr key={entry.id} data-log-id={entry.id} className={detail?.id === entry.id ? "internal-log-selected" : ""}>
+        <tbody>{entries.map(entry => <tr key={entry.id} data-log-id={entry.id}>
           <td><time dateTime={new Date(entry.timestamp).toISOString()}>{dateTime(entry.timestamp)}</time></td>
           <td>{logCategories[entry.category] ?? entry.category}</td>
           <td>{entry.kind === "engine" ? entry.stream : <>{logStates[entry.state] ?? entry.state}<small className={`internal-log-level internal-log-level-${entry.level}`}>{levels[entry.level] ?? entry.level}</small></>}</td>
           <td>{logElapsed(entry.elapsedMs)}</td>
           <td className="internal-log-message"><pre>{entry.message.slice(0, 240)}</pre></td>
-          <td><button type="button" className="small-secondary" aria-label={`${dateTime(entry.timestamp)}のログ詳細 ${entry.id}`} aria-haspopup="dialog" onClick={event => { event.currentTarget.focus({ preventScroll: true }); detailTrigger.current = event.currentTarget; setDetail(entry); }}>詳細</button></td>
+          <td><InfoPopover label="ログ詳細" triggerText="詳細" triggerLabel={`${dateTime(entry.timestamp)}のログ詳細 ${entry.id}`} popupClassName="internal-log-detail" maxWidth={680} openOnFocus lazy>
+            <dl><dt>日時</dt><dd>{dateTime(entry.timestamp)}</dd><dt>会議ID</dt><dd>{entry.meetingId ?? "—"}</dd><dt>ジョブID</dt><dd>{entry.jobId ?? "—"}</dd><dt>操作ID</dt><dd>{entry.operationId ?? "—"}</dd><dt>起動ID</dt><dd>{entry.sessionId}</dd>
+            <dt>実行単位</dt><dd>{entry.source ?? "—"}</dd><dt>出力元</dt><dd>{entry.stream ?? "—"}</dd><dt>状態</dt><dd>{entry.state}</dd><dt>経過時間</dt><dd>{logElapsed(entry.elapsedMs)}</dd></dl><pre>{entry.message}</pre>
+          </InfoPopover></td>
         </tr>)}</tbody>
       </table>
       {!entries.length && !loading && !error && !invalidDate && <p className="internal-logs-empty">条件に一致するログはありません。収集開始前のログは表示されません。</p>}
     </div>
     </div>
-    <CommonModal portal open={!!detail} onDismiss={() => setDetail(null)} restoreTarget={() => detailTrigger.current?.isConnected ? detailTrigger.current : scroll.current} dismissLabel="閉じる" dismissText="詳細を閉じる" className="internal-log-detail" aria-label="ログ詳細">
-    {detail && <><h2>ログ詳細</h2><dl>
-      <dt>日時</dt><dd>{dateTime(detail.timestamp)}</dd><dt>会議ID</dt><dd>{detail.meetingId ?? "—"}</dd><dt>ジョブID</dt><dd>{detail.jobId ?? "—"}</dd><dt>操作ID</dt><dd>{detail.operationId ?? "—"}</dd><dt>起動ID</dt><dd>{detail.sessionId}</dd>
-      <dt>実行単位</dt><dd>{detail.source ?? "—"}</dd><dt>出力元</dt><dd>{detail.stream ?? "—"}</dd><dt>状態</dt><dd>{detail.state}</dd><dt>経過時間</dt><dd>{logElapsed(detail.elapsedMs)}</dd></dl><pre>{detail.message}</pre></>}
-    </CommonModal>
   </section>;
 }

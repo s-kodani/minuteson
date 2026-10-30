@@ -21,6 +21,22 @@
       }
     },
     {
+      "name": "get_credits",
+      "handler": "credits::get_credits",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Credits,mon_contracts::AppError>",
+          "ok": "Credits",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_internal_logs",
       "handler": "internal_logs::get_internal_logs",
       "roles": [

@@ -19,7 +19,7 @@ test("macOS pointer opening captures the settings entry point before modal focus
     assert.ok(focus>=0,name);
     assert.equal(view.slice(focus+"event.currentTarget.focus({preventScroll:true});".length).startsWith(open+";"),true,name);
   }
-  assert.match(source("meeting-audio.tsx"),/<OptionsModal label="再生設定" icon="more"/);
+  assert.doesNotMatch(source("meeting-audio.tsx"),/OptionsModal|再生設定/);
 });
 
 test("modal entry points share primary actions while fields keep one stable body portal", () => {
@@ -41,7 +41,7 @@ test("plain minutes use direct controls without an operations dialog", () => {
 
 test("meeting management is available only in detail, never as a list footer", () => {
   const view=source("main.tsx");
-  assert.match(view,/const renderMeetingTools = .*=> !detail \? null : <OptionsModal/);
+  assert.match(view,/<div className="meeting-detail-actions"><RowMenu label="会議の操作"/);
   assert.doesNotMatch(view,/renderMeetingTools\(null, null\)|landing-tools/);
   assert.match(view,/<RowMenu label=\{`\$\{meeting.title\}の操作`\}/);
 });

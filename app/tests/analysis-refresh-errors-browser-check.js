@@ -16,13 +16,10 @@ async page => {
     };
     await f.emitNotification();
   });
-  await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).click();
-  const tools=page.getByRole("dialog",{name:"会議管理・録音・解析操作",exact:true});
   const regen=page.locator(".transcript-generation-host button").filter({hasText:"文字起こしを再生成"});
   await regen.waitFor();
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.holdOldRead=true;await f.emitNotification();});
   await page.waitForFunction(()=>!!window.monBrowserFixture.releaseOldRead);
-  if(await tools.isVisible())await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
   await regen.click();
   const confirmation=page.getByRole("dialog",{name:"文字起こしを再生成",exact:true});
   await confirmation.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
@@ -30,9 +27,6 @@ async page => {
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="transcription");
   await page.evaluate(async()=>{const f=window.monBrowserFixture;await f.emitNotification();f.releaseOldRead();});
   await page.waitForFunction(()=>!document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-  await tools.waitFor({state:"hidden"});
-  await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).click();
-  await page.getByRole("status").filter({hasText:"文字起こしの開始を準備"}).waitFor();
   await page.getByRole("alert").filter({hasText:"模擬遅延状態読込失敗"}).waitFor({state:"hidden"});
   check(await regen.isDisabled(),"running generation can be started twice");
   results.push("late read failure after a new action is resolved by a verified fresh read, not left as a persistent toast");
@@ -51,7 +45,6 @@ async page => {
   results.push("read failures expose the current verification status until a successful read recovers it");
 
   await page.evaluate(()=>{window.monBrowserFixture.failAction=true;});
-  if(await tools.isVisible())await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
   await regen.click();
   const action=page.getByRole("alert").filter({hasText:"模擬再生成操作失敗"});
   await action.waitFor();
@@ -83,8 +76,7 @@ async page => {
     };
     await f.emitNotification();
   });
-  await page.getByRole('button',{name:'会議管理・録音・解析操作',exact:true}).click();
-  await tools.getByRole('button',{name:'話者分離を再開',exact:true}).click();
+  await page.locator('.transcript-generation-host').getByRole('button',{name:'話者分離を再開',exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==='diarization');
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='regenerate_transcription').length)===1,'handoff recovery reran transcription');
   check(await page.evaluate(()=>window.monBrowserFixture.analysisFlow.transcriptionJob.id)==='saved-transcription','handoff recovery discarded saved transcription');

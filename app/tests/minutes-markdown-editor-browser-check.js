@@ -63,5 +63,41 @@ async page=>{
     check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"plain editor overflows horizontally");
     await page.screenshot({path:`output/playwright/plain-minutes-editor-${theme}-${width}-20261012.png`});
   }
-  return {passed:11,explicitSaving:true,nativeTextareaPreserved:true,lostSuccessInputRetained:true,emptyHumanDocumentSaved:true,realCapture:false,realAI:false};
+  await page.setViewportSize({width:1280,height:820});
+  await edit.click();
+  const copiedSource="# コピーする議事録\n\n- **未保存の編集**。[区間](audio:00:00:01.987654-00:00:02.999999)\n\n`[例](audio:00:00:03-00:00:04)`\n";
+  await input.fill(copiedSource);
+  const saveCount=await page.evaluate(()=>window.plainMinutesFixture.calls.length);
+  await page.evaluate(()=>{
+    const f=window.plainMinutesFixture;f.clipboardWrites=0;f.copiedText="";f.clipboardHold=true;
+    Object.defineProperty(navigator,"clipboard",{configurable:true,value:{write:async([item])=>{
+      f.clipboardWrites++;const text=await (await item.getType("text/plain")).text();
+      if(f.clipboardHold)await new Promise(resolve=>{f.clipboardRelease=resolve;});
+      if(f.clipboardError)throw Error("合成クリップボード権限エラー");
+      f.copiedText=text;
+    }}});
+  });
+  const copy=page.getByRole("button",{name:"議事録をコピー",exact:true});
+  await copy.click();
+  await page.waitForFunction(()=>window.plainMinutesFixture.clipboardRelease!==undefined);
+  check(await copy.isDisabled(),"copy is not locked while clipboard write is pending");
+  await copy.evaluate(button=>button.click());
+  check(await page.evaluate(()=>window.plainMinutesFixture.clipboardWrites===1),"copy replayed while pending");
+  await page.evaluate(()=>{const f=window.plainMinutesFixture;f.clipboardHold=false;f.clipboardRelease();});
+  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("status").filter({hasText:"議事録をコピーしました。"}).waitFor();
+  check(await page.evaluate(()=>window.plainMinutesFixture.copiedText)==="# コピーする議事録\n\n- **未保存の編集**。(00:00:01)\n\n`[例](audio:00:00:03-00:00:04)`\n","copy did not preserve Markdown or transform only the audio link");
+  check(await input.inputValue()===copiedSource&&await page.evaluate(()=>window.plainMinutesFixture.calls.length)===saveCount,"copy modified or saved the source document");
+  await copy.click();await page.waitForFunction(()=>window.plainMinutesFixture.clipboardWrites===2);
+  const copied=await page.evaluate(()=>window.plainMinutesFixture.copiedText);
+  await input.dispatchEvent("compositionstart");
+  await copy.click();
+  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"日本語入力を確定してからコピーしてください"}).waitFor();
+  check(await page.evaluate(()=>window.plainMinutesFixture.copiedText)===copied,"copy published unconfirmed IME text");
+  await input.dispatchEvent("compositionend");
+  await page.evaluate(()=>window.plainMinutesFixture.clipboardError=true);
+  await copy.click();
+  await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"合成クリップボード権限エラー"}).waitFor();
+  check(await input.inputValue()===copiedSource,"clipboard failure discarded edits");
+  await input.fill("");check(await copy.isDisabled(),"empty minutes remain copyable");
+  return {passed:16,explicitSaving:true,nativeTextareaPreserved:true,lostSuccessInputRetained:true,emptyHumanDocumentSaved:true,markdownCopy:true,realCapture:false,realAI:false};
 }

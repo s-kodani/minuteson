@@ -6,8 +6,6 @@ async (page, capturePath, detailUI) => {
   const start=player.getByRole("button",{name:"再生",exact:true});
   const editor=page.getByRole("region",{name:"文字起こし編集",exact:true});
   const row=editor.getByRole("article",{name:"00:00:00の発言行",exact:true});
-  const settings=page.getByRole("dialog",{name:"再生設定",exact:true});
-  const mode=settings.getByRole("combobox",{name:"会議全体の再生トラック",exact:true});
   const error=()=>page.locator('.toast-host').getByRole('alert').filter({hasText:'音声を再生できません'});
   const count=command=>page.evaluate(command=>window.monBrowserFixture.calls.filter(c=>c.command===command).length,command);
   const boot=async patch=>{
@@ -77,18 +75,6 @@ async (page, capturePath, detailUI) => {
   await page.evaluate(()=>window.monBrowserFixture.preparation.failClose=false);await barrier();await settled();await released();
   check(await page.evaluate(()=>window.cancelBarrierState)==="fulfilled"&&await count("read_playback_chunk")===0,"known-token retry did not release or replayed");
   results.push("known-token close failures stay in the barrier after receipt loss and are released only by a successful retry");
-
-  // Per-input switching was retired with the canonical meeting WAV.
-  // Opening the remaining settings must preserve the existing paused checkpoint.
-  await boot(); await start.click(); await player.getByRole("button", {name:"一時停止",exact:true}).click();
-  await player.getByRole("slider", {name:"会議全体の再生位置",exact:true}).fill("320000");
-  await player.getByRole("combobox", {name:"速度",exact:true}).selectOption("1.5");
-  const preparationsBeforeSettings = await count("prepare_meeting_playback");
-  await dock.getByRole("button", {name:"再生設定",exact:true}).click(); await settings.waitFor();
-  check(await settings.getByRole("combobox").count() === 0, "retired source switching is exposed");
-  await settings.press("Escape"); await settings.waitFor({state:"hidden"});
-  check(await player.getByRole("slider", {name:"会議全体の再生位置",exact:true}).inputValue() === "320000" && await player.getByRole("combobox", {name:"速度",exact:true}).inputValue() === "1.5" && await count("prepare_meeting_playback") === preparationsBeforeSettings, "settings reset or re-prepared canonical playback");
-  results.push("canonical settings preserve position and speed without preparing another token");
 
   await boot({responsive:true});await row.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
   const field=row.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("取消でも未確定本文を保持します。");

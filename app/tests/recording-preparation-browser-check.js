@@ -22,7 +22,7 @@ async (page,capturePath,detailUI)=>{
   const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした。"}).waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
   try {
   await boot();
-  for(const [label,text] of [["新しい録音","モデル未準備でも録音できます"],["録音の会議名","日時から仮の会議名"],["録音するマイク","自動では会議アプリ"],["会議全体の話者数","会議全体の最大人数"],["録音前の入力確認","毎回のテストは必須ではありません"]]){
+  for(const [label,text] of [["新しい録音","モデル未準備でも録音できます"],["録音の会議名","日時から仮の会議名"],["録音するマイク","自動では会議アプリ"],["録音前の入力確認","毎回のテストは必須ではありません"]]){
     await workspace().getByRole("button",{name:`${label}の説明を開く`,exact:true}).click();
     const help=page.getByRole("dialog",{name:label,exact:true});await help.waitFor();
     check((await help.innerText()).includes(text),`${label}: explanation missing`);

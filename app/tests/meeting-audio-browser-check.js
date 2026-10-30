@@ -18,11 +18,8 @@ async (page, capturePath, detailUI) => {
   const pause = async () => { await player.getByRole('button', { name: '一時停止', exact: true }).click(); await player.getByRole('button', { name: '再生', exact: true }).waitFor(); };
   for (const source of ['recording', 'audio_import']) {
     await boot(source);
-    await dock.getByRole('button', { name: '再生設定', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: '再生設定', exact: true });
-    check(await settings.getByRole('combobox').count() === 0 && (await settings.innerText()).includes('保存した会議音声'), 'canonical source fabricated selectable input tracks');
-    await settings.getByRole('button', { name: '確認を閉じる', exact: true }).click();
-    check(await count('prepare_meeting_playback') === 0, 'settings prepared audio without playback');
+    check(await dock.getByRole('button', { name: '再生設定', exact: true }).count() === 0, 'removed playback settings remain');
+    check(await count('prepare_meeting_playback') === 0, 'initial bar prepared audio without playback');
     await play(); await pause();
     check(await slider.getAttribute('max') === '57600000', 'meeting timeline is not the complete 16 kHz hour');
     check(await page.evaluate(() => window.monBrowserFixture.calls.find(call => call.command === 'prepare_meeting_playback').args.request.mode) === 'mixed', 'source did not request canonical meeting audio');

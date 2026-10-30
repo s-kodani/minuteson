@@ -44,10 +44,10 @@ async (page, capturePath, detailUI) => {
     results.push("application scope stays unset until explicit choice; metadata does not claim input or permission verification");
 
     stage="cancel";const key=await choose(1);await begin();await modal().waitFor();
-    check((await modal().innerText()).includes("選択したアプリ（会議ブラウザ）")&&(await modal().innerText()).includes("他のタブ")&&await mode().isDisabled()&&await app().isDisabled()&&await refresh().isDisabled(),"confirmation omitted app scope or left it mutable");
+    check(await modal().getByRole("combobox",{name:"会議全体の話者数",exact:true}).isVisible()&&await mode().isDisabled()&&await app().isDisabled()&&await refresh().isDisabled(),"confirmation omitted app scope or left it mutable");
     await page.keyboard.press("Escape");await modal().waitFor({state:"hidden"});
     check(await app().inputValue()===key&&await mode().inputValue()==="application"&&await count("start_recording")===0,"cancel erased target or started");
-    results.push("confirmation reviews application and browser-wide scope; cancellation keeps exact choice without capture");
+    results.push("speaker confirmation locks the application scope; cancellation keeps exact choice without capture");
 
     stage="same-name-exact-start";await begin();await accept().dblclick();await modal().waitFor({state:"hidden"});
     check(await count("start_recording")===1&&await page.evaluate(()=>{const a=window.closeFixture.calls.find(c=>c.command==="start_recording").args.captureScope;return a.mode==="application"&&a.application.pid===456&&a.application.bundleIdentifier==="com.example.other"&&a.application.launchTimeUs===1791100000000002;}),"same-named target confused or double start sent");

@@ -3,6 +3,7 @@
 pub fn permits(command: &str, role: &str) -> bool {
     match command {
         "get_window_environment" => matches!(role, "main" | "recorder" | "recorder-info" | "recording-confirmation"),
+        "get_credits" => matches!(role, "main"),
         "get_internal_logs" => matches!(role, "main"),
         "get_recording_recovery" => matches!(role, "main"),
         "get_startup_report" => matches!(role, "main"),

@@ -27,9 +27,9 @@ async (page) => {
   let stage = "setup";
   try {
     stage = "start-decline"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await modal(startTitle).waitFor();
-    check((await modal(startTitle).innerText()).includes("終了検査の会議") && (await modal(startTitle).innerText()).includes("参加者の同意") && await modal(startTitle).getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "start omitted target or unsafe focus");
+    check((await modal(startTitle).innerText()).includes("終了検査の会議") && await modal(startTitle).getByRole("combobox", { name: "会議全体の話者数", exact: true }).isVisible() && await modal(startTitle).getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "start omitted target or unsafe focus");
     await page.keyboard.press("Enter"); await modal(startTitle).waitFor({ state: "hidden" }); check(await count("start_recording") === 0, "initial Enter started recording");
-    results.push("recording start reviews the exact meeting and permission scope; initial Enter cancels without device access");
+    results.push("recording start reviews the exact meeting and speaker count; initial Enter cancels without device access");
 
     // Dispatch on the same original control: a physical second click can land
     // on the newly opened modal backdrop and correctly decline it instead.
@@ -52,8 +52,13 @@ async (page) => {
     check((await newStart.count() === 0 || await newStart.isDisabled()) && await page.evaluate(() => window.closeFixture.recording.phase === "preparing"), "lost response fabricated idle");
     results.push("lost accepted-start acknowledgement retains canonical preparing state without replay");
 
-    stage = "start-import-scope"; await boot(true); await configureImport(false); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().waitFor(); check((await modal(startTitle).innerText()).includes("合成会議.m4a") && (await modal(startTitle).innerText()).includes("元ファイルと保存済み会議を保持"), "start lost import scope"); await page.keyboard.press("Escape"); await modal(startTitle).waitFor({ state: "hidden" }); check(await count("start_recording") === 0 && await count("cancel_audio_import") === 0, "decline cancelled import");
-    results.push("starting with a selected import explains exact loss and declining retains the import");
+    stage = "start-import-scope"; await boot(true); await configureImport(false);
+    const importBeforeDecline = await page.evaluate(() => JSON.stringify(window.closeFixture.importing));
+    await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().waitFor();
+    check(await modal(startTitle).getByRole("combobox", { name: "会議全体の話者数", exact: true }).isVisible() && await modal(startTitle).locator(".confirmation-impact").count() === 0, "recording start did not use the compact speaker confirmation");
+    await page.keyboard.press("Escape"); await modal(startTitle).waitFor({ state: "hidden" });
+    check(await count("start_recording") === 0 && await count("cancel_audio_import") === 0 && await page.evaluate(before => JSON.stringify(window.closeFixture.importing) === before, importBeforeDecline), "decline altered the selected import or started recording");
+    results.push("starting with a selected import uses the compact speaker confirmation and declining retains the exact import token and review");
 
     stage = "close-decline"; await boot(); await configureImport(false); const snapshot = await page.evaluate(() => JSON.stringify(window.closeFixture.importing)); await request(); await modal(title).waitFor();
     check((await modal(title).innerText()).includes("合成会議.m4a") && (await modal(title).innerText()).includes("元ファイルは変更しません"), "close omitted reviewed import loss"); await page.keyboard.press("Enter"); await modal(title).waitFor({ state: "hidden" });
