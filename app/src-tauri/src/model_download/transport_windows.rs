@@ -155,3 +155,128 @@ fn stream(
         .map_err(str::to_owned);
     completion
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom};
+    use std::net::TcpListener;
+
+    #[test]
+    fn windows_system_curl_stream_accepts_native_http_line_endings() {
+        const BODY: &[u8] = b"Windows curl verified response\n";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || -> Result<(), String> {
+            let started = Instant::now();
+            let mut connection = loop {
+                match listener.accept() {
+                    Ok((connection, _)) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if started.elapsed() > Duration::from_secs(10) {
+                            return Err("curl did not connect".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            };
+            connection
+                .set_nonblocking(false)
+                .map_err(|error| error.to_string())?;
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .map_err(|error| error.to_string())?;
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0u8; 1024];
+                let count = connection.read(&mut chunk).map_err(|e| e.to_string())?;
+                if count == 0 || headers.len() + count > 16384 {
+                    return Err("incomplete or oversized request".into());
+                }
+                headers.extend_from_slice(&chunk[..count]);
+            }
+            write!(
+                connection,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                BODY.len()
+            )
+            .map_err(|error| error.to_string())?;
+            connection
+                .write_all(BODY)
+                .map_err(|error| error.to_string())
+        });
+        let mut launch = OwnedCommand::for_purpose(
+            &system_tool("curl.exe").unwrap(),
+            mon_native::process::Purpose::SystemTool,
+        )
+        .unwrap();
+        // Only this loopback fixture permits HTTP; production fetch requires HTTPS.
+        configure_curl(&mut launch.command, &url, "=http");
+        let mut output = tempfile::tempfile().unwrap();
+        let mut progress = Vec::new();
+        let result = stream(
+            launch,
+            BODY.len() as u64,
+            &format!("{:x}", Sha256::digest(BODY)),
+            &mut output,
+            &|| false,
+            &mut |count| progress.push(count),
+            Duration::from_secs(10),
+        );
+        server.join().unwrap().unwrap();
+        result.unwrap();
+        output.seek(SeekFrom::Start(0)).unwrap();
+        let mut actual = Vec::new();
+        output.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, BODY);
+        assert_eq!(progress.last(), Some(&(BODY.len() as u64)));
+    }
+
+    #[test]
+    #[ignore = "downloads the fixed LFM3 model and notices over HTTPS into owned temporary storage"]
+    fn windows_lfm3_network_download_finishes_with_hash_bound_receipt() {
+        use crate::model_download_recipe::RecipeExt;
+        #[derive(serde::Deserialize)]
+        struct Choice {
+            id: String,
+            recipe: crate::model_download_recipe::Recipe,
+        }
+        let bundle = crate::windows_runtime::resources().unwrap();
+        let choices: Vec<Choice> =
+            serde_json::from_slice(&crate::windows_runtime::catalog(&bundle).unwrap()).unwrap();
+        let recipe = choices
+            .into_iter()
+            .find(|choice| choice.id == "windows-llama-b11960-lfm3-17b-q4km")
+            .unwrap()
+            .recipe;
+        let recipe_hash = recipe.hash().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("downloads");
+        let operation = uuid::Uuid::new_v4().to_string();
+        let mut latest = Instant::now();
+        let receipt = crate::model_download::download_platform(
+            &root,
+            &bundle,
+            None,
+            &operation,
+            &recipe,
+            &recipe_hash,
+            &|| false,
+            &mut |done, total| {
+                if latest.elapsed().as_secs() >= 5 || done == total {
+                    eprintln!("LFM3 download: {done}/{total}");
+                    latest = Instant::now();
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(receipt.recipe_hash, recipe_hash);
+        assert!(!receipt.installed && !receipt.ready);
+        let readback =
+            crate::model_download::readback(&root, &operation, &recipe_hash, &|| false).unwrap();
+        assert_eq!(readback.state, "complete");
+        assert!(readback.receipt.is_some());
+    }
+}

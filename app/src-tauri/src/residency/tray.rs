@@ -152,7 +152,19 @@ pub(super) fn refresh(app: &tauri::AppHandle) {
     TRAY.with(|slot| {
         if let Some((icon, item)) = slot.borrow().as_ref() {
             item.set_text(&status);
-            let _ = icon.set_tooltip(Some(format!("{name} — {status}")));
+            let tooltip = format!("{name} — {status}");
+            #[cfg(windows)]
+            if let Some(guid) = app
+                .state::<Residency>()
+                .guid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_deref()
+            {
+                let _ = windows::set_tray_tooltip(icon, guid, &tooltip);
+            }
+            #[cfg(target_os = "macos")]
+            let _ = icon.set_tooltip(Some(tooltip));
         }
     });
 }

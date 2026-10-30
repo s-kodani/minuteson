@@ -59,9 +59,15 @@ test("all Windows model choices from the native IPC pass the production frontend
 }, async () => {
   const native = JSON.parse(readFileSync(process.env.MON_WINDOWS_MODEL_OPTIONS!, "utf8"));
   const choices = await assertOfficialModelOptions(native);
-  assert.equal(choices.length, 16);
+  assert.equal(choices.length, 19);
   assert.deepEqual(choices.map(o => o.review.manifest.engine).reduce((counts, engine) => {
     counts[engine] = (counts[engine] ?? 0) + 1; return counts;
-  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 6, "asr": 2 });
+  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 9, "asr": 2 });
+  for (const model of ["gemma4-e4b-it", "phi4-mini-instruct", "lfm3-17b"]) {
+    const choice = choices.find(option => option.id === `windows-llama-b11960-${model}-q4km`);
+    assert.ok(choice, `missing Windows model: ${model}`);
+    assert.equal(choice.review.manifest.engineVersion, "b11960");
+    assert.equal(choice.tokenLimits?.tokenizer, "gguf");
+  }
   for (const choice of choices) assert.ok(choice.review.bundledBytes! > 0);
 });

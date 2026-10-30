@@ -79,6 +79,34 @@ class BuildEvidenceTests(unittest.TestCase):
     def finish(self):
         evidence.finish(self.root, self.snapshot, self.app, self.helper, self.installer, self.manifest)
 
+    def test_shared_crates_and_workspace_build_inputs_cannot_drift_during_build(self):
+        sources = ('crates/mon-native/src/transport.rs', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml')
+        for name in sources:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('original build input\n', encoding='utf8')
+        self.git('add', *sources)
+        self.git('-c', 'user.name=Build Test', '-c', 'user.email=build@example.invalid',
+                 'commit', '-qm', 'workspace fixture')
+        evidence.begin(self.root, self.snapshot)
+        self.finish()
+        self.assertTrue(evidence.verify(self.root, self.manifest, require_current_source=True)
+                        ['currentSourceMatches'])
+        for index, name in enumerate((*sources, 'crates/mon-native/src/untracked.rs')):
+            with self.subTest(source=name):
+                self.snapshot = self.root / f'output/source-{index}.json'
+                self.manifest = self.root / f'output/build-{index}.json'
+                evidence.begin(self.root, self.snapshot)
+                path = self.root / name
+                path.write_text('changed build input\n', encoding='utf8')
+                with self.assertRaisesRegex(ValueError, 'Build source changed'):
+                    self.finish()
+                self.assertFalse(self.manifest.exists())
+                if name in sources:
+                    path.write_text('original build input\n', encoding='utf8')
+                else:
+                    path.unlink()
+
     def test_dirty_source_is_identified_and_installed_binaries_are_compared(self):
         (self.root / "app/main.ts").write_text("modified source\n", encoding="utf-8")
         (self.root / "app/untracked.ts").write_text("new source\n", encoding="utf-8")

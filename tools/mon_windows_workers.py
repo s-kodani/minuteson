@@ -31,6 +31,8 @@ def extract(archive,target):
                 # Mobile applications are unrelated to the CLI worker and
                 # exceed legacy Windows extraction path limits.
                 if len(parts)>1 and parts[0]=='examples' and parts[1].startswith(('whisper.android','whisper.objc','whisper.swift','whisper.wasm')):continue
+                # The disabled llama tools UI also contains paths over MAX_PATH.
+                if parts[:2]==('tools','ui'):continue
                 member.name=str(Path('tree',*parts))
                 selected.append(member)
             source.extractall(target,members=selected,filter='data')

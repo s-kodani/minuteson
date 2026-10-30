@@ -40,7 +40,10 @@ impl Diagnostics {
     }
     pub fn complete_http(&self, process_success: bool) -> Result<(), &'static str> {
         self.check()?;
-        if process_success && self.bytes.ends_with(b"MON_HTTP_STATUS:200\n") {
+        // Windows curl writes stderr in text mode; Unix curl uses LF.
+        let complete = self.bytes.ends_with(b"MON_HTTP_STATUS:200\n")
+            || self.bytes.ends_with(b"MON_HTTP_STATUS:200\r\n");
+        if process_success && complete {
             Ok(())
         } else {
             Err(HTTP_FAILURE)
@@ -85,15 +88,24 @@ mod tests {
     use super::*;
     #[test]
     fn only_successful_complete_200_has_the_same_contract_on_every_os() {
-        for code in ["200", "206", "204", "301", "404", "000"] {
-            let mut diagnostic = Diagnostics::default();
-            diagnostic.push(format!("{HTTP_MARKER}{code}\n").as_bytes());
-            assert_eq!(diagnostic.complete_http(true).is_ok(), code == "200");
-            assert!(diagnostic.complete_http(false).is_err());
+        for newline in ["\n", "\r\n"] {
+            for code in ["200", "206", "204", "301", "404", "000"] {
+                let mut diagnostic = Diagnostics::default();
+                diagnostic.push(format!("{HTTP_MARKER}{code}{newline}").as_bytes());
+                assert_eq!(diagnostic.complete_http(true).is_ok(), code == "200");
+                assert!(diagnostic.complete_http(false).is_err());
+            }
         }
-        let mut diagnostic = Diagnostics::default();
-        diagnostic.push(b"MON_HTTP_STATUS:200\nextra");
-        assert!(diagnostic.complete_http(true).is_err());
+        for bytes in [
+            b"MON_HTTP_STATUS:200\nextra".as_slice(),
+            b"MON_HTTP_STATUS:200\r\nextra",
+            b"MON_HTTP_STATUS:200\r",
+            b"MON_HTTP_STATUS:200\r\r\n",
+        ] {
+            let mut diagnostic = Diagnostics::default();
+            diagnostic.push(bytes);
+            assert!(diagnostic.complete_http(true).is_err());
+        }
     }
     #[test]
     fn tokens_are_never_in_errors_and_oversized_or_failed_diagnostics_fail_closed() {

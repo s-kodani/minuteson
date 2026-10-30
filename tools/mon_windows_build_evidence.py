@@ -14,7 +14,9 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_PATHS = ("app", "probes", "tools", "third-party", ".github/workflows")
+SOURCE_DIRECTORIES = ("app", "crates", ".cargo", "probes", "tools", "third-party", ".github/workflows")
+SOURCE_FILES = ("Cargo.toml", "Cargo.lock")
+SOURCE_PATHS = (*SOURCE_DIRECTORIES, *SOURCE_FILES)
 
 
 def utc_now():
@@ -78,7 +80,7 @@ def validate_source_identity(source):
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
             raise ValueError("Build source file identity is malformed")
         name = entry["path"]
-        if (not any(name.startswith(prefix + "/") for prefix in SOURCE_PATHS)
+        if (not (name in SOURCE_FILES or any(name.startswith(prefix + "/") for prefix in SOURCE_DIRECTORIES))
                 or any(part in ("", ".", "..") for part in name.split("/")) or "\\" in name
                 or not ((set(entry) == {"path", "sha256"} and digest(entry["sha256"]))
                         or (set(entry) == {"path", "deleted"} and entry["deleted"] is True))):

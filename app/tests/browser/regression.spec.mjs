@@ -11,7 +11,9 @@ if (!suites.length || selected && suites.length !== selected.size) throw Error("
 
 for (const [name, fixture, source] of suites) {
   test(name, async ({ page, baseURL }, info) => {
-    page.setDefaultTimeout(10_000);
+    // Tracing the 1,000-row history, filtering and recovery flow needs more time.
+    if (name === "internal-logs") test.setTimeout(240_000);
+    page.setDefaultTimeout(name === "internal-logs" ? 30_000 : 10_000);
     const port = new URL(baseURL).port;
     const localPort = value => value.replaceAll("1420", port);
     if (fixture) {
