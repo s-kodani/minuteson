@@ -31,7 +31,7 @@ class Worker:
         self.test, self.engine = test, engine
         self.log = test.root / (engine + '-startup.log')
         self.stderr = self.log.open('w')
-        self.proc = subprocess.Popen(['/usr/bin/time', '-l', str(test.runtime / ('mon-' + engine + '-worker')), '--mon-resident-v1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr)
+        self.proc = subprocess.Popen(['/usr/bin/time', '-l', str(test.runtime / ('mon-' + engine + '-worker')), '--mon-resident-v1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, env=getattr(test, 'worker_env', None))
         self.pending = b''
         self.inference_seconds = 0.0
         self.rss = []
@@ -51,7 +51,7 @@ class Worker:
                 raise AssertionError('resident response timed out')
             block = os.read(self.proc.stdout.fileno(), 65536)
             if not block:
-                raise AssertionError('resident worker died: ' + self.log.read_text()[-2000:])
+                raise AssertionError('resident worker died: ' + self.log.read_text(errors='replace')[-2000:])
             self.pending += block
         line, self.pending = self.pending.split(b'\n', 1)
         return json.loads(line)
@@ -63,11 +63,11 @@ class Worker:
             response = self.receive()
             self.test.assertEqual(response['id'], index)
             if response['op'] == 'error':
-                self.test.fail(str(response) + '\n' + (directory / 'stderr.log').read_text()[-4000:])
+                self.test.fail(str(response) + '\n' + (directory / 'stderr.log').read_text(errors='replace')[-4000:])
             if response['op'] == 'done':
                 break
         self.inference_seconds += time.monotonic()-started
-        pid = re.search(r'mon_session: pid=(\d+)', (directory/'stderr.log').read_text())[1]
+        pid = re.search(r'mon_session: pid=(\d+)', (directory/'stderr.log').read_text(errors='replace'))[1]
         sample = subprocess.run(['/bin/ps','-o','rss=','-p',pid],capture_output=True,text=True)
         self.rss.append(int(sample.stdout.strip())*1024 if sample.returncode==0 and sample.stdout.strip() else None)
 

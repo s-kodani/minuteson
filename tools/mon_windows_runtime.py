@@ -25,6 +25,7 @@ CACHE = ROOT / '.cache/windows-runtime'
 PACKAGE = CACHE / 'package'
 URI = 'mon-bundled://windows-runtime-v1/runtime.tar'
 LLAMA = ('https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-win-cpu-x64.zip', 19513403, '659ac73690e588bf60ba1c8de02479683e60ed2ce2915ddf3e15904b520fa933')
+LLAMA_11960 = ('https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-win-cpu-x64.zip', 24407745, '73f962f82850d244db47eaacb9d913637027b82399124324298576d58c5f4287')
 SHERPA = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-no-tts.tar.bz2',23271851,'4b0a94f7b5c606b1b64a19a831c2127559e4b3d34e195465ebc7be73d9ed4783')
 
 def digest(path):
@@ -67,12 +68,14 @@ def build_whisper():
     dump((source/'LICENSE').read_bytes(),PACKAGE/'whisper/notices/whisper-MIT.txt')
 
 def upstream_engines():
-    with zipfile.ZipFile(acquire(*LLAMA)) as archive:
-        for name in archive.namelist():
-            leaf=Path(name).name
-            if leaf=='llama-completion.exe' or leaf.lower().endswith('.dll'):
-                if not leaf: continue
-                dump(archive.read(name),PACKAGE/'llama'/leaf)
+    for engine, release in [('llama', LLAMA), ('llama11960', LLAMA_11960)]:
+        with zipfile.ZipFile(acquire(*release)) as archive:
+            for name in archive.namelist():
+                leaf=Path(name).name
+                if leaf=='llama-completion.exe' or leaf.lower().endswith('.dll') or leaf=='LICENSE':
+                    if not leaf: continue
+                    rel='notices/llama-MIT.txt' if leaf=='LICENSE' else leaf
+                    dump(archive.read(name),PACKAGE/engine/rel)
     with tarfile.open(acquire(*SHERPA)) as archive:
         for member in archive.getmembers():
             leaf=Path(member.name).name
@@ -111,21 +114,22 @@ def catalog():
         if choice['recipe']['manifest']['engine'] not in ('llama.cpp','sherpa-onnx'):
             raise ValueError('unsupported shared model engine')
         choices.append(choice)
-    executables={'whisper':'whisper-cli.exe','llama':'llama-completion.exe','sherpa':'sherpa-onnx-offline-speaker-diarization.exe'}
+    executables={'whisper':'whisper-cli.exe','llama':'llama-completion.exe','llama11960':'llama-completion.exe','sherpa':'sherpa-onnx-offline-speaker-diarization.exe'}
     engine_ids={'whisper.cpp':'whisper','llama.cpp':'llama','sherpa-onnx':'sherpa'}
     # App-local VC runtime for upstream llama DLLs: do not depend on a developer
     # machine's global PATH or preinstalled redistributable.
     redists=list(Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)')).glob('Microsoft Visual Studio/2022/*/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT'))
     if not redists: raise ValueError('Visual C++ redistributable directory missing')
     for name in ('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'):
-        dump((sorted(redists)[-1]/name).read_bytes(),PACKAGE/'llama'/name)
+        for engine in ('llama', 'llama11960'):
+            dump((sorted(redists)[-1]/name).read_bytes(),PACKAGE/engine/name)
     # Sign before generating hashes: installed bytes must match the recipes.
     for engine in executables:
         for path in sorted((PACKAGE/engine).rglob('*')):
             if path.is_file() and path.suffix.lower() in ('.exe','.dll'):sign(path)
     def native_files(engine):
         paths=sorted(p for p in (PACKAGE/engine).rglob('*') if p.is_file())
-        if engine=='llama':
+        if engine in ('llama', 'llama11960'):
             keep={'llama-completion.exe','llama-completion-impl.dll','llama-common.dll','llama.dll','ggml.dll','ggml-base.dll','libomp.dll','ggml-cpu-x64.dll','ggml-cpu-haswell.dll','ggml-cpu-skylakex.dll','ggml-cpu-zen4.dll','ggml-cpu-sapphirerapids.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'}
             paths=[p for p in paths if p.name in keep or p.relative_to(PACKAGE/engine).parts[0]=='notices']
         return paths
@@ -145,6 +149,7 @@ def catalog():
         snapshots.append(dict(protocol=2,engine=engine,name=name,bytes=path.stat().st_size,sha256=digest(path)))
     for choice in choices:
         recipe=choice['recipe'];engine=engine_ids[recipe['manifest']['engine']]
+        if engine=='llama' and recipe['manifest']['engineVersion']=='b11960':engine='llama11960'
         native=[];sources=[]
         for path in native_files(engine):
             if not path.is_file():continue

@@ -36,6 +36,7 @@ pub(crate) struct Capacity {
 #[serde(rename_all = "snake_case")]
 enum Tokenizer {
     Utf8ByteBpe,
+    Gguf,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -57,6 +58,9 @@ impl TokenLimits {
     }
 }
 impl Capacity {
+    pub(super) fn requires_tokenizer(&self) -> bool {
+        self.tokenizer == Tokenizer::Gguf
+    }
     pub(crate) fn reviewed(model: &Fingerprint) -> Result<Self, String> {
         // Official model cards and fixed revisions are reviewed per catalog
         // entry. Capacity binds exact model bytes, including quantization.
@@ -156,6 +160,9 @@ impl Capacity {
         self.validate(engine)?;
         let input_upper_bound = match super::optimization::count(system, prompt) {
             Some(n) => n?.checked_add(self.template_reserve_tokens),
+            None if self.requires_tokenizer() => {
+                return Err("選択モデルにはGGUFトークナイザーによる入力算定が必要です".into());
+            }
             None => system
                 .len()
                 .checked_add(prompt.len())
@@ -308,6 +315,22 @@ mod tests {
             e.context_tokens = 32768;
             let capacity = Capacity::reviewed(&e.model).unwrap();
             let expected_output = choice["tokenLimits"]["maxOutputTokens"].as_u64().unwrap() as u32;
+            if capacity.requires_tokenizer() {
+                assert!(capacity.execution(&e, "system", "短い入力").is_err());
+                let (_scope, _, _) = super::super::optimization::Scope::fixture();
+                let context = choice["tokenLimits"]["maxContextTokens"].as_u64().unwrap() as u32;
+                let runtime = capacity.execution(&e, "system", "短い入力").unwrap();
+                assert_eq!(
+                    (runtime.context_tokens, runtime.prediction_tokens),
+                    (context, expected_output)
+                );
+                assert!(capacity
+                    .execution(&e, "system", &"x".repeat(context as usize))
+                    .is_err());
+                e.model.size += 1;
+                assert!(Capacity::reviewed(&e.model).is_err());
+                continue;
+            }
             assert_eq!(
                 capacity
                     .execution(&e, "system", "短い入力")
@@ -340,7 +363,7 @@ mod tests {
             e.model.size += 1;
             assert!(Capacity::reviewed(&e.model).is_err());
         }
-        assert_eq!(seen.len(), 6);
+        assert_eq!(seen.len(), 9);
     }
     #[test]
     fn model_input_limit_is_independent_of_context_and_output_limits() {

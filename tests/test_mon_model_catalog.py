@@ -3,12 +3,14 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import mon_model_catalog as catalog
+import mon_windows_runtime as windows_runtime
 
 
 def canonical_hash(value):
@@ -17,9 +19,39 @@ def canonical_hash(value):
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_windows_packages_bind_new_models_to_new_runtime_and_keep_old_models_on_old_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / 'package'
+            executables = {'whisper': 'whisper-cli.exe', 'sherpa': 'sherpa-onnx-offline-speaker-diarization.exe',
+                           'llama': 'llama-completion.exe', 'llama11960': 'llama-completion.exe'}
+            for engine, name in executables.items():
+                (package / engine).mkdir(parents=True)
+                (package / engine / name).write_bytes(engine.encode())
+                if engine.startswith('llama'):
+                    (package / engine / 'llama.dll').write_bytes((engine + '-library').encode())
+            redist = root / 'Microsoft Visual Studio/2022/BuildTools/VC/Redist/MSVC/14.0/x64/Microsoft.VC143.CRT'
+            redist.mkdir(parents=True)
+            for name in ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'):
+                (redist / name).write_bytes(name.encode())
+            with patch.object(windows_runtime, 'PACKAGE', package), patch.object(windows_runtime, 'sign'), \
+                    patch.dict(windows_runtime.os.environ, {'ProgramFiles(x86)': str(root)}):
+                windows_runtime.catalog()
+            choices = json.loads((package / 'catalog.json').read_text())
+            llms = [c for c in choices if c['recipe']['manifest']['engine'] == 'llama.cpp']
+            self.assertEqual(len(llms), 9)
+            for choice in llms:
+                manifest = choice['recipe']['manifest']
+                engine = 'llama11960' if manifest['engineVersion'] == 'b11960' else 'llama'
+                executable = next(f for f in manifest['files'] if f['role'] == 'executable')
+                self.assertEqual(executable['expectedHash'], hashlib.sha256(engine.encode()).hexdigest())
+                source = next(s for s in choice['recipe']['sources'] if s['relativePath'] == executable['relativePath'])
+                self.assertEqual(source['archive']['memberPath'], engine + '/llama-completion.exe')
+                self.assertTrue(choice['id'].startswith('windows-llama-'))
+
     def test_generated_macos_compatibility_recipes_retain_every_old_field_and_order(self):
         expected = {
-            'macos.json': ('base', 'f65b4e440155913c85c8ab67b4fe1554635a9873301f3922954037759b2d8445'),
+            'macos.json': ('base', 'dadd46dffb9404f0a0ed2814ce9e2343b2b7f824ddc06d4bb6f3d90306172895'),
             'asr-transducer.json': ('asr', 'd72e39de3b7a96da478e4d267bf88f83400dee5fc64cb35d4deaade73eadc8a1'),
         }
         for name, (group, golden) in expected.items():

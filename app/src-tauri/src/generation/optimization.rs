@@ -50,6 +50,12 @@ pub(super) fn select(
     let Some(runtime) = runtime else {
         return Ok(None);
     };
+    // Required model-specific counting is a correctness policy, independent
+    // of measured speedups. Never enable prefix reuse under this policy.
+    if super::model_budget::Capacity::reviewed(&engine.model).is_ok_and(|c| c.requires_tokenizer())
+    {
+        return Ok(Some(Policy::gguf(engine, runtime)));
+    }
     let prompt = format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&(extract, merge)).map_err(|e| e.to_string())?)
@@ -75,6 +81,38 @@ pub(super) fn select(
         }
     }
     Ok(None)
+}
+impl Policy {
+    fn gguf(engine: &LlamaConfig, runtime: &resident::Snapshot) -> Self {
+        Self {
+            version: 2,
+            token_packing: true,
+            prefix_reuse: false,
+            evidence_hash: format!(
+                "{:x}",
+                Sha256::digest(format!(
+                    "gguf-tokenizer-v1:{}:{}",
+                    engine.model.sha256, runtime.sha256
+                ))
+            ),
+        }
+    }
+    pub(super) fn validate_model(
+        policy: Option<&Self>,
+        engine: &LlamaConfig,
+        runtime: Option<&resident::Snapshot>,
+        capacity: &super::model_budget::Capacity,
+    ) -> Result<(), String> {
+        if capacity.requires_tokenizer() {
+            let runtime = runtime.ok_or("GGUFトークナイザーの実行環境がありません")?;
+            if policy != Some(&Self::gguf(engine, runtime)) {
+                return Err("GGUFトークナイザーの固定条件が一致しません".into());
+            }
+        } else if policy.is_some_and(|p| p.version != 1) {
+            return Err("未対応の議事録最適化です".into());
+        }
+        Ok(())
+    }
 }
 impl Evidence {
     fn accepted(&self) -> bool {
@@ -113,7 +151,9 @@ thread_local! {static COUNTER:RefCell<Option<Counter>>=const{RefCell::new(None)}
 pub(super) struct Scope;
 impl Scope {
     pub(super) fn enter(engine: &LlamaConfig, policy: Option<&Policy>) -> Result<Self, String> {
-        if policy.is_some_and(|p| p.version != 1) {
+        if policy.is_some_and(|p| {
+            !matches!(p.version, 1 | 2) || p.version == 2 && (!p.token_packing || p.prefix_reuse)
+        }) {
             return Err("未対応の議事録最適化です".into());
         }
         if COUNTER.with(|v| v.borrow().is_some()) || PREFIX.with(|p| p.get()) {
@@ -364,6 +404,44 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn required_gguf_counting_binds_model_and_worker_without_prefix_reuse() {
+        let (_scope, mut engine, _) = Scope::fixture();
+        engine.model.size = 4_977_171_584;
+        engine.model.sha256 =
+            "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87".into();
+        let capacity = super::super::model_budget::Capacity::reviewed(&engine.model).unwrap();
+        let mut runtime = resident::Snapshot {
+            gpu: None,
+            protocol: 1,
+            engine: "llama".into(),
+            name: "mon-llama-worker".into(),
+            bytes: 1,
+            sha256: "b".repeat(64),
+        };
+        let policy = select(
+            &engine,
+            Some(&runtime),
+            "extract",
+            "merge",
+            super::super::markdown::PromptVersion::CustomPromptsV5,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (policy.version, policy.token_packing, policy.prefix_reuse),
+            (2, true, false)
+        );
+        assert!(Policy::validate_model(Some(&policy), &engine, Some(&runtime), &capacity).is_ok());
+        assert!(Policy::validate_model(None, &engine, Some(&runtime), &capacity).is_err());
+        let mut invalid = policy.clone();
+        invalid.prefix_reuse = true;
+        assert!(
+            Policy::validate_model(Some(&invalid), &engine, Some(&runtime), &capacity).is_err()
+        );
+        runtime.sha256 = "c".repeat(64);
+        assert!(Policy::validate_model(Some(&policy), &engine, Some(&runtime), &capacity).is_err());
+    }
     #[test]
     fn long_context_packing_accepts_inputs_above_the_previous_byte_limit() {
         let (_scope, _, _) = Scope::fixture();

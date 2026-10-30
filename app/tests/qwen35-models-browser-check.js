@@ -4,7 +4,7 @@ async (page) => {
   const row = page.locator(".model-selection-row").filter({ has: field });
   await field.waitFor();
   check(await page.getByRole("combobox").count() === 3, "model catalog did not load");
-  check(await page.locator('select[aria-label$="のモデル"] option[value^="official:"]').count() === 14, "expected fourteen official model choices");
+  check(await page.locator('select[aria-label$="のモデル"] option[value^="official:"]').count() === 17, "expected seventeen official model choices");
   const before = await field.locator("option").allTextContents();
   for (const size of ["4B", "9B"]) {
     const id = `official:llama-b11533-qwen35-${size.toLowerCase()}-q4km`;
@@ -34,5 +34,5 @@ async (page) => {
     check(await row.evaluate(el => el.getBoundingClientRect().right <= innerWidth), "model controls overflow");
   }
   await page.screenshot({ path: "output/playwright/qwen35-models.png" });
-  return ["fourteen catalog choices load; both Qwen3.5 sizes select without IO", "each Qwen3.5 download and global selection binds its own model bytes", "installed choices retain stable labels without duplicates at desktop and mobile widths"];
+  return ["seventeen catalog choices load; both Qwen3.5 sizes select without IO", "each Qwen3.5 download and global selection binds its own model bytes", "installed choices retain stable labels without duplicates at desktop and mobile widths"];
 }

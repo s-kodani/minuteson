@@ -25,6 +25,7 @@ export const browserSuites = [
   ["speaker-completion-settings", "browser-fixture.js", "speaker-completion-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
   ["qwen35-models", "model-download-browser-fixture.tsx", "qwen35-models-browser-check.js"],
+  ["additional-minutes-models", "model-download-browser-fixture.tsx", "additional-minutes-models-browser-check.js"],
   ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
   ["minutes-audio-tags", "plain-minutes-interval-browser-fixture.js", "minutes-audio-tags-browser-check.js"],
   ["plain-minutes-interval", "plain-minutes-interval-browser-fixture.js", "plain-minutes-interval-browser-check.js"],

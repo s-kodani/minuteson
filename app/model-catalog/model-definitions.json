@@ -870,5 +870,203 @@
       "macos_aarch64",
       "windows_x86_64"
     ]
+  },
+  {
+    "id": "llama-b11960-gemma4-e4b-it-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 131072,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 131072,
+      "tokenizer": "gguf"
+    },
+    "label": "Gemma 4 E4B IT · Q4_K_M",
+    "description": "Gemma 4 E4B IT・Q4_K_M。テキストによる議事録生成に使用します。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11960",
+      "modelName": "gemma-4-E4B-it",
+      "modelVersion": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE ; Model: https://huggingface.co/google/gemma-4-E4B-it/tree/ee0ef6023621cff504d758262d4e04895a5af4a2 ; License text: https://raw.githubusercontent.com/google/gemma_pytorch/014acb7ac4563a5f77c76d7ff98f31b568c16508/LICENSE ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 4977171584,
+        "expectedHash": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Gemma-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11357,
+        "expectedHash": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Gemma-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/google/gemma_pytorch/014acb7ac4563a5f77c76d7ff98f31b568c16508/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11960-phi4-mini-instruct-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 131072,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 131072,
+      "tokenizer": "gguf"
+    },
+    "label": "Phi-4-mini-instruct · Q4_K_M",
+    "description": "Phi-4-mini-instruct・Q4_K_M。テキストによる議事録生成に使用します。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11960",
+      "modelName": "Phi-4-mini-instruct",
+      "modelVersion": "7ff82c2aaa4dde30121698a973765f39be5288c0",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE ; Model: https://huggingface.co/microsoft/Phi-4-mini-instruct/tree/cfbefacb99257ffa30c83adab238a50856ac3083 ; License text: https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/cfbefacb99257ffa30c83adab238a50856ac3083/LICENSE ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 2491874688,
+        "expectedHash": "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Phi-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1084,
+        "expectedHash": "fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/7ff82c2aaa4dde30121698a973765f39be5288c0/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/Phi-MIT.txt",
+        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/cfbefacb99257ffa30c83adab238a50856ac3083/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
+  },
+  {
+    "id": "llama-b11960-lfm3-17b-q4km",
+    "tokenLimits": {
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768,
+      "maxContextTokens": 262144,
+      "tokenizer": "gguf"
+    },
+    "label": "LFM3-1.7B · Q4_K_M",
+    "description": "LFM3-1.7B・Q4_K_M。テキストによる議事録生成に使用します。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "llama.cpp",
+      "engineVersion": "b11960",
+      "modelName": "LFM3-1.7B",
+      "modelVersion": "bad5729bba61d076fff20d2548e62526665af215",
+      "quantization": "Q4_K_M",
+      "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE ; Model: https://huggingface.co/LiquidAI/LFM3-1.7B/tree/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7 ; License text: https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/LICENSE ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 1099627808,
+        "expectedHash": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/LFM-Open-License-1.0.txt",
+        "role": "notice",
+        "expectedSize": 10574,
+        "expectedHash": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "model.gguf",
+        "url": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/bad5729bba61d076fff20d2548e62526665af215/LFM3-1.7B-Q4_K_M.gguf"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/LFM-Open-License-1.0.txt",
+        "url": "https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/LICENSE"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
   }
 ]

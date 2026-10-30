@@ -51,6 +51,16 @@ pub(super) fn model_arguments(model: &Fingerprint) -> &'static [&'static str] {
             "--chat-template",
             QWEN3_NON_THINKING_TEMPLATE,
         ]
+    } else if model.size == 4_977_171_584
+        && model.sha256 == "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+    {
+        &[
+            "--temp", "1.0", "--top-p", "0.95", "--top-k", "64", "--min-p", "0",
+        ]
+    } else if model.size == 1_099_627_808
+        && model.sha256 == "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4"
+    {
+        &["--temp", "0.1", "--top-k", "50", "--repeat-penalty", "1.1"]
     } else {
         &["--temp", "0"]
     }

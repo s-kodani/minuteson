@@ -18,9 +18,9 @@ else:
     asr = None
 
 ROOT = Path(__file__).resolve().parents[1]
-LLAMA_COMMIT = "edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc"
-LLAMA_SHA = "12f869f66555d409954d8d68d7fd85a308e4fa42e25e0631e9776f23cc898234"
-LLAMA_BYTES = 37840022
+LLAMA_COMMIT = "8642541b255bfb5dc39cd351a178be09013a55d6"  # b11960; adds LFM3
+LLAMA_SHA = "1688a167a8edd9499cdd0c19b8bd044f0fa184b466981977bbf2222d884953a4"
+LLAMA_BYTES = 38685236
 SHERPA_COMMIT = "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
 SHERPA_LICENSE_SHA = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 HEADER_SHA = "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"
@@ -104,6 +104,10 @@ target_compile_features(mon-whisper-worker PRIVATE cxx_std_17)
 def patch_llama(root):
     source = root / "tools/completion/completion.cpp"
     text = source.read_text(encoding="utf8")
+    # completion does not forward --reasoning off to its initial template.
+    # Keep generation and the vocabulary-only counter on the same settings.
+    text = replace(text, "                inputs.force_pure_content = params.force_pure_content_parser;",
+                   "                inputs.force_pure_content = params.force_pure_content_parser;\n                inputs.enable_thinking = params.reasoning_format != COMMON_REASONING_FORMAT_NONE;\n                inputs.chat_template_kwargs = params.default_template_kwargs;")
     # Reuse the constructor's exact model-derived sampler preparation on every
     # subsequent request too (GGUF defaults, EOG biases), while keeping the new
     # request's grammar and seed. Do not approximate those defaults in MON.
@@ -161,9 +165,11 @@ int llama_completion(int argc, char ** argv) {""")
     if (mon_prefix_enabled) {
         common_chat_templates_inputs in;
         in.use_jinja=params.use_jinja; in.force_pure_content=params.force_pure_content_parser;
+        in.enable_thinking=params.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+        in.chat_template_kwargs=params.default_template_kwargs;
         if (!params.system_prompt.empty()) { common_chat_msg m; m.role="system"; m.content=params.system_prompt; in.messages.push_back(m); }
         in.add_generation_prompt=false;
-        auto system_tokens=common_tokenize(ctx,common_chat_templates_apply(chat_templates.get(),in).prompt,true,true);
+        auto system_tokens=common_tokenize(ctx,common_chat_templates_apply(chat_templates.get(),in).prompt.str(),true,true);
         while(mon_system_tokens<system_tokens.size() && mon_system_tokens<embd_inp.size() && system_tokens[mon_system_tokens]==embd_inp[mon_system_tokens]) ++mon_system_tokens;
         size_t keep=0;
         while(keep<mon_system_tokens && keep<mon_prefix_tokens.size() && mon_prefix_tokens[keep]==embd_inp[keep]) ++keep;
@@ -214,7 +220,7 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
                 verify(package)
                 return package
         whisper = acquire(cache,"whisper-source.tar.gz",asr.SOURCE_URL,asr.SOURCE_SHA,asr.SOURCE_BYTES,whisper_source)
-        llama = acquire(cache,"llama-source.tar.gz",f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{LLAMA_COMMIT}",LLAMA_SHA,LLAMA_BYTES,llama_source)
+        llama = acquire(cache,f"llama-source-{LLAMA_COMMIT}.tar.gz",f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{LLAMA_COMMIT}",LLAMA_SHA,LLAMA_BYTES,llama_source)
         header = acquire(cache,"c-api.h",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/sherpa-onnx/c-api/c-api.h",HEADER_SHA,supplied=sherpa_header)
         license_file = acquire(cache,"sherpa-LICENSE",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/LICENSE",SHERPA_LICENSE_SHA,11358,sherpa_license)
         with tempfile.TemporaryDirectory(prefix="build-", dir=cache) as temporary:

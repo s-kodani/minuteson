@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 8);
+        assert_eq!(choices.len(), 11);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
             assert!(ids.insert(choice.id.clone()));
@@ -153,8 +153,10 @@ mod tests {
                         limits.max_output_tokens,
                         limits.max_context_tokens
                     ),
-                    if choice.id.contains("qwen35-") {
+                    if choice.id.contains("qwen35-") || choice.id.contains("lfm3-") {
                         (262144, 32768, 262144)
+                    } else if choice.id.contains("gemma4-") || choice.id.contains("phi4-") {
+                        (131072, 32768, 131072)
                     } else if matches!(
                         choice.id.as_str(),
                         "llama-b11533-qwen3-8b-q4km" | "llama-b11533-qwen3-4b-q4km"
@@ -190,6 +192,15 @@ mod tests {
                 }
                 "llama-b11533-qwen35-9b-q4km" => {
                     "a87db4f037d6eb2276580a1a2f296cdbe479025b84b0363a6b969ac78e0f2ac2"
+                }
+                "llama-b11960-gemma4-e4b-it-q4km" => {
+                    "733daf690e7514e028c97f186ecb3f806a00338347ba2aed83f15abf9facd4aa"
+                }
+                "llama-b11960-phi4-mini-instruct-q4km" => {
+                    "5303c39fa0d3b3114d52fc071a9e09ea5502532d1a52104467db8b5f0680d190"
+                }
+                "llama-b11960-lfm3-17b-q4km" => {
+                    "9193aca93434d1450a772da9a997c4b28265537479a9a452c7fda4827f87d75f"
                 }
                 _ => panic!("unverified catalog choice"),
             };

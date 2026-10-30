@@ -178,7 +178,24 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 8);
+  assert.equal(options.length, 11);
+  const withAdditionalAsrChoices = [...native, ...native.slice(0, 8).map((option, i) => ({ ...option, id: `extra-${i}` }))];
+  assert.equal((await assertOfficialModelOptions(withAdditionalAsrChoices)).length, 19);
+  await assert.rejects(assertOfficialModelOptions(Array.from({ length: 33 }, (_, i) => ({ ...native[0], id: `extra-${i}` }))));
+  const additions = options.filter(o => o.id.startsWith("llama-b11960-"));
+  assert.deepEqual(additions.map(o => o.label), ["Gemma 4 E4B IT · Q4_K_M", "Phi-4-mini-instruct · Q4_K_M", "LFM3-1.7B · Q4_K_M"]);
+  for (const option of additions) {
+    assert.equal(option.tokenLimits?.tokenizer, "gguf");
+    assert.equal(option.tokenLimits?.maxOutputTokens, 32768);
+    assert.equal(option.tokenLimits?.maxContextTokens, option.id.includes("lfm3") ? 262144 : 131072);
+    assert.equal(option.review.manifest.engineVersion, "b11960");
+    assert.equal(option.review.manifest.quantization, "Q4_K_M");
+    assert.equal(option.review.manifest.files.filter(f => f.role === "notice").length, 2);
+    assert.equal(option.review.ready, false);
+  }
+  const invalidTokenizer = structuredClone(native);
+  invalidTokenizer.at(-1).tokenLimits.tokenizer = "unknown";
+  await assert.rejects(assertOfficialModelOptions(invalidTokenizer));
   assert.equal(options[0].review.manifest.engine, "llama.cpp");
   assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
   assert.equal(options[1].tokenLimits, null);

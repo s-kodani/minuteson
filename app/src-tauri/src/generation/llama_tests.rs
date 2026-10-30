@@ -2,6 +2,38 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn additional_models_use_only_their_own_sampling_settings() {
+    for (size, sha, expected) in [
+        (
+            4_977_171_584,
+            "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+            vec![
+                "--temp", "1.0", "--top-p", "0.95", "--top-k", "64", "--min-p", "0",
+            ],
+        ),
+        (
+            1_099_627_808,
+            "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4",
+            vec!["--temp", "0.1", "--top-k", "50", "--repeat-penalty", "1.1"],
+        ),
+        (
+            2_491_874_688,
+            "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2",
+            vec!["--temp", "0"],
+        ),
+    ] {
+        let mut model = Fingerprint {
+            path: "/not-run/model.gguf".into(),
+            size,
+            sha256: sha.into(),
+        };
+        assert_eq!(model_arguments(&model), expected);
+        model.size += 1;
+        assert_eq!(model_arguments(&model), &["--temp", "0"]);
+    }
+}
+
+#[test]
 fn model_qwen3_and_qwen35_exact_bytes_use_non_thinking_template_and_recommended_sampling() {
     for (size, sha256) in [
         (

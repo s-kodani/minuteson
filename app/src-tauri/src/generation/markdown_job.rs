@@ -551,11 +551,17 @@ fn acceleration_context(p: &Parameters) -> Result<u32, String> {
         .context_tokens)
 }
 fn validate_capacity(p: &Parameters) -> Result<(), String> {
+    super::optimization::Policy::validate_model(
+        p.optimization.as_ref(),
+        &p.engine,
+        p.resident_runtime.as_ref(),
+        &p.capacity,
+    )?;
     if p.resident_runtime.is_none()
         || p.prompt_version != markdown::PromptVersion::CustomPromptsV5
         || (p.optimization_version != Some(crate::current_formats::OPTIMIZATION))
         || p.optimization.as_ref().is_some_and(|p| {
-            p.version != 1
+            !matches!(p.version, 1 | 2)
                 || p.evidence_hash.len() != 64
                 || !p.evidence_hash.bytes().all(|b| b.is_ascii_hexdigit())
         })
@@ -961,6 +967,12 @@ pub(crate) fn process_observed(
         else {
             return Ok(None);
         };
+        // Replay may count with the CPU worker before restoring a frozen
+        // Vulkan choice. No generated unit has started in this attempt yet.
+        #[cfg(windows)]
+        if checkpoint.acceleration.is_some() {
+            crate::local_engine::resident::discard_trial();
+        }
         if p.acceleration_policy.is_some() && checkpoint.acceleration.is_none() {
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, 0)?;
             diagnostic_directory = Some(directory.clone());
