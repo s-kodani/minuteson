@@ -290,8 +290,17 @@ pub(crate) fn download_with_bundle_reuse(
     if recipe.review()?.recipe_hash != expected_recipe_hash {
         return Err("同梱モデルの確認した取得定義と一致しません".into());
     }
-    let mut bundle = crate::model_bundled_runtime::Bundle::open(bundle_root)?;
-    bundle.prepare(bundle_root, recipe, cancelled)?;
+    let mut bundle = if recipe
+        .sources
+        .iter()
+        .any(|source| source.url == crate::model_download_recipe::BUNDLED_WHISPER)
+    {
+        let mut bundle = crate::model_bundled_runtime::Bundle::open(bundle_root)?;
+        bundle.prepare(bundle_root, recipe, cancelled)?;
+        Some(bundle)
+    } else {
+        None
+    };
     let asr_root = bundle_root
         .parent()
         .ok_or("ASR素材の場所がありません")?
@@ -315,7 +324,10 @@ pub(crate) fn download_with_bundle_reuse(
         progress,
         &mut |url, size, hash, output, cancelled, report| {
             if url == crate::model_download_recipe::BUNDLED_WHISPER {
-                bundle.fetch(url, size, hash, output, cancelled)
+                bundle
+                    .as_mut()
+                    .ok_or("Whisperの同梱実体を確認できません")?
+                    .fetch(url, size, hash, output, cancelled)
             } else if url == crate::model_asr_catalog::URI {
                 crate::model_asr_catalog::fetch(&asr_root, size, hash, output, cancelled)
             } else if let Some(candidate) = candidates.iter().find(|c| c.url == url) {

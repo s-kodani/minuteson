@@ -286,7 +286,9 @@ fn long_context_input_reaches_completion_without_truncation() {
 #[test]
 #[cfg(unix)]
 fn explicit_gpu_selection_is_not_silently_overridden_by_cpu_flags() {
-    let (dir, mut config) = fake("printf '%s\\n' \"$@\" > args.log\nprintf '{\"items\":[]}'");
+    let (dir, mut config) = fake(
+        "printf '%s\\n' \"$@\" > args.log\nprintf '%s\\n' 'llama_prepare_model_devices: using device MTL0 (Apple GPU)' 'load_tensors: offloaded 3/3 layers to GPU' >&2\nprintf '{\"items\":[]}'",
+    );
     config.gpu_layers = 3;
     let path = unit(dir.path(), "gpu-argument-contract-only");
     run_unit(

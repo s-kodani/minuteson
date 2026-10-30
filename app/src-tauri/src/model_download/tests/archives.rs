@@ -1,4 +1,5 @@
 use super::*;
+mod bundled_asr;
 mod real;
 
 fn archive_recipe(bytes: &[u8]) -> Recipe {

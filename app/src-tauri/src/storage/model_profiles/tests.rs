@@ -188,8 +188,11 @@ done
 printf '{"schemaVersion":1,"backendId":"sherpa-onnx-transducer","models":{"model":"%s","decoder":"%s","joiner":"%s","library":"%s","tokens":"%s"},"durationUs":%s,"segments":[{"startUs":0,"endUs":500000,"text":"文字起こしテスト"}],"tokens":[],"ignoredHotwords":[]}' "$model" "$decoder" "$joiner" "$library" "$tokens" "$(( (end-first)*1000000/16000 ))" > "$output"
 "#.into(),
             Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
-            Engine::Llama=>r#"predict=
-while [ "$#" -gt 0 ]; do case "$1" in --predict) predict="$2"; shift;; esac; shift; done
+            Engine::Llama=>r#"predict=; gpu_layers=0; device=
+while [ "$#" -gt 0 ]; do case "$1" in --predict) predict="$2"; shift;; --gpu-layers) gpu_layers="$2"; shift;; --device) device="$2"; shift;; esac; shift; done
+if [ "$gpu_layers" -gt 0 ]; then
+printf 'llama_prepare_model_devices: using device %s (synthetic fixture)\nload_tensors: offloaded %s/%s layers to GPU\n' "$device" "$gpu_layers" "$gpu_layers" >&2
+fi
 if [ "$predict" = 64 ]; then printf '{"ok":true}'; else printf '{"markdown":"Fixture minutes"}'; fi"#.into(),
             Engine::Sherpa=> {
                 // Echo actual CLI arguments rather than embedding an install

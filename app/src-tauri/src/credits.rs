@@ -467,6 +467,30 @@ fn tar_notices(path: &Path, output: &mut Vec<Notice>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires MON_PACKAGED_RESOURCES; reads packaged credits without opening app storage"]
+    fn packaged_macos_credits_read_dependencies_models_and_notices() {
+        let resources = PathBuf::from(std::env::var_os("MON_PACKAGED_RESOURCES").unwrap());
+        let result = load(paths(&resources, None, Target::Macos), Target::Macos).unwrap();
+        assert!(result
+            .technologies
+            .iter()
+            .any(|entry| entry.name == "react"));
+        assert!(result
+            .models
+            .iter()
+            .any(|entry| entry.name.contains("Whisper")));
+        assert!(result
+            .models
+            .iter()
+            .any(|entry| entry.name.contains("ReazonSpeech")));
+        assert!(!result.dependencies.is_empty());
+        assert!(!result.notices.is_empty());
+        assert!(result.notices.iter().all(|notice| !notice.text.is_empty()));
+    }
+
     #[test]
     fn credits_are_main_only_and_development_roots_are_os_specific() {
         assert!(require_main("main").is_ok());
