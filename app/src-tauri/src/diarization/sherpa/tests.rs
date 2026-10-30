@@ -111,6 +111,38 @@ fn output(config: &SherpaConfig, count: Option<u32>, rows: &str) -> Vec<u8> {
 }
 
 #[test]
+fn standalone_cli_rejects_partial_input_before_launching_or_creating_logs() {
+    let root = tempfile::tempdir().unwrap();
+    let config = config(root.path());
+    crate::test_support::write_wave(&root.path().join("source.wav"));
+    for (index, (first, end)) in [(0, 8000), (8000, 16000)].into_iter().enumerate() {
+        let unit = root.path().join(index.to_string());
+        std::fs::create_dir(&unit).unwrap();
+        crate::transcription::input::Input::new(
+            &root.path().join("source.wav"),
+            first,
+            end,
+            &|| false,
+        )
+        .unwrap()
+        .write(&unit)
+        .unwrap();
+        let error = run_standalone_track(
+            &config,
+            None,
+            &unit,
+            500_000,
+            Duration::from_secs(1),
+            &|| false,
+        )
+        .unwrap_err();
+        assert!(error.contains("音声ファイル全体"), "{error}");
+        assert!(!unit.join("stdout.log").exists());
+        assert!(!unit.join("stderr.log").exists());
+    }
+}
+
+#[test]
 fn model_rebinding_log_normalization_keeps_overlaps_labels_and_timing_but_cannot_execute_unavailable_paths(
 ) {
     let directory = tempfile::tempdir().unwrap();
@@ -749,7 +781,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
         )
         .unwrap();
         let started = Instant::now();
-        let result = run_track(
+        let result = run_standalone_track(
             &config,
             num_speakers,
             directory.path(),

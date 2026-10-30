@@ -196,5 +196,7 @@ pub(crate) fn verify_success(
     }
 }
 
+#[cfg(test)]
+mod native_tests;
 #[cfg(all(test, unix))]
 mod tests;

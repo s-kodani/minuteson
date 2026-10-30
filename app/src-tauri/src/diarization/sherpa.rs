@@ -445,6 +445,7 @@ pub(crate) fn logical_output(
 
 // Whole-track unit; an unfinished inference is killed and never checkpointed.
 // Caller uses a new task-owned directory and verifies persisted provenance.
+#[cfg(test)]
 pub(crate) fn run_track(
     config: &SherpaConfig,
     num_speakers: Option<u32>,
@@ -464,6 +465,33 @@ pub(crate) fn run_track(
     )
 }
 
+// Package checks execute the upstream CLI, which accepts a complete WAV but
+// does not implement MON's private worker range options.
+pub(crate) fn run_standalone_track(
+    config: &SherpaConfig,
+    num_speakers: Option<u32>,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<Segment>>, String> {
+    run(
+        config,
+        num_speakers,
+        directory,
+        duration_us,
+        timeout,
+        Invocation::Standalone,
+        cancelled,
+        &|_| {},
+    )
+}
+
+enum Invocation {
+    Standalone,
+    Worker,
+}
+
 pub(crate) fn run_track_observed(
     config: &SherpaConfig,
     num_speakers: Option<u32>,
@@ -473,12 +501,35 @@ pub(crate) fn run_track_observed(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u32),
 ) -> Result<Option<Vec<Segment>>, String> {
+    run(
+        config,
+        num_speakers,
+        directory,
+        duration_us,
+        timeout,
+        Invocation::Worker,
+        cancelled,
+        progress,
+    )
+}
+
+fn run(
+    config: &SherpaConfig,
+    num_speakers: Option<u32>,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    invocation: Invocation,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u32),
+) -> Result<Option<Vec<Segment>>, String> {
     match run_track_inner(
         config,
         num_speakers,
         directory,
         duration_us,
         timeout,
+        invocation,
         cancelled,
         progress,
     ) {
@@ -493,6 +544,7 @@ fn run_track_inner(
     directory: &Path,
     duration_us: i64,
     timeout: Duration,
+    invocation: Invocation,
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u32),
 ) -> Result<Option<Vec<Segment>>, String> {
@@ -512,6 +564,13 @@ fn run_track_inner(
         || ((input.frames() * 1_000_000 / 16000) as i64 - duration_us).abs() > 100
     {
         return Err("話者分離の入力範囲が不正です".into());
+    }
+    if matches!(invocation, Invocation::Standalone) {
+        let mut file = File::open(&input.proof.path).map_err(|e| e.to_string())?;
+        let layout = crate::audio::wave::inspect(&mut file, input.proof.size)?;
+        if input.first_frame != 0 || input.end_frame != layout.frames {
+            return Err("通常版sherpa-onnx CLIの動作確認には音声ファイル全体が必要です".into());
+        }
     }
     let wav = input.proof.path.clone();
     let stdout_path = directory.join("stdout.log");
@@ -591,11 +650,14 @@ fn run_track_inner(
                 config.min_duration_off_ms
             })
         ))
-        .arg(&wav)
-        .arg("--mon-first-frame")
-        .arg(input.first_frame.to_string())
-        .arg("--mon-end-frame")
-        .arg(input.end_frame.to_string());
+        .arg(&wav);
+    if matches!(invocation, Invocation::Worker) {
+        command
+            .arg("--mon-first-frame")
+            .arg(input.first_frame.to_string())
+            .arg("--mon-end-frame")
+            .arg(input.end_frame.to_string());
+    }
     if crate::local_engine::resident::enabled() {
         let libraries: Vec<_> = config
             .runtime_libraries

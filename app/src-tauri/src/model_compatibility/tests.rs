@@ -181,6 +181,17 @@ fn compatibility_three_adapters_preserve_data_store_exact_cpu_evidence_and_repea
             "ran\n"
         );
         let env = std::fs::read_to_string(directory(&f, &operation).join("env.log")).unwrap();
+        if engine == Engine::Sherpa {
+            let args = std::fs::read_to_string(directory(&f, &operation).join("args.log")).unwrap();
+            assert!(
+                !args.contains("--mon-"),
+                "upstream CLI received worker options: {args}"
+            );
+            assert_eq!(
+                args.lines().last(),
+                directory(&f, &operation).join("input.wav").to_str()
+            );
+        }
         assert!(
             !env.contains("HF_TOKEN=")
                 && !env.contains("LLAMA_ARG_")

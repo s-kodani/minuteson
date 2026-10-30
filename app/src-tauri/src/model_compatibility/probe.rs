@@ -252,7 +252,7 @@ fn run(
                     speech_sensitivity_milli: 0,
                 },
             );
-            crate::diarization::sherpa::run_track(
+            crate::diarization::sherpa::run_standalone_track(
                 &config,
                 None,
                 directory.path(),
