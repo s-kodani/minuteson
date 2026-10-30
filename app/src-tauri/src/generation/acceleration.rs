@@ -148,28 +148,6 @@ impl Resolved {
         }
     }
 }
-fn memory_sufficient() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        let mut bytes = 0_u64;
-        let mut size = std::mem::size_of_val(&bytes);
-        unsafe {
-            libc::sysctlbyname(
-                c"hw.memsize".as_ptr(),
-                (&mut bytes as *mut u64).cast(),
-                &mut size,
-                std::ptr::null_mut(),
-                0,
-            ) == 0
-                && size == 8
-                && bytes >= 32 * 1024 * 1024 * 1024
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
 pub(super) fn resolve(
     policy: Policy,
     base: &LlamaConfig,
@@ -177,14 +155,7 @@ pub(super) fn resolve(
     directory: &Path,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Resolved>, String> {
-    resolve_with_memory(
-        policy,
-        base,
-        context,
-        directory,
-        cancelled,
-        memory_sufficient(),
-    )
+    resolve_with_memory(policy, base, context, directory, cancelled, false)
 }
 fn resolve_with_memory(
     policy: Policy,
@@ -192,7 +163,7 @@ fn resolve_with_memory(
     context: u32,
     directory: &Path,
     cancelled: &impl Fn() -> bool,
-    memory_available: bool,
+    _legacy_total_memory_flag: bool,
 ) -> Result<Option<Resolved>, String> {
     if cancelled() {
         return Ok(None);
@@ -248,6 +219,7 @@ fn resolve_with_memory(
             let result = std::fs::read_to_string(directory.join("result.json"))
                 .map_err(|e| e.to_string())?;
             let (_, actual_layers) = policy.evidence(&log).ok_or("GPU実行の証拠がありません")?;
+            crate::local_engine::resident::confirm_generation_layers(actual_layers);
             let proof = Proof {
                 schema_version: policy.proof_version(),
                 engine_sha256: base.executable.sha256.clone(),
@@ -284,8 +256,18 @@ fn resolve_with_memory(
         match trial {
             Ok(Some(choice)) => return Ok(Some(choice)),
             Ok(None) => return Ok(None),
-            Err(_) => {
+            Err(error) => {
                 crate::local_engine::resident::discard_trial();
+                crate::internal_logs::detail(
+                    crate::internal_logs::current_context("minutes_generation"),
+                    "gpuTrial", "info", Duration::ZERO,
+                    &json!({"event":"GPU試行不採用","gpuLayers":layers,"contextTokens":context,"reason":error}).to_string(),
+                );
+                // A rejected estimate has not loaded the model or emitted
+                // placement evidence. Smaller GPU placements may still fit.
+                if error.contains("minutes_memory_insufficient") {
+                    continue;
+                }
                 // A CPU-only build or missing device cannot benefit from fewer
                 // layers. Retry only when this runtime actually selected Metal.
                 let log = std::fs::read_to_string(directory.join("stderr.log")).unwrap_or_default();

@@ -110,6 +110,15 @@ fn fixture_version(
     queued: bool,
     version: markdown::PromptVersion,
 ) -> Fixture {
+    fixture_allocation(long, pending, queued, version, false)
+}
+fn fixture_allocation(
+    long: bool,
+    pending: bool,
+    queued: bool,
+    version: markdown::PromptVersion,
+    memory_aware: bool,
+) -> Fixture {
     let mut old_input = crate::storage::current_minutes_fixture::input();
     if long {
         old_input.analysis.utterances[0].effective_text = "点検日について確認する。".repeat(1500);
@@ -138,6 +147,22 @@ fn fixture_version(
         seed: 1,
     };
     let capacity = crate::generation::model_budget::Capacity::synthetic(&engine, 32768, 8192);
+    let capacity = if memory_aware {
+        capacity.with_execution_context(16384)
+    } else {
+        capacity
+    };
+    let resident_runtime = serde_json::from_value(json!({"protocol":1,"engine":"llama","name":"mon-llama-worker","bytes":1234,"sha256":"a".repeat(64)})).unwrap();
+    let optimization = memory_aware.then(|| {
+        super::super::super::optimization::memory_aware_policy(&engine, Some(&resident_runtime))
+            .unwrap()
+    });
+    let _tokens = optimization.as_ref().map(|policy| {
+        super::super::super::optimization::Scope::fixture_for(
+            &capacity.token_configuration(&engine).unwrap(),
+            policy,
+        )
+    });
     let prompt_budget = if version == markdown::PromptVersion::CustomPromptsV5 {
         5400
     } else {
@@ -159,10 +184,10 @@ fn fixture_version(
     );
     let plan = plan::build_with_system(&old_input, limit, version, extract_system).unwrap();
     let p = Parameters {
-        resident_runtime: Some(serde_json::from_value(json!({"protocol":1,"engine":"llama","name":"mon-llama-worker","bytes":1234,"sha256":"a".repeat(64)})).unwrap()),
+        resident_runtime: Some(resident_runtime),
         schema_version: crate::current_formats::MINUTES,
         optimization_version: Some(1),
-        optimization: None,
+        optimization,
         prompt_version: version,
         prompt_snapshot,
         acceleration_policy: None,
@@ -235,6 +260,9 @@ fn fixture_version(
         if c.outputs.len() == p.plan.nodes.len() {
             c.markdown_hash = Some(content_hash(bodies.last().unwrap()));
         }
+    }
+    if memory_aware {
+        c.token_counts = super::super::super::optimization::counts();
     }
     let job = |spec: &JobSpec| JobSnapshot {
         execution_progress: None,
@@ -310,6 +338,72 @@ fn markdown_restore_keeps_exact_text_intervals_and_four_files_without_models_or_
         .unwrap();
         assert_eq!(mapped, restored);
     }
+}
+
+#[test]
+fn memory_aware_fixed_context_and_cpu_fallback_restore_without_models_or_current_memory() {
+    let mut f = fixture(false, false, false);
+    for spec in [&mut f.old_spec, &mut f.new_spec] {
+        let mut p: Parameters =
+            serde_json::from_value(spec.parameters["generation"].clone()).unwrap();
+        p.capacity = p.capacity.with_execution_context(16384);
+        p.optimization = Some(
+            super::super::super::optimization::memory_aware_policy(
+                &p.engine,
+                p.resident_runtime.as_ref(),
+            )
+            .unwrap(),
+        );
+        p.acceleration_policy = Some(super::super::super::acceleration::Policy::AutoMetalV2);
+        assert_eq!(acceleration_context(&p).unwrap(), 16384);
+        spec.parameters["generation"] = serde_json::to_value(p).unwrap();
+    }
+    f.value["acceleration"] = json!({"backend":"cpu","reason":"trialFailed"});
+    let original = f.value.clone();
+    let restored = f.run(&crate::test_support::never_cancelled).unwrap();
+    assert_eq!(restored["markdownHash"], original["markdownHash"]);
+    assert_eq!(restored["acceleration"], original["acceleration"]);
+    assert_eq!(
+        f.run(&crate::test_support::never_cancelled).unwrap(),
+        restored
+    );
+    for (id, (_, _, bytes)) in &f.assets.source {
+        assert_eq!(&f.assets.target[&format!("new-{id}")], bytes);
+    }
+    f.assets.target.clear();
+    f.new_spec.parameters["generation"]["capacity"]["executionContextTokens"] = json!(32768);
+    assert!(f.run(&crate::test_support::never_cancelled).is_err());
+    assert!(f.assets.target.is_empty());
+}
+
+#[test]
+fn memory_aware_partial_merge_and_large_rejected_candidate_counts_restore_without_models() {
+    let mut f = fixture_allocation(
+        true,
+        true,
+        false,
+        markdown::PromptVersion::CustomPromptsV5,
+        true,
+    );
+    assert!(f.value["pending"].is_object());
+    assert!(!f.value["tokenCounts"].as_object().unwrap().is_empty());
+    // Packing records rejected candidates too; their counts can exceed the
+    // model context while remaining within the bounded tokenizer request.
+    f.value["tokenCounts"]["f".repeat(64)] = json!(200000);
+    let original = f.value.clone();
+    let restored = f.run(&crate::test_support::never_cancelled).unwrap();
+    assert!(restored["pending"].is_object());
+    assert_eq!(restored["tokenCounts"], original["tokenCounts"]);
+    assert_eq!(
+        f.run(&crate::test_support::never_cancelled).unwrap(),
+        restored
+    );
+    assert_eq!(f.value, original);
+    f.assets.target.clear();
+    f.value["tokenCounts"]["f".repeat(64)] =
+        json!(super::super::super::optimization::MAX_TOKEN_COUNT + 1);
+    assert!(f.run(&crate::test_support::never_cancelled).is_err());
+    assert!(f.assets.target.is_empty());
 }
 #[test]
 fn markdown_restore_preserves_model_capacity_and_schema_even_before_first_output() {

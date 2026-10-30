@@ -39,7 +39,8 @@ def extract(archive,target):
         (target/'.complete').write_text('verified source\n',encoding='utf8')
     return target/'tree'
 
-def prepare(vulkan=False):
+def prepare(vulkan=False, jobs=4):
+    if not isinstance(jobs,int) or not 1 <= jobs <= 64:raise ValueError('worker build jobs must be between 1 and 64')
     if vulkan:
         from mon_windows_vulkan_sdk import prepare as sdk
         sdk_root=sdk();os.environ['VULKAN_SDK']=str(sdk_root)
@@ -84,7 +85,7 @@ def prepare(vulkan=False):
         else:options+=['-DLLAMA_BUILD_COMMON=ON','-DLLAMA_BUILD_TESTS=OFF','-DLLAMA_BUILD_TOOLS=OFF','-DLLAMA_BUILD_EXAMPLES=OFF','-DLLAMA_BUILD_APP=OFF','-DLLAMA_BUILD_MTMD=OFF','-DLLAMA_OPENSSL=OFF']
         subprocess.run(['cmake','-S',str(source),'-B',str(build),'-G','Visual Studio 17 2022','-A','x64',*options],check=True)
         targets=[shared.NAMES[engine]]+([shared.NAMES['sherpa'], shared.NAMES['asr-transducer']] if engine=='llama' and not vulkan else [])
-        subprocess.run(['cmake','--build',str(build),'--config','Release','--target',*targets,'--parallel','4'],check=True)
+        subprocess.run(['cmake','--build',str(build),'--config','Release','--target',*targets,'--parallel',str(jobs)],check=True)
         for name in targets:
             candidates=list(build.rglob(name+'.exe'));candidates=[p for p in candidates if p.parent.name=='Release']
             if len(candidates)!=1:raise ValueError('worker output missing or ambiguous')
@@ -106,4 +107,4 @@ def prepare(vulkan=False):
 
 if __name__=='__main__':
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--vulkan',action='store_true');args=parser.parse_args();prepare(args.vulkan)
+    parser=argparse.ArgumentParser();parser.add_argument('--vulkan',action='store_true');parser.add_argument('--jobs',type=int,default=int(os.environ.get('MON_WINDOWS_WORKER_JOBS','4')));args=parser.parse_args();prepare(args.vulkan,args.jobs)

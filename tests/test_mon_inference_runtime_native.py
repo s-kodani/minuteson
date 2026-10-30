@@ -8,6 +8,7 @@ MON_RESIDENT_SHERPA_ROOT: package with bin/, models/, lib/
 MON_RESIDENT_EMBEDDING_HELPER: existing single-shot MON helper
 MON_RESIDENT_VAD_MODEL: optional pinned Silero VAD model
 MON_RESIDENT_METAL: opt into actual Metal GPU tests
+MON_RESIDENT_VULKAN: opt into the Windows Vulkan memory-estimator test
 MON_RESIDENT_LLAMA_QWEN3_MODEL: optional Qwen3 model for template/sampling tests
 MON_RESIDENT_REPORT: optional JSON measurements destination
 """
@@ -24,6 +25,116 @@ import unittest
 import wave
 
 REPORT = []
+
+
+@unittest.skipUnless(os.environ.get('MON_RESIDENT_RUNTIME') and os.environ.get('MON_RESIDENT_LLAMA_MODEL'),
+                     'explicit native llama worker and model required')
+class NativeLlamaMemory(unittest.TestCase):
+    """Runs on Windows and macOS without audio or platform-specific timing tools."""
+
+    def run_requests(self, operations, vulkan=False):
+        temporary = tempfile.TemporaryDirectory(prefix='mon-llama-memory-check-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        runtime = Path(os.environ['MON_RESIDENT_RUNTIME']).resolve()
+        executable = runtime / ('mon-llama-vulkan-worker.exe' if vulkan else
+                                'mon-llama-worker.exe' if os.name == 'nt' else 'mon-llama-worker')
+        requests = [dict(protocol=1, id=1, op='init')]
+        directories = []
+        for index, (kind, context) in enumerate(operations, 1):
+            directory = root / str(index)
+            directory.mkdir()
+            directories.append(directory)
+            (directory / 'system.txt').write_text('Return only the JSON object required by the schema.', encoding='utf8')
+            (directory / 'prompt.txt').write_text('Return {"ok":true}.', encoding='utf8')
+            (directory / 'schema.json').write_text(json.dumps(dict(type='object', properties=dict(ok=dict(type='boolean', const=True)),
+                                                                  required=['ok'], additionalProperties=False)), encoding='utf8')
+            for name in ('result.json', 'stderr.log'):
+                (directory / name).touch()
+            args = ['--model', os.environ['MON_RESIDENT_LLAMA_MODEL'], '--ctx-size', str(context),
+                    '--predict', '64', '--threads', '2', '--threads-batch', '2', '--gpu-layers', '0',
+                    '--device', 'none', '--no-kv-offload', '--no-op-offload', '--offline', '--fit', 'off',
+                    '--system-prompt-file', str(directory / 'system.txt'), '--file', str(directory / 'prompt.txt'),
+                    '--json-schema-file', str(directory / 'schema.json'), '--conversation', '--jinja',
+                    '--no-escape', '--reasoning', 'off', '--seed', '42', '--temp', '0', '--single-turn',
+                    '--no-display-prompt', '--no-context-shift', '--no-warmup', '--simple-io']
+            if vulkan:
+                args[args.index('--gpu-layers') + 1] = '16'
+                args[args.index('--device') + 1] = 'Vulkan0'
+                args.remove('--no-kv-offload')
+                args.remove('--no-op-offload')
+            requests.append(dict(protocol=1, id=index, op='infer', kind=kind, args=args,
+                                 directory=str(directory), stdout='result.json', stderr='stderr.log'))
+        requests.append(dict(protocol=1, id=0, op='shutdown'))
+        completed = subprocess.run([str(executable), '--mon-resident-v1'],
+                                   input=''.join(json.dumps(request) + '\n' for request in requests).encode(),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        diagnostics = completed.stderr.decode(errors='replace') + '\n'.join(
+            (directory / 'stderr.log').read_text(encoding='utf8', errors='replace') for directory in directories)
+        self.assertEqual(completed.returncode, 0, diagnostics[-8000:])
+        replies = [json.loads(row) for row in completed.stdout.splitlines()]
+        self.assertFalse(any(reply['op'] == 'error' for reply in replies), diagnostics[-8000:])
+        self.assertEqual([reply['id'] for reply in replies if reply['op'] == 'done'], list(range(1, len(operations) + 1)))
+        return directories, diagnostics
+
+    def test_cpu_memory_estimate_repeats_without_loading_model_tensors(self):
+        directories, diagnostics = self.run_requests([('llama_memory', 2048), ('llama_memory', 8192), ('llama_memory', 2048)])
+        estimates = []
+        for directory, context in zip(directories, (2048, 8192, 2048)):
+            output = (directory / 'result.json').read_bytes()
+            self.assertLessEqual(len(output), 32 * 1024)
+            estimate = json.loads(output)
+            estimates.append(estimate)
+            self.assertEqual((estimate['schemaVersion'], estimate['contextTokens'], estimate['gpuLayers']), (1, context, 0))
+            self.assertEqual(len(estimate['devices']), 1)
+            host = estimate['devices'][0]
+            self.assertEqual((host['type'], host['name'], host['sharedMemory']), ('host', 'CPU', False))
+            self.assertTrue(all(isinstance(host[key], int) and host[key] >= 0 for key in
+                                ('total', 'free', 'modelBytes', 'contextBytes', 'computeBytes')))
+            self.assertLessEqual(host['free'], host['total'])
+            self.assertGreater(host['modelBytes'], 0)
+            self.assertGreater(host['contextBytes'], 0)
+        for field in ('modelBytes', 'contextBytes', 'computeBytes'):
+            self.assertEqual(estimates[0]['devices'][0][field], estimates[2]['devices'][0][field])
+        self.assertGreaterEqual(estimates[1]['devices'][0]['contextBytes'], estimates[0]['devices'][0]['contextBytes'])
+        self.assertNotIn('mon_model_load: llama=', diagnostics)
+        self.assertNotIn('using device ', diagnostics)
+
+    def test_memory_estimate_does_not_change_completion_resident_cache(self):
+        directories, diagnostics = self.run_requests([('llama_memory', 8192), ('llama', 2048),
+                                                      ('llama_memory', 8192), ('llama', 2048)])
+        self.assertEqual(diagnostics.count('mon_model_load: llama=1'), 1)
+        for directory in (directories[1], directories[3]):
+            raw = (directory / 'result.json').read_text(encoding='utf8').lstrip()
+            self.assertEqual(json.JSONDecoder().raw_decode(raw)[0], {'ok': True})
+
+    def test_large_context_is_estimated_without_initializing_completion(self):
+        directories, diagnostics = self.run_requests([('llama_memory', 131072)])
+        estimate = json.loads((directories[0] / 'result.json').read_bytes())
+        self.assertEqual((estimate['schemaVersion'], estimate['contextTokens'], estimate['gpuLayers']),
+                         (1, 131072, 0))
+        self.assertEqual(len(estimate['devices']), 1)
+        self.assertGreater(estimate['devices'][0]['contextBytes'], 0)
+        self.assertNotIn('mon_model_load: llama=', diagnostics)
+        REPORT.append(dict(test='cpu-memory-131072', estimate=estimate))
+
+    @unittest.skipUnless(os.name == 'nt' and os.environ.get('MON_RESIDENT_VULKAN'),
+                         'explicit Windows Vulkan memory estimate required')
+    def test_vulkan_estimate_identifies_device_and_shared_host_demand(self):
+        directories, diagnostics = self.run_requests([('llama_memory', 8192)], vulkan=True)
+        estimate = json.loads((directories[0] / 'result.json').read_bytes())
+        self.assertEqual((estimate['schemaVersion'], estimate['contextTokens']), (1, 8192))
+        self.assertGreater(estimate['gpuLayers'], 0)
+        self.assertGreaterEqual(len(estimate['devices']), 2)
+        self.assertEqual(estimate['devices'][-1]['type'], 'host')
+        gpu = estimate['devices'][0]
+        self.assertEqual(gpu['name'], 'Vulkan0')
+        self.assertIn(gpu['type'], ('gpu', 'integratedGpu'))
+        if gpu['type'] == 'integratedGpu':
+            self.assertTrue(gpu['sharedMemory'])
+        self.assertGreater(gpu['modelBytes'] + gpu['contextBytes'] + gpu['computeBytes'], 0)
+        self.assertNotIn('mon_model_load: llama=', diagnostics)
+        REPORT.append(dict(test='vulkan-memory-8192', estimate=estimate))
 
 
 class Worker:

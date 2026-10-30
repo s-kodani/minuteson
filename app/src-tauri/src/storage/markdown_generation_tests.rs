@@ -1563,6 +1563,33 @@ fn custom_prompts_are_frozen_for_admission_replay_resume_and_new_generation() {
 }
 
 #[test]
+fn repeated_admission_keeps_saved_capacity_when_new_defaults_change() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let req = request(&storage, false);
+    let model = engine(root.path(), "custom");
+    let original = markdown_job::enqueue_synthetic(
+        &storage,
+        req.clone(),
+        model.clone(),
+        "standard",
+        5400,
+        None,
+    )
+    .unwrap();
+    let saved = storage.fixed_job_input(&original.id).unwrap();
+    assert_eq!(
+        saved.0.parameters["generation"]["capacity"]["maxContextTokens"],
+        32768
+    );
+    // The new admission helper proposes the profile's smaller capacity. A
+    // repeated operation must return the already fixed plan and capacity.
+    let repeated = markdown_job::enqueue_synthetic_custom(&storage, req, model, None).unwrap();
+    assert_eq!(repeated.id, original.id);
+    assert_eq!(storage.fixed_job_input(&repeated.id).unwrap(), saved);
+}
+
+#[test]
 fn custom_prompt_read_errors_and_oversized_instructions_never_enqueue() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();

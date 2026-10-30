@@ -90,7 +90,7 @@ pub(crate) fn enqueue(
     prompt_budget: usize,
     expected: Option<MarkdownStamp>,
 ) -> Result<JobSnapshot, String> {
-    let capacity = Capacity::reviewed(&engine.model)?;
+    let capacity = Capacity::for_new_job(&engine.model)?;
     let acceleration = super::acceleration::policy(&engine);
     enqueue_with_capacity(
         storage,
@@ -114,7 +114,7 @@ pub(crate) fn enqueue_prepared(
     expected: Option<MarkdownStamp>,
     selection: managed::Snapshot,
 ) -> Result<JobSnapshot, String> {
-    let capacity = Capacity::reviewed(&engine.model)?;
+    let capacity = Capacity::for_new_job(&engine.model)?;
     let acceleration = super::acceleration::policy(&engine);
     enqueue_with_selection(
         storage,
@@ -303,7 +303,7 @@ fn enqueue_with_selection(
     storage: &Storage,
     request: MinutesJobRequest,
     engine: super::llama::LlamaConfig,
-    capacity: Capacity,
+    mut capacity: Capacity,
     name: &str,
     prompt_budget: usize,
     expected: Option<MarkdownStamp>,
@@ -359,6 +359,11 @@ fn enqueue_with_selection(
     );
     let selected_optimization = if existing {
         None
+    } else if capacity.is_memory_aware() {
+        Some(super::optimization::memory_aware_policy(
+            &engine,
+            new_runtime.as_ref(),
+        )?)
     } else {
         super::optimization::select(
             &engine,
@@ -380,6 +385,64 @@ fn enqueue_with_selection(
             &capacity.token_configuration(&engine)?,
             selected_optimization.as_ref(),
         )?;
+        if capacity.is_memory_aware() {
+            let slices: Vec<_> = input
+                .analysis
+                .utterances
+                .iter()
+                .enumerate()
+                .filter(|(_, utterance)| !utterance.effective_text.trim().is_empty())
+                .map(|(utterance_index, utterance)| plan::Slice {
+                    utterance_index,
+                    first_byte: 0,
+                    end_byte: utterance.effective_text.len(),
+                })
+                .collect();
+            let full_prompt = plan::extract_prompt_with_version(&input, &slices, prompt_version)?;
+            let system = task_system(extract, prompt_version);
+            let desired = if system.len().saturating_add(full_prompt.len())
+                <= super::llama::MAX_PROMPT_BYTES
+            {
+                let count = super::optimization::count(&system, &full_prompt)
+                    .ok_or("議事録の入力トークン数を確認できません")?;
+                capacity.desired_context(tokens.check(count)?)?
+            } else {
+                // Full inputs above the bounded tokenizer request are split by
+                // the existing lossless planner; no source text is omitted.
+                capacity.maximum_context()
+            };
+            let merge_count = super::optimization::count(
+                &task_system(merge, prompt_version),
+                "{\"drafts\":[\"a\"],\"sourceLinks\":[]}",
+            )
+            .ok_or("統合用プロンプトのトークン数を確認できません")?;
+            let minimum = capacity
+                .minimum_context(
+                    CUSTOM_COMPLETION
+                        .len()
+                        .max(super::model_budget::COMPLETION_INSTRUCTION.len()),
+                )?
+                .max(capacity.minimum_input_context(tokens.check(merge_count)?)?);
+            let context = super::memory::select_context(
+                &engine,
+                new_runtime.as_ref(),
+                desired.max(minimum),
+                minimum,
+                capacity.maximum_context(),
+            )?;
+            capacity = capacity.with_execution_context(context);
+            tokens.configure(&capacity.token_configuration(&engine)?)?;
+            if !plan::fits(
+                &task_system(merge, prompt_version),
+                "{\"drafts\":[\"a\"],\"sourceLinks\":[]}",
+                plan_limit_for(&capacity, &engine, prompt_budget, prompt_version)?,
+            ) {
+                return Err(
+                    "統合用プロンプトが長すぎて入力が収まりません。プロンプトを短くしてください"
+                        .into(),
+                );
+            }
+        }
         let plan = tokens.check(plan::build_with_system(
             &input,
             plan_limit_for(&capacity, &engine, prompt_budget, prompt_version)?,
@@ -392,6 +455,10 @@ fn enqueue_with_selection(
         None
     };
     storage.enqueue_markdown_minutes_job_with_prompts(request, profile, target, |input, db, saved| {
+        let capacity = match saved {
+            Some(saved) => serde_json::from_value::<Capacity>(saved["capacity"].clone()).map_err(|e| e.to_string())?,
+            None => capacity.clone(),
+        };
         let prompt_snapshot = if prompt_version == markdown::PromptVersion::CustomPromptsV5 {
             Some(if let Some(saved) = saved {
                 serde_json::from_value::<PromptSnapshot>(saved["promptSnapshot"].clone()).map_err(|e| e.to_string())?
@@ -404,7 +471,7 @@ fn enqueue_with_selection(
         let merge_system = prompt_snapshot.as_ref().map_or_else(|| prompt_version.merge_system(), |s| s.preferences.merge_prompt.as_str());
         let limit = plan_limit_for(&capacity, &engine, prompt_budget, prompt_version)?;
         // Check both instructions before enqueueing; never truncate either prompt.
-        if !plan::fits(merge_system, "{\"drafts\":[\"a\"]}", limit) {
+        if !capacity.is_memory_aware() && !plan::fits(merge_system, "{\"drafts\":[\"a\"]}", limit) {
             return Err("統合用プロンプトが長すぎて入力が収まりません。プロンプトを短くしてください".into());
         }
         let optimization=if let Some(saved)=saved {saved.get("optimization").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?}else{selected_optimization.clone()};
@@ -504,7 +571,15 @@ fn checked_checkpoint(
         || c.token_counts
             .keys()
             .any(|k| k.len() != 64 || !k.bytes().all(|b| b.is_ascii_hexdigit()))
-        || c.token_counts.values().any(|n| *n == 0 || *n > 131072)
+        || c.token_counts.values().any(|n| {
+            *n == 0
+                || *n
+                    > if p.capacity.is_memory_aware() {
+                        super::optimization::MAX_TOKEN_COUNT
+                    } else {
+                        131072
+                    }
+        })
         || (!p.optimization.as_ref().is_some_and(|p| p.token_packing) && !c.token_counts.is_empty())
     {
         return Err("保存トークン数の固定条件が不正です".into());
@@ -542,13 +617,9 @@ fn checked_checkpoint(
     Ok(c)
 }
 fn acceleration_context(p: &Parameters) -> Result<u32, String> {
-    Ok(p.capacity
-        .execution(
-            &p.engine,
-            super::acceleration::SYSTEM,
-            super::acceleration::PROMPT,
-        )?
-        .context_tokens)
+    // The context is fixed independently of prompt length. Portable restore
+    // validates this proof without opening a tokenizer or a model.
+    Ok(p.capacity.token_configuration(&p.engine)?.context_tokens)
 }
 fn validate_capacity(p: &Parameters) -> Result<(), String> {
     super::optimization::Policy::validate_model(
@@ -832,6 +903,22 @@ fn infer(
     let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
     let mut execution = p.capacity.execution(&runtime, &task.system, &task.prompt)?;
     let device = acceleration.and_then(|choice| choice.configure(&mut execution));
+    crate::internal_logs::detail(
+        crate::internal_logs::current_context("minutes_generation"),
+        "prepared",
+        "info",
+        started.elapsed(),
+        &serde_json::json!({
+            "event":"議事録の実行枠を確定",
+            "unitIndex":index,
+            "actualTokens":actual_tokens,
+            "contextTokens":execution.context_tokens,
+            "predictionTokens":execution.prediction_tokens,
+            "gpuLayers":execution.gpu_layers,
+            "device":device,
+        })
+        .to_string(),
+    );
     let prepare_ms = started.elapsed().as_millis();
     let inference = Instant::now();
     let Some(raw) = super::llama::run_unit_observed_on_device(

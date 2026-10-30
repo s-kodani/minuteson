@@ -301,7 +301,8 @@ fn explicit_gpu_selection_is_not_silently_overridden_by_cpu_flags() {
     .unwrap();
     let args = std::fs::read_to_string(path.join("args.log")).unwrap();
     assert!(args.contains("--gpu-layers\n3") && args.contains("--fit\noff"));
-    for cpu_only in ["--device", "--no-kv-offload", "--no-op-offload"] {
+    assert!(args.contains("--device\nMTL0"));
+    for cpu_only in ["--device\nnone", "--no-kv-offload", "--no-op-offload"] {
         assert!(!args.contains(cpu_only), "{cpu_only}: {args}");
     }
     // A fake CLI checks the contract only; this is not a real GPU trial.

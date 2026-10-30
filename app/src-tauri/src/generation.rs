@@ -5,6 +5,7 @@ mod llama_metrics;
 pub(crate) mod markdown;
 pub(crate) mod markdown_job;
 mod markdown_plan;
+mod memory;
 pub(crate) mod model_budget;
 mod optimization;
 pub(crate) mod restore;

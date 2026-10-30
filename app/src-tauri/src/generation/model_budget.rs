@@ -13,12 +13,12 @@ pub(super) const COMPLETION_INSTRUCTION: &str =
 // must use a new policy variant so existing jobs keep their fixed budgets.
 const ADAPTIVE_OUTPUT_RESERVE: u32 = 8192;
 
-// The only current allocation policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum Allocation {
     #[default]
     ModelAdaptive,
+    MemoryAwareV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +31,8 @@ pub(crate) struct Capacity {
     template_reserve_tokens: u32,
     tokenizer: Tokenizer,
     allocation: Allocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_context_tokens: Option<u32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,7 +61,49 @@ impl TokenLimits {
 }
 impl Capacity {
     pub(super) fn requires_tokenizer(&self) -> bool {
-        self.tokenizer == Tokenizer::Gguf
+        self.tokenizer == Tokenizer::Gguf || self.is_memory_aware()
+    }
+    pub(super) fn is_memory_aware(&self) -> bool {
+        self.allocation == Allocation::MemoryAwareV1
+    }
+    pub(super) fn for_new_job(model: &Fingerprint) -> Result<Self, String> {
+        let capacity = Self::reviewed(model)?;
+        let context = capacity.max_context_tokens;
+        Ok(capacity.with_execution_context(context))
+    }
+    pub(super) fn with_execution_context(mut self, context: u32) -> Self {
+        self.allocation = Allocation::MemoryAwareV1;
+        self.execution_context_tokens = Some(context);
+        self
+    }
+    pub(super) fn maximum_context(&self) -> u32 {
+        self.max_context_tokens
+    }
+    pub(super) fn desired_context(&self, actual_input_tokens: u32) -> Result<u32, String> {
+        self.context_for_input(actual_input_tokens, self.max_output_tokens)
+    }
+    pub(super) fn minimum_input_context(&self, actual_input_tokens: u32) -> Result<u32, String> {
+        self.context_for_input(
+            actual_input_tokens,
+            self.max_output_tokens.min(ADAPTIVE_OUTPUT_RESERVE),
+        )
+    }
+    fn context_for_input(&self, actual_input_tokens: u32, output: u32) -> Result<u32, String> {
+        let required = actual_input_tokens
+            .checked_add(self.template_reserve_tokens)
+            .and_then(|n| n.checked_add(output))
+            .ok_or("議事録の必要コンテキストが範囲外です")?;
+        Ok(required.saturating_add(255) / 256 * 256)
+    }
+    pub(super) fn minimum_context(&self, instruction_bytes: usize) -> Result<u32, String> {
+        let required = self
+            .max_output_tokens
+            .min(ADAPTIVE_OUTPUT_RESERVE)
+            .checked_add(self.template_reserve_tokens)
+            .and_then(|n| n.checked_add(2048))
+            .and_then(|n| n.checked_add(u32::try_from(instruction_bytes).ok()?))
+            .ok_or("議事録の最小コンテキストが範囲外です")?;
+        Ok(required.saturating_add(255) / 256 * 256)
     }
     pub(crate) fn reviewed(model: &Fingerprint) -> Result<Self, String> {
         // Official model cards and fixed revisions are reviewed per catalog
@@ -86,12 +130,18 @@ impl Capacity {
             template_reserve_tokens: 512,
             tokenizer: limits.tokenizer,
             allocation: Allocation::ModelAdaptive,
+            execution_context_tokens: None,
         })
     }
     pub(super) fn validate(&self, engine: &LlamaConfig) -> Result<(), String> {
         engine.validate()?;
-        if self.allocation != Allocation::ModelAdaptive {
-            return Err("非対応の旧トークン予算です".into());
+        match (self.allocation, self.execution_context_tokens) {
+            (Allocation::ModelAdaptive, None) => {}
+            (Allocation::MemoryAwareV1, Some(context))
+                if (2048..=self.max_context_tokens.min(262144)).contains(&context)
+                    && context % 256 == 0
+                    && context > self.max_output_tokens.min(ADAPTIVE_OUTPUT_RESERVE) + 512 => {}
+            _ => return Err("議事録の実行コンテキストと割当方式が一致しません".into()),
         }
         if self.model_sha256 != engine.model.sha256
             || !(2048..=1_048_576).contains(&self.max_context_tokens)
@@ -108,8 +158,14 @@ impl Capacity {
     }
     fn model_configuration(&self, engine: &LlamaConfig) -> Result<LlamaConfig, String> {
         let mut runtime = engine.clone();
-        runtime.context_tokens = self.max_context_tokens;
-        runtime.prediction_tokens = self.max_output_tokens;
+        runtime.context_tokens = self
+            .execution_context_tokens
+            .unwrap_or(self.max_context_tokens);
+        runtime.prediction_tokens = if self.is_memory_aware() {
+            self.max_output_tokens.min(runtime.context_tokens - 256)
+        } else {
+            self.max_output_tokens
+        };
         // Reject unsupported catalog limits instead of silently shrinking the
         // model's context or output. Keep the selected device/thread settings.
         runtime.validate()?;
@@ -173,7 +229,10 @@ impl Capacity {
         if input_upper_bound > self.max_input_tokens {
             return Err("選択モデルの入力トークン上限を超えています".into());
         }
-        if self.allocation == Allocation::ModelAdaptive {
+        if matches!(
+            self.allocation,
+            Allocation::ModelAdaptive | Allocation::MemoryAwareV1
+        ) {
             let mut runtime = self.model_configuration(engine)?;
             let available = runtime
                 .context_tokens
@@ -198,6 +257,7 @@ impl Capacity {
             template_reserve_tokens: 512,
             tokenizer: Tokenizer::Utf8ByteBpe,
             allocation: Allocation::ModelAdaptive,
+            execution_context_tokens: None,
         }
     }
     #[cfg(test)]
@@ -383,6 +443,71 @@ mod tests {
             value["allocation"] = serde_json::json!(allocation);
             assert!(serde_json::from_value::<Capacity>(value).is_err());
         }
+    }
+    #[test]
+    fn memory_aware_capacity_roundtrips_and_rejects_missing_or_mismatched_caps() {
+        let e = engine();
+        let original = Capacity::synthetic(&e, 131072, 32768);
+        let legacy = serde_json::to_value(&original).unwrap();
+        assert!(legacy.get("executionContextTokens").is_none());
+        let capacity = original.with_execution_context(16384);
+        let serialized = serde_json::to_value(&capacity).unwrap();
+        assert_eq!(serialized["allocation"], "memoryAwareV1");
+        assert_eq!(serialized["executionContextTokens"], 16384);
+        let decoded: Capacity = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(decoded, capacity);
+        decoded.validate(&e).unwrap();
+        for context in [
+            serde_json::Value::Null,
+            serde_json::json!(8192),
+            serde_json::json!(16385),
+            serde_json::json!(131328),
+        ] {
+            let mut value = serialized.clone();
+            value["executionContextTokens"] = context;
+            assert!(serde_json::from_value::<Capacity>(value)
+                .unwrap()
+                .validate(&e)
+                .is_err());
+        }
+        let mut changed = serialized;
+        changed["allocation"] = serde_json::json!("modelAdaptive");
+        assert!(serde_json::from_value::<Capacity>(changed)
+            .unwrap()
+            .validate(&e)
+            .is_err());
+        let legacy: Capacity = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            legacy.execution(&e, "", "a").unwrap().context_tokens,
+            131072
+        );
+    }
+    #[test]
+    fn memory_aware_desired_context_rounds_actual_input_and_preserves_output_floor() {
+        let e = engine();
+        let c = Capacity::synthetic(&e, 131072, 32768).with_execution_context(16384);
+        assert_eq!(c.desired_context(0).unwrap(), 33280);
+        assert_eq!(c.desired_context(1).unwrap(), 33536);
+        assert_eq!(c.desired_context(256).unwrap(), 33536);
+        assert_eq!(c.minimum_context(100).unwrap(), 11008);
+        assert!(c.desired_context(u32::MAX).is_err());
+        assert!(c.minimum_context(usize::MAX).is_err());
+        let (scope, _, _) = super::super::optimization::Scope::fixture();
+        // Synthetic counting uses characters, so multibyte inputs prove the
+        // fixed context is based on tokens rather than source byte length.
+        let runtime = c.execution(&e, "", &"あ".repeat(7660)).unwrap();
+        assert_eq!(
+            (runtime.context_tokens, runtime.prediction_tokens),
+            (16384, 8192)
+        );
+        assert!(c.execution(&e, "", &"あ".repeat(7661)).is_err());
+        drop(scope);
+        assert!(c.execution(&e, "", "a").is_err());
+        let small = Capacity::synthetic(&e, 4096, 1024).with_execution_context(3840);
+        assert_eq!(
+            small.token_configuration(&e).unwrap().prediction_tokens,
+            1024
+        );
     }
     #[test]
     fn model_adaptive_uses_remaining_context_and_bounds_input_by_minimum_output() {

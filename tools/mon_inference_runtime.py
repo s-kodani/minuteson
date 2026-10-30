@@ -184,7 +184,7 @@ int llama_completion(int argc, char ** argv) {""")
     text = replace(text, "    llama_backend_free();", "    // Model/context lifetime belongs to the worker.")
     source.write_text(text,encoding="utf8")
     with (root / "CMakeLists.txt").open("a") as output:
-        output.write('''\nadd_executable(mon-llama-worker tools/completion/completion.cpp mon/llama-main.cpp mon/llama-tokenize.cpp)
+        output.write('''\nadd_executable(mon-llama-worker tools/completion/completion.cpp mon/llama-main.cpp mon/llama-tokenize.cpp mon/llama-memory.cpp)
 target_include_directories(mon-llama-worker PRIVATE mon common)
 target_link_libraries(mon-llama-worker PRIVATE llama-common llama)
 target_compile_features(mon-llama-worker PRIVATE cxx_std_17)

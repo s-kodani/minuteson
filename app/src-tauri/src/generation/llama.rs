@@ -299,6 +299,11 @@ pub(crate) fn run_unit_observed_on_device(
     device: Option<&str>,
 ) -> Result<Option<Value>, String> {
     use super::llama_metrics::{Metrics, Phase};
+    // Explicit layer settings historically allowed the backend's default
+    // device. Pin that default so admission and inference inspect the same GPU.
+    let device = device.or_else(|| {
+        (config.gpu_layers > 0).then_some(if cfg!(windows) { "Vulkan0" } else { "MTL0" })
+    });
     if device.is_some_and(|v| !matches!(v, "MTL0" | "Vulkan0") || config.gpu_layers == 0) {
         return Err("GPUデバイスの固定条件が不正です".into());
     }
@@ -432,6 +437,12 @@ pub(crate) fn run_unit_observed_on_device(
         // Zero model layers alone still permits Metal KV/host-op offload in
         // official shared builds. CPU trials and CPU jobs must stay on CPU.
         command.args(["--device", "none", "--no-kv-offload", "--no-op-offload"]);
+    }
+    if let Err(error) = super::memory::guard(config, device, cancelled) {
+        return if cancelled() { Ok(None) } else { Err(error) };
+    }
+    if cancelled() {
+        return Ok(None);
     }
     let verification = started.elapsed();
     observe(Phase::Starting);

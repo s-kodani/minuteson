@@ -84,6 +84,8 @@ struct Worker {
     failed: bool,
     initialized: bool,
     requires_pcm_ranges: bool,
+    generation_key: Option<GenerationKey>,
+    active_generation: Option<GenerationKey>,
     startup_path: PathBuf,
 }
 impl Worker {
@@ -144,6 +146,8 @@ impl Worker {
             failed: false,
             initialized: false,
             requires_pcm_ranges: false,
+            generation_key: None,
+            active_generation: None,
             startup_path: directory.join("worker-startup.log"),
         })
     }
@@ -161,6 +165,11 @@ impl Worker {
         self.watched.verify()?;
         let id = self.next;
         self.next += 1;
+        self.active_generation = if matches!(kind, "llama" | "llama_prefix") {
+            GenerationKey::from_args(&args)
+        } else {
+            None
+        };
         let mut bytes = serde_json::to_vec(&json!({"protocol":1,"id":id,"op":"infer","kind":kind,"args":args,"directory":directory,"stdout":stdout,"stderr":stderr})).map_err(|e| e.to_string())?;
         if bytes.len() as u64 > PROCESS_POLICY.stdout_bytes {
             return Err("推論要求が上限を超えています".into());
@@ -252,6 +261,9 @@ impl Worker {
                 Some("done") => {
                     self.watched.verify()?;
                     self.active = None;
+                    if let Some(key) = self.active_generation.take() {
+                        self.generation_key = Some(key);
+                    }
                     #[cfg(unix)]
                     {
                         use std::os::unix::process::ExitStatusExt;
@@ -299,6 +311,219 @@ impl Drop for Worker {
 
 pub(crate) fn enabled() -> bool {
     JOB.with(|cell| cell.borrow().is_some())
+}
+
+// Admission checks account for the complete prospective allocation. Once the
+// same job's model/context is resident, charging it against free RAM again
+// would count it twice. Tokenizer and estimator requests never set this flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GenerationKey {
+    model: String,
+    context: u32,
+    layers: u32,
+}
+impl GenerationKey {
+    fn from_args(args: &[String]) -> Option<Self> {
+        let value = |flag: &str| args.windows(2).find(|v| v[0] == flag).map(|v| v[1].clone());
+        Some(Self {
+            model: value("--model")?,
+            context: value("--ctx-size")?.parse().ok()?,
+            layers: value("--gpu-layers")?.parse().ok()?,
+        })
+    }
+}
+pub(crate) fn generation_ready_for(model: &Path, context: u32, layers: u32) -> bool {
+    JOB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|j| j.worker.as_ref())
+            .is_some_and(|worker| {
+                !worker.failed
+                    && worker.generation_key.as_ref().is_some_and(|key| {
+                        Some(key.model.as_str()) == model.to_str()
+                            && key.context == context
+                            && key.layers == layers
+                    })
+            })
+    })
+}
+
+// Native GPU admission clamps its requested upper bound to the model's actual
+// layer count. Only the verified successful trial may normalize this key.
+pub(crate) fn confirm_generation_layers(layers: u32) {
+    JOB.with(|cell| {
+        if let Some(key) = cell
+            .borrow_mut()
+            .as_mut()
+            .and_then(|j| j.worker.as_mut())
+            .and_then(|w| w.generation_key.as_mut())
+        {
+            if layers > 0 && layers <= key.layers {
+                key.layers = layers;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_enabled() -> bool {
+    JOB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|j| installation::is_synthetic(&j.snapshot))
+    })
+}
+
+/// A separate metadata-only session. It cannot change the job's cached model,
+/// context, placement or protocol state, including when guarding an old job.
+pub(crate) struct Estimator {
+    worker: Option<Worker>,
+    root: PathBuf,
+    snapshot: Snapshot,
+    directory: tempfile::TempDir,
+    sequence: u64,
+}
+impl Estimator {
+    pub(crate) fn open(snapshot: Option<&Snapshot>) -> Result<Self, String> {
+        let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let root = JOB
+            .with(|cell| cell.borrow().as_ref().map(|j| j.root.clone()))
+            .unwrap_or(directory.path().canonicalize().map_err(|e| e.to_string())?);
+        // Old jobs keep their frozen inference worker. Their admission guard
+        // uses the current bundled estimator, never an unsupported old opcode.
+        let snapshot = match snapshot.filter(|s| s.protocol == 1) {
+            Some(snapshot) => snapshot.clone(),
+            None => prepare(&root, "llama")?.ok_or("メモリ見積もりワーカーがありません")?,
+        };
+        snapshot.validate()?;
+        Ok(Self {
+            worker: None,
+            root,
+            snapshot,
+            directory,
+            sequence: 0,
+        })
+    }
+    pub(crate) fn run(
+        &mut self,
+        args: Vec<String>,
+        gpu: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<u8>, String> {
+        use std::time::{Duration, Instant};
+        const OUTPUT_LIMIT: u64 = 32 * 1024;
+        let selected = {
+            #[cfg(windows)]
+            {
+                if gpu {
+                    self.snapshot.accelerated()?
+                } else {
+                    self.snapshot.clone()
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = gpu;
+                self.snapshot.clone()
+            }
+        };
+        let directory = self.directory.path().join(self.sequence.to_string());
+        self.sequence += 1;
+        std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+        let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+        for name in ["memory.json", "memory.log"] {
+            OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(directory.join(name))
+                .map_err(|e| e.to_string())?;
+        }
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|w| w.runtime_sha256 != selected.sha256)
+        {
+            self.worker.take();
+        }
+        if self.worker.is_none() {
+            let job = Job {
+                root: self.root.clone(),
+                snapshot: selected.clone(),
+                worker: None,
+            };
+            self.worker = Some(Worker::launch(&job, &directory, &selected)?);
+        }
+        let worker = self.worker.as_mut().unwrap();
+        let id = worker.request(
+            "llama_memory",
+            args,
+            &directory,
+            "memory.json",
+            "memory.log",
+        )?;
+        let started = Instant::now();
+        loop {
+            if cancelled() {
+                self.worker.take();
+                return Err("メモリ確認が中断されました".into());
+            }
+            if started.elapsed() > Duration::from_secs(30) {
+                self.worker.take();
+                return Err("メモリ見積もりが時間上限を超えました".into());
+            }
+            for (name, limit) in [("memory.json", OUTPUT_LIMIT), ("memory.log", 1024 * 1024)] {
+                let meta =
+                    std::fs::symlink_metadata(directory.join(name)).map_err(|e| e.to_string())?;
+                if !meta.is_file() || meta.len() > limit {
+                    self.worker.take();
+                    return Err("メモリ見積もりの出力が上限を超えています".into());
+                }
+            }
+            if self.worker.as_mut().unwrap().poll(id)?.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let bytes = std::fs::read(directory.join("memory.json")).map_err(|e| e.to_string())?;
+        if bytes.is_empty() || bytes.len() as u64 > OUTPUT_LIMIT {
+            return Err("メモリ見積もりの出力が空か上限を超えています".into());
+        }
+        Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod generation_key_tests {
+    use super::*;
+    #[test]
+    fn warm_admission_identity_includes_model_context_and_placement() {
+        let args: Vec<String> = [
+            "--model",
+            "/model.gguf",
+            "--ctx-size",
+            "40960",
+            "--gpu-layers",
+            "0",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let key = GenerationKey::from_args(&args).unwrap();
+        assert_eq!(
+            key,
+            GenerationKey {
+                model: "/model.gguf".into(),
+                context: 40960,
+                layers: 0
+            }
+        );
+        for (index, value) in [(1, "/other.gguf"), (3, "32768"), (5, "16")] {
+            let mut other = args.clone();
+            other[index] = value.into();
+            assert_ne!(Some(key.clone()), GenerationKey::from_args(&other));
+        }
+        assert!(GenerationKey::from_args(&args[..4]).is_none());
+    }
 }
 
 pub(crate) enum Run {

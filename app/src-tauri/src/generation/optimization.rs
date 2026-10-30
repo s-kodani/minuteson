@@ -9,6 +9,9 @@ use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
 };
+// Rejected packing candidates may exceed the chosen context; their counts
+// remain bounded by tokenizer request bytes plus the pinned chat template.
+pub(super) const MAX_TOKEN_COUNT: u32 = super::llama::MAX_PROMPT_BYTES as u32 + 8192;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Policy {
@@ -82,6 +85,13 @@ pub(super) fn select(
     }
     Ok(None)
 }
+pub(super) fn memory_aware_policy(
+    engine: &LlamaConfig,
+    runtime: Option<&resident::Snapshot>,
+) -> Result<Policy, String> {
+    let runtime = runtime.ok_or("GGUFトークナイザーの実行環境がありません")?;
+    Ok(Policy::gguf(engine, runtime))
+}
 impl Policy {
     fn gguf(engine: &LlamaConfig, runtime: &resident::Snapshot) -> Self {
         Self {
@@ -150,6 +160,26 @@ struct Counter {
 thread_local! {static COUNTER:RefCell<Option<Counter>>=const{RefCell::new(None)};static PREFIX:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 pub(super) struct Scope;
 impl Scope {
+    pub(super) fn configure(&self, engine: &LlamaConfig) -> Result<(), String> {
+        COUNTER.with(|counter| {
+            let mut current = counter.borrow_mut();
+            let current = current
+                .as_mut()
+                .ok_or("トークン算定セッションがありません")?;
+            if current.engine.model != engine.model
+                || current.engine.executable != engine.executable
+                || current.engine.threads != engine.threads
+                || current.engine.gpu_layers != engine.gpu_layers
+                || current.engine.seed != engine.seed
+                || current.read_only
+            {
+                return Err("トークン算定の固定モデル・構成が変更されています".into());
+            }
+            current.engine = engine.clone();
+            current.output_reserve = engine.prediction_tokens;
+            Ok(())
+        })
+    }
     pub(super) fn enter(engine: &LlamaConfig, policy: Option<&Policy>) -> Result<Self, String> {
         if policy.is_some_and(|p| {
             !matches!(p.version, 1 | 2) || p.version == 2 && (!p.token_packing || p.prefix_reuse)
@@ -180,6 +210,12 @@ impl Scope {
         Ok(Self)
     }
     #[cfg(test)]
+    pub(super) fn fixture_for(engine: &LlamaConfig, policy: &Policy) -> Self {
+        let scope = Self::enter(engine, Some(policy)).unwrap();
+        COUNTER.with(|c| c.borrow_mut().as_mut().unwrap().synthetic = true);
+        scope
+    }
+    #[cfg(test)]
     pub(super) fn fixture() -> (Scope, LlamaConfig, Policy) {
         let proof = crate::local_engine::Fingerprint {
             path: "/test/model".into(),
@@ -201,8 +237,7 @@ impl Scope {
             prefix_reuse: false,
             evidence_hash: "b".repeat(64),
         };
-        let scope = Scope::enter(&engine, Some(&policy)).unwrap();
-        COUNTER.with(|c| c.borrow_mut().as_mut().unwrap().synthetic = true);
+        let scope = Self::fixture_for(&engine, &policy);
         (scope, engine, policy)
     }
     pub(super) fn replay(
@@ -217,7 +252,7 @@ impl Scope {
             || counts
                 .keys()
                 .any(|k| k.len() != 64 || !k.bytes().all(|b| b.is_ascii_hexdigit()))
-            || counts.values().any(|n| *n == 0)
+            || counts.values().any(|n| *n == 0 || *n > MAX_TOKEN_COUNT)
         {
             return Err("保存トークン数の形式が不正です".into());
         }
@@ -391,6 +426,7 @@ impl Counter {
         let result: Count = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         if result.schema_version != 1
             || result.tokens == 0
+            || result.tokens > MAX_TOKEN_COUNT
             || result.system_prefix_tokens > result.tokens
         {
             return Err("トークン算定結果が不正です".into());
@@ -404,6 +440,122 @@ impl Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn short_input_keeps_a_valid_long_merge_instruction_with_its_output_reserve() {
+        use super::super::model_budget::Capacity;
+        let (scope, engine, _) = Scope::fixture();
+        let capacity = Capacity::synthetic(&engine, 32768, 8192).with_execution_context(32768);
+        let extraction = count("short instruction", "{}").unwrap().unwrap();
+        let merge_system = "m".repeat(16 * 1024);
+        let merge_prompt = "{\"drafts\":[\"a\"]}";
+        let merge = count(&merge_system, merge_prompt).unwrap().unwrap();
+        let desired = capacity.desired_context(extraction).unwrap();
+        let minimum = capacity
+            .minimum_context(128)
+            .unwrap()
+            .max(capacity.minimum_input_context(merge).unwrap());
+        assert!(minimum > desired && minimum <= 32768);
+        let selected = capacity.with_execution_context(desired.max(minimum));
+        scope
+            .configure(&selected.token_configuration(&engine).unwrap())
+            .unwrap();
+        assert_eq!(fits(&merge_system, merge_prompt), Some(true));
+        let merge_runtime = selected
+            .execution(&engine, &merge_system, merge_prompt)
+            .unwrap();
+        assert!(merge_runtime.prediction_tokens >= 8192);
+        let extract_runtime = selected
+            .execution(&engine, "short instruction", "{}")
+            .unwrap();
+        assert_eq!(extract_runtime.context_tokens, merge_runtime.context_tokens);
+        let preferred = Capacity::synthetic(&engine, 131072, 32768).with_execution_context(131072);
+        assert!(
+            preferred.desired_context(extraction).unwrap()
+                >= preferred.minimum_input_context(merge).unwrap()
+        );
+    }
+    #[test]
+    fn memory_aware_counter_uses_fixed_cap_and_replays_lossless_partition_without_a_model() {
+        use super::super::{markdown, markdown_job, markdown_plan as plan, model_budget::Capacity};
+        let (scope, engine, policy) = Scope::fixture();
+        let capacity = Capacity::synthetic(&engine, 131072, 32768).with_execution_context(16384);
+        let token_engine = capacity.token_configuration(&engine).unwrap();
+        scope.configure(&token_engine).unwrap();
+        let mut input = crate::storage::current_minutes_fixture::input();
+        let original = "会議の確認事項。\"資料\"\\参照\n".repeat(2000);
+        input.analysis.utterances[0].effective_text = original.clone();
+        let limit = capacity.plan_limit(&engine, 5400).unwrap();
+        let planned = scope.check(plan::build(&input, limit)).unwrap();
+        plan::validate_coverage(&input, &planned).unwrap();
+        let mut source = String::new();
+        let mut extract_count = 0;
+        for node in &planned.nodes {
+            if let plan::Node::Extract { slices } = node {
+                let prompt = plan::extract_prompt(&input, slices).unwrap();
+                let system = markdown_job::task_system(
+                    markdown::system(),
+                    markdown::PromptVersion::CustomPromptsV5,
+                );
+                let runtime = capacity.execution(&engine, &system, &prompt).unwrap();
+                assert_eq!(runtime.context_tokens, 16384);
+                assert!(runtime.prediction_tokens >= 8192);
+                for slice in slices {
+                    source.push_str(&original[slice.first_byte..slice.end_byte]);
+                }
+                extract_count += 1;
+            }
+        }
+        assert!(extract_count > 1);
+        assert_eq!(source, original);
+        let recorded = counts();
+        let mut changed = token_engine.clone();
+        changed.model.sha256 = "f".repeat(64);
+        assert!(scope.configure(&changed).is_err());
+        drop(scope);
+        let replay = Scope::replay(&token_engine, Some(&policy), &recorded)
+            .unwrap()
+            .unwrap();
+        assert_eq!(replay.check(plan::build(&input, limit)).unwrap(), planned);
+        assert!(replay.configure(&token_engine).is_err());
+    }
+    #[test]
+    fn memory_aware_policy_requires_exact_counting_for_every_catalog_model() {
+        let (_, mut engine, _) = Scope::fixture();
+        let definitions: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../model-catalog/model-definitions.json"
+        ))
+        .unwrap();
+        let runtime = resident::Snapshot {
+            gpu: None,
+            protocol: 1,
+            engine: "llama".into(),
+            name: "mon-llama-worker".into(),
+            bytes: 1,
+            sha256: "b".repeat(64),
+        };
+        for choice in definitions
+            .iter()
+            .filter(|c| c["manifest"]["engine"] == "llama.cpp")
+        {
+            let model = choice["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["role"] == "llm")
+                .unwrap();
+            engine.model.sha256 = model["expectedHash"].as_str().unwrap().into();
+            engine.model.size = model["expectedSize"].as_u64().unwrap();
+            let capacity =
+                super::super::model_budget::Capacity::for_new_job(&engine.model).unwrap();
+            let policy = memory_aware_policy(&engine, Some(&runtime)).unwrap();
+            assert_eq!(
+                (policy.version, policy.token_packing, policy.prefix_reuse),
+                (2, true, false)
+            );
+            Policy::validate_model(Some(&policy), &engine, Some(&runtime), &capacity).unwrap();
+            assert!(Policy::validate_model(None, &engine, Some(&runtime), &capacity).is_err());
+        }
+    }
     #[test]
     fn required_gguf_counting_binds_model_and_worker_without_prefix_reuse() {
         let (_scope, mut engine, _) = Scope::fixture();

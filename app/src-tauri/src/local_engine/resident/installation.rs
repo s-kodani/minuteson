@@ -121,7 +121,8 @@ impl Snapshot {
         self.validate()?;
         if kind != self.engine
             && !(self.engine == "sherpa" && kind == "embedding")
-            && !(self.engine == "llama" && matches!(kind, "llama_tokenize" | "llama_prefix"))
+            && !(self.engine == "llama"
+                && matches!(kind, "llama_tokenize" | "llama_prefix" | "llama_memory"))
         {
             return Err("ジョブと推論エンジンが一致しません".into());
         }
