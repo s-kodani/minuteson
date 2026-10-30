@@ -246,6 +246,14 @@ mockIPC(async (command, args) => {
     if(f.hideLost)throw Error("合成の収納応答喪失");
     f.hidden=true;return null;
   }
+  if(command==="get_analysis_flow"&&f.regenerationFlow?.meetingId===args.meetingId)return clone(f.regenerationFlow);
+  if(command==="get_transcription_regeneration_target")return {target:null,flow:f.regenerationFlow?{id:f.regenerationFlow.id,lockVersion:f.regenerationFlow.lockVersion}:null};
+  if(command==="regenerate_transcription"){
+    if(f.captureTest)throw Error("録音前テストの停止・検証・一時音声の解放を完了してください");
+    f.regenerationRequest=clone(args.request);
+    f.regenerationFlow={id:args.request.operationId,meetingId:args.request.meetingId,stage:"transcription",lockVersion:0,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:true,readyToPublish:false};
+    return clone(f.regenerationFlow);
+  }
   if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft", "get_minutes_markdown"].includes(command)) return null;
   if (["get_analysis_jobs", "get_ready_analysis_flows", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_publication_status") return null;

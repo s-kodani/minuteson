@@ -12,6 +12,7 @@ import { ToastHost, NotificationList } from "../src/toast";
 (window as any).skipModelDownloadFixtureMain = true;
 const { modelDownloadIPC } = await import("./model-download-browser-fixture");
 const f = (window as any).modelDownloadFixture;
+f.entries[0].modelFiles = [{ role: "asr", size: 17, sha256: "b".repeat(64) }];
 const copy = structuredClone(f.entries[0]); copy.packageId = "55555555-5555-4555-8555-555555555555";
 f.entries.push(copy);
 f.deletionMode = "normal";

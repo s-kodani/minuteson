@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { canonicalRecipe, downloadByteTotals, downloadDigest, type OfficialModelOption } from "../src/model-download-state.ts";
+import { canonicalRecipe, downloadByteTotals, downloadDigest, packageReviewHash, type OfficialModelOption } from "../src/model-download-state.ts";
 import { canReuseOfficialModel, installedModelGroups, matchesOfficialModel, modelChoices, modelChoiceAction, modelDisplayName } from "../src/model-selection-state.ts";
 import type { ModelPlacementEntry } from "../src/model-inspection-state.ts";
 import type { ModelProfileView } from "../src/model-profile-state.ts";
@@ -10,14 +10,14 @@ const catalog = JSON.parse(readFileSync(new URL("../model-catalog/macos.json", i
 const options: OfficialModelOption[] = await Promise.all(catalog.map(async (choice: any) => {
   const recipe = canonicalRecipe(choice.recipe);
   return { ...choice, definition: JSON.stringify(recipe), review: { ...recipe, recipeSchemaVersion: recipe.schemaVersion,
-    recipeHash: await downloadDigest(recipe), ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0),
+    recipeHash: await downloadDigest(recipe), packageReviewHash: await packageReviewHash(recipe.manifest), ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0),
     installed: false, ready: false, publisherAuthenticity: "not_verified" } };
 }));
 function entry(option = options[0], packageId = "installed"): ModelPlacementEntry {
   const manifest = option.review.manifest;
   return { packageId, engine: manifest.engine, engineVersion: manifest.engineVersion, modelName: manifest.modelName,
     modelVersion: manifest.modelVersion, quantization: manifest.quantization, totalBytes: option.review.totalBytes,
-    placementRecorded: true, ready: false, sourceType: "download", reviewHash: "a".repeat(64),
+    placementRecorded: true, ready: false, sourceType: "download", reviewHash: option.review.packageReviewHash,
     download: { operationId: "33333333-3333-4333-8333-333333333333", recipeHash: option.review.recipeHash },
     modelFiles: manifest.files.filter(file => !["executable", "runtime_library", "notice"].includes(file.role))
       .map(file => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })) };
@@ -36,12 +36,23 @@ test("downloaded choice retains its value and exact label without a second insta
   assert.equal(modelDisplayName(installed, options), options[0].label);
   assert.equal(installed.modelName, "Qwen2.5-1.5B-Instruct");
 });
-test("older download recipes reuse exact model bytes and display the catalog name", () => {
+test("older transport recipes reuse exact package bytes and display the catalog name", () => {
   const installed = entry(); installed.download!.recipeHash = "b".repeat(64);
-  installed.engineVersion = "older-runtime";
   assert.equal(matchesOfficialModel(installed, options[0]), true);
   assert.equal(modelChoices("llama.cpp", [installed], options, [])[0].entry, installed);
   assert.equal(modelDisplayName(installed, options), options[0].label);
+});
+
+test("minutes models also prepare changed executables instead of reusing weights alone", async () => {
+  const option = options.find(o => o.review.manifest.engine === "llama.cpp")!;
+  const { installed, used, profiles } = checkedSelection(option);
+  const changed = structuredClone(option);
+  changed.review.manifest.files.find(file => file.role === "executable")!.expectedHash = "f".repeat(64);
+  changed.review.packageReviewHash = await packageReviewHash(changed.review.manifest);
+  assert.equal(matchesOfficialModel(installed, changed), true);
+  assert.equal(canReuseOfficialModel(installed, changed), false);
+  const choice = modelChoices(installed.engine, [installed], [changed], profiles)[0];
+  assert.equal(choice.entry, undefined); assert.equal(modelChoiceAction(choice, [installed], used), "update_runtime");
 });
 test("Whisper keeps its model name but prepares the current engine instead of reusing a CPU-only recipe", () => {
   const option = structuredClone(options[0]);
@@ -49,6 +60,7 @@ test("Whisper keeps its model name but prepares the current engine instead of re
   for (const file of option.review.manifest.files) if (file.role === "llm") file.role = "asr";
   const current = entry(option, "metal"), old = entry(option, "cpu");
   old.download!.recipeHash = "b".repeat(64);
+  old.reviewHash = "c".repeat(64);
   assert.equal(matchesOfficialModel(old, option), true);
   assert.equal(canReuseOfficialModel(old, option), false);
   assert.equal(canReuseOfficialModel(current, option), true);
@@ -100,6 +112,7 @@ test("Sherpa keeps model identity but reacquires the package with the voice C AP
   const option = options.find(o => o.review.manifest.engine === "sherpa-onnx")!;
   const current = entry(option, "with-c-api"), old = entry(option, "without-c-api");
   old.download!.recipeHash = "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8";
+  old.reviewHash = "c".repeat(64);
   assert.equal(matchesOfficialModel(old, option), true);
   assert.equal(canReuseOfficialModel(old, option), false);
   assert.equal(canReuseOfficialModel(current, option), true);
@@ -115,6 +128,44 @@ test("Sherpa keeps model identity but reacquires the package with the voice C AP
       expectedHash:"ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1",
     });
   }
+});
+
+test("Mac and Windows reuse complete speech packages across transport-only changes", async () => {
+  for (const target of ["macos_aarch64", "windows_x86_64"] as const) {
+    for (const engine of ["whisper.cpp", "sherpa-onnx", "asr"] as const) {
+      const option = structuredClone(options.find(o => o.review.manifest.engine === "sherpa-onnx")!);
+      option.review.manifest.target = target; option.review.manifest.engine = engine;
+      if (engine === "asr") option.review.manifest.backend = { id: "sherpa-onnx-transducer", files: { model: "models/segmentation.onnx" } };
+      option.review.packageReviewHash = await packageReviewHash(option.review.manifest);
+      const installed = entry(option, "unchanged"); installed.backendId = option.review.manifest.backend?.id;
+      installed.download!.recipeHash = "b".repeat(64);
+      for (const state of ["failed", "succeeded"] as const) {
+        installed.compatibility = { operationId: "check", packageId: installed.packageId, reviewHash: installed.reviewHash, adapterRevision: 1, state, errorMessage: state === "failed" ? "previous failure" : null };
+        assert.equal(canReuseOfficialModel(installed, option), true);
+        const choice = modelChoices(engine, [installed], [option], [])[0];
+        assert.equal(choice.entry, installed); assert.equal(modelChoiceAction(choice, [installed]), "use");
+      }
+      for (const role of ["executable", "runtime_library", "notice", "segmentation", "speaker_embedding"]) {
+        const changed = structuredClone(option);
+        const file = changed.review.manifest.files.find(f => f.role === role)!;
+        assert.ok(file, role); file.expectedHash = "f".repeat(64);
+        changed.review.packageReviewHash = await packageReviewHash(changed.review.manifest);
+        assert.equal(canReuseOfficialModel(installed, changed), false, `${target}/${engine}/${role}`);
+      }
+      const manual = { ...installed, sourceType: "manual_import" as const, download: null };
+      assert.equal(canReuseOfficialModel(manual, option), false);
+    }
+  }
+});
+
+test("group totals exclude deleted copies and keep full and int8 models separate", () => {
+  const variants = options.filter(o => o.review.manifest.engine === "sherpa-onnx");
+  const copies = [entry(variants[0], "first"), entry(variants[0], "second"), entry(variants[1], "int8")];
+  const groups = installedModelGroups(copies, []);
+  assert.equal(groups.length, 2); assert.equal(groups[0].entries.length, 2);
+  assert.equal(groups[0].totalBytes, copies[0].totalBytes * 2);
+  const after = installedModelGroups([{ ...copies[0], bodyRemoved: true }, ...copies.slice(1)], []);
+  assert.equal(after.length, 2); assert.equal(after[0].key, groups[0].key); assert.equal(after[0].totalBytes, copies[1].totalBytes);
 });
 
 function checkedSelection(option: OfficialModelOption) {
@@ -142,13 +193,13 @@ test("rebuilding a shared runtime archive does not turn applied checked models i
     const { installed, used, profiles } = checkedSelection(option);
     const choice = modelChoices(installed.engine, [installed], [option], profiles)[0];
     assert.equal(modelChoiceAction(choice, [installed], used), "in_use");
-    // Keep runtime admission strict even when the applied selection is usable.
-    if (installed.engine !== "llama.cpp") assert.equal(choice.entry, undefined);
+    assert.equal(choice.entry, installed, "unchanged installed package must be reusable after archive metadata changes");
   }
 });
 
 test("an installed VAD with changed transport metadata offers runtime preparation, never a nonexistent missing VAD", () => {
   const option = whisperWithVad(), { installed } = checkedSelection(option);
+  installed.reviewHash = "c".repeat(64); // An actual runtime update is required.
   const choice = modelChoices(installed.engine, [installed], [option], [])[0];
   assert.equal(modelChoiceAction(choice, [installed]), "update_runtime");
   installed.modelFiles = installed.modelFiles!.filter(file => file.role !== "vad");

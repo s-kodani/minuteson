@@ -5,7 +5,7 @@ import { mockIPC, mockWindows } from "./startup-ready-mocks";
 import { emit } from "@tauri-apps/api/event";
 import { ModelInspectionPanel } from "../src/model-inspection";
 import { ToastHost, NotificationList } from "../src/toast";
-import { parseDownloadDefinition, downloadDigest, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
+import { parseDownloadDefinition, downloadDigest, packageReviewHash, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
 import officialChoices from "../model-catalog/macos.json";
@@ -49,7 +49,7 @@ const componentRoles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation",
 f.definition = JSON.stringify({ schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: "c".repeat(64), memberPath: "model" } }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
   const recipe = parseDownloadDefinition(definition);
-  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), recipeSchemaVersion: recipe.schemaVersion, ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), packageReviewHash: await packageReviewHash(recipe.manifest), recipeSchemaVersion: recipe.schemaVersion, ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };
 }
 async function receipt(operationId: string, review: DownloadReview) {
   const manifestHash = await downloadDigest(review.manifest), files = review.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));

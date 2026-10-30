@@ -123,7 +123,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         await stopAllPlayback();
         const currentTest=await captureTest.client.refresh();
         if((currentTest?.runId??null)!==(expectedTest?.runId??null)||currentTest?.busy)throw Error("録音前テストの対象・状態が変更されました。録音は開始していません。");
-        if(currentTest)await captureTest.client.discard(currentTest.runId);
+        await captureTest.finish();
         if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true}:current);
         await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers:local?.numSpeakers??null });
         const accepted=await invoke<CaptureMeeting | null>("get_meeting", { id: expected.id });
@@ -184,7 +184,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
           await stopAllPlayback();
           const current=await captureTest.client.refresh();
           if((current?.runId??null)!==(previous?.runId??null)||current?.busy)throw Error("前のテストの状態が変更されています。");
-          if(current)await captureTest.client.discard(current.runId);
+          await captureTest.finish();
           await captureTest.client.start({runId:crypto.randomUUID(),microphoneUid:uid,captureScope:scope,expectedImport:{token:importing.token,revision:importing.revision,busy:importing.busy}});
         }),onError:cause=>setCaptureTestError(String(cause))});
     }catch(cause){setCaptureTestError(String(cause));}
@@ -193,12 +193,11 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
   const cancelCaptureTest=async()=>{
     const id=captureTest.snapshot?.runId??captureTest.pending?.runId;if(!id)return;
     setCaptureTestError("");
-    try{await captureTest.client.cancel(id);}catch(cause){setCaptureTestError(String(cause));}
+    try{await captureTest.finish();}catch(cause){setCaptureTestError(String(cause));}
   };
-  const discardCaptureTest=async()=>{
-    const id=captureTest.snapshot?.runId;if(!id)return;
+  const finishCaptureTest=async()=>{
     setCaptureTestError("");
-    try{await stopAllPlayback();await captureTest.client.discard(id);}catch(cause){setCaptureTestError(String(cause));}
+    try{await captureTest.finish();}catch(cause){setCaptureTestError(String(cause));throw cause;}
   };
   const stopRecording = async (source?:HTMLElement) => {
     await recordingDecision.request(false,source);
@@ -212,6 +211,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
   const confirmPreparationResult=async()=>{
     const expected=preparation;if(!expected?.submitted||navigationLocked)return;
     await withSavedEdits(async()=>{
+      await captureTest.finish();
       const [meeting,recording]=await Promise.all([invoke<CaptureMeeting|null>("get_meeting",{id:expected.id}),invoke<RecordingSnapshot>("get_recording_snapshot")]);
       assertCloseRecording(recording);
       if(root.current.preparation?.id!==expected.id||root.current.screen!=="recording")throw Error("録音準備が変更されています。別の会議には切り替えていません。");
@@ -220,5 +220,5 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
       setSelectedMeeting(meeting);setRenameTitle(meeting.title);setPreparation(null);setMeetings(await invoke<CaptureMeeting[]>("list_meetings"));setCaptureError("");
     });
   };
-  return { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, discardCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult };
+  return { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, finishCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult };
 }

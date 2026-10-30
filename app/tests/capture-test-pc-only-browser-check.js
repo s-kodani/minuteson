@@ -37,7 +37,7 @@ async page=>{
     check(await panel.evaluate(e=>{const buttons=[...e.querySelectorAll('.common-modal-body > button')].map(b=>b.getBoundingClientRect());return buttons.slice(1).every((b,i)=>b.top-buttons[i].bottom>=8);}),"test actions have no spacing");
     await page.screenshot({path:`output/playwright/test-controls-pc-only-${theme}-20261012.png`});
   }
-  await panel.getByRole("button",{name:"テスト音声を破棄",exact:true}).click();
+  await panel.getByRole("button",{name:"確認を閉じる",exact:true}).click();
   await page.waitForFunction(()=>window.closeFixture.captureTest===null);
   return {passed:8,results:["one idle action and no manual refresh", "PC-only ready result", "microphone absence is informational", "no autoplay/native recording", "PC-only prepared playback", "both themes without overflow", "spaced test actions", "owned partial result disposed"]};
 }

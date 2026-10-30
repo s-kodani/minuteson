@@ -275,7 +275,7 @@ impl CaptureTests {
             return Err("アプリの終了処理が進行中です".into());
         }
         if state.current.is_some() {
-            return Err("録音前テストの停止・検証・一時音声の解放を完了してください".into());
+            return Err("5秒録音テストがまだ終了していません。テスト画面を閉じてから、もう一度操作してください。テスト音声は自動で削除されます。".into());
         }
         Ok(())
     }

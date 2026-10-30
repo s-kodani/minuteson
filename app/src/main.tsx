@@ -136,7 +136,13 @@ function MainWindow() {
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
-  const { busy: navigationBusy, running: navigating, withSavedEdits } = useSavedNavigation(setMeetingError);
+  const { busy: navigationBusy, running: navigating, withSavedEdits: saveEdits } = useSavedNavigation(setMeetingError);
+  // Navigation and regeneration cannot leave a completed test holding the
+  // native admission gate. Capture actions own their own confirmation barrier.
+  const withSavedEdits: typeof saveEdits = (action, reason) => saveEdits(async () => {
+    await captureTest.finish();
+    await action();
+  }, reason);
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
@@ -171,10 +177,10 @@ function MainWindow() {
   // model preparation. Recording, maintenance and shutdown still stop it.
   const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || closingBusy || startConfirm.pending;
   const publication = useAnalysisPublication(writeLocked, action => withSavedEdits(action, "transcription"));
-  const { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, discardCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult } = useCaptureActions({
+  const { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, finishCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult } = useCaptureActions({
     context: { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state },
     controller: captureController, captureOwner, closing, activeMicrophoneInput, microphoneSession, microphoneSelection,
-    startConfirm, withSavedEdits, recordingDecision, navigationLocked, setPreparation, setSelectedMeeting, setRenameTitle, setScreen, setMeetings,
+    startConfirm, withSavedEdits: saveEdits, recordingDecision, navigationLocked, setPreparation, setSelectedMeeting, setRenameTitle, setScreen, setMeetings,
   });
   const goBack = async () => {
     const target = history.previous, from = history.current;
@@ -436,7 +442,7 @@ function MainWindow() {
               activeMicrophone={captureAvailable&&activeMicrophoneInput?<ActiveMicrophoneSelection control={captureInputs} locked={writeLocked||!captureInputs.inputs} onSelect={value=>void selectRecordingMicrophone(value)} status={microphoneSelection} pending={microphoneSelection?.source==="pending"||microphoneRequest?.owner===microphoneSession&&(!microphoneSelection||microphoneSelection.requestRevision<microphoneRequest.revision)}/>:null}
               test={captureAvailable?<CaptureTestPanel operationError={captureTestError} control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
                 canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
-                locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
+                locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onFinish={finishCaptureTest}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
           {selectedMeeting ? <AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onGenerationStarted={() => setMeetingToolsOpen(false)} renderTools={renderMeetingTools} onHeadChanged={async () => {

@@ -22,11 +22,12 @@ export function matchesOfficialModel(entry: ModelPlacementEntry, option: Officia
   const key = identity(entry.engine, entry.modelFiles ?? [], entry.backendId);
   return key !== null && key === identity(option.review.manifest.engine, option.review.manifest.files.map(file => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), option.review.manifest.backend?.id);
 }
-// Matching weights retain the display identity. Whisper needs the current
-// engine, and Sherpa needs the C API library added for voice registration.
+// Matching weights retain the display identity. Reusing downloaded packages
+// requires every runtime/model/notice byte to match the current manifest.
 export function canReuseOfficialModel(entry: ModelPlacementEntry, option: OfficialModelOption): boolean {
-  return matchesOfficialModel(entry, option) && (!["whisper.cpp", "asr", "sherpa-onnx"].includes(entry.engine)
-    || entry.sourceType === "download" && entry.download?.recipeHash === option.review.recipeHash);
+  return matchesOfficialModel(entry, option) && entry.sourceType === "download"
+    && (entry.download?.recipeHash === option.review.recipeHash
+      || /^[0-9a-f]{64}$/u.test(option.review.packageReviewHash) && entry.reviewHash === option.review.packageReviewHash);
 }
 export function modelDisplayName(entry: ModelPlacementEntry, options: OfficialModelOption[]): string {
   const official = options.find(option => matchesOfficialModel(entry, option));
@@ -45,7 +46,8 @@ export function installedModelGroups(entries: ModelPlacementEntry[], profiles: M
     const key = entryIdentity(entry), group = groups.get(key) ?? [];
     group.push(entry); groups.set(key, group);
   }
-  return [...groups.values()].map(group => ({ entry: preferred(group, profiles), entries: group }));
+  return [...groups].map(([key, group]) => ({ key, entry: preferred(group, profiles), entries: group,
+    totalBytes: group.reduce((sum, entry) => sum + entry.totalBytes, 0) }));
 }
 export interface ModelChoice {
   value: string;
@@ -63,8 +65,8 @@ function containsModelFiles(entry: ModelPlacementEntry, option: OfficialModelOpt
 export type ModelChoiceAction = "in_use" | "add_vad" | "use" | "update_runtime" | "download";
 // An applied, checked package is independent of a new catalog's transport
 // archive. A rebuilt shared archive must not erase the current configuration.
-// This is presentation only: preparing another runtime keeps the strict recipe
-// and compatibility checks in canReuseOfficialModel / useModel.
+// Runtime changes still require the full-package and compatibility checks in
+// canReuseOfficialModel / useModel, even if the model weights are unchanged.
 export function modelChoiceAction(choice: ModelChoice | undefined, entries: ModelPlacementEntry[], used?: ModelProfileComponent): ModelChoiceAction {
   if (!choice) return "download";
   const option = choice.option;
@@ -72,8 +74,8 @@ export function modelChoiceAction(choice: ModelChoice | undefined, entries: Mode
   const applied = installed.find(entry => entry.packageId === used?.packageId && entry.engine === used.engine);
   if (applied && used?.settingsMatch && used.compatibilityCurrent && canReviewApplication(applied)
     && applied.compatibility?.operationId === used.checkOperationId
-    && (!option || containsModelFiles(applied, option))) return "in_use";
-  if (choice.entry) return "use";
+    && (!option || containsModelFiles(applied, option) && canReuseOfficialModel(applied, option))) return "in_use";
+  if (choice.entry && installed.some(entry => entry.packageId === choice.entry!.packageId && (!option || containsModelFiles(entry, option)))) return "use";
   if (option?.review.manifest.engine === "whisper.cpp"
     && option.review.manifest.files.some(file => file.role === "vad")
     && installed.some(entry => entry.modelFiles?.some(file => file.role === "asr"))

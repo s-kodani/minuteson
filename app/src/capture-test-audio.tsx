@@ -4,7 +4,7 @@ import {useEffect,useRef,useState} from "react";
 import {BrowserAudioClock} from "./transcript-audio";
 import {ChunkPlayer,type PlaybackInfo} from "./playback";
 import {PlaybackPreparationPool} from "./playback-preparation";
-import {registerPlaybackStop} from "./playback-barrier";
+import {registerCaptureTestPlaybackStop} from "./playback-barrier";
 import {checkedCaptureTestPlayback,type CaptureTestSnapshot} from "./capture-test-state";
 
 export function CaptureTestAudio({run,locked}:{run:CaptureTestSnapshot;locked:boolean}){
@@ -38,12 +38,12 @@ export function CaptureTestAudio({run,locked}:{run:CaptureTestSnapshot;locked:bo
       await Promise.all(jobs.current);await pool.stop();await Promise.all(Array.from(closing.current.keys(),closeToken));
       if(detached)unregister();
     };
-    const unregister=registerPlaybackStop(stop);
+    const unregister=registerCaptureTestPlaybackStop(stop,run.runId);
     const other=(event:Event)=>{if((event as CustomEvent<string>).detail!==owner)clear();};
     window.addEventListener("mon-audio-start",other);
     const timer=window.setInterval(()=>{if(player.snapshot().playing)refresh(n=>n+1);},100);
     return()=>{detached=true;window.clearInterval(timer);window.removeEventListener("mon-audio-start",other);generation.current++;player.clear();void stop().catch(()=>{});clock.dispose();};
-  },[clock,player,pool,owner]);
+  },[clock,player,pool,owner,run.runId]);
   useEffect(()=>{if(locked)clear();},[locked]);
   const startInner=async(kind:"mic"|"system")=>{
     const track=kind==="mic"?run.microphone:run.system;

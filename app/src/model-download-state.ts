@@ -12,7 +12,7 @@ export const bundledAsrSource = "mon-bundled://asr-v1/asr-runtime.tar";
 export const bundledWindowsSource = "mon-bundled://windows-runtime-v1/runtime.tar";
 const isBundledSource = (url: string) => url === bundledWhisperSource || url === bundledWindowsSource || url === bundledAsrSource;
 export type DownloadRecipe = Omit<Recipe, "schemaVersion" | "manifest" | "sources"> & { schemaVersion: 4; manifest: DownloadManifest; sources: (Omit<DownloadSource, "archive"> & { archive?: DownloadArchive })[] };
-export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
+export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; packageReviewHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded" }[] };
@@ -121,6 +121,15 @@ export async function downloadDigest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalModelJSON(value));
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
+// The native inspection digest binds the complete installed package. Transport
+// archives and URLs are deliberately outside this identity, while executables,
+// libraries, VAD and license notices remain part of the fixed byte set.
+export async function packageReviewHash(manifest: DownloadManifest): Promise<string> {
+  const manifestHash = await downloadDigest(manifest);
+  const files = manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role,
+    actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
+  return downloadDigest([1, manifest, manifestHash, files]);
+}
 export async function assertDownloadReview(value: unknown, expectedRecipeHash?: string): Promise<DownloadReview> {
   const review = object(value); unready(review);
   if (review.recipeSchemaVersion !== 4) fail();
@@ -130,7 +139,7 @@ export async function assertDownloadReview(value: unknown, expectedRecipeHash?: 
   const totals = downloadByteTotals(recipe);
   if (review.downloadBytes !== totals.downloadBytes || review.archiveBytes !== totals.archiveBytes) fail();
   if (review.bundledBytes !== totals.bundledBytes) fail();
-  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, totalBytes, recipeSchemaVersion: recipe.schemaVersion, ...totals, publisherAuthenticity: "not_verified", installed: false, ready: false };
+  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, packageReviewHash: await packageReviewHash(recipe.manifest), totalBytes, recipeSchemaVersion: recipe.schemaVersion, ...totals, publisherAuthenticity: "not_verified", installed: false, ready: false };
 }
 export async function assertOfficialModelOptions(value: unknown): Promise<OfficialModelOption[]> {
   if (!Array.isArray(value) || value.length > 32) fail();
@@ -160,13 +169,12 @@ export async function assertDownloadReceipt(value: unknown, operationId: string,
   if (receipt.operationId !== identity(operationId) || receipt.recipeHash !== review.recipeHash || receipt.installed !== false || receipt.ready !== false || report.engineCompatibility !== "not_verified" || report.totalBytes !== review.totalBytes || !Array.isArray(report.files) || report.files.length !== review.manifest.files.length) fail();
   const manifest = canonicalRecipe({ schemaVersion: review.recipeSchemaVersion, manifest: report.manifest, sources: review.sources }).manifest;
   if (JSON.stringify(manifest) !== JSON.stringify(review.manifest)) fail();
-  const files = report.files.map((value, index) => {
+  report.files.forEach((value, index) => {
     const f = object(value), expected = review.manifest.files[index];
     if (f.relativePath !== expected.relativePath || f.role !== expected.role || f.actualSize !== expected.expectedSize || f.actualHash !== expected.expectedHash || f.expectedSizeChecked !== true || f.expectedHashChecked !== true) fail();
-    return { relativePath: expected.relativePath, role: expected.role, actualSize: expected.expectedSize, actualHash: expected.expectedHash, expectedSizeChecked: true, expectedHashChecked: true };
   });
   const manifestHash = await downloadDigest(manifest);
-  if (report.manifestHash !== manifestHash || report.reviewHash !== await downloadDigest([1, manifest, manifestHash, files])) fail();
+  if (report.manifestHash !== manifestHash || report.reviewHash !== await packageReviewHash(manifest)) fail();
   text(receipt.directory, 16_384); // Display only. Never used as a placement path.
   return structuredClone(value) as DownloadReceipt;
 }

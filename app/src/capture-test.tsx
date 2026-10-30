@@ -1,6 +1,5 @@
 import { InfoPopover } from "./info-popover";
 import {invoke,isTauri} from "./ipc.ts";
-import { IconButton } from "./action-icon";
 import {useEffect,useRef,useState,useSyncExternalStore} from "react";
 import {CommonModal} from "./common-modal";
 import {CaptureTestClient} from "./capture-test-client";
@@ -8,6 +7,7 @@ import {InputLevelMeter,useCaptureTestLevels} from "./input-levels";
 import {CaptureTestAudio} from "./capture-test-audio";
 import type {CaptureScope} from "./capture-scope-state";
 import type {ConfirmationOutcome} from "./confirmation-state";
+import {stopCaptureTestPlayback} from "./playback-barrier";
 
 export function useCaptureTest(){
   const [client]=useState(()=>new CaptureTestClient({
@@ -22,16 +22,21 @@ export function useCaptureTest(){
     const timer=window.setInterval(()=>{void client.poll().catch(()=>{});},500);
     return()=>window.clearInterval(timer);
   },[client]);
-  return {client,...view,blocked:client.blocked()};
+  return {client,...view,blocked:client.blocked(),finish:()=>client.finish(stopCaptureTestPlayback)};
 }
-export function CaptureTestPanel({control,currentUid,currentScope,canStart,locked,onStart,onCancel,onDiscard,operationError=""}:{
+export function CaptureTestPanel({control,currentUid,currentScope,canStart,locked,onStart,onCancel,onFinish,operationError=""}:{
   operationError?:string;control:ReturnType<typeof useCaptureTest>;currentUid:string;currentScope:CaptureScope|null;
-  canStart:boolean;locked:boolean;onStart:(source:HTMLElement)=>Promise<ConfirmationOutcome|undefined>;onCancel:()=>void;onDiscard:()=>void;
+  canStart:boolean;locked:boolean;onStart:(source:HTMLElement)=>Promise<ConfirmationOutcome|undefined>;onCancel:()=>void;onFinish:()=>Promise<void>;
 }){
   const [open,setOpen]=useState(false);
+  const [closeError,setCloseError]=useState("");
   const requesting=useRef(false);
   const trigger=useRef<HTMLButtonElement>(null);
   const run=control.snapshot;
+  const close=async()=>{
+    setCloseError("");
+    try{await onFinish();setOpen(false);}catch(cause){setCloseError(`5秒録音テストを終了できませんでした。「閉じる」でもう一度お試しください: ${String(cause)}`);}
+  };
   // Initial consent opens first. Cancelling it must not reveal an empty test
   // dialog underneath. Retests keep their existing result dialog as the owner.
   const start=async(source:HTMLElement)=>{
@@ -51,26 +56,27 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
     <div className="heading-with-info"><h3>録音前の入力確認</h3><InfoPopover label="録音前の入力確認">5秒テスト中にマイクへ話してください。PC音声も確認する場合はPCで音声を再生してください。停止後に取得できた音声を別々に聴けます。会議や解析結果は作りません。毎回のテストは必須ではありません。初期化が終わってから5秒の音声を保存します。取消は取得プロセスの終了確認まで待ちます。</InfoPopover></div>
     <button ref={trigger} type="button" className="secondary" disabled={locked||(!hasResult&&!canStart)} onClick={event=>{if(hasResult)setOpen(true);else void start(event.currentTarget);}}>{run?.busy?"テスト中…":control.pending?"テストの受付を確認":hasResult?"テスト結果を確認":"5秒録音して確認"}</button>
     {!open&&(run?.cleanupPending||control.pending||control.error||operationError||run?.errorMessage)&&<p role="status" className="capture-input-hint">{operationError||control.error||run?.errorMessage||"テストの状態を確認してください。"}</p>}
-    <CommonModal open={open} onDismiss={()=>setOpen(false)} restoreTarget={()=>trigger.current} aria-label="録音前の入力確認" className="capture-test-dialog" dismissLabel="閉じる" portal>
+    <CommonModal open={open} blocked={control.finishing} onDismiss={close} restoreTarget={()=>trigger.current} aria-label="録音前の入力確認" className="capture-test-dialog" dismissLabel="閉じる" portal>
     <h2>録音前の入力確認</h2>
     <p className="capture-test-intro">マイクに話しかけ、PCの音声を再生してください。</p>
-    <button type="button" className="secondary" disabled={!canStart||locked||control.commandBusy||!!control.pending||!!run?.busy} onClick={event=>void start(event.currentTarget)}>{run?"もう一度5秒録音して確認":"5秒録音して確認"}</button>
+    <p>この画面を閉じると、テスト音声は自動で削除されます。</p>
+    {control.finishing&&<p role="status">5秒録音テストを終了しています。完了するまでお待ちください。</p>}
+    <button type="button" className="secondary" disabled={!canStart||locked||control.finishing||control.commandBusy||!!control.pending||!!run?.busy} onClick={event=>void start(event.currentTarget)}>{run?"もう一度5秒録音して確認":"5秒録音して確認"}</button>
     {run&&<>
       <p role="status">{run.phase==="ready"&&!run.microphone?"PC音声の検証が完了しました（マイク音声は未受信）":run.phase==="ready"&&!run.system?"マイク音声の検証が完了しました（PC音声は未受信）":labels[run.phase]}</p>
       <p>テスト時のマイク: {run.microphoneName??"選択したマイク（確認中）"} ／PC音声: {run.captureScope.mode==="system"?"PCの再生音全体":run.applicationName??"選択したアプリ（確認中）"}</p>
       {!matches&&<p role="alert">現在の入力選択とは異なるテスト結果です。現在の入力の確認済み結果としては使いません。</p>}
       {run.busy&&<>
         <dl className="recording-track-status"><div><dt>マイク</dt><dd><InputLevelMeter label="テストのマイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd><InputLevelMeter label="テストのPC音声" level={levels.system}/></dd></div></dl>
-        <button type="button" className="stop-button" disabled={control.commandBusy||locked||run.phase==="cancelling"} onClick={onCancel}>テストを取り消す</button>
+        <button type="button" className="stop-button" disabled={control.finishing||control.commandBusy||locked||run.phase==="cancelling"} onClick={onCancel}>テストを取り消す</button>
       </>}
-      {open&&run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||!control.connected||control.commandBusy||!matches}/>}
-      {!run.busy&&<IconButton label="テスト音声を破棄" icon="trash" type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard} />}
-      {run.cleanupPending&&<p role="alert" className="capture-test-error">一時音声の回収が未完了です。破棄を再確認するまで録音・終了はできません。</p>}
+      {open&&run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||control.finishing||!control.connected||control.commandBusy||!matches}/>}
+      {run.cleanupPending&&<p role="alert" className="capture-test-error">テスト音声の自動削除が完了していません。「閉じる」で終了処理を再試行できます。</p>}
       {run.errorMessage&&<p role="alert" className="capture-test-error">{run.errorMessage}</p>}
     </>}
     {control.pending&&!control.commandBusy&&<p role="alert" className="capture-test-error">開始要求の受付結果が未確認です。開始は再送しません。</p>}
     {!control.connected&&<p role="status">テストの状態を確認できていません。</p>}
-    {(operationError||control.error)&&<p role="alert" className="capture-test-error">{operationError||control.error}</p>}
+    {(closeError||operationError||control.error)&&<p role="alert" className="capture-test-error">{closeError||operationError||control.error}</p>}
     </CommonModal>
   </section>;
 }

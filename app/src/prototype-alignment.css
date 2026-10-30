@@ -683,6 +683,12 @@ button:disabled { opacity:.5; }
 .model-inventory-summary>span { color:var(--muted); font-size:13px; }
 .model-inventory-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; flex-shrink:0; }
 .model-inventory-actions .options-modal { margin:0; }
+.model-copy { display:flex; align-items:center; justify-content:space-between; gap:20px; width:100%; min-width:0; }
+.model-inventory li.model-inventory-group { flex-direction:column; align-items:stretch; gap:12px; }
+.model-copies summary { cursor:pointer; width:fit-content; }
+.model-copies .model-copy { padding:12px 0; border-top:1px solid var(--border); }
+.model-copies>div { margin-top:12px; }
+@media(max-width:700px) { .model-copy { flex-direction:column; align-items:flex-start; gap:8px; } }
 .model-details .options-dialog { max-width:680px; }
 .model-details dd { overflow-wrap:anywhere; }
 .model-deletion-pending { border-top:1px solid var(--border); padding-top:16px; }

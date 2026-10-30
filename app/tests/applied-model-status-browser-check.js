@@ -49,9 +49,9 @@ async page=>{
     component.settingsMatch=false;f.profiles[0].configurationComplete=false;
   });
   await reloadSettings();
-  await row('文字起こし').getByRole('button',{name:'実行環境を更新して使用',exact:true}).waitFor();
+  await row('文字起こし').getByRole('button',{name:'使用',exact:true}).waitFor();
   check(await row('文字起こし').getByRole('button',{name:'VADを追加して使用',exact:true}).count()===0,'present VAD mislabeled as missing');
-  results.push('an unapplied runtime with installed VAD offers explicit runtime preparation, never a false missing-VAD download');
+  results.push('an unapplied unchanged package offers reuse, never a false missing-VAD download');
   await page.evaluate(()=>{
     const f=window.modelDownloadFixture,component=f.profiles[0].components.find(c=>c.engine==='whisper.cpp');
     const entry=f.entries.find(e=>e.packageId===component.packageId);
@@ -67,12 +67,12 @@ async page=>{
     component.compatibilityCurrent=false;f.profiles[0].configurationComplete=false;
   });
   await reloadSettings();
-  await row('文字起こし').getByRole('button',{name:'実行環境を更新して使用',exact:true}).waitFor();
+  await row('文字起こし').getByRole('button',{name:'使用',exact:true}).waitFor();
   const appliedBefore=await calls('apply_model_profile_application');
-  await row('文字起こし').getByRole('button',{name:'実行環境を更新して使用',exact:true}).click();
+  await row('文字起こし').getByRole('button',{name:'使用',exact:true}).click();
   await row('文字起こし').getByRole('button',{name:'使用中',exact:true}).waitFor();
-  check(await calls('start_model_download')===before&&await calls('apply_model_profile_application')===appliedBefore+1,'explicit runtime update did not reuse its checked completed download and reapply');
-  results.push('stale compatibility is not marked in-use; explicit preparation still checks, places and applies the current package');
+  check(await calls('start_model_download')===before&&await calls('apply_model_profile_application')===appliedBefore+1,'explicit reuse did not reapply its checked package');
+  results.push('stale profile compatibility is not marked in-use; explicit reuse reapplies the existing checked package');
   await field('文字起こし').selectOption('official:whisper-synthetic-base');
   await row('文字起こし').getByRole('button',{name:'ダウンロードして使用',exact:true}).waitFor();
   check(await calls('start_model_download')===before,'selecting an uninstalled model started work');

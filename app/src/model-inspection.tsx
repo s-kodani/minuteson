@@ -17,7 +17,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, modelChoiceAction, modelDisplayName, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
+import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -232,9 +232,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     retain(null);
   });
   const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
-  const installed = entries.filter(item => item.placementRecorded && item.bodyRemoved !== true);
+  const installed = installedModelGroups(entries, profiles);
 
   const selectedProfile = profiles.find(item => item.name === "standard");
+  const copyStatus = (item: ModelPlacementEntry) => isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
+  const purposeOf = (item: ModelPlacementEntry) => engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
+  const renderCopy = (item: ModelPlacementEntry, grouped = false) => <InstalledModelCopy key={item.packageId} item={item} name={modelDisplayName(item, options)} status={copyStatus(item)} purpose={purposeOf(item)} grouped={grouped} disabled={disabled} deletion={deletion} />;
   return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
@@ -301,20 +304,14 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   <section className="analysis-card model-inventory" aria-label="導入済みモデル管理" hidden={!visible}>
     <h2 tabIndex={-1}>導入済みモデル管理</h2>
     {!installed.length && <p>導入済みモデルはありません。「ローカルAI」からモデルを導入できます。</p>}
-    <ul>{installed.map(item => {
-      const selected = selectedProfile?.components.some(component => component.packageId === item.packageId);
-      const status = isRetired(item) ? "選択対象外" : selected ? "使用中" : "導入済み";
-      const purpose = engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
-      return <li key={item.packageId}><div className="model-inventory-summary"><strong>{modelDisplayName(item, options)}</strong>
-        <span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span><span className="model-copy-id">コピー {item.packageId.slice(0, 8)}</span></div>
-        <div className="model-inventory-actions"><OptionsModal label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">
-          <h3>{modelDisplayName(item, options)}</h3><dl className="import-info"><dt>用途</dt><dd>{purpose}</dd>
-            <dt>モデル名</dt><dd>{item.modelName || "不明"}</dd><dt>バージョン</dt><dd>{item.modelVersion || "不明"}</dd>
-            <dt>量子化</dt><dd>{item.quantization || "不明"}</dd><dt>エンジン</dt><dd>{item.engine || "不明"} · {item.engineVersion || "不明"}</dd>
-            <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
-            <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
-            <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>
-        </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-describedby={(!deletion?.canReviewModel || disabled) ? "model-deletion-unavailable" : undefined} aria-label={`${modelDisplayName(item, options)}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
+    <ul>{installed.map(group => {
+      if (group.entries.length === 1) return <li key={group.key}>{renderCopy(group.entry)}</li>;
+      const status = group.entries.some(item => copyStatus(item) === "使用中") ? "使用中" : group.entries.every(isRetired) ? "選択対象外" : "導入済み";
+      return <li key={group.key} className="model-inventory-group"><div className="model-inventory-summary"><strong>{modelDisplayName(group.entry, options)}</strong>
+        <span>{purposeOf(group.entry)} · 合計 {bytesLabel(group.totalBytes)} · {group.entries.length}コピー · {status}</span></div>
+        <details className="model-copies"><summary>コピーを管理（{group.entries.length}件）</summary><div role="group" aria-label={`${modelDisplayName(group.entry, options)}のコピー`}>
+          {group.entries.map(item => renderCopy(item, true))}
+        </div></details>
       </li>;
     })}</ul>
     {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{recordingActive ? "録音・音声保存が完了すると削除できます。" : busy ? "モデル準備が完了すると削除できます。" : pending ? "モデル準備の受付結果を「現在の状態を確認」で確認後に削除できます。" : deletion?.reviewUnavailableReason ?? "ほかの操作が完了すると削除できます。"}</p></div>}
@@ -323,4 +320,22 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}
     {deletion?.unknown && <button type="button" disabled={deletion.rpcBusy} onClick={() => void deletion.retryUnknown()}>同じ削除操作の結果を確認</button>}
   </section></>;
+}
+
+function InstalledModelCopy({ item, name, status, purpose, grouped, disabled, deletion }: {
+  item: ModelPlacementEntry; name: string; status: string; purpose: string; grouped: boolean; disabled: boolean; deletion?: ModelDeletionControl;
+}) {
+  return <div className="model-copy" data-model-copy={item.packageId}><div className="model-inventory-summary">
+    {!grouped && <strong>{name}</strong>}<span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span>
+    <span className="model-copy-id">コピー {item.packageId.slice(0, 8)} · {item.engineVersion}</span></div>
+    <div className="model-inventory-actions"><OptionsModal label={`${name}（${item.packageId.slice(0, 8)}）の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">
+      <h3>{name}</h3><dl className="import-info"><dt>用途</dt><dd>{purpose}</dd>
+        <dt>モデル名</dt><dd>{item.modelName || "不明"}</dd><dt>バージョン</dt><dd>{item.modelVersion || "不明"}</dd>
+        <dt>量子化</dt><dd>{item.quantization || "不明"}</dd><dt>エンジン</dt><dd>{item.engine || "不明"} · {item.engineVersion || "不明"}</dd>
+        <dt>発話検知モデル</dt><dd>{item.modelFiles?.some(file => file.role === "vad") ? "あり" : "なし"}</dd>
+        <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
+        <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
+        <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>
+    </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-describedby={(!deletion?.canReviewModel || disabled) ? "model-deletion-unavailable" : undefined} aria-label={`${name}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
+  </div>;
 }

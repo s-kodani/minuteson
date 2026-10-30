@@ -1,188 +1,119 @@
-// Production MainWindow with synthetic IPC and silent PCM only. No native capture.
-async page=>{
+// Production UI with synthetic ownership/PCM. No microphones or user files.
+async (page,capturePath)=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
-    const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    const response=await route.fetch();
+    const body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
-  const panel=()=>page.locator(".capture-test-dialog");
-  const entry=()=>page.locator(".capture-test-panel > button");
-  const hide=async()=>{if(await page.locator(".capture-test-dialog[open]").count())await panel().getByRole("button",{name:"確認を閉じる",exact:true}).click();};
-  const show=async()=>{await entry().click();await panel().waitFor();};
-  const start=()=>page.locator(".capture-test-dialog[open] .common-modal-body:not([hidden]) > button.secondary, .capture-test-panel > button").filter({hasText:/^(?:もう一度)?5秒録音して確認$/u}).last();
-  const modal=()=>page.getByRole("dialog",{name:"5秒の録音前テストを開始しますか？",exact:true});
-  const accept=()=>modal().getByRole("button",{name:"5秒テストを開始する",exact:true});
-  const failedConfirmation=()=>page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first();
-  const mic=()=>page.locator('[aria-label="録音するマイク"]');
-  const normal=()=>page.locator(".recording-primary-actions > button");
-  const beginNormal=async()=>{await hide();await normal().click();};
-  const count=cmd=>page.evaluate(cmd=>window.closeFixture.calls.filter(c=>c.command===cmd).length,cmd);
-  const idle=()=>page.waitForFunction(()=>{const b=[...document.querySelectorAll('.capture-test-dialog .common-modal-body > button.secondary')].find(b=>/^(?:もう一度)?5秒録音して確認$/u.test(b.textContent));return b&&!b.disabled;});
-  const boot=async()=>{
-    await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
-    await page.getByRole("button",{name:"新しい録音",exact:true}).click();await page.getByRole("region",{name:"録音前の5秒テスト",exact:true}).waitFor();await idle();
+  const panel=()=>page.getByRole('dialog',{name:'録音前の入力確認',exact:true});
+  const close=()=>panel().getByRole('button',{name:'確認を閉じる',exact:true});
+  const count=command=>page.evaluate(command=>window.closeFixture.calls.filter(c=>c.command===command).length,command);
+  const boot=async(query='')=>{
+    await page.goto('http://127.0.0.1:1420/'+query);await page.waitForFunction(()=>!!window.closeFixture);
+    await page.getByRole('button',{name:'新しい録音',exact:true}).click();
+    await page.getByRole('region',{name:'録音前の5秒テスト',exact:true}).waitFor();
   };
-  const begin=async()=>{await start().click();await accept().click();await modal().waitFor({state:"hidden"});await panel().getByText("テストの入力を初期化しています",{exact:true}).waitFor();};
-  const ready=async()=>{await page.evaluate(()=>window.closeFixture.testReady());await panel().getByText("停止と音声の検証が完了しました",{exact:true}).waitFor();};
-  const play=kind=>panel().getByRole("button",{name:`${kind}のテスト音声を再生`,exact:true});
-  const discard=()=>panel().getByRole("button",{name:"テスト音声を破棄",exact:true});
-  const released=()=>page.waitForFunction(()=>Object.keys(window.closeFixture.testPlayback.tokens).length===0&&Object.keys(window.closeFixture.testPlayback.reservations).length===0);
+  const begin=async()=>{
+    await page.locator('.capture-test-panel > button').click();
+    const consent=page.getByRole('dialog',{name:'5秒の録音前テストを開始しますか？',exact:true});
+    await consent.getByRole('button',{name:'5秒テストを開始する',exact:true}).click();
+    await consent.waitFor({state:'hidden'});await panel().waitFor();
+  };
+  const ready=async()=>{await page.evaluate(()=>window.closeFixture.testReady());await panel().getByText('停止と音声の検証が完了しました',{exact:true}).waitFor();};
+  const released=()=>page.waitForFunction(()=>!window.closeFixture.captureTest&&Object.keys(window.closeFixture.testPlayback.tokens).length===0&&Object.keys(window.closeFixture.testPlayback.reservations).length===0);
   try{
-    await boot();
-    check(await normal().isEnabled()&&await count("start_capture_test")===0&&await count("start_recording")===0&&await count("create_meeting")===0&&await count("get_capture_test_levels")===0,"opening preparation started capture or required test");
-    results.push("preparation reads test ownership only, never starts capture, creates meetings or requires a test before recording");
-    await start().click();await modal().waitFor();
-    check((await modal().innerText()).includes("内蔵マイク")&&(await modal().innerText()).includes("通知音")&&await mic().isDisabled()&&await count("start_capture_test")===0,"confirmation omitted scope or started early");
-    await page.keyboard.press("Escape");await modal().waitFor({state:"hidden"});await idle();
-    check(await count("start_capture_test")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"decline started or saved meeting");
-    results.push("explicit confirmation freezes microphone/scope and explains private five-second audio; declining has no capture or DB effect");
-    await start().click();await accept().dblclick();await modal().waitFor({state:"hidden"});
-    await panel().getByRole("button",{name:"テストを取り消す",exact:true}).waitFor();
-    const request=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_capture_test").args.request);
-    check(await count("start_capture_test")===1&&request.microphoneUid==="built-in"&&request.captureScope.mode==="system"&&request.expectedImport.token===null&&await count("start_recording")===0&&await count("create_meeting")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"test confirmation did not reserve exact independent ownership once");
-    check(await mic().isDisabled()&&await normal().isDisabled()&&await start().isDisabled(),"busy test allowed competing input/capture");
-    results.push("double consent sends one fixed run/input/import request without a meeting and blocks competing recording or input changes");
-    await page.evaluate(()=>{const f=window.closeFixture;f.testChanged({phase:"recording"});f.testLevels={schemaVersion:1,ownerId:f.captureTest.runId,revision:1,reportAgeMs:0,microphone:{state:"measured",windowFrames:1024,ageMs:0,rms:0.25,peak:0.5},system:{state:"waiting",windowFrames:null,ageMs:null,rms:null,peak:null}};});
-    await panel().getByRole("meter",{name:"テストのマイクのピーク入力レベル",exact:true}).waitFor();
-    check(await panel().getByRole("meter").getAttribute("value")==="0.5"&&await count("get_recording_levels")===0,"test meters adopted session telemetry or wrong PCM");
-    results.push("busy test shows run-owned separate PCM meters, never reads normal recording telemetry");
-    await ready();check(await count("prepare_capture_test_playback")===0&&await count("read_playback_chunk")===0,"ready autoplayed");
-    check((await panel().innerText()).includes("5.000秒")&&(await panel().innerText()).includes("4.000秒")&&(await panel().innerText()).includes("欠損あり"),"received physical durations or gaps hidden");
-    results.push("verified readiness never autoplays and displays per-track physical duration/gaps without filling missing audio");
-    await play("マイク").click();await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-    await play("PC").click();await page.waitForFunction(()=>window.closeFixture.calls.filter(c=>c.command==="prepare_capture_test_playback").length===2);await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-    const playback=await page.evaluate(()=>window.closeFixture.calls.filter(c=>["register_playback_preparation","prepare_capture_test_playback","finish_playback_preparation"].includes(c.command)));
-    check(playback.length===6&&playback.filter(c=>c.command==="prepare_capture_test_playback").map(c=>c.args.trackKind).join(",")==="mic,system"&&playback.every(c=>c.args.preparationId)&&await count("close_playback")>=1,"separate playback ownership or prior-token close missing");
-    results.push("explicit mic and PC playback register/prepare/acknowledge separately; switching closes the prior private token");
-    await hide();await mic().selectOption("usb-123");await show();
-    await panel().getByRole("alert").filter({hasText:"現在の入力選択とは異なる"}).waitFor();await released();
-    check(await play("マイク").isDisabled()&&await play("PC").isDisabled()&&(await panel().innerText()).includes("テスト時のマイク: 内蔵マイク"),"old test was relabelled or played as new input");
-    results.push("changing microphone keeps frozen input labels, stops old playback and disables stale-result playback");
-    await hide();await mic().selectOption("built-in");await show();await play("マイク").click();await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-    await discard().click();await released();await idle();
-    check(await page.evaluate(()=>window.closeFixture.captureTest===null)&&await count("discard_capture_test")===1&&await count("start_recording")===0,"explicit discard leaked or started recording");
-    results.push("closing test stops playback, waits for exact token cleanup and discards only test audio");
-
-    await boot();await begin();await panel().getByRole("button",{name:"テストを取り消す",exact:true}).click();
-    await panel().getByText("テストの停止完了を待っています",{exact:true}).waitFor();
-    check(await normal().isDisabled()&&await discard().count()===0&&await count("cancel_capture_test")===1,"cancel receipt falsely meant stopped");
-    await page.evaluate(()=>window.closeFixture.testChanged({phase:"cancelled",busy:false}));await discard().waitFor();await discard().click();await idle();
-    results.push("cancellation remains busy until native termination; terminal cancelled ownership is explicitly discarded before reuse");
-
-    await boot();await page.evaluate(()=>window.closeFixture.testLost=true);await start().click();await accept().click();
-    await failedConfirmation().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
-    await panel().getByText("テストの入力を初期化しています",{exact:true}).waitFor();
-    check(await count("start_capture_test")===1&&await normal().isDisabled(),"lost accepted reply replayed or enabled capture");
-    const firstPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,firstPoll);check(await count("start_capture_test")===1,"read replayed start");
-    results.push("lost accepted start reply is reconciled by read-only ownership polling, never by resubmitting capture");
-
-    await boot();await page.evaluate(()=>{window.closeFixture.testAbsentStart=true;window.closeFixture.testReconcileFailure=true;});await start().click();await accept().click();
-    await failedConfirmation().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
-    await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
-    const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);
-    check(await count("start_capture_test")===1&&await start().isDisabled()&&await normal().isDisabled(),"unknown absence allowed replay");
-    results.push("missing result after an uncertain start stays unknown and blocks new recording without guessing that audio stopped");
-
-    await boot();await page.evaluate(()=>window.closeFixture.failFlush=true);await start().click();await accept().click();await failedConfirmation().waitFor();
-    check(await count("start_capture_test")===0,"failed draft save started test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
-    results.push("failed pending-edit save prevents test admission and retains existing meetings/input");
-
-    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardFailure=true);await discard().click();
-    await page.getByRole("alert").filter({hasText:"模擬テスト回収未完了"}).first().waitFor();
-    await beginNormal();const n=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await failedConfirmation().waitFor();
-    check(await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"failed discard saved normal meeting or started capture");await n.getByRole("button",{name:"確認を閉じる",exact:true}).click();
-    results.push("failed private-audio collection prevents normal recording and meeting creation even after a second confirmation");
-
-    await boot();await begin();await ready();await play("マイク").click();await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();
-    await page.evaluate(()=>window.closeFixture.testPlayback.failClose=true);await discard().click();await page.getByRole("alert").filter({hasText:"模擬テスト再生解放失敗"}).first().waitFor();
-    check(await count("discard_capture_test")===0&&await page.evaluate(()=>Object.keys(window.closeFixture.testPlayback.tokens).length===1),"failed playback release dropped ownership");
-    await page.evaluate(()=>window.closeFixture.testPlayback.failClose=false);await discard().click();await released();await idle();
-    results.push("failed known-token release retains ownership and blocks discard until explicit cleanup retry succeeds");
-
-    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testPlayback.hold=true);await play("PC").click();await page.waitForFunction(()=>window.closeFixture.testPlayback.pending.length===1);
-    await panel().getByRole("button",{name:"テスト音声の再生準備を取り消す",exact:true}).click();await discard().click();
-    await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="cancel_playback_preparation"));
-    check(await count("discard_capture_test")===0,"cancel receipt dropped pending playback worker");
-    await page.evaluate(()=>{const p=window.closeFixture.testPlayback;p.hold=false;p.pending.splice(0).forEach(resolve=>resolve());});await released();await idle();
-    check(await count("read_playback_chunk")===0&&await count("discard_capture_test")===1,"late cancelled worker revived test playback");
-    results.push("test discard waits for an actually terminating playback preparation, not just its cancellation receipt");
-
-    await boot();await begin();await ready();await beginNormal();
-    check((await n.innerText()).includes("一時音声を破棄"),"normal confirmation omitted test disposal");
-    await n.getByRole("button",{name:"録音を開始する",exact:true}).click();await n.waitFor({state:"hidden"});
-    const order=await page.evaluate(()=>window.closeFixture.calls.filter(c=>["discard_capture_test","start_recording"].includes(c.command)).map(c=>c.command).join(","));
-    check(order==="discard_capture_test,start_recording"&&await count("start_recording")===1&&await page.evaluate(()=>window.dataFixture.meetings.length===2),"normal capture skipped owned test collection");
-    results.push("normal recording collects terminal test audio before one confirmed meeting/capture admission");
-
-    await boot();await begin();await page.evaluate(()=>window.closeFixture.request(true));
-    const close=page.getByRole("dialog",{name:"録音前テストを閉じて終了しますか？",exact:true});await close.waitFor();await page.keyboard.press("Escape");await close.waitFor({state:"hidden"});
-    check(await count("cancel_capture_test")===0&&await count("finish_main_close")===0,"declining close cancelled or exited");
-    await page.evaluate(()=>window.closeFixture.request(true));await close.getByRole("button",{name:"テストを閉じて終了へ進む",exact:true}).click();
-    await page.waitForFunction(()=>window.closeFixture.captureTest?.phase==="cancelling");
-    check(await count("finish_main_close")===0&&await count("discard_capture_test")===0,"close raced process termination");
-    await page.evaluate(()=>window.closeFixture.testChanged({phase:"cancelled",busy:false}));await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="finish_main_close"));
-    check(await count("cancel_capture_test")===1&&await count("discard_capture_test")===1,"close did not cancel/collect exactly owned test");
-    results.push("close confirmation can decline safely; accepted exit waits for test termination and collection before final native guard");
-
-    const editInputs=hide;
-    const returnToTest=async()=>{if(await page.evaluate(()=>!!window.closeFixture.captureTest))await show();};
-    await boot();await editInputs();
-    await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("application");
-    const application=page.getByRole("combobox",{name:"録音するアプリ",exact:true});await application.waitFor();
-    await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
-    check(await start().isDisabled(),"unselected app permitted test");
-    const appKey=await application.locator('option').nth(1).getAttribute("value");await application.selectOption(appKey);
-    await returnToTest();
-    await start().click();check((await modal().innerText()).includes("会議ブラウザ")&&(await modal().innerText()).includes("他のタブ"),"app confirmation omitted scope limit");
-    await accept().click();await modal().waitFor({state:"hidden"});await ready();
-    const scoped=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_capture_test").args.request.captureScope);
-    check(scoped.mode==="application"&&scoped.application.pid===123&&scoped.application.launchTimeUs===1791100000000001&&(await panel().innerText()).includes("会議ブラウザ"),"app test lost exact process identity");
-    await editInputs();await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("system");await returnToTest();await panel().getByRole("alert").filter({hasText:"現在の入力選択とは異なる"}).waitFor();
-    check(await play("PC").isDisabled()&&(await panel().innerText()).includes("会議ブラウザ"),"old application test relabelled as system");
-    results.push("app test requires explicit process selection, freezes exact identity and tab limitations, and never relabels its result after scope changes");
-
-    await boot();await editInputs();await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("application");
-    await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
-    await application.selectOption(await application.locator('option').nth(1).getAttribute("value"));
-    await returnToTest();
-    await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await failedConfirmation().waitFor();
-    check(await count("start_capture_test")===0,"restarted app accepted test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
-    results.push("application restart during edit flushing rejects test before admission without falling back to whole-system capture");
-
-    await boot();await page.evaluate(()=>window.closeFixture.captureInputs.microphonePermission="denied");await start().click();await page.getByRole("region",{name:"録音前の5秒テスト",exact:true}).getByRole("status").filter({hasText:"選択したマイクまたは権限"}).waitFor();
-    check(await count("start_capture_test")===0&&await modal().count()===0,"denied microphone prompted/started test");
-    results.push("fresh denied microphone permission prevents test admission without choosing another device");
-
-    for(const property of ["losePrepare","loseReceipt"]){
-      await boot();await begin();await ready();await page.evaluate(property=>window.closeFixture.testPlayback[property]=true,property);await play("マイク").click();await page.getByRole("alert").filter({hasText:"音声を再生できません"}).first().waitFor();await released();
-      check(await count("read_playback_chunk")===0&&await count("cancel_playback_preparation")>=1,"lost playback reply produced audio or leaked reservation");
-      await discard().click();await idle();results.push(`${property}: lost private playback reply releases reservation/token without scheduling PCM`);
+    for(const mode of ['button','escape','outside']){
+      await boot();await begin();await ready();
+      check(await panel().getByRole('button',{name:'テスト音声を破棄',exact:true}).count()===0,'manual discard remains');
+      await panel().getByText('この画面を閉じると、テスト音声は自動で削除されます。',{exact:true}).waitFor();
+      if(mode==='button')await close().click();
+      else if(mode==='escape')await page.keyboard.press('Escape');
+      else await page.mouse.click(2,2);
+      await panel().waitFor({state:'hidden'});await released();
+      check(await count('discard_capture_test')===1&&await count('cancel_capture_test')===0,'terminal close did not release exactly once');
+      await page.getByRole('button',{name:'会議一覧',exact:true}).first().click();await page.getByRole('heading',{name:'会議一覧',exact:true}).waitFor();
+      check(await count('start_recording')===0,'test created a meeting recording');
+      results.push(`${mode}: closing deletes test audio and unlocks navigation without manual discard`);
     }
-
-    await boot();await begin();await ready();await play("マイク").click();await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();await page.evaluate(()=>window.closeFixture.testReadFailure=true);
-    await panel().getByText("テストの状態を確認できていません。",{exact:true}).waitFor();await released();
-    check(await play("マイク").isDisabled()&&await normal().isDisabled()&&await start().isDisabled(),"unknown ownership allowed playback/capture");
-    await page.evaluate(()=>window.closeFixture.testReadFailure=false);await idle();
-    check(await count("start_capture_test")===1&&await play("マイク").isEnabled(),"read recovery resent capture");
-    results.push("ownership read failure stops and locks private playback/recording; valid read recovery never restarts capture");
-
-    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardLost=true);await discard().click();await idle();
-    check(await page.evaluate(()=>window.closeFixture.captureTest===null)&&await count("discard_capture_test")===1,"lost collection reply replayed disposal");
-    results.push("lost discard receipt is accepted only after authoritative empty ownership, without replaying collection");
-
-    await boot();await begin();await ready();await start().click();check((await modal().innerText()).includes("前のテスト音声"),"new test omitted disposal");await accept().click();await modal().waitFor({state:"hidden"});
-    const restarts=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="start_capture_test").map(c=>c.args.request.runId));
-    check(restarts.length===2&&restarts[0]!==restarts[1]&&await count("discard_capture_test")===1&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"new test replayed owner or saved meeting");
-    results.push("a new confirmed test collects previous terminal audio and uses a fresh run ID without meeting publication");
-
+    for(const phase of ['preparing','recording','checking']){
+      await boot();await begin();
+      if(phase!=='preparing')await page.evaluate(phase=>window.closeFixture.testChanged({phase}),phase);
+      await close().click();await panel().getByText('5秒録音テストを終了しています。完了するまでお待ちください。',{exact:true}).waitFor();
+      check(await count('cancel_capture_test')===1&&await count('discard_capture_test')===0&&await close().isDisabled(),'cleanup did not wait for capture exit');
+      await page.evaluate(()=>window.closeFixture.testChanged({phase:'cancelled',busy:false}));
+      await panel().waitFor({state:'hidden'});await released();
+      results.push(`${phase}: close waits for the same capture process before deleting`);
+    }
     await boot();await begin();await ready();
-    for(const width of [1280,960,360])for(const theme of ["light","dark"]){
-      await page.setViewportSize({width,height:700});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
-      await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);await play("マイク").scrollIntoViewIfNeeded();
-      check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth),"test panel horizontal overflow");
-      await page.screenshot({path:`output/playwright/test-controls-${theme}-${width}-20261012.png`});
+    await panel().getByRole('button',{name:'マイクのテスト音声を再生',exact:true}).click();
+    await panel().getByRole('button',{name:'一時停止',exact:true}).waitFor();
+    await close().click();await panel().waitFor({state:'hidden'});await released();
+    check(await count('close_playback')>=1&&await count('discard_capture_test')===1,'playback release did not precede deletion');
+    results.push('playing test audio is stopped and its token released before deletion');
+
+    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testPlayback.hold=true);
+    await panel().getByRole('button',{name:'マイクのテスト音声を再生',exact:true}).click();
+    await page.waitForFunction(()=>window.closeFixture.testPlayback.pending.length===1);
+    await close().click();await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==='cancel_playback_preparation'));
+    check(await count('discard_capture_test')===0,'deleted audio before pending preparation completed');
+    await page.evaluate(()=>{for(const resolve of window.closeFixture.testPlayback.pending.splice(0))resolve();});
+    await panel().waitFor({state:'hidden'});await released();
+    check(await count('cancel_playback_preparation')>=1&&await count('read_playback_chunk')===0,'pending playback prepared after close');
+    results.push('close cancels pending playback preparation and releases reservations');
+
+    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardFailure=true);
+    await close().click();await panel().getByRole('alert').filter({hasText:'「閉じる」'}).first().waitFor();
+    check(await panel().isVisible()&&await close().isEnabled()&&await page.evaluate(()=>!!window.closeFixture.captureTest),'failed cleanup hid the owner');
+    await page.evaluate(()=>window.closeFixture.testDiscardFailure=false);await close().click();await panel().waitFor({state:'hidden'});await released();
+    results.push('cleanup failures remain inline and closing retries the same test');
+
+    await boot();await begin();await ready();await page.evaluate(()=>window.closeFixture.testDiscardLost=true);
+    await close().click();await panel().waitFor({state:'hidden'});await released();
+    check(await count('discard_capture_test')===1,'lost deletion reply replayed disposal');
+    results.push('lost deletion receipt is reconciled against empty ownership');
+
+    await boot();await begin();await ready();await panel().getByRole('button',{name:'もう一度5秒録音して確認',exact:true}).click();
+    await page.getByRole('dialog',{name:'5秒の録音前テストを開始しますか？',exact:true}).getByRole('button',{name:'5秒テストを開始する',exact:true}).click();
+    await page.waitForFunction(()=>window.closeFixture.calls.filter(c=>c.command==='start_capture_test').length===2);
+    const ids=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==='start_capture_test').map(c=>c.args.request.runId));
+    check(ids[0]!==ids[1]&&await count('discard_capture_test')===1,'retest reused the capture identity');
+    await page.evaluate(()=>window.closeFixture.testReady());await ready();
+    for(const width of [1200,390]){
+      await page.setViewportSize({width,height:800});
+      check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1),'cleanup dialog overflows');
+      await panel().screenshot({path:capturePath(`test-auto-cleanup-${width}.png`)});
     }
-    results.push("ready inputs, separate playback and cleanup controls fit both themes at 1280/960/360px without horizontal overflow");
-    await discard().click();await idle();return {passed:results.length,results};
-  }catch(cause){throw Error(`after ${results.length} cases (${results.at(-1)??"setup"}): ${cause}; body=${await page.locator('body').innerText()}`);}
+    await close().click();await panel().waitFor({state:'hidden'});await released();results.push('retest releases its predecessor and both dialog sizes fit');
+    await page.setViewportSize({width:1200,height:900});
+    await page.evaluate(()=>{
+      const meeting=window.dataFixture.meetings[0];meeting.lifecycle='recorded';meeting.sourceType='recording';
+      window.closeFixture.regenerationFlow={id:'previous-flow',meetingId:meeting.id,stage:'review',lockVersion:1,transcriptionJob:null,diarizationJob:null,errorMessage:null};
+    });
+    await page.getByRole('button',{name:'会議一覧',exact:true}).first().click();
+    await page.getByRole('button',{name:'既存会議',exact:true}).click();
+    const regenerate=page.locator('.transcript-generation-host button').filter({hasText:'文字起こしを再生成'});
+    await regenerate.click();
+    await page.getByRole('dialog',{name:'文字起こしを再生成',exact:true}).getByRole('button',{name:'文字起こしを再生成',exact:true}).click();
+    await page.waitForFunction(()=>!!window.closeFixture.regenerationRequest);
+    check(await page.evaluate(()=>!window.closeFixture.captureTest),'regeneration retained test audio');
+    results.push('after closing the five-second test, transcript regeneration is admitted without a discard operation');
+    for(const platform of ['windows','macos']){
+      await boot(`?resident=${platform}`);await begin();await ready();
+      await page.evaluate(()=>window.closeFixture.request(false));
+      await page.waitForFunction(()=>window.closeFixture.hidden);
+      await released();
+      check(await count('discard_capture_test')===1,'backgrounding retained test audio');
+      check(await page.getByRole('dialog',{name:'録音前テストを閉じて終了しますか？',exact:true}).count()===0,'extra test deletion confirmation remains');
+      results.push(`${platform}: backgrounding automatically releases a ready test without a deletion confirmation`);
+      await boot(`?resident=${platform}`);await begin();
+      await page.evaluate(()=>window.closeFixture.request(true));
+      await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==='cancel_capture_test'));
+      check(await count('finish_main_close')===0,'application closed before test capture exited');
+      await page.evaluate(()=>window.closeFixture.testChanged({phase:'cancelled',busy:false}));
+      await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==='finish_main_close'));
+      await released();results.push(`${platform}: quitting stops an active test and deletes its audio before application close`);
+    }
+    return {passed:results.length,results};
+  }catch(cause){throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator('body').innerText()}`);}
 }

@@ -12,7 +12,6 @@ import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import { checkedResidencyState } from "./residency-state";
 import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
-import { waitForCaptureTestStop } from "./capture-test-client";
 import { stopAllPlayback } from "./playback-barrier";
 import { assertCloseContext, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
@@ -20,7 +19,7 @@ interface CloseDependencies {
   platform: "macos" | "windows" | "other";
   closing: { current: boolean }; starting: { current: boolean }; navigating: { current: boolean };
   setClosingBusy: (value: boolean) => void; setMeetingError: (message: string) => void;
-  captureTest: Pick<ReturnType<typeof useCaptureTest>, "client">;
+  captureTest: Pick<ReturnType<typeof useCaptureTest>, "client" | "finish">;
   meetings: readonly { id: string; title: string }[];
   closeConfirm: ReturnType<typeof useActionConfirmation>;
   withSavedEdits: ReturnType<typeof useSavedNavigation>["withSavedEdits"];
@@ -44,6 +43,7 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
     if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
     closing.current = true; setClosingBusy(true); setMeetingError("");
     try {
+      await captureTest.finish();
       if (!quit && platform !== "other") {
         const readBackground = async () => {
           const context = await readCloseContext();
@@ -62,19 +62,6 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
         if (initial.busy) await closeConfirm({ title: "バックグラウンドで継続しますか？", target: initial.context.recording.meetingId ? meetings.find(meeting => meeting.id === initial.context.recording.meetingId)?.title ?? "実行中の録音" : closeTarget(initial.context), confirmLabel: "継続して画面を閉じる", message: "録音・保存・実行中の処理を続けたままウィンドウを閉じます。常駐アイコンからメイン画面を開き直せます。アプリを終了する場合は「終了」を選んでください。", action: hide });
         else await hide();
         return;
-      }
-      const test=await captureTest.client.refresh();
-      if(test){
-        const outcome=await closeConfirm({title:"録音前テストを閉じて終了しますか？",target:"録音前の5秒テスト",confirmLabel:"テストを閉じて終了へ進む",
-          message:"進行中なら取得プロセスの停止完了を待ち、再生を止めて一時テスト音声を破棄します。会議の保存音声は変更しません。停止や解放が未確認の場合は終了しません。",
-          action:async()=>{
-            await stopAllPlayback();
-            const current=await captureTest.client.refresh();
-            if(!current||current.runId!==test.runId)throw Error("終了するテストが変更されています。");
-            if(current.busy){await captureTest.client.cancel(test.runId);await waitForCaptureTestStop(test.runId,()=>captureTest.client.refresh());}
-            await captureTest.client.discard(test.runId);
-          }});
-        if(outcome!=="completed")return;
       }
       const recording = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(recording);
       if (!quit && ["preparing", "recording"].includes(recording.phase)) {

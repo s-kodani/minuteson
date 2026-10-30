@@ -21,6 +21,67 @@ function fixture(){
   };
   return {client:new CaptureTestClient(bridge),bridge,calls,set:(value:CaptureTestSnapshot|null)=>{native=value;}};
 }
+
+test("finishing a ready test shares release and waits for playback before deleting",async()=>{
+  const f=fixture();f.set(snapshot("ready",4));await f.client.refresh();
+  const playback=deferred<void>();let stopped=0;
+  const stop=async(runId:string)=>{assert.equal(runId,id);stopped++;await playback.promise;};
+  const first=f.client.finish(stop),second=f.client.finish(stop);
+  assert.equal(first,second);assert.equal(f.client.blocked(),true);
+  await new Promise(resolve=>setTimeout(resolve,0));assert.equal(stopped,1);assert.equal(f.calls.includes("discard"),false);
+  playback.resolve();await first;
+  assert.equal(f.calls.filter(c=>c==="discard").length,1);assert.equal(f.client.getSnapshot().snapshot,null);assert.equal(f.client.blocked(),false);
+});
+
+test("an empty finish does not mark recording priority or interrupt unrelated model preparation",async()=>{
+  const f=fixture();await f.client.refresh();const blocked:boolean[]=[];
+  const unsubscribe=f.client.subscribe(()=>blocked.push(f.client.blocked()));
+  await f.client.finish(async()=>{throw Error("no test playback to stop");});unsubscribe();
+  assert.ok(blocked.every(value=>value===false));assert.equal(f.calls.includes("discard"),false);
+});
+
+test("finishing each active phase waits for the exact process to stop",async()=>{
+  for(const phase of ["preparing","recording","checking","cancelling"] as const){
+    const f=fixture();f.set(snapshot(phase,2));await f.client.refresh();let paused=0;
+    await f.client.finish(async()=>{assert.equal(f.client.getSnapshot().snapshot?.busy,false);},1000,async()=>{
+      assert.equal(f.calls.includes("discard"),false);paused++;f.set(snapshot("cancelled",4));
+    });
+    assert.equal(paused,1);assert.equal(f.calls.filter(c=>c==="cancel").length,phase==="cancelling"?0:1);assert.equal(f.calls.filter(c=>c==="discard").length,1);
+  }
+});
+
+test("close waits for an in-flight start and never replays a lost accepted start",async()=>{
+  const f=fixture();await f.client.refresh();const receipt=deferred<CaptureTestSnapshot>();
+  f.bridge.start=async()=>{f.calls.push("start");return receipt.promise;};
+  const start=f.client.start(request());const finish=f.client.finish(async()=>{});
+  assert.equal(f.client.getSnapshot().finishing,true);
+  f.set(snapshot("ready",4));receipt.resolve(snapshot("ready",4));await start;await finish;
+  assert.equal(f.calls.filter(c=>c==="start").length,1);assert.equal(f.client.getSnapshot().snapshot,null);
+  const lost=fixture();await lost.client.refresh();lost.bridge.start=async()=>{lost.calls.push("start");lost.set(snapshot("ready",4));throw Error("lost reply");};
+  await assert.rejects(lost.client.start(request()));await lost.client.finish(async()=>{});
+  assert.equal(lost.calls.filter(c=>c==="start").length,1);assert.equal(lost.client.getSnapshot().pending,null);
+});
+
+test("finishing fences an absent pending start and leaves foreign ownership untouched",async()=>{
+  const f=fixture();await f.client.refresh();f.bridge.start=async()=>{throw Error("unknown start");};
+  await assert.rejects(f.client.start(request()));await f.client.finish(async()=>{throw Error("no audio to stop");});
+  assert.equal(f.calls.filter(c=>c==="reconcile").length,1);assert.equal(f.calls.includes("discard"),false);
+  const other=fixture();other.set(snapshot("ready",4));await other.client.refresh();
+  other.set({...snapshot("ready",4),runId:"a69b7530-c4b4-40f2-b2c5-50e28244e86d"});
+  await assert.rejects(other.client.finish(async()=>{}));assert.equal(other.calls.includes("discard"),false);
+});
+
+test("finish reconciles lost cancel/discard replies and permits cleanup failure retry",async()=>{
+  const f=fixture();f.set(snapshot("recording",2));await f.client.refresh();
+  f.bridge.cancel=async()=>{f.calls.push("cancel");f.set(snapshot("cancelled",4));throw Error("lost cancel reply");};
+  f.bridge.discard=async()=>{f.calls.push("discard");f.set(null);throw Error("lost discard reply");};
+  await f.client.finish(async()=>{});assert.equal(f.calls.filter(c=>c==="cancel").length,1);assert.equal(f.calls.filter(c=>c==="discard").length,1);
+  const retry=fixture();retry.set(snapshot("ready",4));await retry.client.refresh();let fail=true;
+  retry.bridge.discard=async()=>{if(fail)throw Error("file still open");retry.set(null);};
+  await assert.rejects(retry.client.finish(async()=>{}));assert.equal(retry.client.getSnapshot().snapshot?.runId,id);assert.equal(retry.client.getSnapshot().finishing,false);
+  assert.match(retry.client.getSnapshot().error,/「閉じる」/);fail=false;await retry.client.finish(async()=>{});
+  assert.equal(retry.client.getSnapshot().snapshot,null);
+});
 test("read reconciliation never starts capture; explicit start sends once and keeps its owner",async()=>{
   const f=fixture();assert.equal(f.client.blocked(),true);await f.client.refresh();assert.equal(f.client.blocked(),false);
   await f.client.start(request());assert.equal(f.client.blocked(),true);await f.client.refresh();

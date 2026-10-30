@@ -17,6 +17,16 @@ test("recipe canonical struct order and optional null bind regardless of input p
   assert.equal(canonicalRecipe(recipe).manifest.quantization, null);
   assert.equal(JSON.stringify(parseDownloadDefinition(JSON.stringify(recipe))), JSON.stringify(recipe));
 });
+
+test("package digest matches native receipt proof and ignores archive transport identity", async () => {
+  const first = await review(), result = await receipt();
+  assert.equal(first.packageReviewHash, result.report.reviewHash);
+  const changed = structuredClone(recipe); changed.sources[1].archive!.expectedHash = "c".repeat(64);
+  const second = await assertDownloadReview({ ...first, ...changed, recipeHash: await downloadDigest(changed) });
+  assert.notEqual(first.recipeHash, second.recipeHash); assert.equal(first.packageReviewHash, second.packageReviewHash);
+  const untrusted = await assertDownloadReview({ ...first, packageReviewHash: "f".repeat(64) });
+  assert.equal(untrusted.packageReviewHash, first.packageReviewHash, "derive package identity instead of trusting a wire field");
+});
 test("canonical unicode recipe agrees with native Rust independent golden", async () => {
   const value = structuredClone(recipe);
   value.manifest.modelName = "合成取得素材"; value.manifest.licenseRef = "synthetic fixture only"; value.manifest.files[1].expectedHash = "b".repeat(64);
