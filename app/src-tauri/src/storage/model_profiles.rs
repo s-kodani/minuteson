@@ -216,7 +216,9 @@ impl Binding {
         {
             return Err("プロファイルのモデル参照が不正です".into());
         }
-        let (record, placed) = super::model_placements::load(db, &self.package_id)?
+        // A later body deletion does not invalidate the immutable application
+        // evidence. Reading a profile must still allow selecting a replacement.
+        let (record, placed) = super::model_placements::load_history(db, &self.package_id)?
             .ok_or("プロファイルのモデル記録が欠損しています")?;
         if !placed
             || record.review_hash != self.review_hash
@@ -236,6 +238,15 @@ impl Binding {
             .report
             .ok_or("プロファイルの成功証拠がありません")?
             .validate(&record)?;
+        Ok(record)
+    }
+    fn validate_for_use(&self, db: &Connection) -> Result<PlacementRecord, String> {
+        let record = self.validate(db)?;
+        if !super::model_placements::load(db, &self.package_id)?.is_some_and(|(_, placed)| placed) {
+            return Err(
+                "選択したモデル本体は削除されています。設定でモデルを選び直してください".into(),
+            );
+        }
         Ok(record)
     }
 }
@@ -516,6 +527,8 @@ fn view(
     if let Some(stored) = stored {
         for binding in &stored.bindings {
             let record = binding.validate(db)?;
+            let available = super::model_placements::load(db, &binding.package_id)?
+                .is_some_and(|(_, placed)| placed);
             let latest = super::model_checks::latest(db, &binding.package_id)?
                 .ok_or("最新の互換性確認が欠損しています")?;
             components.push(ComponentView {
@@ -532,7 +545,8 @@ fn view(
                 check_operation_id: binding.check_operation_id.clone(),
                 settings_match: settings(db, name, binding.settings.engine())?.0
                     == binding.settings,
-                compatibility_current: latest.summary.state == CheckState::Succeeded
+                compatibility_current: available
+                    && latest.summary.state == CheckState::Succeeded
                     && latest.summary.operation_id == binding.check_operation_id,
             });
         }
@@ -622,7 +636,7 @@ fn preview(
             settings.vad_options = Some(Default::default());
         }
     }
-    if binding.validate(db)? != *record {
+    if binding.validate_for_use(db)? != *record {
         return Err("適用する配置記録が変わっています".into());
     }
     let latest =
@@ -859,7 +873,7 @@ impl Storage {
                     .ok_or("適用済みの構成が一致しません")?;
                 let latest = super::model_checks::latest(&tx, &binding.package_id)?
                     .ok_or("互換性確認がありません")?;
-                if binding.validate(&tx)? != *record
+                if binding.validate_for_use(&tx)? != *record
                     || binding.review_hash != expected.review_hash
                     || latest.summary.state != CheckState::Succeeded
                     || latest.summary.operation_id != binding.check_operation_id
@@ -982,3 +996,6 @@ pub(crate) fn remove_schema_for_test(db: &Connection) {
 }
 #[cfg(all(test, unix))]
 pub(in crate::storage) mod tests;
+
+#[cfg(test)]
+mod availability_tests;

@@ -467,7 +467,7 @@ fn current(
                     "適用後に互換性確認が変わっています。再確認・再適用してください".into(),
                 );
             }
-            let record = binding.validate(db)?;
+            let record = binding.validate_for_use(db)?;
             let compatibility = super::super::model_checks::read(db, &binding.check_operation_id)?
                 .and_then(|c| c.report)
                 .ok_or("成功した互換性証拠がありません")?;
@@ -648,7 +648,7 @@ impl Storage {
         if binding.settings != requested {
             return Err("選択した議事録モデルが変更されています。再確認してください".into());
         }
-        let record = binding.validate(&db)?;
+        let record = binding.validate_for_use(&db)?;
         let fingerprint = |role| -> Result<Fingerprint, String> {
             let files: Vec<_> = record.files.iter().filter(|f| f.role == role).collect();
             if files.len() != 1 {
