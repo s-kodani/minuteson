@@ -134,10 +134,10 @@ fn artifact(
 }
 fn artifacts(
     directory: &Path,
-    engine: Engine,
+    record: &PlacementRecord,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<Artifact>, String> {
-    artifact_names(engine)
+    artifact_names_for(record)?
         .iter()
         .map(|name| artifact(directory, name, cancelled))
         .collect()
@@ -231,10 +231,38 @@ fn run(
                     .descriptor()
                     .default_vad,
             );
-            config.verify(cancelled)?;
-            crate::transcription::asr::adapter(&config)?
-                .recognize(&config, directory.path(), 10_000_000, cancelled)?
-                .ok_or("ASR動作確認を取り消しました")?;
+            let adapter = crate::transcription::asr::adapter(&config)?;
+            let extended = adapter.compatibility_hint().is_some();
+            if extended {
+                // Exercise both decoders, including on silent synthetic input.
+                // Otherwise VAD can skip decoding and conceal a bad hotword path.
+                config.vad_options.as_mut().unwrap().enabled = false;
+            }
+            let started = Instant::now();
+            let trial_cancelled = || cancelled() || (extended && started.elapsed() >= timeout);
+            let result = (|| -> Result<(), String> {
+                config.verify(&trial_cancelled)?;
+                adapter
+                    .recognize(&config, directory.path(), 10_000_000, &trial_cancelled)?
+                    .ok_or("ASR動作確認を取り消しました")?;
+                if let Some(hint) = adapter.compatibility_hint() {
+                    check_cancelled(&trial_cancelled)?;
+                    let hinted = directory.child("with-hints", true)?;
+                    crate::transcription::input::Input::load(directory.path(), &trial_cancelled)?
+                        .write(hinted.path())?;
+                    config.prompt = hint.into();
+                    adapter
+                        .recognize(&config, hinted.path(), 10_000_000, &trial_cancelled)?
+                        .ok_or("ASR用語ヒントの動作確認を取り消しました")?;
+                    hinted.verify()?;
+                    hinted.sync()?;
+                }
+                Ok(())
+            })();
+            if extended && !cancelled() && started.elapsed() >= timeout {
+                return Err("ASR動作確認が制限時間を超えました".into());
+            }
+            result?;
         }
         Engine::Sherpa => {
             wave(directory)?;
@@ -321,7 +349,7 @@ pub(super) fn verify_success(
     }
     let directory = check_root.join(operation);
     if directory.canonicalize().map_err(|e| e.to_string())? != directory
-        || artifacts(&directory, record.manifest.engine, cancelled)? != report.artifacts
+        || artifacts(&directory, &record, cancelled)? != report.artifacts
     {
         return Err("保存済みの互換性試行の証拠が欠損・変更されています".into());
     }
@@ -390,8 +418,8 @@ pub(super) fn check(
                 engine: record.manifest.engine,
                 declared_engine_version: record.manifest.engine_version.clone(),
                 adapter_revision: 1,
-                settings: settings(record.manifest.engine),
-                artifacts: artifacts(directory.path(), record.manifest.engine, cancelled)?,
+                settings: settings_for(&record)?,
+                artifacts: artifacts(directory.path(), &record, cancelled)?,
                 elapsed_ms: u64::try_from(started.elapsed().as_millis())
                     .map_err(|e| e.to_string())?,
             };

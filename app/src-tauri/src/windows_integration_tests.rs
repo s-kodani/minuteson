@@ -1037,14 +1037,18 @@ fn windows_capture_stop_publishes_one_wav_and_restores_its_capture_history() {
 fn windows_bundled_model_catalog_is_complete_and_target_bound() {
     let root = crate::windows_runtime::resources().unwrap();
     let options = crate::model_official_catalog::options_windows(&root).unwrap();
-    assert_eq!(options.len(), 19);
+    assert_eq!(options.len(), 20);
     if let Some(path) = std::env::var_os("MON_WINDOWS_MODEL_OPTIONS") {
         // Feed the exact IPC shape and Rust digests to the production TS reader.
         fs::write(path, serde_json::to_vec(&options).unwrap()).unwrap();
     }
     let bytes = crate::windows_runtime::catalog(&root).unwrap();
     let choices: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(choices.len(), 19);
+    assert_eq!(choices.len(), 20);
+    assert!(choices
+        .iter()
+        .any(|choice| choice["recipe"]["manifest"]["backend"]["id"]
+            == crate::transcription::asr::NEMO_TDT));
     let mut engines = std::collections::BTreeSet::new();
     for choice in choices {
         let recipe =

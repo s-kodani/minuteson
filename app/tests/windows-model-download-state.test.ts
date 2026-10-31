@@ -34,10 +34,22 @@ test("Windows bundle definitions retain native recipe digests and count the arch
     delete (review as Record<string, unknown>).schemaVersion;
     const option = { id: "windows-fixture", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe), review,
       tokenLimits: engine === "llama.cpp" ? { maxInputTokens: 2048, maxOutputTokens: 512, maxContextTokens: 4096, tokenizer: "utf8_byte_bpe" } : null };
-    assert.equal((await assertOfficialModelOptions([option])).length, 1);
+    for (const id of ["windows-fixture", "windows-version-v1.0"]) {
+      assert.equal((await assertOfficialModelOptions([{ ...option, id }]))[0].id, id);
+    }
     await assert.rejects(assertDownloadReview({ ...review, bundledBytes: 0 }));
     await assert.rejects(assertDownloadReview({ ...review, downloadBytes: 130 }));
     await assert.rejects(assertDownloadReview({ ...review, recipeHash: "b".repeat(64) }));
+  }
+});
+
+test("versioned official IDs cannot be paths or ambiguous dot components", async () => {
+  const recipe = canonicalRecipe(windowsRecipe());
+  const option = { id: "windows-version-v1.0", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe),
+    review: { ...recipe, recipeSchemaVersion: 4, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe), totalBytes: 60,
+      publisherAuthenticity: "not_verified", installed: false, ready: false }, tokenLimits: null };
+  for (const id of [".", "..", "../escape", "windows/model", "windows\\model", ".windows", "windows.", "windows..v1"]) {
+    await assert.rejects(assertOfficialModelOptions([{ ...option, id }]), id);
   }
 });
 
@@ -59,10 +71,13 @@ test("all Windows model choices from the native IPC pass the production frontend
 }, async () => {
   const native = JSON.parse(readFileSync(process.env.MON_WINDOWS_MODEL_OPTIONS!, "utf8"));
   const choices = await assertOfficialModelOptions(native);
-  assert.equal(choices.length, 19);
+  assert.equal(choices.length, 20);
   assert.deepEqual(choices.map(o => o.review.manifest.engine).reduce((counts, engine) => {
     counts[engine] = (counts[engine] ?? 0) + 1; return counts;
-  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 9, "asr": 2 });
+  }, {} as Record<string, number>), { "whisper.cpp": 6, "sherpa-onnx": 2, "llama.cpp": 9, "asr": 3 });
+  const haas = choices.find(option => option.id === "windows-haas-ja-v1.0-onnx-quantized");
+  assert.equal(haas?.review.manifest.backend?.id, "sherpa-onnx-nemo-tdt");
+  assert.equal(haas?.review.manifest.backend?.files.bpeVocab, "models/bpe.vocab");
   for (const model of ["gemma4-e4b-it", "phi4-mini-instruct", "lfm3-17b"]) {
     const choice = choices.find(option => option.id === `windows-llama-b11960-${model}-q4km`);
     assert.ok(choice, `missing Windows model: ${model}`);

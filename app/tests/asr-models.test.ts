@@ -19,17 +19,19 @@ test("ASR selection groups registered backends without a model-specific UI branc
   const other = structuredClone(options[0]);
   other.id = "third-adapter"; other.label = "Another ASR"; other.review.manifest.backend!.id = "test-adapter";
   const choices = modelChoices("asr", [], [whisper, ...options, other], []);
-  assert.deepEqual(choices.map(c => c.label), ["Whisper", "ReazonSpeech-k2-v2（軽量）", "ReazonSpeech-k2-v2（FP32）", "Another ASR"]);
+  assert.deepEqual(choices.map(c => c.label), ["Whisper", "ReazonSpeech-k2-v2（軽量）", "ReazonSpeech-k2-v2（FP32）", "Haas-ja-v1.0（量子化）", "Another ASR"]);
   assert.ok(isAsrEngine("whisper.cpp") && isAsrEngine("asr"));
   assert.equal(isAsrEngine("sherpa-onnx"), false);
 });
-test("both transducer variants share decoder, tokens and VAD and keep distinct encoders", () => {
-  const files = options.map(option => new Map(option.review.manifest.files.map(f => [f.relativePath, f.expectedHash])));
+test("both ReazonSpeech variants share decoder, tokens and VAD and keep distinct encoders", () => {
+  const reazon = options.filter(option => option.id.startsWith("reazonspeech-k2-v2-"));
+  assert.equal(reazon.length, 2);
+  const files = reazon.map(option => new Map(option.review.manifest.files.map(f => [f.relativePath, f.expectedHash])));
   for (const path of ["models/decoder.onnx", "models/tokens.txt", "models/silero_vad.onnx"]) {
     assert.equal(files[0].get(path), files[1].get(path));
   }
   assert.notEqual(files[0].get("models/encoder.int8.onnx"), files[1].get("models/encoder.onnx"));
-  assert.deepEqual(Object.keys(options[0].review.manifest.backend!.files), ["decoder", "joiner", "library", "tokens"]);
+  assert.deepEqual(Object.keys(reazon[0].review.manifest.backend!.files), ["decoder", "joiner", "library", "tokens"]);
 });
 test("a changed transport recipe preserves the installed transducer model identity", () => {
   const option = options[0], m = option.review.manifest;
@@ -38,7 +40,7 @@ test("a changed transport recipe preserves the installed transducer model identi
     download: { operationId: "33333333-3333-4333-8333-333333333333", recipeHash: "b".repeat(64) },
     modelFiles: m.files.filter(f => ["asr", "asr_asset", "vad"].includes(f.role)).map(f => ({ role: f.role, size: f.expectedSize, sha256: f.expectedHash })) };
   assert.ok(matchesOfficialModel(entry, option));
-  assert.equal(modelChoices("asr", [entry], options, []).length, 2);
+  assert.equal(modelChoices("asr", [entry], options, []).length, 3);
   entry.modelFiles[0].sha256 = "c".repeat(64);
   assert.equal(matchesOfficialModel(entry, option), false);
 });

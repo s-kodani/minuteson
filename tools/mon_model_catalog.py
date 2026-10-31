@@ -74,7 +74,11 @@ def main():
             if json.loads(destination.read_text(encoding='utf8')) != choices:
                 raise SystemExit(f'{destination}: regenerate with tools/mon_model_catalog.py')
         else:
-            destination.write_text(json.dumps(choices, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
+            # Preserve formatting of compatibility catalogs when their meaning
+            # is unchanged; changing an ASR choice must not rewrite base models.
+            if destination.exists() and json.loads(destination.read_text(encoding='utf8')) == choices:
+                continue
+            destination.write_text(json.dumps(choices, ensure_ascii=False, indent=2) + '\n', encoding='utf8', newline='\n')
 
 
 if __name__ == '__main__':

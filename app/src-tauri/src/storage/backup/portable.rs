@@ -424,8 +424,96 @@ pub(super) fn portable_json_with_metadata(
             }
         }
     }
+    // Registered ASR adapters emit a models map instead of Whisper's params.
+    // Only generated file references are shortened; recognized text is intact.
+    if value.get("backendId").is_some_and(Value::is_string) {
+        if let Some(models) = value.get_mut("models").and_then(Value::as_object_mut) {
+            for (slot, path) in models {
+                let text = path.as_str().ok_or("ASR結果のモデル参照が不正です")?;
+                let role = if slot == "model" { "model" } else { "artifact" };
+                let name = text
+                    .strip_prefix("mon-unavailable:")
+                    .filter(|sha| valid_hash(sha))
+                    .and_then(|sha| {
+                        known
+                            .iter()
+                            .filter(|reference| reference.role == role && reference.sha256 == sha)
+                            .map(|reference| reference.name.as_str())
+                            .min()
+                    })
+                    .map(str::to_owned)
+                    .unwrap_or(basename(text)?);
+                *path = Value::String(name);
+            }
+        }
+    }
     redact_json(&mut value, "artifact", references, known, 0)?;
     serde_json::to_vec(&value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod asr_tests {
+    use super::*;
+
+    #[test]
+    fn portable_asr_models_redact_every_dependency_and_preserve_recognized_text() {
+        let metadata = [
+            FileReference {
+                name: "encoder.onnx".into(),
+                size: 10,
+                sha256: "a".repeat(64),
+                role: "model".into(),
+            },
+            FileReference {
+                name: "encoder.data".into(),
+                size: 20,
+                sha256: "b".repeat(64),
+                role: "artifact".into(),
+            },
+            FileReference {
+                name: "tokens.txt".into(),
+                size: 30,
+                sha256: "c".repeat(64),
+                role: "artifact".into(),
+            },
+        ];
+        let result = json!({"schemaVersion":1,"backendId":"test-asr","models":{
+            "model":r"C:\private\models\encoder.onnx", "data":"/private/models/encoder.data", "tokens":"/private/models/tokens.txt"},
+            "segments":[{"startUs":0,"endUs":100,"text":"/private/meeting は本文なので保持"}]});
+        let portable: Value = serde_json::from_slice(
+            &portable_json_with_metadata(
+                &serde_json::to_vec(&result).unwrap(),
+                false,
+                &mut BTreeSet::new(),
+                &metadata,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            portable["models"],
+            json!({"model":"encoder.onnx","data":"encoder.data","tokens":"tokens.txt"})
+        );
+        assert_eq!(portable["segments"], result["segments"]);
+        let mut logical = portable.clone();
+        for (slot, index) in [("model", 0), ("data", 1), ("tokens", 2)] {
+            logical["models"][slot] = json!(format!("mon-unavailable:{}", metadata[index].sha256));
+        }
+        let again: Value = serde_json::from_slice(
+            &portable_json_with_metadata(
+                &serde_json::to_vec(&logical).unwrap(),
+                false,
+                &mut BTreeSet::new(),
+                &metadata,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            again, portable,
+            "rebackup preserves the same names without revealing machine paths"
+        );
+    }
 }
 
 pub(super) fn portable_completion(

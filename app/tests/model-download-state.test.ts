@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult, bundledWhisperSource } from "../src/model-download-state.ts";
+import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult, bundledWhisperSource, bundledAsrSource, bundledWindowsSource } from "../src/model-download-state.ts";
 import { readFileSync } from "node:fs";
 import { placementLabel } from "../src/model-inspection-state.ts";
 const id = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", hash = "a".repeat(64);
@@ -16,6 +16,27 @@ test("recipe canonical struct order and optional null bind regardless of input p
   assert.equal(await downloadDigest(canonicalRecipe(reversed)), await downloadDigest(recipe));
   assert.equal(canonicalRecipe(recipe).manifest.quantization, null);
   assert.equal(JSON.stringify(parseDownloadDefinition(JSON.stringify(recipe))), JSON.stringify(recipe));
+});
+
+test("bundled ASR assets must be declared by their backend on either platform", () => {
+  const definitions = JSON.parse(readFileSync(new URL("../model-catalog/asr-transducer.json", import.meta.url), "utf8"));
+  const haas = definitions.find((option: any) => option.id === "haas-ja-v1.0-onnx-quantized").recipe;
+  for (const [target, url] of [["macos_aarch64", bundledAsrSource], ["windows_x86_64", bundledWindowsSource]]) {
+    const value = structuredClone(haas);
+    value.manifest.target = target;
+    const asset = value.sources.find((source: any) => source.relativePath === value.manifest.backend.files.bpeVocab);
+    asset.url = url;
+    assert.equal(canonicalRecipe(value).manifest.backend?.files.bpeVocab, "models/bpe.vocab");
+    const unreferenced = structuredClone(value);
+    delete unreferenced.manifest.backend.files.bpeVocab;
+    assert.throws(() => canonicalRecipe(unreferenced), "unreferenced bundled ASR asset");
+    const unrelatedEngine = structuredClone(value);
+    unrelatedEngine.manifest.engine = "llama.cpp";
+    assert.throws(() => canonicalRecipe(unrelatedEngine), "ASR asset attached to a non-ASR engine");
+    const missingArchive = structuredClone(value);
+    delete missingArchive.sources.find((source: any) => source.relativePath === "models/bpe.vocab").archive;
+    assert.throws(() => canonicalRecipe(missingArchive), "bundled ASR asset without an archive");
+  }
 });
 
 test("package digest matches native receipt proof and ignores archive transport identity", async () => {

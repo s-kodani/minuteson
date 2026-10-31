@@ -1,2 +1,3 @@
 # Notice files are verified by exact byte length and SHA-256 in index.json.
 third-party/notices/** -text
+third-party/asr-assets/** -text

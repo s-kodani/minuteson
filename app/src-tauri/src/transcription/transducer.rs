@@ -27,6 +27,8 @@ struct Output {
     segments: Vec<Segment>,
     tokens: Vec<Token>,
     ignored_hotwords: Vec<String>,
+    #[serde(default)]
+    ignored_hotword_reasons: BTreeMap<String, String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -84,7 +86,12 @@ pub(crate) fn parse(
         }
         previous = token.start_us;
     }
-    if output.ignored_hotwords.iter().any(|s| s.len() > 800) {
+    if output.ignored_hotwords.iter().any(|s| s.len() > 800)
+        || output.ignored_hotword_reasons.len() > 1000
+        || output.ignored_hotword_reasons.iter().any(|(word, reason)| {
+            word.len() > 800 || reason.len() > 1024 || !output.ignored_hotwords.contains(word)
+        })
+    {
         return Err("ASR用語診断が大きすぎます".into());
     }
     Ok(output.segments)
@@ -160,6 +167,18 @@ pub(crate) fn run(
         .arg(config.threads.to_string())
         .arg("--hotwords")
         .arg(&config.prompt);
+    if let Some(options) = asr::adapter(config)?.native_options() {
+        c.arg("--backend-id")
+            .arg(&backend.id)
+            .arg("--model-type")
+            .arg(options.model_type)
+            .arg("--feature-dim")
+            .arg(options.feature_dim.to_string())
+            .arg("--modeling-unit")
+            .arg(options.modeling_unit)
+            .arg("--max-segment-seconds")
+            .arg(options.max_segment_seconds.to_string());
+    }
     for (key, file) in &backend.files {
         c.arg(format!("--{key}")).arg(&file.path);
     }

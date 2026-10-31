@@ -33,6 +33,15 @@ async (page, capturePath) => {
   const details = copies.first().getByRole('button', { name: /の詳細$/ }); await details.click();
   const detail = page.getByRole('dialog', { name: 'モデルの詳細', exact: true });
   await detail.getByText('44444444-4444-4444-8444-444444444444', { exact: true }).waitFor();
+  const vocabulary = detail.locator('dt:visible').filter({ hasText: '用語辞書の対応' });
+  check(await vocabulary.count() === 1, 'ASR copy details omitted vocabulary support');
+  check((await vocabulary.locator('xpath=following-sibling::dd[1]').innerText()).includes('表記・読み'), 'legacy whisper copy did not resolve its own backend support');
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    check(await detail.evaluate(element => element.scrollWidth <= element.clientWidth + 1), 'model vocabulary details overflow');
+    await detail.screenshot({ path: capturePath(`model-vocabulary-details-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1200, height: 900 });
   await page.keyboard.press('Escape'); await detail.waitFor({ state: 'hidden' });
   check(await details.evaluate(element => element === document.activeElement), 'details lost their own opener');
   await start(copies.first());

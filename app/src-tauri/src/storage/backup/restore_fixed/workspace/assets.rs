@@ -72,6 +72,19 @@ impl<C: Fn() -> bool> WorkspaceAssets<'_, '_, '_, C> {
     }
 }
 impl<C: Fn() -> bool> Assets for WorkspaceAssets<'_, '_, '_, C> {
+    fn model_aliases(&self, role: &str, size: u64, sha256: &str) -> Vec<String> {
+        self.fixed
+            .ids
+            .source()
+            .manifest
+            .file_references
+            .iter()
+            .filter(|reference| {
+                reference.role == role && reference.size == size && reference.sha256 == sha256
+            })
+            .map(|reference| reference.name.clone())
+            .collect()
+    }
     fn read(&mut self, role: Role, id: &str, hash: &str) -> Result<Vec<u8>, String> {
         let entry = self.entry(role, id, hash)?;
         let path = self.fixed.ids.source().owned_asset_path(id)?;

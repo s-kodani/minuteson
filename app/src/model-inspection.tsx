@@ -18,6 +18,7 @@ import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadba
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
 import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
+import { modelVocabularySupport } from "./model-vocabulary-support";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -29,7 +30,7 @@ const engines = [{ engine: "asr", label: "文字起こし" }, { engine: "sherpa-
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
-  useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => setError(String(cause))); }, [visible]);
+  useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => { setBackends([]); setError(String(cause)); }); }, [visible]);
   const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>({});
   const [cpuThreads, setCpuThreads] = useState<number | null>(null), [threadChoice, setThreadChoice] = useState("");
@@ -237,7 +238,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const selectedProfile = profiles.find(item => item.name === "standard");
   const copyStatus = (item: ModelPlacementEntry) => isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
   const purposeOf = (item: ModelPlacementEntry) => engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
-  const renderCopy = (item: ModelPlacementEntry, grouped = false) => <InstalledModelCopy key={item.packageId} item={item} name={modelDisplayName(item, options)} status={copyStatus(item)} purpose={purposeOf(item)} grouped={grouped} disabled={disabled} deletion={deletion} />;
+  const renderCopy = (item: ModelPlacementEntry, grouped = false) => <InstalledModelCopy key={item.packageId} item={item} name={modelDisplayName(item, options)} status={copyStatus(item)} purpose={purposeOf(item)} vocabularySupport={modelVocabularySupport(item, backends)} grouped={grouped} disabled={disabled} deletion={deletion} />;
   return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
@@ -322,8 +323,8 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   </section></>;
 }
 
-function InstalledModelCopy({ item, name, status, purpose, grouped, disabled, deletion }: {
-  item: ModelPlacementEntry; name: string; status: string; purpose: string; grouped: boolean; disabled: boolean; deletion?: ModelDeletionControl;
+function InstalledModelCopy({ item, name, status, purpose, vocabularySupport, grouped, disabled, deletion }: {
+  item: ModelPlacementEntry; name: string; status: string; purpose: string; vocabularySupport: string | null; grouped: boolean; disabled: boolean; deletion?: ModelDeletionControl;
 }) {
   return <div className="model-copy" data-model-copy={item.packageId}><div className="model-inventory-summary">
     {!grouped && <strong>{name}</strong>}<span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span>
@@ -333,6 +334,7 @@ function InstalledModelCopy({ item, name, status, purpose, grouped, disabled, de
         <dt>モデル名</dt><dd>{item.modelName || "不明"}</dd><dt>バージョン</dt><dd>{item.modelVersion || "不明"}</dd>
         <dt>量子化</dt><dd>{item.quantization || "不明"}</dd><dt>エンジン</dt><dd>{item.engine || "不明"} · {item.engineVersion || "不明"}</dd>
         <dt>発話検知モデル</dt><dd>{item.modelFiles?.some(file => file.role === "vad") ? "あり" : "なし"}</dd>
+        {vocabularySupport !== null && <><dt>用語辞書の対応</dt><dd>{vocabularySupport}</dd></>}
         <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
         <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
         <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>

@@ -2,7 +2,7 @@ import { invoke, isTauri } from "./ipc.ts";
 import { IconButton } from "./action-icon";
 import { OptionsModal } from "./options-modal";
 import type { ModalReplacement } from "./common-modal";
-import { InfoPopover } from "./info-popover";
+import { VocabularyHelp } from "./vocabulary-help";
 import { IssueNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { useEffect, useId, useRef, useState, type MutableRefObject, type ReactNode } from "react";
@@ -95,7 +95,7 @@ export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef, re
     </article>)}</fieldset>
     {items.length > 50 && <nav aria-label="用語のページ" className="transcript-pages"><IconButton label="前へ" icon="previous" type="button" disabled={currentPage === 0 || locked} onClick={() => setPage(currentPage - 1)} /><span>{currentPage + 1} / {Math.ceil(items.length / 50)}</span><IconButton label="次へ" icon="next" type="button" disabled={(currentPage + 1) * 50 >= items.length || locked} onClick={() => setPage(currentPage + 1)} /></nav>}
   </>;
-  const help = <InfoPopover label={meetingId ? "会議の用語" : "共通用語"} details={<p>用語と読みを認識ヒントとして渡します。補足は保存・表示用で、音声認識には渡しません。自動置換や精度向上の保証ではありません。編集は次回の新しい解析に反映し、実行中・同じ条件の再試行・過去の結果は変更しません。共通用語はプロンプト画面で編集できます。同じ表記は有効な会議別用語を優先し、無効な会議別用語は共通用語を除外しません。開始時に保存済みの両リストを固定します。</p>}>用語は自動置換ではなく認識ヒントです。編集は次回の新しい解析に反映し、実行中・同じ条件の再試行・過去の結果は変更しません。</InfoPopover>;
+  const help = <VocabularyHelp label={meetingId ? "会議の用語" : "共通用語"} context={<p>共通用語はプロンプト画面で編集できます。同じ表記は有効な会議別用語を優先し、無効な会議別用語は共通用語を除外しません。文字起こしの開始時に保存済みの両リストを固定します。</p>} />;
   // Keep the problem visible even when the optional editor is collapsed. A
   // notification can be dismissed without clearing the queue or the input.
   const issue = <IssueNotice scope={meetingId ?? "global"} type="vocabulary-save" label="用語の読込・保存" message={state.error || error ? `${state.error || error} 入力は保持しています。空欄・重複を修正して再試行してください。競合時は入力を控えてから再読込してください。` : ""} action={state.error ? { kind: "retry", label: "用語保存を再試行", disabled: disabled || state.saving || !state.dirty || !validVocabulary(items), run: async () => { if (!locked && !loading && !confirm.pending && validVocabulary(queue.snapshot().payload ?? [])) await queue.retry().catch(() => {}); } } : undefined} />;

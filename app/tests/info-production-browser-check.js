@@ -2,12 +2,17 @@
 async (page,capturePath)=>{
   const results=[],check=(v,m)=>{if(!v)throw Error(m);};
   const info=label=>page.getByRole("button",{name:`${label}の説明を開く`,exact:true});
-  const visit=async(label,text)=>{
+  const visit=async(label,text,details=false)=>{
     await info(label).click();
     const popup=page.getByRole("dialog",{name:label,exact:true});await popup.waitFor();
+    if(details)await popup.getByRole("link",{name:"詳しい説明",exact:true}).click();
     check((await popup.innerText()).includes(text),`${label}: missing current explanation`);
     const bounds=await popup.boundingBox(),width=await page.evaluate(()=>document.documentElement.clientWidth);
-    check(bounds.x>=7.9&&bounds.y>=7.9&&bounds.x+bounds.width<=width-7.9,"clipped help");
+    check(bounds.x>=7.9&&bounds.y>=7.9&&bounds.x+bounds.width<=width-7.9&&bounds.y+bounds.height<=await page.evaluate(()=>window.innerHeight)-7.9,"clipped help");
+    if(details){
+      check(await popup.evaluate(e=>e.scrollWidth<=e.clientWidth+1),"detailed help overflows horizontally");
+      await popup.screenshot({path:capturePath("vocabulary-help-details.png")});
+    }
     await page.keyboard.press("Escape");await popup.waitFor({state:"hidden"});
     check(await info(label).evaluate(e=>e===document.activeElement),`${label}: opener focus lost`);
   };
@@ -17,7 +22,9 @@ async (page,capturePath)=>{
     await visit(label,text);results.push(`current ${label} help dismisses by keyboard and restores focus`);
   }
   await page.locator('.sidebar').getByRole("button",{name:"プロンプト",exact:true}).click();
-  await visit("共通用語","次回");
+  await page.setViewportSize({width:360,height:640});
+  await visit("共通用語","次回",true);
+  await page.setViewportSize({width:1200,height:900});
   await page.locator('.sidebar').getByRole("button",{name:"設定",exact:true}).click();
   for(const label of ["要確認データ","モデル本体削除","モデル配置記録","プロファイル構成記録"]){
     check(await info(label).count()===0,`${label}: retired maintenance help remains`);

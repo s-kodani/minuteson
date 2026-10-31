@@ -244,7 +244,7 @@ test("import title uses the available width without a meeting model selector", (
   const css=source("prototype-alignment.css"), panel=source("audio-import.tsx");
   assert.match(css,/\.import-dialog fieldset \{ grid-template-columns:minmax\(0,1fr\); \}/);
   assert.doesNotMatch(panel,/import-analysis-profile|import-profile-field|options:.*profile/);
-  assert.match(panel,/>会議の用語（任意）<\/button><InfoPopover label="取り込みの用語"/);
+  assert.match(panel,/>会議の用語（任意）<\/button><VocabularyHelp label="取り込みの用語"/);
 });
 
 test("pointer opening an import captures its actual entry point before the native file panel", () => {

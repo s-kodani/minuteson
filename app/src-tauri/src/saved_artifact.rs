@@ -32,6 +32,11 @@ impl Role {
 // byte proofs remain the coordinator's responsibility. Implementations must
 // never overwrite conflicting historical output or make models available.
 pub(crate) trait RestoreAssets {
+    /// Historical basenames bound to exact model bytes in the verified archive.
+    /// Domains may use these to validate path-free native result references.
+    fn model_aliases(&self, _role: &str, _size: u64, _sha256: &str) -> Vec<String> {
+        vec![]
+    }
     fn read(&mut self, role: Role, id: &str, hash: &str) -> Result<Vec<u8>, String>;
     fn write(
         &mut self,

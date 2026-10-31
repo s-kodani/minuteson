@@ -62,6 +62,7 @@ pub struct Segment {
 
 pub(crate) const WHISPER: &str = "whisper.cpp";
 pub(crate) const TRANSDUCER: &str = "sherpa-onnx-transducer";
+pub(crate) const NEMO_TDT: &str = "sherpa-onnx-nemo-tdt";
 
 pub(crate) use mon_contracts::BackendManifest;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -124,8 +125,27 @@ pub(crate) struct Descriptor {
     pub max_input_seconds: u32,
 }
 
+/// App-declared native settings, never persisted into existing job snapshots.
+/// Absence retains the exact legacy transducer command line.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeTransducerOptions {
+    pub model_type: &'static str,
+    pub feature_dim: u32,
+    pub modeling_unit: &'static str,
+    pub max_segment_seconds: u32,
+}
+
 pub(crate) trait AsrAdapter: Sync {
     fn descriptor(&self) -> Descriptor;
+    fn native_options(&self) -> Option<NativeTransducerOptions> {
+        None
+    }
+    fn compatibility_hint(&self) -> Option<&'static str> {
+        None
+    }
+    fn validate_manifest(&self, _manifest: &PackageManifest) -> Result<(), String> {
+        Ok(())
+    }
     fn recognition_policy(&self) -> super::RecognitionPolicy {
         super::RecognitionPolicy::AdapterV1
     }
@@ -187,10 +207,12 @@ pub(crate) trait AsrAdapter: Sync {
 }
 struct WhisperAdapter;
 struct TransducerAdapter;
+struct NemoTdtAdapter;
 static WHISPER_ADAPTER: WhisperAdapter = WhisperAdapter;
 static TRANSDUCER_ADAPTER: TransducerAdapter = TransducerAdapter;
-pub(crate) fn registry() -> [&'static dyn AsrAdapter; 2] {
-    [&WHISPER_ADAPTER, &TRANSDUCER_ADAPTER]
+static NEMO_TDT_ADAPTER: NemoTdtAdapter = NemoTdtAdapter;
+pub(crate) fn registry() -> [&'static dyn AsrAdapter; 3] {
+    [&WHISPER_ADAPTER, &TRANSDUCER_ADAPTER, &NEMO_TDT_ADAPTER]
 }
 fn lookup<'a>(
     adapters: impl IntoIterator<Item = &'a dyn AsrAdapter>,
@@ -255,7 +277,7 @@ pub(crate) fn validate_manifest(manifest: &PackageManifest) -> Result<(), String
     {
         return Err("ASRモデルに未参照のファイルがあります".into());
     }
-    Ok(())
+    find(&backend.id)?.validate_manifest(manifest)
 }
 impl AsrAdapter for WhisperAdapter {
     fn recognition_policy(&self) -> super::RecognitionPolicy {
@@ -273,7 +295,8 @@ impl AsrAdapter for WhisperAdapter {
             supports_vad_overlap: true,
             default_vad: Default::default(),
             vocabulary_method: "whisper-vocabulary-v2",
-            vocabulary_description: "表記・読み・補足を認識のヒントに使用します。",
+            vocabulary_description:
+                "対応：表記・読み。用語と読みを文章のヒントとして渡します。補足は保存・表示用です。",
             max_input_seconds: 30,
         }
     }
@@ -336,7 +359,7 @@ impl AsrAdapter for TransducerAdapter {
                 ..Default::default()
             },
             vocabulary_method: "transducer-hotwords-v1",
-            vocabulary_description: "用語の表記を使用します。読み・補足は対象外です。",
+            vocabulary_description: "対応：表記のみ。登録した表記で文字起こしされやすくします。読み・補足は保存・表示用です。",
             max_input_seconds: 30,
         }
     }
@@ -363,6 +386,84 @@ impl AsrAdapter for TransducerAdapter {
     }
 }
 
+impl AsrAdapter for NemoTdtAdapter {
+    fn descriptor(&self) -> Descriptor {
+        let mut d = TRANSDUCER_ADAPTER.descriptor();
+        d.id = NEMO_TDT;
+        d.slots = &["bpeVocab", "data", "decoder", "joiner", "library", "tokens"];
+        d.max_input_seconds = 29;
+        d.default_vad.max_speech_duration_s = 29;
+        d
+    }
+    fn native_options(&self) -> Option<NativeTransducerOptions> {
+        Some(NativeTransducerOptions {
+            model_type: "nemo_transducer",
+            feature_dim: 128,
+            modeling_unit: "bpe",
+            max_segment_seconds: self.descriptor().max_input_seconds,
+        })
+    }
+    fn compatibility_hint(&self) -> Option<&'static str> {
+        Some("確認")
+    }
+    fn validate_manifest(&self, manifest: &PackageManifest) -> Result<(), String> {
+        let backend = manifest
+            .backend
+            .as_ref()
+            .ok_or("ASRモデル構成がありません")?;
+        let model = manifest
+            .files
+            .iter()
+            .find(|f| f.role == Role::Asr)
+            .ok_or("Encoderがありません")?;
+        validate_external_data(
+            Path::new(&model.relative_path),
+            Path::new(&backend.files["data"]),
+        )
+    }
+    fn validate(&self, c: &AsrConfig) -> Result<(), String> {
+        let b = c.backend.as_ref().ok_or("ASRモデル構成がありません")?;
+        if b.files.keys().map(String::as_str).collect::<Vec<_>>() != self.descriptor().slots
+            || c.use_gpu
+        {
+            return Err("NeMo TDTのファイル構成またはCPU設定が不正です".into());
+        }
+        let portable = |file: &Fingerprint| {
+            file.path.to_str() == Some(format!("mon-unavailable:{}", file.sha256).as_str())
+        };
+        if portable(&c.model)
+            && portable(&c.executable)
+            && b.files.values().all(portable)
+            && c.vad_model.as_ref().is_none_or(portable)
+        {
+            // Portable history deliberately has no host paths. Its package
+            // manifest still verifies the real relative external-data layout;
+            // executing this configuration always requires verified rebinding.
+            return Ok(());
+        }
+        validate_external_data(&c.model.path, &b.files["data"].path)
+    }
+    fn recognize(
+        &self,
+        c: &AsrConfig,
+        d: &Path,
+        t: i64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<Vec<Segment>>, String> {
+        super::transducer::run(c, d, t, &|| cancelled())
+    }
+    fn parse_result(&self, b: &[u8], c: &AsrConfig, t: i64) -> Result<Vec<Segment>, String> {
+        super::transducer::parse(b, c, t)
+    }
+}
+
+fn validate_external_data(model: &Path, data: &Path) -> Result<(), String> {
+    if model.parent() != data.parent() || data.file_name().is_none_or(|n| n != "encoder.data") {
+        return Err("Encoderとencoder.dataを同じフォルダーに配置してください".into());
+    }
+    Ok(())
+}
+
 /// Worker identity is declared once by an adapter, independently of model names.
 pub(crate) fn worker_binary(worker: &str) -> Option<&'static str> {
     registry()
@@ -371,6 +472,10 @@ pub(crate) fn worker_binary(worker: &str) -> Option<&'static str> {
         .find(|d| d.worker == worker)
         .map(|d| d.worker_binary)
 }
+
+#[cfg(test)]
+#[path = "asr/haas_native_tests.rs"]
+mod haas_native_tests;
 
 #[cfg(test)]
 mod tests {
@@ -402,7 +507,12 @@ mod tests {
                         .descriptor()
                         .slots
                         .iter()
-                        .map(|s| (s.to_string(), proof(s)))
+                        .map(|s| {
+                            (
+                                s.to_string(),
+                                proof(if *s == "data" { "encoder.data" } else { s }),
+                            )
+                        })
                         .collect(),
                 })
             },
@@ -410,7 +520,7 @@ mod tests {
     }
     #[test]
     fn asr_adapters_share_a_validated_segment_contract() {
-        for id in [WHISPER, TRANSDUCER] {
+        for id in [WHISPER, TRANSDUCER, NEMO_TDT] {
             let c = config(id);
             let a = adapter(&c).unwrap();
             a.prepare(&c).unwrap();
@@ -515,6 +625,89 @@ mod tests {
         b.validate().unwrap();
         b.files.insert("extra".into(), "/models/extra".into());
         assert!(b.validate().is_err());
+    }
+
+    #[test]
+    fn asr_nemo_assets_and_native_settings_are_adapter_owned() {
+        let mut c = config(NEMO_TDT);
+        let a = adapter(&c).unwrap();
+        a.prepare(&c).unwrap();
+        let native = a.native_options().unwrap();
+        assert_eq!(
+            (
+                native.model_type,
+                native.feature_dim,
+                native.modeling_unit,
+                native.max_segment_seconds
+            ),
+            ("nemo_transducer", 128, "bpe", 29)
+        );
+        assert_eq!(
+            a.descriptor().worker,
+            TRANSDUCER_ADAPTER.descriptor().worker
+        );
+        assert_eq!(a.compatibility_hint(), Some("確認"));
+        assert!(TRANSDUCER_ADAPTER.native_options().is_none());
+        assert!(TRANSDUCER_ADAPTER.compatibility_hint().is_none());
+        assert!(WHISPER_ADAPTER.native_options().is_none());
+        let b = c.backend.as_mut().unwrap();
+        b.files.get_mut("data").unwrap().path = Path::new("/other/encoder.data").into();
+        assert!(a.prepare(&c).is_err());
+        c.backend
+            .as_mut()
+            .unwrap()
+            .files
+            .get_mut("data")
+            .unwrap()
+            .path = proof("renamed.data").path;
+        assert!(a.prepare(&c).is_err());
+        c.backend
+            .as_mut()
+            .unwrap()
+            .files
+            .get_mut("data")
+            .unwrap()
+            .path = proof("encoder.data").path;
+        c.use_gpu = true;
+        assert!(a.prepare(&c).is_err());
+        c.use_gpu = false;
+        c.backend.as_mut().unwrap().files.remove("bpeVocab");
+        assert!(a.prepare(&c).is_err());
+    }
+
+    #[test]
+    fn asr_legacy_job_configuration_does_not_gain_native_settings() {
+        for id in [WHISPER, TRANSDUCER] {
+            let c = config(id);
+            let value = serde_json::to_value(&c).unwrap();
+            assert!(value.get("nativeOptions").is_none());
+            let restored: AsrConfig = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&restored).unwrap(), value);
+            assert!(adapter(&restored).unwrap().native_options().is_none());
+        }
+    }
+
+    #[test]
+    fn asr_nemo_portable_history_validates_without_claiming_files_are_installed() {
+        let mut c = config(NEMO_TDT);
+        let unavailable = |file: &mut Fingerprint| {
+            file.path = format!("mon-unavailable:{}", file.sha256).into();
+        };
+        unavailable(&mut c.executable);
+        unavailable(&mut c.model);
+        for file in c.backend.as_mut().unwrap().files.values_mut() {
+            unavailable(file);
+        }
+        c.validate_settings().unwrap();
+        assert!(c.verify(&|| false).is_err());
+        c.backend
+            .as_mut()
+            .unwrap()
+            .files
+            .get_mut("data")
+            .unwrap()
+            .path = proof("encoder.data").path;
+        assert!(c.validate_settings().is_err());
     }
     #[test]
     #[ignore = "requires MON_ASR_ASSETS and built native transducer worker"]

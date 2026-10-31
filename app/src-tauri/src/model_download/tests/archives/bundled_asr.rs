@@ -88,6 +88,67 @@ fn reazonspeech_variants_prepare_their_own_bundle_without_whisper_before_network
 }
 
 #[test]
+fn haas_bundled_vocabulary_is_selected_verified_and_prepared_before_network() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = fixture(&temp);
+    let asr = bundle.parent().unwrap().join("inference-runtime");
+    let choice_id = "haas-ja-v1.0-onnx-quantized";
+    let definitions: Vec<crate::model_asr_catalog::Choice> = serde_json::from_str(include_str!(
+        "../../../../../model-catalog/asr-transducer.json"
+    ))
+    .unwrap();
+    let choice = definitions.into_iter().find(|c| c.id == choice_id).unwrap();
+    let vocabulary = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../third-party/asr-assets/haas-ja-v1.0-onnx-quantized/models/bpe.vocab"
+    ));
+    let file = choice
+        .recipe
+        .manifest
+        .files
+        .iter()
+        .find(|f| f.relative_path == "models/bpe.vocab")
+        .unwrap();
+    assert_eq!(
+        file.expected_hash.as_deref(),
+        Some(hash(vocabulary).as_str())
+    );
+    let member = format!("assets/{choice_id}/models/bpe.vocab");
+    let notice = b"synthetic runtime notice";
+    let bytes = tar(&[
+        ("bin/mon-transducer-worker", BIN, b'0'),
+        ("notices/nlohmann-MIT.txt", notice, b'0'),
+        (&member, vocabulary, b'0'),
+    ]);
+    let index_path = asr.join("asr-index.json");
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+    index["archiveBytes"] = json!(bytes.len());
+    index["archiveSha256"] = json!(hash(&bytes));
+    index["modelAssets"] = json!({choice_id: [file]});
+    std::fs::write(asr.join("asr-runtime.tar"), &bytes).unwrap();
+    std::fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+    let choices = crate::model_asr_catalog::options(&asr).unwrap();
+    assert_eq!(choices.len(), 3);
+    let haas = choices.iter().find(|c| c.id == choice_id).unwrap();
+    let source = haas
+        .recipe
+        .sources
+        .iter()
+        .find(|s| s.relative_path == "models/bpe.vocab")
+        .unwrap();
+    assert_eq!(source.archive.as_ref().unwrap().expected_hash, hash(&bytes));
+    assert_eq!(source.archive.as_ref().unwrap().member_path, member);
+    prepare_runtime_without_network(&bundle, &private_root(&temp), &haas.recipe);
+    index["modelAssets"][choice_id][0]["expectedHash"] = json!(hash(b"changed"));
+    std::fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+    assert!(crate::model_asr_catalog::options(&asr)
+        .err()
+        .unwrap()
+        .contains("一致しません"));
+}
+
+#[test]
 fn reazonspeech_rejects_changed_recipe_before_creating_download_intent() {
     let temp = tempfile::tempdir().unwrap();
     let bundle = fixture(&temp);

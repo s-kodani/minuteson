@@ -54,15 +54,18 @@ export function canonicalRecipe(value: unknown): DownloadRecipe {
       if (memberPath.split("/").some(part => !part || part === "." || part === "..") || /[\\:]/u.test(memberPath)) fail();
       result.archive = { format: "tar", expectedSize: size(a.expectedSize), expectedHash: sha(a.expectedHash), memberPath };
     }
+    const file = manifest.files[index];
+    const declaredAsrAsset = file.role === "asr_asset" && manifest.engine === "asr"
+      && Object.values(manifest.backend?.files ?? {}).includes(file.relativePath);
     if (result.url === bundledWhisperSource) {
       const file = manifest.files[index], member = result.archive?.memberPath;
       if (manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
         || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
     } else if (result.url === bundledAsrSource) {
-      if (manifest.engine !== "asr" || manifest.target !== "macos_aarch64" || !result.archive || !["executable", "notice"].includes(manifest.files[index].role)) fail();
+      if (manifest.engine !== "asr" || manifest.target !== "macos_aarch64" || !result.archive || !(["executable", "notice"].includes(file.role) || declaredAsrAsset)) fail();
     } else if (result.url === bundledWindowsSource) {
       if (manifest.target !== "windows_x86_64" || !result.archive
-        || !["executable", "runtime_library", "notice"].includes(manifest.files[index].role)) fail();
+        || !(["executable", "runtime_library", "notice"].includes(file.role) || declaredAsrAsset)) fail();
     } else if (result.url.startsWith("mon-bundled:")) fail();
     return result;
   });
@@ -148,7 +151,7 @@ export async function assertOfficialModelOptions(value: unknown): Promise<Offici
   for (const entry of value) {
     const option = object(entry); keys(option, ["id", "label", "description", "definition", "review", "tokenLimits"]);
     const id = text(option.id, 128);
-    if (!/^[a-z0-9-]+$/u.test(id) || seen.has(id)) fail(); seen.add(id);
+    if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/u.test(id) || seen.has(id)) fail(); seen.add(id);
     const definition = text(option.definition, 65_536), recipe = parseDownloadDefinition(definition);
     let tokenLimits: ModelTokenLimits | null = null;
     if (recipe.manifest.engine === "llama.cpp") {

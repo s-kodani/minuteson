@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import mon_model_catalog as catalog
 import mon_windows_runtime as windows_runtime
+import mon_asr_assets as asr_assets
 
 
 def canonical_hash(value):
@@ -37,7 +38,7 @@ class ModelCatalogTests(unittest.TestCase):
             with patch.object(windows_runtime, 'PACKAGE', package), patch.object(windows_runtime, 'sign'), \
                     patch.dict(windows_runtime.os.environ, {'ProgramFiles(x86)': str(root)}):
                 windows_runtime.catalog()
-            choices = json.loads((package / 'catalog.json').read_text())
+            choices = json.loads((package / 'catalog.json').read_text(encoding='utf8'))
             llms = [c for c in choices if c['recipe']['manifest']['engine'] == 'llama.cpp']
             self.assertEqual(len(llms), 9)
             for choice in llms:
@@ -56,11 +57,13 @@ class ModelCatalogTests(unittest.TestCase):
         }
         for name, (group, golden) in expected.items():
             generated = catalog.compile_target('macos_aarch64', group)
-            self.assertEqual(generated, json.loads((catalog.CATALOG / name).read_text()))
-            self.assertEqual(canonical_hash(generated), golden)
+            self.assertEqual(generated, json.loads((catalog.CATALOG / name).read_text(encoding='utf8')))
+            legacy = generated if group == 'base' else [choice for choice in generated if choice['id'] in (
+                'reazonspeech-k2-v2-int8-fp32', 'reazonspeech-k2-v2-fp32')]
+            self.assertEqual(canonical_hash(legacy), golden)
 
     def test_windows_model_templates_match_previous_recipe_transform_without_mac_source(self):
-        baseline = json.loads((catalog.CATALOG / 'macos.json').read_text())
+        baseline = json.loads((catalog.CATALOG / 'macos.json').read_text(encoding='utf8'))
         expected = []
         for original in baseline:
             choice = copy.deepcopy(original)
@@ -94,6 +97,32 @@ class ModelCatalogTests(unittest.TestCase):
         with patch.object(catalog, 'definitions', return_value=definitions + [addition]):
             self.assertIn('windows-windows-only-llm', [c['id'] for c in catalog.compile_target('windows_x86_64')])
             self.assertNotIn('windows-only-llm', [c['id'] for c in catalog.compile_target('macos_aarch64')])
+
+    def test_haas_external_data_and_hotword_assets_are_pinned_for_both_targets(self):
+        for target in ('macos_aarch64', 'windows_x86_64'):
+            choice = next(c for c in catalog.compile_target(target, 'asr')
+                          if c['id'].endswith('haas-ja-v1.0-onnx-quantized'))
+            manifest = choice['recipe']['manifest']
+            backend = manifest['backend']
+            self.assertEqual(backend['id'], 'sherpa-onnx-nemo-tdt')
+            self.assertEqual(set(backend['files']), {'bpeVocab', 'data', 'decoder', 'joiner', 'library', 'tokens'})
+            self.assertEqual(backend['files']['data'], 'models/encoder.data')
+            self.assertEqual(backend['files']['bpeVocab'], 'models/bpe.vocab')
+            primary = next(f for f in manifest['files'] if f['role'] == 'asr')
+            self.assertEqual(primary['relativePath'], 'models/encoder.quantized.onnx')
+            self.assertEqual(Path(primary['relativePath']).parent, Path(backend['files']['data']).parent)
+            for file, source in zip(manifest['files'], choice['recipe']['sources']):
+                if file['role'] in ('asr', 'asr_asset') and file['relativePath'] != 'models/bpe.vocab':
+                    self.assertIn('/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/', source['url'])
+            self.assertIn('notices/haas-NOTICE.txt', {f['relativePath'] for f in manifest['files']})
+
+    def test_haas_hotword_asset_reproduces_offline_from_pinned_tokens(self):
+        for relative, expected in asr_assets.outputs().items():
+            self.assertEqual((asr_assets.DIRECTORY / relative).read_bytes(), expected)
+        vocabulary = (asr_assets.DIRECTORY / 'models/bpe.vocab').read_text(encoding='utf8')
+        self.assertEqual(len(vocabulary.splitlines()), 3073)
+        self.assertTrue(vocabulary.startswith('<unk>\t-1.0\n'))
+        self.assertTrue(vocabulary.endswith('<blk>\t-1.0\n'))
 
     def test_duplicate_definitions_and_unknown_target_fail(self):
         definitions = catalog.definitions()

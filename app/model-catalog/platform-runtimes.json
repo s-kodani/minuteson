@@ -1883,6 +1883,65 @@
             "notices/llama-MIT.txt",
             "notices/LFM-Open-License-1.0.txt"
           ]
+        },
+        "haas-ja-v1.0-onnx-quantized": {
+          "files": [
+            {
+              "relativePath": "lib/libonnxruntime.dylib",
+              "role": "runtime_library",
+              "expectedSize": 28775120,
+              "expectedHash": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+            },
+            {
+              "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+              "role": "runtime_library",
+              "expectedSize": 2999920,
+              "expectedHash": "ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1"
+            }
+          ],
+          "sources": [
+            {
+              "relativePath": "lib/libonnxruntime.dylib",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+              "archive": {
+                "format": "tar",
+                "expectedSize": 18252168,
+                "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+                "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib"
+              }
+            },
+            {
+              "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+              "archive": {
+                "format": "tar",
+                "expectedSize": 18252168,
+                "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+                "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib"
+              }
+            }
+          ],
+          "order": [
+            "models/encoder.quantized.onnx",
+            "models/encoder.data",
+            "models/decoder.onnx",
+            "models/joiner.onnx",
+            "models/tokens.txt",
+            "models/bpe.vocab",
+            "models/silero_vad.onnx",
+            "lib/libonnxruntime.dylib",
+            "lib/libsherpa-onnx-c-api.dylib",
+            "notices/sherpa-Apache-2.0.txt",
+            "notices/onnxruntime-MIT.txt",
+            "notices/onnxruntime-ThirdPartyNotices.txt",
+            "notices/silero-MIT.txt",
+            "notices/haas-Apache-2.0.txt",
+            "notices/haas-NOTICE.txt",
+            "notices/haas-model-card.md"
+          ],
+          "backendFiles": {
+            "library": "lib/libsherpa-onnx-c-api.dylib"
+          }
         }
       }
     },

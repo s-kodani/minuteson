@@ -1,8 +1,67 @@
-//! Replay stored JSON through the native parser without executing whisper.
+//! Replay stored JSON through the selected ASR parser without executing models.
 use super::*;
 use crate::saved_artifact::{RestoreAssets, Role};
 use serde_json::{json, Value};
 use std::path::Path;
+
+/// Bind every native ASR reference to the fixed model bytes before replacing
+/// historical basenames with logical unavailable paths. Text and times are
+/// validated by the same adapter used for normal result publication.
+fn restore_asr_result(
+    bytes: &[u8],
+    before: &AsrConfig,
+    after: &AsrConfig,
+    model_names: &[String],
+    duration: i64,
+    aliases: &impl Fn(&crate::local_engine::Fingerprint, &str) -> Vec<String>,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let raw: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let models = raw
+        .get("models")
+        .and_then(Value::as_object)
+        .ok_or("ASR結果のモデル参照がありません")?;
+    let mut runtime = before.clone();
+    let rebind = |slot: &str,
+                  proof: &mut crate::local_engine::Fingerprint,
+                  role: &str|
+     -> Result<(), String> {
+        let name = models
+            .get(slot)
+            .and_then(Value::as_str)
+            .ok_or("ASR結果の必要ファイル参照がありません")?;
+        let logical = proof.path.to_str().ok_or("固定モデルの参照が不正です")?;
+        let portable = logical == format!("mon-unavailable:{}", proof.sha256);
+        let original_basename = logical.rsplit(['/', '\\']).next().unwrap_or("");
+        if name != logical
+            && (portable || name != original_basename)
+            && !aliases(proof, role).iter().any(|known| known == name)
+            && !(slot == "model" && model_names.iter().any(|known| known == name))
+        {
+            return Err("ASR結果のファイル名が固定した容量・SHA・役割と一致しません".into());
+        }
+        proof.path = name.into();
+        Ok(())
+    };
+    rebind("model", &mut runtime.model, "model")?;
+    for (slot, proof) in &mut runtime
+        .backend
+        .as_mut()
+        .ok_or("ASRバックエンドがありません")?
+        .files
+    {
+        rebind(slot, proof, "artifact")?;
+    }
+    let adapter = asr::adapter(before)?;
+    let recognized = adapter.parse_result(bytes, &runtime, duration)?;
+    let logical_before = adapter.logical_output(bytes, &runtime, before, duration)?;
+    let rebuilt = adapter.logical_output(&logical_before, before, after, duration)?;
+    if adapter.parse_result(&logical_before, before, duration)? != recognized
+        || adapter.parse_result(&rebuilt, after, duration)? != recognized
+    {
+        return Err("再構成でASR結果の本文・時刻が変化しています".into());
+    }
+    Ok((logical_before, rebuilt))
+}
 
 pub(crate) fn restore_parameters(
     meeting: &str,
@@ -64,6 +123,11 @@ pub(crate) fn restore_saved_results(
         return Err("復元前後の文字起こし固定条件が一致しません".into());
     }
     let checkpoint = checked_checkpoint(job, Some(value))?;
+    if before.recognition_policy == Some(RecognitionPolicy::AdapterV1)
+        && checkpoint.pending_recovery.is_some()
+    {
+        return Err("ASRバックエンドに未対応の再認識状態があります".into());
+    }
     for output in checkpoint.outputs {
         if cancelled() {
             return Err("文字起こし成果物の復元が中断されました".into());
@@ -106,6 +170,18 @@ pub(crate) fn restore_saved_results(
             let bytes = assets.read(Role::TranscriptionResult, id, hash)?;
             if bytes.len() as u64 > Role::TranscriptionResult.max_bytes() {
                 return Err("文字起こし成果物が容量上限を超えています".into());
+            }
+            if before.recognition_policy == Some(RecognitionPolicy::AdapterV1) {
+                let (logical_before, rebuilt) = restore_asr_result(
+                    &bytes,
+                    &before.engine,
+                    &after.engine,
+                    model_names,
+                    old_duration,
+                    &|proof, role| assets.model_aliases(role, proof.size, &proof.sha256),
+                )?;
+                rewritten.push((id, hash, logical_before, rebuilt));
+                continue;
             }
             let mut raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             let name = raw["params"]["model"]
@@ -184,3 +260,6 @@ pub(crate) fn restore_saved_results(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
