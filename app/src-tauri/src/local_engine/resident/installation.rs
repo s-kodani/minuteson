@@ -428,8 +428,8 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
     Ok(snapshot)
 }
 
-#[cfg(all(test, unix))]
-mod installation_tests {
+#[cfg(test)]
+mod bundled_runtime_tests {
     use super::*;
     use sha2::Digest;
 
@@ -527,7 +527,9 @@ mod installation_tests {
     fn bundled_runtime_prepares_actual_app_workers_through_production_admission() {
         let bundle = std::env::var_os("MON_TEST_INFERENCE_RUNTIME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| resources().unwrap());
+            .unwrap_or_else(|| resources().unwrap())
+            .canonicalize()
+            .unwrap();
         let root = tempfile::tempdir().unwrap();
         let root = root.path().canonicalize().unwrap();
         for engine in ["whisper", "llama", "sherpa", "asr-transducer"] {
@@ -536,6 +538,12 @@ mod installation_tests {
             snapshot.resolve(&root).unwrap().verify(&|| false).unwrap();
         }
     }
+}
+
+#[cfg(all(test, unix))]
+mod installation_tests {
+    use super::*;
+    use sha2::Digest;
 
     #[test]
     fn first_installation_can_finish_shared_verification_after_staging_cleanup() {
