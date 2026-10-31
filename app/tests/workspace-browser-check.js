@@ -64,7 +64,8 @@ async page => {
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("未保存の点検日を保持します。");
   await text.evaluate(e => { window.monBrowserFixture.headerEditNode = e; }); await open().click();
-  await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
+  // The save error can cover the navigation notice in the collapsed toast stack.
+  await editor.getByRole("button", { name: "保存を再試行", exact: true }).waitFor();
   check(await text.inputValue() === "未保存の点検日を保持します。" && await text.evaluate(e => e === window.monBrowserFixture.headerEditNode) && await page.locator(".meeting-title-row h1").innerText() === "会議A", "failed flush discarded input or navigated to another meeting");
   results.push("the recording link waits for edited content; failed saving preserves the mounted input and current meeting");
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; });

@@ -322,8 +322,12 @@ pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, Str
     if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         return Err("この環境の常駐推論ワーカーは未対応です".into());
     }
+    prepare_bundled(root, engine, &resources()?).map(Some)
+}
+
+fn prepare_bundled(root: &Path, engine: &str, bundle: &Path) -> Result<Snapshot, String> {
     let mut bytes = Vec::new();
-    File::open(resources()?.join("runtime-index.json"))
+    File::open(bundle.join("runtime-index.json"))
         .map_err(|e| e.to_string())?
         .take(65537)
         .read_to_end(&mut bytes)
@@ -332,18 +336,31 @@ pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, Str
         return Err("推論ランタイムの定義が上限を超えています".into());
     }
     let snapshots: Vec<Snapshot> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if snapshots.len() != 2 + crate::transcription::asr::registry().len() {
+    // Several ASR adapters can use the same worker (ReazonSpeech and Haas).
+    // Validate the complete set of worker engines, independently of model count.
+    let mut engines = ["llama", "sherpa"]
+        .into_iter()
+        .chain(
+            crate::transcription::asr::registry()
+                .into_iter()
+                .map(|adapter| adapter.descriptor().worker),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    if snapshots.len() != engines.len() {
         return Err("推論ランタイムの構成が不正です".into());
     }
     for snapshot in &snapshots {
         snapshot.validate()?;
+        if !engines.remove(snapshot.engine.as_str()) {
+            return Err("推論ランタイムの構成が不正です".into());
+        }
     }
     let snapshot = snapshots
         .into_iter()
         .find(|s| s.engine == engine)
         .ok_or("推論ランタイムがありません")?;
-    snapshot.resolve(root)?;
-    Ok(Some(snapshot))
+    snapshot.resolve_from(root, || Ok(bundle.join(&snapshot.name)))?;
+    Ok(snapshot)
 }
 
 // Preserve the initial execution mode on lost admission responses, including
@@ -415,6 +432,110 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
 mod installation_tests {
     use super::*;
     use sha2::Digest;
+
+    fn bundle_fixture(root: &Path) -> (PathBuf, Vec<Snapshot>) {
+        let bundle = root.join("bundle");
+        std::fs::create_dir(&bundle).unwrap();
+        let snapshots = ["whisper", "llama", "sherpa", "asr-transducer"]
+            .into_iter()
+            .map(|engine| {
+                let name = if engine == "asr-transducer" {
+                    "mon-transducer-worker".to_owned()
+                } else {
+                    format!("mon-{engine}-worker")
+                };
+                let bytes = format!("#!/bin/sh\n# {engine}\nexit 0\n");
+                std::fs::write(bundle.join(&name), bytes.as_bytes()).unwrap();
+                Snapshot {
+                    protocol: 1,
+                    engine: engine.into(),
+                    name,
+                    bytes: bytes.len() as u64,
+                    sha256: format!("{:x}", sha2::Sha256::digest(bytes.as_bytes())),
+                    gpu: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(
+            bundle.join("runtime-index.json"),
+            serde_json::to_vec(&snapshots).unwrap(),
+        )
+        .unwrap();
+        (bundle, snapshots)
+    }
+
+    #[test]
+    fn bundled_runtime_prepares_shared_asr_worker_through_production_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let (bundle, snapshots) = bundle_fixture(&root);
+        assert_eq!(
+            crate::transcription::asr::find(crate::transcription::asr::TRANSDUCER)
+                .unwrap()
+                .descriptor()
+                .worker,
+            crate::transcription::asr::find(crate::transcription::asr::NEMO_TDT)
+                .unwrap()
+                .descriptor()
+                .worker
+        );
+        for expected in snapshots {
+            let actual = prepare_bundled(&root, &expected.engine, &bundle).unwrap();
+            assert_eq!(actual, expected);
+            actual.resolve(&root).unwrap().verify(&|| false).unwrap();
+        }
+    }
+
+    #[test]
+    fn bundled_runtime_rejects_missing_duplicate_unknown_or_tampered_workers() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let (bundle, snapshots) = bundle_fixture(&root);
+        for corruption in ["missing", "duplicate", "unknown", "invalid-hash"] {
+            let mut entries = snapshots.clone();
+            match corruption {
+                "missing" => {
+                    entries.pop();
+                }
+                "duplicate" => entries[3] = entries[0].clone(),
+                "unknown" => entries[3].engine = "unregistered-worker".into(),
+                "invalid-hash" => entries[0].sha256 = "invalid".into(),
+                _ => unreachable!(),
+            }
+            std::fs::write(
+                bundle.join("runtime-index.json"),
+                serde_json::to_vec(&entries).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                prepare_bundled(&root, "whisper", &bundle).is_err(),
+                "{corruption}"
+            );
+            assert!(!root.join("inference-runtimes").exists());
+        }
+        std::fs::write(
+            bundle.join("runtime-index.json"),
+            serde_json::to_vec(&snapshots).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(bundle.join("mon-whisper-worker"), b"tampered").unwrap();
+        assert!(prepare_bundled(&root, "whisper", &bundle).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires a built inference runtime bundle; no model or user data is used"]
+    fn bundled_runtime_prepares_actual_app_workers_through_production_admission() {
+        let bundle = std::env::var_os("MON_TEST_INFERENCE_RUNTIME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| resources().unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        for engine in ["whisper", "llama", "sherpa", "asr-transducer"] {
+            let snapshot = prepare_bundled(&root, engine, &bundle).unwrap();
+            assert_eq!(snapshot.engine, engine);
+            snapshot.resolve(&root).unwrap().verify(&|| false).unwrap();
+        }
+    }
 
     #[test]
     fn first_installation_can_finish_shared_verification_after_staging_cleanup() {

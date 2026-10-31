@@ -4,7 +4,8 @@ async (page) => {
   const row = page.locator(".model-selection-row").filter({ has: field });
   await field.waitFor();
   check(await page.getByRole("combobox").count() === 3, "model catalog did not load");
-  check(await page.locator('select[aria-label$="のモデル"] option[value^="official:"]').count() === 17, "expected seventeen official model choices");
+  // The select controls render before asynchronous catalog validation finishes.
+  await page.waitForFunction(() => document.querySelectorAll('select[aria-label$="のモデル"] option[value^="official:"]').length === 17);
   const before = await field.locator("option").allTextContents();
   for (const size of ["4B", "9B"]) {
     const id = `official:llama-b11533-qwen35-${size.toLowerCase()}-q4km`;

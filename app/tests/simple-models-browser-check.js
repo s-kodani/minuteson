@@ -134,7 +134,10 @@ async function (page) {
 
   await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "applyLost"; });
-  await start(); await recovering.waitFor(); await recovering.waitFor({state:"hidden"});
+  await start();
+  // Successful readback can finish before Playwright observes the recovery notice.
+  await readyToRetry();
+  await asrRow.getByRole("button", { name: "使用中", exact: true }).waitFor();
   check(await asrRow.getByRole("button").isDisabled() && await count("apply_model_profile_application") === 1, "lost successful application was replayed or left actionable as unapplied");
   results.push("successful selection with a lost reply is read back as selected without reapplying");
   await page.screenshot({path:"simple-models.png"});
