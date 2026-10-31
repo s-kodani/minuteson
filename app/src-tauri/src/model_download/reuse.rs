@@ -30,9 +30,7 @@ pub(super) fn candidates(
                         && Some(f.size) == file.expected_size
                         && Some(&f.sha256) == file.expected_hash.as_ref()
                 })
-                && root
-                    .join(&entry.package_id)
-                    .join(&file.relative_path)
+                && crate::native_fs::join(&root.join(&entry.package_id), &file.relative_path)
                     .exists()
         }) {
             result.push(Candidate {
@@ -53,7 +51,16 @@ impl Candidate {
         cancelled: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(u64),
     ) -> Result<(), String> {
-        let mut source = Source::open(&self.root, &self.relative)?;
+        // app_data_dir() uses an ordinary Windows path. Resolve its spelling
+        // through a checked, pinned managed directory before Source compares
+        // canonical parents; canonicalize() alone could follow a junction.
+        #[cfg(windows)]
+        let package = super::Directory::open_existing(&self.root)?;
+        #[cfg(windows)]
+        let root = package.path();
+        #[cfg(not(windows))]
+        let root = &self.root;
+        let mut source = Source::open(root, &self.relative)?;
         if source.file.metadata().map_err(|e| e.to_string())?.len() != size {
             return Err("再利用するモデルの容量が変わっています".into());
         }
@@ -83,6 +90,10 @@ impl Candidate {
         Ok(())
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "reuse/windows_tests.rs"]
+mod windows_tests;
 
 #[cfg(all(test, unix))]
 mod tests {

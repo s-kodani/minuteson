@@ -92,6 +92,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     return structuredClone(entry.compatibility);
   }
   if (command === "preview_model_profile_application") {
+    if (f.mode === "previewFailure") throw Error("模擬使用設定の確認失敗");
     const entry = f.entries.find((item: any) => item.packageId === args.packageId), profile = f.profiles.find((item: any) => item.name === args.profile);
     const before = structuredClone(f.settingsByEngine[entry.engine]), after = structuredClone(before);
     after.executablePath = `/synthetic/${entry.packageId}/cli`;
@@ -141,6 +142,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     const review = await reviewed(args.definition); if (review.recipeHash !== args.expectedRecipeHash) throw Error("模擬定義SHAの不一致");
     f.active.add(args.token); const result = await receipt(args.token, review);
     const item = { review, state: "incomplete", receipt: result }; f.operations.set(args.token, item);
+    if (f.mode === "modelFileFailure") { f.active.delete(args.token); throw { code: "operation_result_unknown", message: "モデルの親フォルダーにリンクまたは変更があります", operationId: args.token, retryDisposition: "reconcile" }; }
     if (f.mode === "downloadFailure") { f.active.delete(args.token); throw Error("模擬通信失敗"); }
     const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) throw Error("模擬取得の中断・途中保全"); item.state = "complete"; return structuredClone(result); };
     if (f.mode === "earlyLost") { f.finish = finish; throw Error("処理は継続中だが開始応答が喪失"); }

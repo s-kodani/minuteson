@@ -1,5 +1,5 @@
 .settings-credits { margin:32px 0 12px; text-align:center; }
-.credits-link { border:0; background:none; padding:6px; color:var(--primary-strong); font:inherit; font-size:13px; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.credits-link { border:0; background:none; padding:6px; color:var(--muted); font:inherit; font-size:13px; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
 .credits-link:hover { color:var(--text); }
 .common-modal.credits-modal { width:min(900px,calc(100% - 48px)); max-width:900px; }
 .credits-modal h2 { margin:0 0 24px; }

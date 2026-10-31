@@ -26,13 +26,16 @@ test("uncertain model writers are retained until cancellation and durable readba
   const view = source("model-inspection.tsx");
   assert.match(view, /let unresolved: Pending \| null = null/);
   assert.match(view, /retain\(\{ token, stage, \.\.\.context, startedAtMs: startedAt.current! \}\)/);
-  assert.match(view, /lifetime.active \|\| !lifetime.cancelled/);
+  assert.match(view, /if \(lifetime.active\) throw new ModelPreparationWaiting/);
+  assert.match(view, /if \(!lifetime.cancelled\) throw Error/);
   assert.match(view, /item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded/);
   assert.match(view, /assertDownloadCopyResult\(await invoke\("get_downloaded_model_placement_result"/);
   assert.match(view, /result.active \|\| !result.cancelled/);
   assert.match(view, /item.checkOperationId === value.preview\?\.checkOperationId && item.settingsMatch && item.compatibilityCurrent/);
   const recheck = view.slice(view.indexOf("const recheck"), view.indexOf("const disabled"));
   assert.doesNotMatch(recheck, /start_model_download|place_downloaded_model|check_model_compatibility|apply_model_profile_application/);
+  assert.match(recheck, /window.setTimeout\(attempt, delay\)/);
+  assert.doesNotMatch(view, />現在の状態を確認<|onClick=\{\(\) => void recheck/);
 });
 test("local import is removed and unverified installed runtimes cannot be executed", () => {
   const view = source("model-inspection.tsx");

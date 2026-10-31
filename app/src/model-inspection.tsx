@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePublishProgress } from "./operation-progress";
 import { acceptTransferProgress, modelProgress, type TransferProgress } from "./operation-progress-state";
 import { ModelIssue } from "./model-issue";
+import { modelPreparationError } from "./model-preparation-error";
 import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, type ModelPlacementEntry, type ModelPlacementReceipt, type ModelCompatibilitySummary } from "./model-inspection-state";
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
@@ -21,6 +22,7 @@ import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups
 import { modelVocabularySupport } from "./model-vocabulary-support";
 
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
+class ModelPreparationWaiting extends Error {}
 let unresolved: Pending | null = null;
 // A confirmed download is reusable after navigation. No automatic retry or
 // fresh download replaces an uncertain writer or a retained download receipt.
@@ -30,19 +32,24 @@ const engines = [{ engine: "asr", label: "文字起こし" }, { engine: "sherpa-
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
-  useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => { setBackends([]); setError(String(cause)); }); }, [visible]);
+  useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => { setBackends([]); setError(modelPreparationError(cause)); }); }, [visible]);
   const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
-  const [selection, setSelection] = useState<Record<string, string>>({});
+  const [selection, setSelection] = useState<Record<string, string>>(() => {
+    const option = unresolved?.option;
+    return option ? { [isAsrEngine(option.review.manifest.engine) ? "asr" : option.review.manifest.engine]: `official:${option.id}` } : {};
+  });
   const [cpuThreads, setCpuThreads] = useState<number | null>(null), [threadChoice, setThreadChoice] = useState("");
   const [clusterThreshold, setClusterThreshold] = useState<number | null>(null), [thresholdChoice, setThresholdChoice] = useState("");
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState<Pending | null>(unresolved);
-  const [target, setTarget] = useState("ローカルAI"), [transfer, setTransfer] = useState<TransferProgress | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const failure = useRef<unknown>(null);
+  const [target, setTarget] = useState(unresolved?.option?.label ?? unresolved?.entry?.modelName ?? "ローカルAI"), [transfer, setTransfer] = useState<TransferProgress | null>(null);
   const [waitingToken, setWaitingToken] = useState<string | null>(null);
   const mustStop = recordingActive || (stopRequested ?? locked);
   const mounted = useRef(true), running = useRef(false), blocked = useRef(mustStop);
   blocked.current = mustStop;
   const startedAt = useRef(unresolved?.startedAtMs);
-  const progress = busy || pending ? modelProgress(target, pending?.stage, transfer, !busy ? "interrupted" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
+  const progress = busy || pending ? modelProgress(target, pending?.stage, transfer, !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
   usePublishProgress("model", [progress]);
   const retain = (value: Pending | null) => { unresolved = value; if (mounted.current) setPending(value); };
   const load = async (publish = true) => {
@@ -68,9 +75,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   useEffect(() => {
     if (visible && isTauri()) void Promise.all([load(false), invoke("get_official_model_options").then(assertOfficialModelOptions)]).then(([current, official]) => {
       if (mounted.current) { setOptions(official); setEntries(current.placed); setProfiles(current.catalog); }
-    }).catch(cause => { if (mounted.current) setError(String(cause)); });
+    }).catch(cause => { if (mounted.current) setError(modelPreparationError(cause)); });
   }, [visible]);
-  useEffect(() => { if (refreshEpoch && isTauri()) { downloads.clear(); setSelection({}); void load().catch(cause => setError(String(cause))); } }, [refreshEpoch]);
+  useEffect(() => { if (refreshEpoch && isTauri()) { downloads.clear(); setSelection({}); void load().catch(cause => setError(modelPreparationError(cause))); } }, [refreshEpoch]);
   const selectedDiarization = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "sherpa-onnx" && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
   const profileId = profiles.find(item => item.name === "standard")?.id;
   useEffect(() => {
@@ -82,7 +89,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const threshold = value?.payload?.standard?.clusterThresholdMilli;
       if (!Number.isInteger(threshold) || threshold < 0 || threshold > 2000) throw Error("自動の話者統合の強さを確認できません。");
       if (active) { setCpuThreads(threads); setThreadChoice(String(threads)); setClusterThreshold(threshold); setThresholdChoice(String(threshold)); }
-    }).catch(cause => { if (active) setError(String(cause)); });
+    }).catch(cause => { if (active) setError(modelPreparationError(cause)); });
     return () => { active = false; };
   }, [visible, profileId, selectedDiarization?.packageId]);
   const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => isAsrEngine(item.engine) && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
@@ -94,29 +101,30 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (!preferences || !(preferences.vadModelPath === null || typeof preferences.vadModelPath === "string")) throw Error("VAD設定を確認できません。");
       if (preferences.vadOptions !== undefined) checkedVadOptions(preferences.vadOptions);
       if (active) setWhisperPreferences(preferences);
-    }).catch(cause => { if (active) setError(String(cause)); });
+    }).catch(cause => { if (active) setError(modelPreparationError(cause)); });
     return () => { active = false; };
   }, [visible, profileId, selectedWhisper?.packageId]);
   useEffect(() => { if (mustStop && unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); }, [mustStop]);
   const run = async (label: string, action: () => Promise<void>) => {
     if (running.current || locked || blocked.current || !isTauri()) return;
     startedAt.current = unresolved?.startedAtMs ?? Date.now();
-    running.current = true; setBusy(label); setWaitingToken(null); setError("");
+    running.current = true; failure.current = null; setBusy(label); setWaitingToken(null); setError("");
     try { await action(); }
-    catch (cause) { if (mounted.current) setError(String(cause)); }
-    finally { running.current = false; if (mounted.current) { setBusy(""); await load().catch(cause => setError(String(cause))); } }
+    catch (cause) { if (unresolved) failure.current = cause; else if (mounted.current) setError(modelPreparationError(cause)); }
+    finally { if (mounted.current) { await load().catch(cause => { if (!unresolved) setError(modelPreparationError(cause)); }); setBusy(""); } running.current = false; }
   };
   const step = async <T,>(stage: Pending["stage"], action: (token: string) => Promise<T>, context: Omit<Pending, "token" | "stage" | "startedAtMs"> = {}): Promise<T> => {
-    if (!mounted.current || blocked.current || unresolved) throw Error("モデルの準備を停止しました。現在の状態を確認してください。");
+    if (!mounted.current || blocked.current || unresolved) throw Error("モデルの準備を中断しました。");
     const token = crypto.randomUUID(); setTransfer(null); setWaitingToken(null); retain({ token, stage, ...context, startedAtMs: startedAt.current! });
     const value = await action(token);
-    if (!mounted.current || blocked.current) throw Error("準備の結果を確認してください。");
+    if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
     retain(null); return value;
   };
   const stop = async (token: string) => {
     await invoke("cancel_model_inspection", { token });
     const lifetime = assertDownloadLifetime(await invoke("get_model_download_lifetime", { token }));
-    if (lifetime.active || !lifetime.cancelled) throw Error("準備の停止完了を待っています。");
+    if (lifetime.active) throw new ModelPreparationWaiting("モデルの準備を完了できませんでした。もう一度お試しください。");
+    if (!lifetime.cancelled) throw Error("モデルの準備を停止できませんでした。");
   };
   const apply = async (entry: ModelPlacementEntry, diarizationThreads?: number, diarizationClusterThresholdMilli?: number, whisperVadOptions?: VadOptions) => {
     if (!canReviewApplication(entry)) {
@@ -145,7 +153,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   };
   const useModel = (engine: string, value: string) => {
     return run("モデルを準備しています", async () => {
-    if (pending || unresolved) throw Error("前の準備の状態を確認してください。");
+    if (pending || unresolved) throw Error("モデルの準備が終わるまでお待ちください。");
     const choice = modelChoices(engine, entries, options, profiles).find(item => item.value === value || item.packageIds.includes(value));
     let entry = choice?.entry;
     const option = choice?.option;
@@ -162,7 +170,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
           for (const recorded of matching) {
             // Fence delayed starts as well as active workers before deciding a
             // previous attempt is terminal. Partial bytes are never adopted.
-            await stop(recorded.operationId);
+            try { await stop(recorded.operationId); }
+            catch (cause) {
+              if (cause instanceof ModelPreparationWaiting) retain({ token: recorded.operationId, startedAtMs: startedAt.current!, stage: "download", option });
+              throw cause;
+            }
             const read = await assertDownloadReadback(await invoke("read_model_download", { token: crypto.randomUUID(), downloadId: recorded.operationId, expectedRecipeHash: option.review.recipeHash }), recorded.operationId, option.review.recipeHash);
             if (read.state === "complete" && read.receipt) {
               receipt = read.receipt; downloads.set(option.review.recipeHash, receipt); break;
@@ -176,7 +188,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
             if (active && mounted.current) setTransfer(current => acceptTransferProgress(current, event.payload, token, option.review.recipeHash, option.review.downloadBytes));
           });
           try {
-            if (!mounted.current || blocked.current) throw Error("モデルの準備を停止しました。現在の状態を確認してください。");
+            if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
             setTransfer(current => current ?? { receivedBytes: 0, totalBytes: option.review.downloadBytes });
             const result = await assertDownloadReceipt(await invoke("start_model_download", { token, definition: option.definition, expectedRecipeHash: option.review.recipeHash }), token, option.review);
             downloads.set(option.review.recipeHash, result); return result;
@@ -196,9 +208,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     if (mounted.current) setSelection(current => ({ ...current, [engine]: entry!.packageId }));
     });
   };
-  const recheck = () => run("モデルの状態を確認しています", async () => {
-    const value = unresolved; if (!value) return;
-    await stop(value.token);
+  const recheck = async (): Promise<"waiting" | "resolved" | "applied"> => {
+    const value = unresolved; if (!value) return "resolved";
+    try { await stop(value.token); }
+    catch (cause) { if (cause instanceof ModelPreparationWaiting) return "waiting"; throw cause; }
+    let applied = false;
     if (value.stage === "download" && value.option) {
       const catalog = assertDownloadCatalog(await invoke("get_model_download_catalog", { token: crypto.randomUUID() }));
       if (!catalog.supported) throw Error("この端末ではモデルの取得状態を確認できません。");
@@ -226,12 +240,41 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (value.preview?.whisperVadOptions !== undefined && current.catalog.find(item => item.name === "standard")?.id === value.token) assertAppliedPreferences(await invoke("get_asr_preferences"), value.preview);
       const entry = value.entry;
       if (mounted.current) setSelection(selection => ({ ...selection, [entry.engine]: entry.packageId }));
+      applied = true;
     }
     // Stopped, unsuccessful operations are not successful model selections.
     // Release the UI for a new explicit action; never replay apply/copy here.
     // The next action loads current settings and builds a fresh bound preview.
     retain(null);
-  });
+    return applied ? "applied" : "resolved";
+  };
+  useEffect(() => {
+    if (!pending || mustStop || !isTauri()) return;
+    let active = true, timer: number | undefined, failures = 0;
+    const schedule = (delay = 1000) => { if (active) timer = window.setTimeout(attempt, delay); };
+    const attempt = async () => {
+      if (!active || !mounted.current) return;
+      if (running.current || blocked.current) { schedule(); return; }
+      running.current = true; setRecovering(true); setBusy("再試行の準備をしています");
+      try {
+        const result = await recheck();
+        failures = 0;
+        if (mounted.current) setError(result === "resolved"
+          ? modelPreparationError(failure.current ?? "モデルの準備を完了できませんでした。もう一度お試しください。")
+          : "");
+        if (result !== "waiting") failure.current = null;
+      } catch {
+        failures++;
+        if (failures >= 3 && mounted.current) setError("モデルの準備を完了できません。アプリを再起動してください。");
+      } finally {
+        running.current = false;
+        if (mounted.current) { setRecovering(false); setBusy(""); }
+        if (unresolved) schedule(failures >= 3 ? 5000 : 1000);
+      }
+    };
+    void attempt();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [pending, mustStop]);
   const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
   const installed = installedModelGroups(entries, profiles);
 
@@ -256,7 +299,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={() => void useModel(engine, value)}>{actionLabel}</button></div>;
     })}</div>
     <ModelIssue label="モデルの準備" message={error} />
-    {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}
+    {pending && (!busy || recovering) && <p role="status">再試行の準備をしています…</p>}
   </section>
   <section className="analysis-card local-ai-settings" aria-label="ローカルAI詳細設定" hidden={!visible}>
     <h2>ローカルAI詳細設定</h2>
@@ -315,7 +358,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         </div></details>
       </li>;
     })}</ul>
-    {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{recordingActive ? "録音・音声保存が完了すると削除できます。" : busy ? "モデル準備が完了すると削除できます。" : pending ? "モデル準備の受付結果を「現在の状態を確認」で確認後に削除できます。" : deletion?.reviewUnavailableReason ?? "ほかの操作が完了すると削除できます。"}</p></div>}
+    {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{recordingActive ? "録音・音声保存が完了すると削除できます。" : busy || pending ? "モデル準備が完了すると削除できます。" : deletion?.reviewUnavailableReason ?? "ほかの操作が完了すると削除できます。"}</p></div>}
     {deletion?.listing?.items.map(item => <div key={item.operationId} className="model-deletion-pending"><p>{item.modelName ?? "モデル"}：削除の確認が必要です。{item.errorMessage}</p>
       {item.reviewAllowed && <button type="button" className="small-secondary" disabled={!deletion.canReviewPending} onClick={() => void deletion.reviewPending(item.operationId)}>残りの削除を確認</button>}</div>)}
     {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}

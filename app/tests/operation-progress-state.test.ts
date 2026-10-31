@@ -110,8 +110,14 @@ test("model waiting and unresolved steps remain visible without a stale download
   const interrupted = modelProgress("Qwen 3 8B", "place", transfer, "interrupted");
   assert.equal(interrupted.state, "interrupted");
   assert.equal(interrupted.completed, null);
-  assert.match(interrupted.detail!, /現在の状態を確認/);
+  assert.match(interrupted.detail!, /自動で確認/);
   assert.equal(interrupted.paused, true);
+  const recovering = modelProgress("Qwen 3 8B", "place", transfer, "recovering");
+  assert.equal(recovering.state, "running");
+  assert.equal(recovering.completed, null);
+  assert.equal(recovering.total, null);
+  assert.equal(recovering.paused, false);
+  assert.match(recovering.label, /再試行を準備中/);
 });
 
 test("diarization waits for measured native progress", () => {

@@ -60,7 +60,7 @@ async page => {
   await page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "copying", busy: true }));
   await page.waitForFunction(() => window.modelDownloadFixture.calls.some(call => call.command === "cancel_model_inspection"));
   await page.evaluate(() => window.modelDownloadFixture.finish());
-  await expand(); await common().getByText("モデル準備 · 状態の確認が必要", { exact: true }).waitFor();
+  await expand(); await common().getByText("モデル準備 · 再試行を準備中", { exact: true }).waitFor();
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === "place_downloaded_model").length) === 0, "stopped download proceeded to placement");
   results.push("maintenance still stops preparation and cannot auto-advance it");
 

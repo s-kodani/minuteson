@@ -128,12 +128,17 @@ export function acceptTransferProgress(current: TransferProgress | null, value: 
   return { receivedBytes: next.receivedBytes, totalBytes: next.totalBytes };
 }
 
-export function modelProgress(target: string, stage: string | undefined, transfer: TransferProgress | null, state: "running" | "queued" | "interrupted" = "running", startedAtMs?: number): OperationProgress {
+export function modelProgress(target: string, stage: string | undefined, transfer: TransferProgress | null, state: "running" | "queued" | "interrupted" | "recovering" = "running", startedAtMs?: number): OperationProgress {
+  if (state === "recovering") return {
+    id: "model-preparation", target, kind: "model", state: "running", startedAtMs,
+    label: "モデル準備 · 再試行を準備中", completed: null, total: null, paused: false,
+    detail: "アプリが自動で処理結果を確認しています。",
+  };
   if (state !== "running") return {
     id: "model-preparation", target, kind: "model", state, startedAtMs,
     label: state === "queued" ? "モデル準備 · AI処理の完了待ち" : "モデル準備 · 状態の確認が必要",
     completed: null, total: null, paused: state === "interrupted",
-    detail: state === "queued" ? "実行中のAI処理が終わると自動で続行します。" : "モデル設定の「現在の状態を確認」から再開できます。",
+    detail: state === "queued" ? "実行中のAI処理が終わると自動で続行します。" : "準備の結果を自動で確認します。",
   };
   const verifying = stage === "download" && transfer !== null && transfer.receivedBytes === transfer.totalBytes;
   const label = verifying ? "取得済み · 展開・検証中" : ({ download: "モデルを準備中（取得・再利用）", place: "モデルを配置中", check: "モデルの動作を確認中", preview: "使用設定を確認中", apply: "モデルの使用設定を保存中" } as Record<string, string>)[stage ?? ""] ?? "モデルを準備中";
