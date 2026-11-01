@@ -31,6 +31,18 @@ BUILD_HARNESS = r'''
 param([string]$BuildScript, [string]$CaptureJson, [switch]$Qa, [switch]$Unsigned)
 $ErrorActionPreference = 'Stop'
 $global:BuildCalls = @()
+function Get-Command {
+    param([string]$Name, [string]$CommandType, [string]$ErrorAction)
+    if ($env:MON_TEST_TOOL_DIRECTORY -and $Name -in @('cmake.exe', 'ctest.exe')) {
+        # Hide host-installed tools: discovery must prepend the fixture's VS
+        # directory before either executable becomes visible.
+        if (($env:PATH -split [IO.Path]::PathSeparator)[0] -eq $env:MON_TEST_TOOL_DIRECTORY) {
+            return [pscustomobject]@{ Source = Join-Path $env:MON_TEST_TOOL_DIRECTORY $Name }
+        }
+        return
+    }
+    Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
+}
 function python {
     $global:BuildCalls += [pscustomobject]@{ tool = 'python'; arguments = @($args) }
     $global:LASTEXITCODE = 0
@@ -41,6 +53,7 @@ function npm {
         releaseSigning = $env:MON_WINDOWS_RELEASE_SIGNING
         targetDirectory = $env:CARGO_TARGET_DIR
         inheritedTauriConfig = $env:TAURI_CONFIG
+        searchPath = $env:PATH
     }
     $global:LASTEXITCODE = 87
 }
@@ -79,9 +92,10 @@ class UnsignedBuildModeTests(unittest.TestCase):
         self.harness = self.root / "build-harness.ps1"
         self.harness.write_text(BUILD_HARNESS, encoding="utf-8")
 
-    def invoke(self, *switches):
+    def invoke(self, *switches, cmake_environment_name=None):
         result_path = self.root / "result.json"
         environment = dict(os.environ)
+        environment.pop("MON_TEST_TOOL_DIRECTORY", None)
         environment.update({
             "PATH": str(self.root / "bin") + os.pathsep + environment["PATH"],
             "MON_TEST_SIGNER_SENTINEL": str(self.sentinel),
@@ -90,10 +104,33 @@ class UnsignedBuildModeTests(unittest.TestCase):
             "CARGO_TARGET_DIR": str(self.root / "cached-signed-target"),
             "TAURI_CONFIG": '{"bundle":{"windows":{"signCommand":"stale-signer"}}}',
         })
+        if cmake_environment_name:
+            for name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+                environment[name] = str(self.root / ("empty-" + name))
+            installation_root = self.root / cmake_environment_name
+            environment[cmake_environment_name] = str(installation_root)
+            binary = installation_root / "Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+            binary.mkdir(parents=True, exist_ok=True)
+            for name in ("cmake.exe", "ctest.exe"):
+                shutil.copyfile(self.root / "bin" / name, binary / name)
+            environment["MON_TEST_TOOL_DIRECTORY"] = str(binary)
         result = powershell(self.harness, "-BuildScript", self.root / "app/build-windows.ps1",
                             "-CaptureJson", result_path, *switches, environment=environment)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result_path.read_text(encoding="utf-8-sig"))
+
+    def test_visual_studio_cmake_discovery_searches_all_program_files_roots(self):
+        for name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+            with self.subTest(root=name):
+                result = self.invoke("-Unsigned", cmake_environment_name=name)
+                self.assertIn("Tauri build failed", result["failure"])
+                npm_calls = [call for call in result["calls"] if call["tool"] == "npm"]
+                self.assertEqual(len(npm_calls), 1)
+                binary = Path(npm_calls[0]["searchPath"].split(os.pathsep)[0])
+                self.assertTrue(binary.is_relative_to(self.root / name))
+                self.assertTrue((binary / "cmake.exe").is_file())
+                self.assertTrue((binary / "ctest.exe").is_file())
+                self.assertFalse(self.sentinel.exists())
 
     def test_qa_and_unsigned_are_rejected_before_signing_or_build_hooks(self):
         result = self.invoke("-Qa", "-Unsigned")

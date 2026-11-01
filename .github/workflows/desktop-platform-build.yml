@@ -93,6 +93,7 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s tests -p test_mon_windows_build_evidence.py -v
           python -m unittest discover -s tests -p test_mon_windows_installer_publication.py -v
+          python -m unittest discover -s tests -p test_mon_windows_unsigned.py -v
       - name: Frontend tests and build
         working-directory: app
         run: |

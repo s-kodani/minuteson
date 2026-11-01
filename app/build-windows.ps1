@@ -54,10 +54,18 @@ try {
     $cmake = Get-Command cmake.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $ctest = Get-Command ctest.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $cmake -or -not $ctest) {
-        $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)', 'Process')
-        if (-not $programFiles) { $programFiles = 'C:\Program Files (x86)' }
-        $visualStudio = Join-Path $programFiles 'Microsoft Visual Studio/2022'
-        foreach ($installation in @(Get-ChildItem -LiteralPath $visualStudio -Directory -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+        $programRoots = @(
+            [Environment]::GetEnvironmentVariable('ProgramW6432', 'Process')
+            [Environment]::GetEnvironmentVariable('ProgramFiles', 'Process')
+            [Environment]::GetEnvironmentVariable('ProgramFiles(x86)', 'Process')
+            'C:\Program Files'
+            'C:\Program Files (x86)'
+        ) | Where-Object { $_ } | Select-Object -Unique
+        $installations = @($programRoots | ForEach-Object {
+            $visualStudio = Join-Path $_ 'Microsoft Visual Studio/2022'
+            Get-ChildItem -LiteralPath $visualStudio -Directory -ErrorAction SilentlyContinue
+        } | Sort-Object FullName -Unique)
+        foreach ($installation in $installations) {
             $binary = Join-Path $installation.FullName 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin'
             if ((Test-Path -LiteralPath (Join-Path $binary 'cmake.exe') -PathType Leaf) -and
                 (Test-Path -LiteralPath (Join-Path $binary 'ctest.exe') -PathType Leaf)) {
