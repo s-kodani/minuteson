@@ -9,8 +9,10 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import urllib.request
 import zipfile
@@ -27,6 +29,66 @@ URI = 'mon-bundled://windows-runtime-v1/runtime.tar'
 LLAMA = ('https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-win-cpu-x64.zip', 19513403, '659ac73690e588bf60ba1c8de02479683e60ed2ce2915ddf3e15904b520fa933')
 LLAMA_11960 = ('https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-win-cpu-x64.zip', 24407745, '73f962f82850d244db47eaacb9d913637027b82399124324298576d58c5f4287')
 SHERPA = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-no-tts.tar.bz2',23271851,'4b0a94f7b5c606b1b64a19a831c2127559e4b3d34e195465ebc7be73d9ed4783')
+VC_RUNTIME_FILES = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+
+
+def visual_studio_installations():
+    roots = list(dict.fromkeys(Path(os.environ.get(name) or default) for name, default in (
+        ('ProgramFiles', 'C:/Program Files'), ('ProgramW6432', 'C:/Program Files'),
+        ('ProgramFiles(x86)', 'C:/Program Files (x86)'))))
+    installations = []
+    # IDE editions normally live under Program Files; Build Tools may instead
+    # live under Program Files (x86). vswhere also finds custom install roots.
+    for root in roots:
+        installations.extend(path for path in (root / 'Microsoft Visual Studio/2022').glob('*')
+                             if path.is_dir())
+    candidates = [root / 'Microsoft Visual Studio/Installer/vswhere.exe' for root in roots]
+    command = next((str(path) for path in candidates if path.is_file()), None) or shutil.which('vswhere.exe')
+    if command:
+        try:
+            result = subprocess.run([command, '-products', '*', '-version', '[17.0,18.0)',
+                '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-format', 'json', '-utf8'],
+                capture_output=True, text=True, encoding='utf-8-sig', check=True, timeout=30)
+            records = json.loads(result.stdout)
+            if not isinstance(records, list):
+                raise ValueError('vswhere did not return an installation list')
+            for record in records:
+                path = record.get('installationPath') if isinstance(record, dict) else None
+                if not isinstance(path, str) or not path:
+                    raise ValueError('vswhere returned an invalid installation path')
+                installations.append(Path(path))
+        except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as error:
+            print(f'Visual Studio discovery warning; checking standard install paths: {error}', file=sys.stderr)
+    return list(dict.fromkeys(path.resolve() for path in installations))
+
+
+def visual_cpp_redistributable():
+    installations = visual_studio_installations()
+    candidates = []
+    for installation in installations:
+        for directory in (installation / 'VC/Redist/MSVC').glob('*'):
+            if re.fullmatch(r'\d+(?:\.\d+)*', directory.name):
+                version = tuple(map(int, directory.name.split('.')))
+            elif directory.name == 'v143':
+                version = ()  # Accept a toolset alias only when no versioned CRT is available.
+            else:
+                continue
+            crt = directory / 'x64/Microsoft.VC143.CRT'
+            if all((crt / name).is_file() and (crt / name).stat().st_size > 0 for name in VC_RUNTIME_FILES):
+                candidates.append((version, str(crt), crt))
+    if not candidates:
+        searched = ', '.join(map(str, installations)) or 'no Visual Studio 2022 installations found'
+        raise ValueError('Visual C++ x64 VC143 redistributable directory missing; required '
+                         + ', '.join(VC_RUNTIME_FILES) + '; searched: ' + searched)
+    return max(candidates)[2]
+
+
+def visual_cpp_runtime_files():
+    directory = visual_cpp_redistributable()
+    files = {name: (directory / name).read_bytes() for name in VC_RUNTIME_FILES}
+    if any(not data for data in files.values()):
+        raise ValueError('Visual C++ redistributable files changed or became empty while reading')
+    return files
 
 def digest(path):
     with path.open('rb') as stream:
@@ -97,7 +159,11 @@ def upstream_engines():
     # full DLL dispatch set rather than depending on the build host's PATH.
     print('Windows runtime files:',[str(p.relative_to(PACKAGE)) for p in PACKAGE.rglob('*') if p.is_file()],flush=True)
 
-def catalog():
+def catalog(redist_files=None):
+    # Read every required DLL before changing any existing runtime bytes.
+    redist_files = visual_cpp_runtime_files() if redist_files is None else redist_files
+    if set(redist_files) != set(VC_RUNTIME_FILES) or any(not isinstance(data, bytes) or not data for data in redist_files.values()):
+        raise ValueError('All required Visual C++ redistributable DLL bytes must be supplied')
     upstream=mon_model_catalog.compile_target('windows_x86_64')
     whisper_network=json.loads((ROOT/'app/model-catalog/whisper-small-network.json').read_text(encoding="utf8"))
     variants=json.loads((ROOT/'app/model-catalog/whisper-variants.json').read_text(encoding="utf8"))
@@ -118,11 +184,9 @@ def catalog():
     engine_ids={'whisper.cpp':'whisper','llama.cpp':'llama','sherpa-onnx':'sherpa'}
     # App-local VC runtime for upstream llama DLLs: do not depend on a developer
     # machine's global PATH or preinstalled redistributable.
-    redists=list(Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)')).glob('Microsoft Visual Studio/2022/*/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT'))
-    if not redists: raise ValueError('Visual C++ redistributable directory missing')
-    for name in ('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'):
+    for name in VC_RUNTIME_FILES:
         for engine in ('llama', 'llama11960'):
-            dump((sorted(redists)[-1]/name).read_bytes(),PACKAGE/engine/name)
+            dump(redist_files[name],PACKAGE/engine/name)
     # Sign before generating hashes: installed bytes must match the recipes.
     for engine in executables:
         for path in sorted((PACKAGE/engine).rglob('*')):
@@ -172,8 +236,11 @@ def build_embedding():
 
 def main():
     if os.name!='nt':raise ValueError('build Windows native runtimes on Windows')
+    # A missing/unreadable redist must fail before builds or downloads replace
+    # files in a previously usable package.
+    redist_files = visual_cpp_runtime_files()
     PACKAGE.mkdir(parents=True,exist_ok=True)
-    build_whisper();upstream_engines();catalog();build_embedding()
+    build_whisper();upstream_engines();catalog(redist_files);build_embedding()
     import mon_windows_workers
     mon_windows_workers.prepare()
     mon_windows_workers.prepare(vulkan=True)
