@@ -1,4 +1,4 @@
-# MinutesOnのWindows開発環境とMON QAビルド
+# MinutesOnのWindows開発環境とMinutesOn QAビルド
 
 Microsoft Store向けの本番MSIXは[Store用MSIXの生成・検証・提出準備](windows-store.md)を参照。直接配布版は署名済み`MinutesOn-setup.exe`、QA版は`MON-QA-setup.exe`として作成する。
 
@@ -104,7 +104,7 @@ npm.cmd --prefix app test
 
 各コマンドの終了コードが0であることを確認する。npm・Cargoの依存取得と初回のバンドル用ツール取得にはネットワーク接続が必要。ロックファイルは更新しない。
 
-## MON QAのビルド
+## MinutesOn QAのビルド
 
 ```powershell
 npm.cmd --prefix app run tauri:windows:qa:build
@@ -119,7 +119,7 @@ npm.cmd --prefix app run tauri:windows:qa:build
 5. CMakeによるRelease版WASAPI録音ヘルパーと、ターゲット名付きサイドカーの配置。
 6. Rust本体と、推論ランタイム・通知・WebView2オフライン導入資材を含むNSISインストーラー。モデルの重みは同梱せず、設定画面から取得する。
 
-QAの製品名は `MON QA`、識別子は `jp.mon.desktop.qa`。通常版と区別され、インストーラーはユーザー単位の構成になる。公開配布用署名はこの手順に含めない。
+QAの製品名は `MinutesOn QA`、識別子は `jp.mon.desktop.qa`。通常版と区別され、インストーラーはユーザー単位の構成になる。公開配布用署名はこの手順に含めない。
 
 配布用の出力先（ビルド成功後に最新版1つだけを配置）：
 

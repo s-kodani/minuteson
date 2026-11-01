@@ -8,7 +8,7 @@ async (page, capturePath = name => name) => {
   const chrome=()=>page.getByRole("group",{name:"ウィンドウ操作",exact:true});
   const callCount=command=>page.evaluate(command=>window.titlebarFixture.calls.filter(c=>c.command===command).length,command);
   await page.setViewportSize({width:1280,height:820}); await boot();
-  await chrome().getByText("MON QA — 会議記録",{exact:true}).waitFor();
+  await chrome().getByText("MinutesOn QA — 会議記録",{exact:true}).waitFor();
   const settings=page.getByRole("region",{name:"表示設定",exact:true});
   await settings.waitFor();
   for(const color of ["monochrome","purple"]) for(const mode of ["light","dark"]) {

@@ -27,7 +27,7 @@ const fixture = window.titlebarFixture = {
 mockIPC(async (command, args) => {
   fixture.calls.push({command,args});
   if (fixture.fail === command) throw Error("合成ウィンドウ操作失敗");
-  if (command === "plugin:window|title") return "MON QA — 会議記録";
+  if (command === "plugin:window|title") return "MinutesOn QA — 会議記録";
   if (command === "plugin:window|is_maximized") return fixture.maximized;
   if (command === "plugin:window|toggle_maximize") { await fixture.resize(!fixture.maximized); return; }
   if (["plugin:window|minimize", "plugin:window|close", "plugin:window|start_dragging"].includes(command)) return;

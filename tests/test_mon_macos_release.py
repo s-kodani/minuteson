@@ -259,7 +259,7 @@ class ReleaseTests(unittest.TestCase):
         info_path = self.app / "Contents/Info.plist"
         original = release.read_plist(info_path)
         for key, value in [("CFBundleIdentifier", "jp.mon.desktop.qa"), ("CFBundleExecutable", "mon"),
-                           ("CFBundleName", "mon"), ("CFBundleDisplayName", "MON QA"),
+                           ("CFBundleName", "mon"), ("CFBundleDisplayName", "MinutesOn QA"),
                            ("CFBundleShortVersionString", "0.2.0"), ("LSMinimumSystemVersion", "14.0"),
                            ("CFBundleVersion", "0.2.0"), ("NSMicrophoneUsageDescription", ""),
                            ("NSMicrophoneUsageDescription", True), ("NSAudioCaptureUsageDescription", "")]:

@@ -23,13 +23,13 @@ async page => {
       await page.evaluate(() => window.startupFixture.pendingRetry());
       results.push(`${variant}: diagnostic remains read-only until explicit restart; pending restart is exclusive`);
     }
-    await boot("windows", "MON QA");
-    await page.getByRole("heading", { name: "MON QAの起動と復旧", exact: true }).waitFor();
-    check(await page.title() === "MON QA — 会議記録", "QA title did not use native product name");
+    await boot("windows", "MinutesOn QA");
+    await page.getByRole("heading", { name: "MinutesOn QAの起動と復旧", exact: true }).waitFor();
+    check(await page.title() === "MinutesOn QA — 会議記録", "QA title did not use native product name");
     await page.evaluate(() => { window.startupFixture.retryFail = true; });
     await retry().click();
     await page.getByRole("alert").filter({ hasText: "再起動の受付を確認できません" }).waitFor();
-    check((await page.getByRole("alert").filter({ hasText: "再起動の受付を確認できません" }).innerText()).includes("MON QAを終了"), "QA restart guidance did not use native product name");
+    check((await page.getByRole("alert").filter({ hasText: "再起動の受付を確認できません" }).innerText()).includes("MinutesOn QAを終了"), "QA restart guidance did not use native product name");
     check(await retry().isDisabled() && await quit().isEnabled(), "uncertain restart was resendable or blocked normal exit");
     check((await commands()).filter(command => command === "retry_startup").length === 1, "lost response replayed restart");
     await quit().click();

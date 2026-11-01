@@ -50,9 +50,9 @@ test("actual reset form shows native paths, model deletion, two archive radios a
     const busy = renderToStaticMarkup(StartupResetForm({ ...props, busy: true }));
     assert.equal((busy.match(/<button[^>]*disabled/gu) ?? []).length, 3);
   }
-  const qa = renderToStaticMarkup(StartupResetForm({ ...props, productName: "MON QA", accepted: true }));
-  assert.ok(qa.includes("MON QAを起動し直します"));
-  assert.ok(qa.includes("MON QAを再起動"));
+  const qa = renderToStaticMarkup(StartupResetForm({ ...props, productName: "MinutesOn QA", accepted: true }));
+  assert.ok(qa.includes("MinutesOn QAを起動し直します"));
+  assert.ok(qa.includes("MinutesOn QAを再起動"));
 });
 test("reset IPC is startup-only and available only to the main window", () => {
   const native = readFileSync(new URL("../src-tauri/src/startup_attention.rs", import.meta.url), "utf8");
