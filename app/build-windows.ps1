@@ -77,10 +77,17 @@ try {
     $evidenceTool = Join-Path $PSScriptRoot '../tools/mon_windows_build_evidence.py'
     & python $evidenceTool begin --output $snapshot
     if ($LASTEXITCODE -ne 0) { throw 'Source identity could not be recorded.' }
+    if (-not $Qa) {
+        # Windows PowerShell/native npm argument forwarding strips quotes in
+        # inline JSON. Give Tauri an owned UTF-8 config file instead.
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $signingConfig = [IO.Path]::GetFullPath((Join-Path $work "$buildId-tauri-config.json"))
+        [IO.File]::WriteAllText($signingConfig, $signing, [Text.UTF8Encoding]::new($false))
+    }
     $tauriArgs = @('run', 'tauri', '--', 'build', '--target', 'x86_64-pc-windows-msvc',
         '--config', 'src-tauri/tauri.windows.bundle.conf.json')
     if ($Qa) { $tauriArgs += @('--config', 'src-tauri/tauri.qa.conf.json') }
-    else { $tauriArgs += @('--config', $signing) }
+    else { $tauriArgs += @('--config', $signingConfig) }
     $tauriArgs += @('--', '--locked')
     & npm @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed ($LASTEXITCODE)." }

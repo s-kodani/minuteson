@@ -60,7 +60,7 @@ try {
 class UnsignedBuildModeTests(unittest.TestCase):
     def setUp(self):
         (ROOT / "output").mkdir(exist_ok=True)
-        self.directory = tempfile.TemporaryDirectory(prefix="unsigned-build-test-", dir=ROOT / "output")
+        self.directory = tempfile.TemporaryDirectory(prefix="unsigned build test ", dir=ROOT / "output")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
         (self.root / "app").mkdir()
@@ -123,9 +123,17 @@ class UnsignedBuildModeTests(unittest.TestCase):
                          self.root / "app/src-tauri/target-unsigned")
         arguments = invocation["arguments"]
         self.assertNotIn("src-tauri/tauri.qa.conf.json", arguments)
-        overlays = [json.loads(value) for value in arguments if value.startswith("{")]
-        self.assertTrue(overlays, "Unsigned build must explicitly clear inherited signing configuration")
-        windows = overlays[-1]["bundle"]["windows"]
+        config_arguments = [arguments[index + 1] for index, value in enumerate(arguments) if value == "--config"]
+        self.assertEqual(config_arguments[0], "src-tauri/tauri.windows.bundle.conf.json")
+        self.assertEqual(len(config_arguments), 2)
+        overlay_path = Path(config_arguments[-1])
+        self.assertTrue(overlay_path.is_absolute())
+        self.assertEqual(overlay_path.parent.resolve(), self.root / "output/windows-unsigned-work")
+        self.assertIn(" ", str(overlay_path), "Config-file forwarding must support a workspace containing spaces")
+        self.assertTrue(overlay_path.name.endswith("-tauri-config.json"))
+        self.assertFalse(overlay_path.read_bytes().startswith(b"\xef\xbb\xbf"), "Tauri config must be UTF-8 without BOM")
+        self.assertFalse(any(value.startswith("{") for value in arguments), "Inline JSON is unsafe through Windows npm")
+        windows = json.loads(overlay_path.read_text(encoding="utf-8"))["bundle"]["windows"]
         self.assertIn("signCommand", windows)
         self.assertIsNone(windows["signCommand"])
         self.assertIn("certificateThumbprint", windows)
