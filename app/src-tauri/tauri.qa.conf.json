@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MON QA",
+  "productName": "MinutesOn QA",
   "identifier": "jp.mon.desktop.qa",
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "MON QA — 会議記録",
+        "title": "MinutesOn QA — 会議記録",
         "url": "index.html",
         "width": 1280,
         "height": 820,
@@ -16,7 +16,7 @@
       },
       {
         "label": "recorder",
-        "title": "MON QA 録音パネル",
+        "title": "MinutesOn QA 録音パネル",
         "url": "index.html?window=recorder",
         "width": 227,
         "height": 101,
@@ -28,7 +28,7 @@
       },
       {
         "label": "recorder-info",
-        "title": "MON QA 録音パネルの説明",
+        "title": "MinutesOn QA 録音パネルの説明",
         "url": "index.html?window=recorder-info",
         "width": 360,
         "height": 340,
@@ -41,7 +41,7 @@
       },
       {
         "label": "recording-confirmation",
-        "title": "MON QA 録音終了の確認",
+        "title": "MinutesOn QA 録音終了の確認",
         "url": "index.html?window=recording-confirmation",
         "width": 420,
         "height": 280,

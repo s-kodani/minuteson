@@ -13,6 +13,7 @@ import { checkedResidencyState } from "./residency-state";
 import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
 import { stopAllPlayback } from "./playback-barrier";
+import { useAppName } from "./window-environment";
 import { assertCloseContext, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 interface CloseDependencies {
@@ -36,6 +37,7 @@ async function readCloseContext(): Promise<CloseContext> {
 
 /** Owns close/hide coordination without owning the workspace view. */
 export function useWorkspaceClose(dependencies: CloseDependencies) {
+  const appName = useAppName();
   const latest = useRef(dependencies); latest.current = dependencies;
   const closeHandler = useRef<(request: { quit: boolean; afterRecording?: string }) => Promise<void>>(async () => {});
   closeHandler.current = async ({ quit, afterRecording }) => {
@@ -56,10 +58,10 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
           if (!initial.busy && current.busy) throw Error("新しい処理が始まりました。バックグラウンド継続を確認してください。");
           await stopAllPlayback();
           const residency = checkedResidencyState(await invoke("get_residency_state"));
-          if (!residency.canBackground) throw Error(residency.error ?? "MONの画面を開き直せることを確認できません。画面を表示したままにします。");
+          if (!residency.canBackground) throw Error(residency.error ?? "アプリの画面を開き直せることを確認できません。画面を表示したままにします。");
           await invoke("hide_main_to_background");
         });
-        if (initial.busy) await closeConfirm({ title: "バックグラウンドで継続しますか？", target: initial.context.recording.meetingId ? meetings.find(meeting => meeting.id === initial.context.recording.meetingId)?.title ?? "実行中の録音" : closeTarget(initial.context), confirmLabel: "継続して画面を閉じる", message: "録音・保存・実行中の処理を続けたままウィンドウを閉じます。常駐アイコンからメイン画面を開き直せます。アプリを終了する場合は「終了」を選んでください。", action: hide });
+        if (initial.busy) await closeConfirm({ title: "バックグラウンドで継続しますか？", target: initial.context.recording.meetingId ? meetings.find(meeting => meeting.id === initial.context.recording.meetingId)?.title ?? "実行中の録音" : closeTarget(initial.context, appName), confirmLabel: "継続して画面を閉じる", message: "録音・保存・実行中の処理を続けたままウィンドウを閉じます。常駐アイコンからメイン画面を開き直せます。アプリを終了する場合は「終了」を選んでください。", action: hide });
         else await hide();
         return;
       }
@@ -103,7 +105,7 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
         await invoke("finish_main_close", { quit, expected: { importToken: final.importing.token, dataToken: final.data.token } });
       });
       if (importNeedsConsent(expected.importing) || dataNeedsConsent(expected.data) || !coveredAnalysis && (expected.activity.analysisBusy || expected.activity.modelPreparationBusy)) {
-        await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });
+        await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected, appName), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });
       } else await finish();
     } catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setMeetingError(`${!quit && platform !== "other" ? "画面を閉じられませんでした" : "終了できませんでした"}。アプリと保存結果は保持しています: ${String(cause)}`); }
     finally { closing.current = false; setClosingBusy(false); }

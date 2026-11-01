@@ -104,7 +104,7 @@ fn source_file(path: &Path) -> Result<File, String> {
             .extension()
             .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("monbackup"))
     {
-        return Err("絶対パスのMONバックアップを選択してください".into());
+        return Err("絶対パスのMinutesOnバックアップを選択してください".into());
     }
     let before = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !before.is_file() || before.file_type().is_symlink() {

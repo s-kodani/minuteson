@@ -12,6 +12,9 @@ async (page, capturePath) => {
     await page.keyboard.press("Escape"); await popup(label).waitFor({ state: "hidden" });
   };
   await page.getByRole("heading", { name: "会議一覧", exact: true }).waitFor();
+  check(await page.locator(".brand-name").innerText() === "MinutesOn", "formal application name missing from sidebar");
+  check(await page.locator(".brand").evaluate(el => el.scrollWidth <= el.clientWidth), "formal application name overflows sidebar");
+  check(await page.title() === "MinutesOn — 会議記録", "formal application name missing from document title");
   check(!(await page.locator("body").innerText()).includes("端末内で会議を記録"), "sidebar tagline remains");
   check(await page.getByText("YOUR WORKSPACE", { exact: true }).count() === 0, "workspace eyebrow remains");
   check(await page.getByText("会話を記録して、次のアクションにつなげる。", { exact: true }).count() === 0, "meeting tagline remains");

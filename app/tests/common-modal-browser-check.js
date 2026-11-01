@@ -29,6 +29,12 @@ async (page) => {
 
   await open(); await dialog().getByRole("button", { name: "対象を変更する", exact: true }).click();
   await page.waitForFunction(() => window.modalFixture.commands === 1);
+  // The fixture increments its command count before React commits the busy
+  // state. Start cancellation probes only after the native modal is locked.
+  await page.waitForFunction(() => {
+    const review = document.querySelector('dialog[aria-labelledby="fixture-title"]');
+    return review?.matches(":modal") && review.querySelector('[aria-label="確認をキャンセル"]')?.disabled === true;
+  });
   for (let i = 0; i < 5; i++) await page.keyboard.press("Escape");
   await page.mouse.click(1, 1);
   check(await dialog().isVisible() && await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).isDisabled(), "busy modal dismissed");

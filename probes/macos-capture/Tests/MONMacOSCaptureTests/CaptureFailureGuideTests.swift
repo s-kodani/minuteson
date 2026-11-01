@@ -12,6 +12,8 @@ final class CaptureFailureGuideTests: XCTestCase {
         kAudioDevicePermissionsError, operation: "start tap IO")
     else { return XCTFail("permission") }
     XCTAssertTrue(message.contains("システムオーディオ録音のみ"))
+    XCTAssertTrue(message.contains("MinutesOn、MinutesOn QA"))
+    XCTAssertTrue(message.contains("MinutesOn Capture Helper"))
     XCTAssertTrue(message.contains("画面の収録許可は要求しません"))
     XCTAssertTrue(message.contains("start tap IO"))
     for status in [
@@ -32,6 +34,8 @@ final class CaptureFailureGuideTests: XCTestCase {
     let result = CaptureFailureGuide.systemCaptureFailure(error)
     guard case .permission(let message) = result else { return XCTFail("expected permission") }
     XCTAssertTrue(message.contains("PC音声の取得がOSで許可されていません"))
+    XCTAssertTrue(message.contains("MinutesOn、MinutesOn QA"))
+    XCTAssertTrue(message.contains("MinutesOn Capture Helper"))
     XCTAssertTrue(message.contains("画面収録とシステムオーディオ録音"))
     XCTAssertTrue(message.contains("「システムオーディオ録音のみ」とは別"))
     XCTAssertTrue(message.contains("画面へのアクセスも含む"))
@@ -59,7 +63,8 @@ final class CaptureFailureGuideTests: XCTestCase {
     let denied = CaptureFailureGuide.microphonePermission(.denied)
     XCTAssertTrue(denied.contains("許可されていません"))
     XCTAssertTrue(denied.contains("プライバシーとセキュリティ → マイク"))
-    XCTAssertTrue(denied.contains("MON Capture Probe"))
+    XCTAssertTrue(denied.contains("MinutesOn、MinutesOn QA"))
+    XCTAssertTrue(denied.contains("MinutesOn Capture Helper"))
     XCTAssertTrue(CaptureFailureGuide.microphonePermission(.restricted).contains("管理者"))
     XCTAssertEqual(CaptureFailureGuide.microphonePermission(.authorized), "マイク権限は許可済みです。")
   }

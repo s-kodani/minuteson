@@ -27,7 +27,7 @@ const fixture = window.titlebarFixture = {
 mockIPC(async (command, args) => {
   fixture.calls.push({command,args});
   if (fixture.fail === command) throw Error("合成ウィンドウ操作失敗");
-  if (command === "plugin:window|title") return "MON QA — 会議記録";
+  if (command === "plugin:window|title") return "MinutesOn QA — 会議記録";
   if (command === "plugin:window|is_maximized") return fixture.maximized;
   if (command === "plugin:window|toggle_maximize") { await fixture.resize(!fixture.maximized); return; }
   if (["plugin:window|minimize", "plugin:window|close", "plugin:window|start_dragging"].includes(command)) return;
@@ -49,4 +49,4 @@ function Workspace() {
     <CommonModal open={modal} onDismiss={() => setModal(false)} aria-label="タイトルバー確認" dismissLabel="確認を閉じる"><h2>確認</h2><div style={{height:1800}}>長い確認内容</div></CommonModal>
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<WindowEnvironmentProvider value={{schemaVersion:1,role:"main",platform:"windows",capabilities:{voiceIdentity:true}}}><WindowsDesktopFrame><StartupGate><ThemeProvider><Workspace /></ThemeProvider></StartupGate></WindowsDesktopFrame></WindowEnvironmentProvider>);
+createRoot(document.getElementById("root")!).render(<WindowEnvironmentProvider value={{schemaVersion:1,productName:"MinutesOn",role:"main",platform:"windows",capabilities:{voiceIdentity:true}}}><WindowsDesktopFrame><StartupGate><ThemeProvider><Workspace /></ThemeProvider></StartupGate></WindowsDesktopFrame></WindowEnvironmentProvider>);

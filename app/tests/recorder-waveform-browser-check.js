@@ -1,6 +1,9 @@
 // Production mini panel, synthetic telemetry only; no native audio capture.
 async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
+  // Install before the fixture creates timers; let startup load naturally,
+  // then advance telemetry and freshness through every callback with runFor.
+  await page.clock.install({time:new Date("2026-11-01T00:00:00.000Z")});
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
@@ -8,10 +11,10 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
   await page.setViewportSize({width:227,height:101});
   await page.goto("http://127.0.0.1:1420/?window=recorder");
   await page.waitForFunction(()=>!!window.closeFixture);
-  const report=(microphone,system)=>page.evaluate(([microphone,system])=>{
+  const report=async(microphone,system)=>{await page.evaluate(([microphone,system])=>{
     const f=window.closeFixture,track=peak=>typeof peak==="string"?{state:peak,windowFrames:null,ageMs:null,rms:null,peak:null}:{state:"measured",windowFrames:4800,ageMs:0,rms:peak/2,peak};
     f.inputLevels={schemaVersion:1,ownerId:f.recording.sessionId,revision:(f.inputLevels?.revision??0)+1,reportAgeMs:0,microphone:track(microphone),system:track(system)};
-  },[microphone,system]);
+  },[microphone,system]);await page.clock.runFor(100);};
   const states=(m,s)=>page.waitForFunction(([m,s])=>{const waves=document.querySelectorAll('.mini-waveform');return waves[0]?.dataset.levelState===m&&waves[1]?.dataset.levelState===s;},[m,s]);
   const bars=input=>page.locator(`[data-source="${input}"] .mini-waveform line`);
   await page.evaluate(async()=>{
@@ -23,13 +26,14 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
     f.inputStatus={schemaVersion:4,ownerId:f.recording.sessionId,revision:1,reportAgeMs:0,microphone:binding,system:binding,notices:[],noticeLoss:{microphone:0,system:0}};
   });
   await page.waitForFunction(()=>document.querySelector('.mini-input-indicator')?.dataset.inputState==="connected");
+  await page.clock.pauseAt(new Date("2026-11-01T01:00:00.000Z"));
   await report("waiting","waiting");await states("waiting","waiting");
   check(await bars("microphone").count()===0&&await bars("system").count()===0,"connected inputs invented a waveform");
   results.push("connection without received samples shows no invented waveform");
   await report(.25,.81);await states("measured","measured");
   await page.waitForFunction(()=>document.querySelectorAll('.mini-waveform line').length===2);
   check(Number(await bars("microphone").getAttribute("y1"))===10&&Math.abs(Number(await bars("system").getAttribute("y1"))-3.6)<.01,"separate peaks did not drive separate bars");
-  await page.waitForTimeout(250);
+  await page.clock.runFor(250);
   check(await bars("microphone").count()===1,"polling the same revision duplicated waveform data");
   results.push("separate native measurements drive gray bars without duplicating immutable revisions");
   await report(0,"waiting");await states("measured","waiting");
@@ -38,7 +42,7 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
   check(!(await page.locator('.mini-shell').innerText()).match(/要対応|マイク|PC音声|録音中|未受信|確認不可/),"absent PC signal added unwanted text");
   check(await page.getByRole('img',{name:'マイク',exact:true}).count()===1&&await page.getByRole('img',{name:'PC音声',exact:true}).count()===1,"source icons lost accessible names");
   results.push("received silence stays flat and a missing PC signal stays quiet without hiding its accessible icon");
-  await states("stale","waiting");
+  await page.clock.runFor(1100);await states("stale","waiting");
   check(await bars("microphone").count()===0,"stale telemetry retained a live waveform");
   results.push("expired telemetry removes the previous live waveform");
   await page.evaluate(()=>{
@@ -48,6 +52,7 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
       f.inputLevels={schemaVersion:1,ownerId:f.recording.sessionId,revision:(f.inputLevels?.revision??0)+1,reportAgeMs:0,microphone:track(values[i%values.length]),system:track(values[(i*3+5)%values.length])};i++;
     },100);
   });
+  await page.clock.runFor(6500);
   await page.waitForFunction(()=>document.querySelectorAll('[data-source="microphone"] .mini-waveform line').length===64);
   for(const theme of ["light","dark"]){
     await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
@@ -62,12 +67,14 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
     await page.screenshot({path:capturePath(`mini-panel-${theme}.png`)});
     results.push(`${theme}: centered six-dot grip has no divider; controls and matching gray waveforms fit 227×101`);
   }
-  await page.evaluate(()=>{clearInterval(window.miniWaveformFixtureTimer);window.closeFixture.failInputLevels=true;});await states("unavailable","unavailable");
+  await page.evaluate(()=>{clearInterval(window.miniWaveformFixtureTimer);window.closeFixture.failInputLevels=true;});await page.clock.runFor(100);await states("unavailable","unavailable");
   check(await bars("microphone").count()===0&&await bars("system").count()===0,"failed level RPC retained old waveform");
   results.push("failed telemetry clears both waveforms");
-  await page.evaluate(()=>window.closeFixture.recordChanged({phase:"stopping"}));await states("unavailable","unavailable");
+  await page.evaluate(()=>window.closeFixture.recordChanged({phase:"stopping"}));
+  await page.locator('.mini-stop').waitFor({state:"detached"});
+  await page.clock.runFor(16);await states("unavailable","unavailable");
   const reads=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length);
-  await page.waitForTimeout(250);
+  await page.clock.runFor(250);
   check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length)===reads,"stopping kept polling audio");
   results.push("stopping clears signals and stops telemetry polling");
   return {passed:results.length,results,nativeRecording:false};

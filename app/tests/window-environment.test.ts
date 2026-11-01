@@ -7,7 +7,9 @@ test("window route permits only explicit roles", () => {
   assert.throws(() => windowRole("?window=unknown"));
 });
 test("native window identity and capability replies are validated before mounting UI", () => {
-  const value = { schemaVersion: 1, role: "main", platform: "windows", capabilities: { voiceIdentity: true } };
+  const value = { schemaVersion: 1, productName: "MinutesOn", role: "main", platform: "windows", capabilities: { voiceIdentity: true } };
   assert.deepEqual(checkedWindowEnvironment(value, "main"), value);
-  for (const next of [{ ...value, role: "recorder" }, { ...value, platform: "linux" }, { ...value, capabilities: {} }, { ...value, schemaVersion: 2 }, { ...value, extra: true }]) assert.throws(() => checkedWindowEnvironment(next, "main"));
+  for (const next of [{ ...value, role: "recorder" }, { ...value, platform: "linux" }, { ...value, capabilities: {} }, { ...value, schemaVersion: 2 }, { ...value, extra: true }, { ...value, productName: undefined }, { ...value, productName: " " }, { ...value, productName: "MinutesOn\n" }, { ...value, productName: "M".repeat(257) }]) assert.throws(() => checkedWindowEnvironment(next, "main"));
+  const qa = { ...value, productName: "MinutesOn QA" };
+  assert.equal(checkedWindowEnvironment(qa, "main").productName, "MinutesOn QA");
 });

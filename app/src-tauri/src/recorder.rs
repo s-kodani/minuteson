@@ -1306,7 +1306,7 @@ pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
         let path = candidate.canonicalize().map_err(|_| {
             "Windows録音ヘルパーがありません。アプリを再ビルドしてください".to_string()
         })?;
-        crate::windows_files::read(&path, false)?;
+        crate::windows_files::read_bundled(&path)?;
         return Ok(path);
     }
     if !cfg!(target_os = "macos") {

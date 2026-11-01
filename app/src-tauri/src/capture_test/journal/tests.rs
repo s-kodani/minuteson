@@ -263,6 +263,29 @@ fn quiet_drop_releases_collection_lock_without_adopting_or_removing_audio() {
 }
 #[test]
 fn quiet_drop_never_unlocks_a_retained_capture_writer_description() {
+    const CHILD: &str = "MON_QUIET_RETAINED_WRITER_FIXTURE";
+    const TEST: &str = "capture_test::journal::tests::quiet_drop_never_unlocks_a_retained_capture_writer_description";
+    if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // Unrelated pre-exec children in the parallel suite can legitimately
+        // retain this writer's description. Create the lease only after exec
+        // in a single-test child, where this test controls every writer copy.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated retained-writer fixture failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed") && stdout.contains(TEST),
+            "the isolated retained-writer test did not run: {stdout}"
+        );
+        return;
+    }
     let fixture = tempfile::tempdir().unwrap();
     let registry = Registry::open(fixture.path()).unwrap();
     let area = registry.allocate(request()).unwrap();

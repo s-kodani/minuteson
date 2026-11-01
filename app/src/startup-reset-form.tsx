@@ -1,12 +1,12 @@
 import type { ResetPreview } from "./startup-reset-state";
-export function StartupResetForm({ preview, archive, busy, accepted = false, selecting, message, error, onArchive, onChoose, onCancel, onStart }: {
-  preview: ResetPreview; archive: boolean; busy: boolean; accepted?: boolean; selecting: boolean; message: string; error: string;
+export function StartupResetForm({ preview, archive, busy, accepted = false, productName = "MinutesOn", selecting, message, error, onArchive, onChoose, onCancel, onStart }: {
+  preview: ResetPreview; archive: boolean; busy: boolean; accepted?: boolean; productName?: string; selecting: boolean; message: string; error: string;
   onArchive: (archive: boolean) => void; onChoose: () => void; onCancel: () => void; onStart: () => void;
 }) {
-  const disabled = busy || selecting;
+  const disabled = busy || selecting, appName = productName;
   return <>
     <h2 id="startup-reset-title">データを初期化</h2>
-    <p id="startup-reset-description">会議・音声・文書・モデル・設定を初期化し、同じ保存先でMONを起動し直します。保存先の選択だけを引き継ぎます。</p>
+    <p id="startup-reset-description">会議・音声・文書・モデル・設定を初期化し、同じ保存先で{appName}を起動し直します。保存先の選択だけを引き継ぎます。</p>
     <p>モデル本体とダウンロード途中のモデルデータは、退避の有無にかかわらず削除されます。必要なモデルは初期化後に再ダウンロードしてください。</p>
     <dl><dt>対象の保存先</dt><dd style={{ overflowWrap: "anywhere" }}>{preview.meetingRoot}</dd></dl>
     <fieldset className="startup-reset-options" disabled={disabled || accepted}><legend>旧データの退避</legend>
@@ -21,6 +21,6 @@ export function StartupResetForm({ preview, archive, busy, accepted = false, sel
     {!archive && <p>旧データは残りません。</p>}
     <p>外部の元音声・書き出し・既存バックアップ、アプリ本体、OSの権限設定は初期化しません。</p>
     {message && <p role="status">{message}</p>}{error && <p role="alert">{error}</p>}
-    <div className="analysis-actions"><button type="button" className="secondary" disabled={disabled} onClick={onCancel}>キャンセル</button><button type="button" disabled={disabled || !preview.availability.available || !accepted && archive && !preview.archivePath} onClick={onStart}>{accepted ? "MONを再起動" : "初期化して再起動"}</button></div>
+    <div className="analysis-actions"><button type="button" className="secondary" disabled={disabled} onClick={onCancel}>キャンセル</button><button type="button" disabled={disabled || !preview.availability.available || !accepted && archive && !preview.archivePath} onClick={onStart}>{accepted ? `${appName}を再起動` : "初期化して再起動"}</button></div>
   </>;
 }

@@ -123,6 +123,6 @@ pub(super) fn line_io(file: &mut File, deadline: Instant) -> Result<Vec<u8>, std
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::TimedOut,
-        "MONの画面表示の応答がありません",
+        "アプリの画面表示の応答がありません",
     ))
 }

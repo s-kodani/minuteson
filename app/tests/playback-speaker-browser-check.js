@@ -1,9 +1,13 @@
 // Current highlight consumer with synthetic timeline events, not acoustic QA.
 async(page,capturePath,detailUI)=>{
   const results=[],check=(v,m)=>{if(!v)throw Error(m);};
+  // The fixture transport exists before the lazy desktop UI mounts. Bound
+  // startup separately while keeping ordinary control actions at their limit.
+  const waitForMeetingListReady=()=>page.getByRole('button',{name:'会議A',exact:true}).waitFor({state:'visible',timeout:30_000});
   const boot=async(failed=false)=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     await page.evaluate(failed=>{const f=window.monBrowserFixture;f.failTracks=failed;f.trackPlan={tracks:[{id:'native-mic',kind:'mic',startUs:0,endUs:15_000_000},{id:'native-system',kind:'system',startUs:0,endUs:15_000_000}]};f.setUtterances(['mic','system','unknown'].map((id,i)=>({id,trackId:['native-mic','native-system','missing'][i],startUs:0,endUs:15_000_000,recognizedText:id,effectiveText:id,attributionState:'assigned',speakerIds:[i===1?'speaker-b':'speaker-a']})));},failed);
+    await waitForMeetingListReady();
     await page.getByRole('button',{name:'会議A',exact:true}).click();
     await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='get_meeting_analysis_audio'));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
@@ -23,6 +27,7 @@ async(page,capturePath,detailUI)=>{
   await boot(true);await publish({trackKind:'both'});check(await emphasized().then(v=>v.length)===0,'failed metadata lookup guessed tracks');results.push('failed track lookup never produces inferred speaker playback colours');
   await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
   await page.evaluate(()=>{const f=window.monBrowserFixture;f.trackPlan={tracks:[{id:'meeting-mix',kind:'processed',startUs:0,endUs:15_000_000}]};f.setUtterances(['meeting','unknown'].map(id=>({id,trackId:id==='meeting'?'meeting-mix':'missing',startUs:0,endUs:15_000_000,recognizedText:id,effectiveText:id,attributionState:'assigned',speakerIds:['speaker-a']})));});
+  await waitForMeetingListReady();
   await page.getByRole('button',{name:'会議A',exact:true}).click();
   await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==='get_meeting_analysis_audio'));
   // Wait for the track read to commit, not merely for the IPC invocation.

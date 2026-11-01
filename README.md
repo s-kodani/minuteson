@@ -1,6 +1,6 @@
-# MON
+# MinutesOn
 
-会議の録音・文字起こし・話者分離・議事録生成をローカルで完結する、Windows／macOS向けデスクトップアプリ。
+MinutesOn（略称 mon）は、会議の録音・文字起こし・話者分離・議事録生成をローカルで完結する、Windows／macOS向けデスクトップアプリです。内部の識別子、実行ファイル名、保存形式では略称monを引き続き使用します。
 
 ## 開発状況
 
@@ -20,15 +20,17 @@ npm ci
 npm run tauri -- dev
 ```
 
-この開発実行は通常利用と同じ識別子・保存設定を使用し、起動時に回復処理や解析を進める場合があります。既存データから分離した実機検証には、[MON QAの準備手順](docs/verification/m4-01-macos-native-qa-preparation-2026-10-07.md)を使用してください。現行QAの場所も同手順に記載しています。永続保存先での起動と録音なしの操作を確認していますが、実録音の再試験・長時間・正式署名／公証の成功を意味しません。
+この開発実行は通常利用と同じ識別子・保存設定を使用し、起動時に回復処理や解析を進める場合があります。既存データから分離した実機検証には、[MinutesOn QAの準備手順](docs/verification/m4-01-macos-native-qa-preparation-2026-10-07.md)を使用してください。現行QAの場所も同手順に記載しています。永続保存先での起動と録音なしの操作を確認していますが、実録音の再試験・長時間・正式署名／公証の成功を意味しません。
 
-Windows・macOSでは、MONを起動済みの状態で再度起動すると、既存のメイン画面を表示します。最小化・バックグラウンド常駐中も同じ動作で、後から起動したプロセスは終了します。本番版とMON QAは別の識別子で起動できます。応答しないMONは、WindowsのタスクマネージャーまたはmacOSの「強制終了」から終了して起動し直してください。アプリ内で別のMONを強制終了する復旧操作はありません。
+Windows・macOSでは、MinutesOnを起動済みの状態で再度起動すると、既存のメイン画面を表示します。最小化・バックグラウンド常駐中も同じ動作で、後から起動したプロセスは終了します。本番版とMinutesOn QAは別の識別子で起動できます。応答しないMinutesOnは、WindowsのタスクマネージャーまたはmacOSの「強制終了」から終了して起動し直してください。アプリ内で別のMinutesOnを強制終了する復旧操作はありません。
 
 macOSで保存先の起動設定や台帳の検証に失敗した場合は、通常操作を開始せず起動診断を表示します。診断の再読込は保持した情報だけを読み、保存先の再検査・修復・回収はしません。DB・台帳・設定を削除して再初期化させず、表示された段階・診断と保存先を確認してください。詳細は[保存先の起動拒否時の案内](docs/verification/storage-startup-attention-2026-10-10.md)を参照してください。
 
-初期版は手動更新を想定しています。保存データは保持し、検証済みのDB schema 34／35から36への限定的な追加移行に対応します。移行前のDBコピーを残し、過去会議の自動処理は開始しません。バックアップは形式6で作成し、形式5・schema35も検証して追加復元できます。その他の旧形式を一律に変換する機能はありません。[macOS手動更新の準備とデータ保持](docs/manual-update-macos.md)を参照してください。署名・公証済みDMGの配布と実機更新はまだ未検証です。
+macOSのDMG版とWindowsのEXE版は手動更新、WindowsのStore版はMicrosoft Storeによる更新を使用します。保存データは保持し、検証済みのDB schema 34／35から36への限定的な追加移行に対応します。移行前のDBコピーを残し、過去会議の自動処理は開始しません。バックアップは形式6で作成し、形式5・schema35も検証して追加復元できます。その他の旧形式を一律に変換する機能はありません。[macOS手動更新の準備とデータ保持](docs/manual-update-macos.md)を参照してください。署名・公証済みDMGの配布と実機更新はまだ未検証です。
 
 配布工程の[macOS明示ビルド](docs/macos-distribution.md)は、証明書・Team・新規出力と署名のみ／公証profileの別指定を必要とします。準備app・アドホックDMGの検査は実施しましたが、実Developer ID署名・公証・配布条件・Gatekeeper・実機更新の完了ではありません。
+
+Windowsの[Store向けMSIXビルド](docs/windows-store.md)は、Store識別情報を設定した専用経路で生成します。Store版はEXE版と保存領域・起動IDを分離し、移行にはアプリのバックアップ・復元を使います。
 
 `npm run build` で画面の型検査とビルド、リポジトリルートの `make test-rust` で共有状態・SQLiteのRustテストを実行できます。依存パッケージ取得後はルートの `make check` にもアプリ検査が含まれます。合成IPCの全ブラウザー検査は `make check-browser` で、サーバーとブラウザーを自動起動します。Rust workspaceとCargo.lockはリポジトリルートで共有し、各windowの情報・ジョブ種別・エラー・モデル定義の構造型は `npm --prefix app run generate:contracts` で生成します。Rust検査は共通キャッシュを再利用し、終了後に容量を整理します。変更箇所だけの確認は `make test-rust-focused RUST_TEST_FILTER=recording_segments::tests`、容量確認は `make rust-test-cache` を使用してください。設定と制限は[検証記録](docs/verification/rust-test-efficiency-2026-10-09.md)を参照してください。ブラウザーだけで表示した場合は「デスクトップ接続なし」と表示し、録音状態を模擬しません。
 
@@ -57,7 +59,9 @@ Windows・macOSでは話者一覧の「声の登録・照合」から人物と�
 
 ## ドキュメント
 
-- [Windows開発環境とMON QAビルド](docs/windows-setup.md)：開発ツールの導入、事前検査、QAインストーラー生成
+- [Windows開発環境とMinutesOn QAビルド](docs/windows-setup.md)：開発ツールの導入、事前検査、QAインストーラー生成
+- [Windows Store向けMSIXビルド](docs/windows-store.md)：MinutesOnのパッケージ生成、検証、Store申請準備
+- [macOS本番ビルド手順](docs/macos-distribution.md)：Xcodeでの証明書作成、公証認証の初回設定、本番ビルドコマンドと生成物の確認
 - [初期仕様書 v0.8](docs/specification-v0.8.md)：確定した要件・データ設計・UI・検証条件
 - [開発タスク計画](docs/development-plan.md)：実装順序・依存関係・完了条件
 - [実装状況](docs/implementation-status.md)：計画IDごとの実装・検証状況と残件

@@ -265,6 +265,92 @@ pub(crate) fn read(path: &Path, mutable: bool) -> Result<File, String> {
     }
     Ok(file)
 }
+
+/// Read immutable application resources. Windows can hard-link files shared by
+/// MSIX packages; only the calling process's OS-reported package may use that
+/// exception. Ordinary user data and unpackaged installs retain `read`'s rules.
+pub(crate) fn read_bundled(path: &Path) -> Result<(File, Vec<File>), String> {
+    read_bundled_in_package(path, current_package_path()?.as_deref())
+}
+
+fn current_package_path() -> Result<Option<PathBuf>, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{
+        Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS},
+        Storage::Packaging::Appx::GetCurrentPackagePath,
+    };
+    let mut size = 0;
+    let status = unsafe { GetCurrentPackagePath(&mut size, std::ptr::null_mut()) };
+    if status == APPMODEL_ERROR_NO_PACKAGE {
+        return Ok(None);
+    }
+    if status != ERROR_INSUFFICIENT_BUFFER || !(2..=32768).contains(&size) {
+        return Err("アプリパッケージの場所を取得できません".into());
+    }
+    let mut buffer = vec![0; size as usize];
+    let status = unsafe { GetCurrentPackagePath(&mut size, buffer.as_mut_ptr()) };
+    if status != ERROR_SUCCESS
+        || size < 2
+        || size as usize > buffer.len()
+        || buffer[size as usize - 1] != 0
+        || buffer[..size as usize - 1].contains(&0)
+    {
+        return Err("アプリパッケージの場所を取得できません".into());
+    }
+    Ok(Some(PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..size as usize - 1],
+    ))))
+}
+
+fn read_bundled_in_package(
+    candidate: &Path,
+    package: Option<&Path>,
+) -> Result<(File, Vec<File>), String> {
+    let Some(package) = package else {
+        let pins = parents(candidate.parent().ok_or("親がありません")?)?;
+        return Ok((read(candidate, false)?, pins));
+    };
+    // Start at the package root: its WindowsApps parent need not grant directory
+    // listing access. The root comes from Windows, never a caller's setting.
+    let package_pin = directory(package)?;
+    let package_path = path(&package_pin)?;
+    let relative = candidate
+        .strip_prefix(&package_path)
+        .or_else(|_| candidate.strip_prefix(package))
+        .map_err(|_| "同梱素材は現在のアプリパッケージ内に必要です")?;
+    let components: Vec<_> = relative.components().collect();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err("同梱素材のパスが不正です".into());
+    }
+    let mut pins = vec![package_pin];
+    let mut parent = package_path.clone();
+    for part in &components[..components.len() - 1] {
+        parent.push(part.as_os_str());
+        pins.push(directory(&parent)?);
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .custom_flags(0x00200000)
+        .open(candidate)
+        .map_err(|e| e.to_string())?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() || identity(&file)?.2 == 0 {
+        return Err("同梱素材は通常ファイルで指定してください".into());
+    }
+    // Bind the exception to the opened object, not merely a path prefix.
+    let actual = path(&file)?;
+    if actual != package_path.join(relative)
+        || !actual.starts_with(&package_path)
+        || path(&pins[0])? != package_path
+    {
+        return Err("同梱素材の実体がアプリパッケージ内にありません".into());
+    }
+    Ok((file, pins))
+}
 pub(crate) fn ordinary(metadata: &std::fs::Metadata) -> bool {
     metadata.file_attributes() & 0x400 == 0
 }

@@ -1,4 +1,8 @@
-# macOS実機検証用MON QAの準備
+# macOS実機検証用MinutesOn QAの準備
+
+2026-11-01以降のQAビルドは表示名を`MinutesOn QA`、生成アプリ名を`MinutesOn QA.app`とする。識別子`jp.mon.desktop.qa`と保存領域は維持する。以下にある`MON QA.app`／`MON QA Fresh.app`のパスとSHAは、過去に生成・配置した成果物の記録である。
+
+2026-11-01に`CARGO_INCREMENTAL=0 npm --prefix app run tauri:qa:build -- --bundles app`で再ビルドした。生成物は`app/src-tauri/target/release/bundle/macos/MinutesOn QA.app`、バージョンは`1.0.0`。表示名・QA識別子・最低OS 15.0、本体と両ヘルパーのarm64、アドホック署名と`codesign --verify --deep --strict`の成功を確認した。本体SHA-256は`831962c22bfe96651477f8e7ec8ebb3fa6a93e8f71131fa21dd5745275801ce0`。ログと検証結果は`output/minuteson-qa-rebuild-20261101.log`／`.json`。既存の配置済みQAアプリの差し替え、アプリ起動、録音、公証は行っていない。
 
 ## 2026-10-15 現行QAと短時間の確認順序
 
@@ -62,7 +66,7 @@ H07〜10の通常利用確認は目安1〜2時間（ダウンロード待ち・�
 
 2026-10-10時点の最新QAは `/private/tmp/mon-prototype-simple-qa-artifact.WuwVHb/MON QA.app`、main SHA `5468530636a8b82918153403195daf9c1918aff91fbc173e417fc9a8a56ab897`、識別子 `jp.mon.desktop.qa`。モック準拠の会議一覧・3入口・設定内だけのテーマ切替、CSS／Mac小窓背景の角丸、明示的な説明のWebView焦点復帰を含む。コピー一致・アドホック署名・全arm64・capture help、録音なしの冷起動／検索／2タブ／準備から戻る／小窓を確認。反復focusの変動、全画面、実録音／モデル、配布署名／公証は残す。[範囲と工程時間](m4-01-native-nonrecording-ui-2026-10-10.md#モック準拠と画面操作の簡素化)を参照。以下の「最新」は当時の履歴である。
 
-MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
+MinutesOn QAは、通常利用のMinutesOnとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
 
 現在の最新QAは `/private/tmp/mon-raw-duration-qa-artifact.nHNweS/MON QA.app`、main SHA `cd38dc862662d68d404d2e84a1d10a8efebc68cf7adcf0e33c3c02cdf2ca6d31`。共通dialogのネイティブmodal状態への統一に加えて、[未処理PCMの500ms上限を端数切捨てで超えない修正](live-raw-recording-segments-2026-10-09.md#2026-10-10の未処理pcm時間の端数保護)を含む。最新Swift全体・合成Swift／Rust連携・QA構築・コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認した。操作可能となった後、新QAの冷起動・既存3会議・復元プレビューの限定Tab／Escapeを確認し終了した。同条件の旧側もAX取得に成功したため、以前の欠落は今回再現できず、原因／解消の断定・VoiceOver等の全体合格にはしない。実復元・録音・実モデル・公証は未検証。[今回の実機比較](m4-01-native-nonrecording-ui-2026-10-10.md#再操作可能になった後の最新qaと旧qaの比較)を参照。以下の「最新」表記は当時の履歴として扱う。
 
@@ -76,16 +80,16 @@ MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ�
 
 | 対象 | 通常利用 | 検証用 |
 |---|---|---|
-| アプリ名 | mon | MON QA |
+| アプリ名 | MinutesOn | MinutesOn QA |
 | 識別子 | jp.mon.desktop | jp.mon.desktop.qa |
-| ウィンドウ名 | mon | MON QAで始まる名前 |
+| ウィンドウ名 | MinutesOn | MinutesOn QAで始まる名前 |
 | ウィンドウの役割 | main、recorder、recording-confirmation、recorder-info | 同じ役割とURL |
 
 `app/src-tauri/tauri.qa.conf.json`は識別子・アプリ名・ウィンドウ名だけを変更する。Tauriの既存のmacOS設定は自動的に読み込まれるため、録音・復号・再生ヘルパーと最低OS条件を維持する。通常の設定ファイルとnpmの`tauri`コマンドは変更しない。
 
 起動処理はTauriの`app_config_dir`と`app_data_dir`を使い、インストール済みTauri 2.12.1では既定の領域にアプリ識別子を付ける。QA設定には領域の上書きを置かない。ただし、既存QAの起動設定で保存先が変更されている場合はその保存先が使われる。起動前にQAの設定・DBと本番との分離を確認し、本番の保存先をQAへ指定したり、本番のbootstrap設定をコピーしたりしない。
 
-通常利用のMONを起動すると、未完了の音声取り込み・録音回復や解析待ち行列が動くことがある。検証目的で本番アプリを起動せず、QAのウィンドウ名・バンドル識別子と保存先を確認する。
+通常利用のMinutesOnを起動すると、未完了の音声取り込み・録音回復や解析待ち行列が動くことがある。検証目的で本番アプリを起動せず、QAのウィンドウ名・バンドル識別子と保存先を確認する。
 
 ## ビルドと起動前確認
 
@@ -96,7 +100,7 @@ cd /Users/skodani/Codebase/mon/app
 CARGO_INCREMENTAL=0 npm run tauri:qa:build -- --bundles app
 ```
 
-このコマンドはローカルビルドだけを行い、アプリやCIを起動しない。生成されたアプリの`Contents/Info.plist`で`CFBundleIdentifier`が`jp.mon.desktop.qa`、アプリ名がMON QAであることを確認する。出力場所は実際のビルド結果で確定する。署名検査も行うが、既存設定のアドホック署名は配布用署名・公証の完了ではない。
+このコマンドはローカルビルドだけを行い、アプリやCIを起動しない。生成されたアプリの`Contents/Info.plist`で`CFBundleIdentifier`が`jp.mon.desktop.qa`、アプリ名がMinutesOn QAであることを確認する。出力場所は実際のビルド結果で確定する。署名検査も行うが、既存設定のアドホック署名は配布用署名・公証の完了ではない。
 
 アプリ操作の許可後にQAだけを起動する。最初は録音を行わず、利用を許可された音声のコピーで取り込み・再生・編集・保存・再起動を検証する。初回QAに本番の会議や設定が表示された場合は操作を止め、領域の分離を再確認する。録音の検証は、対象音声と時間・取得範囲を確認し、マイク・システム音声の権限承認後に別途行う。
 

@@ -77,7 +77,7 @@ pub(crate) async fn open_data(
     } else {
         dialog
             .set_title("バックアップから追加復元")
-            .add_filter("MONバックアップ", &["monbackup"])
+            .add_filter("MinutesOnバックアップ", &["monbackup"])
             .pick_file(move |value| {
                 let _ = send.send(value);
             });

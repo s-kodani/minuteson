@@ -2032,7 +2032,7 @@ return errors === 0;
 }
 
 export const validateWindowEnvironment = validate31;
-const schema40 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"Capabilities":{"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"},"Platform":{"enum":["macos","windows","other"],"type":"string"},"WindowRole":{"enum":["main","recorder","recorder-info","recording-confirmation","startup-attention"],"type":"string"}},"properties":{"capabilities":{"$ref":"#/definitions/Capabilities"},"platform":{"$ref":"#/definitions/Platform"},"role":{"$ref":"#/definitions/WindowRole"},"schemaVersion":{"minimum":0,"type":"integer","maximum":4294967295}},"required":["capabilities","platform","role","schemaVersion"],"title":"WindowEnvironment","type":"object","$id":"WindowEnvironment"};
+const schema40 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"Capabilities":{"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"},"Platform":{"enum":["macos","windows","other"],"type":"string"},"WindowRole":{"enum":["main","recorder","recorder-info","recording-confirmation","startup-attention"],"type":"string"}},"properties":{"capabilities":{"$ref":"#/definitions/Capabilities"},"platform":{"$ref":"#/definitions/Platform"},"productName":{"type":"string"},"role":{"$ref":"#/definitions/WindowRole"},"schemaVersion":{"minimum":0,"type":"integer","maximum":4294967295}},"required":["capabilities","platform","productName","role","schemaVersion"],"title":"WindowEnvironment","type":"object","$id":"WindowEnvironment"};
 const schema41 = {"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"};
 const schema42 = {"enum":["macos","windows","other"],"type":"string"};
 const schema43 = {"enum":["main","recorder","recorder-info","recording-confirmation","startup-attention"],"type":"string"};
@@ -2044,14 +2044,14 @@ let errors = 0;
 if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
-if(((((data.capabilities === undefined) && (missing0 = "capabilities")) || ((data.platform === undefined) && (missing0 = "platform"))) || ((data.role === undefined) && (missing0 = "role"))) || ((data.schemaVersion === undefined) && (missing0 = "schemaVersion"))){
+if((((((data.capabilities === undefined) && (missing0 = "capabilities")) || ((data.platform === undefined) && (missing0 = "platform"))) || ((data.productName === undefined) && (missing0 = "productName"))) || ((data.role === undefined) && (missing0 = "role"))) || ((data.schemaVersion === undefined) && (missing0 = "schemaVersion"))){
 validate31.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
-if(!((((key0 === "capabilities") || (key0 === "platform")) || (key0 === "role")) || (key0 === "schemaVersion"))){
+if(!(((((key0 === "capabilities") || (key0 === "platform")) || (key0 === "productName")) || (key0 === "role")) || (key0 === "schemaVersion"))){
 validate31.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
@@ -2116,15 +2116,10 @@ else {
 var valid0 = true;
 }
 if(valid0){
-if(data.role !== undefined){
-let data3 = data.role;
+if(data.productName !== undefined){
 const _errs11 = errors;
-if(typeof data3 !== "string"){
-validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/type",keyword:"type",params:{type: "string"},message:"must be string"}];
-return false;
-}
-if(!(((((data3 === "main") || (data3 === "recorder")) || (data3 === "recorder-info")) || (data3 === "recording-confirmation")) || (data3 === "startup-attention"))){
-validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/enum",keyword:"enum",params:{allowedValues: schema43.enum},message:"must be equal to one of the allowed values"}];
+if(typeof data.productName !== "string"){
+validate31.errors = [{instancePath:instancePath+"/productName",schemaPath:"#/properties/productName/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid0 = _errs11 === errors;
@@ -2133,31 +2128,49 @@ else {
 var valid0 = true;
 }
 if(valid0){
+if(data.role !== undefined){
+let data4 = data.role;
+const _errs13 = errors;
+if(typeof data4 !== "string"){
+validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+if(!(((((data4 === "main") || (data4 === "recorder")) || (data4 === "recorder-info")) || (data4 === "recording-confirmation")) || (data4 === "startup-attention"))){
+validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/enum",keyword:"enum",params:{allowedValues: schema43.enum},message:"must be equal to one of the allowed values"}];
+return false;
+}
+var valid0 = _errs13 === errors;
+}
+else {
+var valid0 = true;
+}
+if(valid0){
 if(data.schemaVersion !== undefined){
-let data4 = data.schemaVersion;
-const _errs14 = errors;
-if(!(((typeof data4 == "number") && (!(data4 % 1) && !isNaN(data4))) && (isFinite(data4)))){
+let data5 = data.schemaVersion;
+const _errs16 = errors;
+if(!(((typeof data5 == "number") && (!(data5 % 1) && !isNaN(data5))) && (isFinite(data5)))){
 validate31.errors = [{instancePath:instancePath+"/schemaVersion",schemaPath:"#/properties/schemaVersion/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
-if(errors === _errs14){
-if((typeof data4 == "number") && (isFinite(data4))){
-if(data4 > 4294967295 || isNaN(data4)){
+if(errors === _errs16){
+if((typeof data5 == "number") && (isFinite(data5))){
+if(data5 > 4294967295 || isNaN(data5)){
 validate31.errors = [{instancePath:instancePath+"/schemaVersion",schemaPath:"#/properties/schemaVersion/maximum",keyword:"maximum",params:{comparison: "<=", limit: 4294967295},message:"must be <= 4294967295"}];
 return false;
 }
 else {
-if(data4 < 0 || isNaN(data4)){
+if(data5 < 0 || isNaN(data5)){
 validate31.errors = [{instancePath:instancePath+"/schemaVersion",schemaPath:"#/properties/schemaVersion/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 }
 }
-var valid0 = _errs14 === errors;
+var valid0 = _errs16 === errors;
 }
 else {
 var valid0 = true;
+}
 }
 }
 }

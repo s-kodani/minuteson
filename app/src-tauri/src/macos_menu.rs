@@ -93,7 +93,7 @@ pub(crate) fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
     let package = app.package_info();
     let config = app.config();
     let about = AboutMetadata {
-        name: Some(package.name.clone()),
+        name: config.product_name.clone(),
         version: Some(package.version.to_string()),
         copyright: config.bundle.copyright.clone(),
         authors: config.bundle.publisher.clone().map(|p| vec![p]),

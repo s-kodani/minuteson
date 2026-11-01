@@ -1,3 +1,5 @@
 # Notice files are verified by exact byte length and SHA-256 in index.json.
 third-party/notices/** -text
 third-party/asr-assets/** -text
+# The capture ABI build compares this header with cbindgen's LF output byte for byte.
+crates/mon-capture-ffi/include/mon_capture.h text eol=lf

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$Installer,
-    [ValidateSet('qa', 'release')][string]$Flavor = 'qa',
+    [ValidateSet('qa', 'release', 'unsigned')][string]$Flavor = 'qa',
     [string]$OutputRoot,
     [string]$BuildManifest
 )
@@ -32,10 +32,18 @@ function Get-Sha256([string]$Path) {
 }
 $source = Assert-WorkspacePath $Installer
 $root = Assert-WorkspacePath $OutputRoot
-$folder = if ($Flavor -eq 'qa') { 'windows-qa' } else { 'windows-release' }
+$folder = switch ($Flavor) {
+    'qa' { 'windows-qa' }
+    'release' { 'windows-release' }
+    'unsigned' { 'windows-unsigned' }
+}
 $distribution = Assert-WorkspacePath (Join-Path $root $folder)
 $work = Assert-WorkspacePath (Join-Path $root "$folder-work")
-$name = if ($Flavor -eq 'qa') { 'MON-QA-setup.exe' } else { 'MON-setup.exe' }
+$name = switch ($Flavor) {
+    'qa' { 'MON-QA-setup.exe' }
+    'release' { 'MinutesOn-setup.exe' }
+    'unsigned' { 'MinutesOn-unsigned-setup.exe' }
+}
 $latest = Assert-WorkspacePath (Join-Path $distribution $name)
 if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or [IO.Path]::GetExtension($source) -ne '.exe') {
     throw 'A built Windows installer executable is required.'
@@ -46,7 +54,14 @@ try {
         throw 'The source is not a Windows executable.'
     }
 } finally { $stream.Dispose() }
+if ($Flavor -eq 'unsigned') {
+    $unsignedProof = @(& (Join-Path $PSScriptRoot 'assert-windows-unsigned.ps1') -Path $source)
+    if (-not $? -or $unsignedProof.Count -ne 1) { throw 'Unsigned installer verification failed; previous installer retained.' }
+}
 $expectedHash = Get-Sha256 $source
+if ($Flavor -eq 'unsigned' -and $unsignedProof[0].sha256 -ne $expectedHash) {
+    throw 'Unsigned installer changed after signature verification; previous installer retained.'
+}
 if ($BuildManifest) {
     $BuildManifest = Assert-WorkspacePath $BuildManifest
     & python (Join-Path $PSScriptRoot 'mon_windows_build_evidence.py') verify --manifest $BuildManifest --require-current-source
@@ -57,10 +72,19 @@ if ($BuildManifest) {
     }
 }
 New-Item -ItemType Directory -Path $distribution, $work -Force | Out-Null
-$stage = Assert-WorkspacePath (Join-Path $work ('.installer-' + [guid]::NewGuid().ToString('N') + '.tmp'))
+$stageExtension = if ($Flavor -eq 'unsigned') { '.exe' } else { '.tmp' }
+$stage = Assert-WorkspacePath (Join-Path $work ('.installer-' + [guid]::NewGuid().ToString('N') + $stageExtension))
 try {
     Copy-Item -LiteralPath $source -Destination $stage
     if ((Get-Sha256 $stage) -ne $expectedHash) { throw 'Installer copy verification failed.' }
+    if ($Flavor -eq 'unsigned') {
+        # Check the copied bytes before replacing any existing distribution.
+        # The source could have changed since its preflight signature check.
+        $copyProof = @(& (Join-Path $PSScriptRoot 'assert-windows-unsigned.ps1') -Path $stage)
+        if (-not $? -or $copyProof.Count -ne 1 -or $copyProof[0].sha256 -ne $expectedHash) {
+            throw 'Unsigned installer copy verification failed; previous installer retained.'
+        }
+    }
     $obsolete = @()
     foreach ($entry in @(Get-ChildItem -LiteralPath $distribution -Force)) {
         $entryPath = Assert-WorkspacePath $entry.FullName
@@ -68,9 +92,9 @@ try {
             if ($entry.PSIsContainer) { throw 'The installer destination is a directory.' }
             continue
         }
-        # Only generated MON installers may be deleted. Preserve diagnostics,
+        # Only generated MinutesOn/MON installers may be deleted. Preserve diagnostics,
         # checksums, scripts and any unfamiliar file outside the download folder.
-        if (-not $entry.PSIsContainer -and $entry.Name -match '^(?:MON-QA-.+-setup|MON(?: QA)?_.+_x64-setup|MON-setup)\.exe$') {
+        if (-not $entry.PSIsContainer -and $entry.Name -match '^(?:MON-QA-.+-setup|MON(?: QA)?_.+_x64-setup|MON-setup|MinutesOn_[0-9]+\.[0-9]+\.[0-9]+_x64-setup|MinutesOn-setup)\.exe$') {
             $obsolete += $entryPath
             continue
         }

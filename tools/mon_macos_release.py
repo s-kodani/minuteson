@@ -1,4 +1,4 @@
-"""Explicit macOS distribution build; never discover credentials or launch MON.
+"""Explicit macOS distribution build; never discover credentials or launch MinutesOn.
 
 The Tauri preparation is deliberately ad-hoc and receives no notarization
 credentials. Only our copied output is signed inside-out, with distinct helper
@@ -26,6 +26,40 @@ NOTARY_ENV = ("APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_PATH",
               "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_PROVIDER_SHORT_NAME")
 POLICIES = {"main.plist": {"com.apple.security.device.audio-input": True}, "capture.plist": {"com.apple.security.device.audio-input": True},
             "embedding.plist": {"com.apple.security.cs.disable-library-validation": True}}
+
+
+def release_configuration(repository=None):
+    """Read the same base, platform and explicit overrides used by Tauri."""
+    root = REPOSITORY if repository is None else repository
+
+    def merge(base, patch):
+        # Tauri uses JSON Merge Patch: objects merge, arrays replace, null removes.
+        if not isinstance(patch, dict):
+            return patch
+        result = dict(base) if isinstance(base, dict) else {}
+        for key, value in patch.items():
+            if value is None:
+                result.pop(key, None)
+            else:
+                result[key] = merge(result.get(key), value)
+        return result
+
+    config = {}
+    for name in ("tauri.conf.json", "tauri.macos.conf.json", "tauri.release.conf.json"):
+        value = json.loads((root / "app/src-tauri" / name).read_text(encoding="utf8"))
+        if not isinstance(value, dict):
+            raise ValueError("Tauri release configuration must be an object")
+        config = merge(config, value)
+    name = config.get("productName")
+    if (not isinstance(name, str) or not name or name != name.strip()
+            or len(name.encode("utf8")) > 128 or not name.isprintable()
+            or name in (".", "..") or name.startswith("-") or name.endswith(".")
+            or any(c in name for c in '/\\:<>"|?*')):
+        raise ValueError("distribution productName must be a safe app and disk image name")
+    version = config.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ValueError("distribution version must be a numeric release version")
+    return config
 
 
 def credentials(identity, team, profile):
@@ -108,26 +142,30 @@ def read_plist(path):
     return value
 
 
-def layout(app, version):
+def layout(app, version, product_name):
     private_path(app, directory=True)
     main = read_plist(app / "Contents/Info.plist")
     def purpose(info, key):
         value = info.get(key)
         return isinstance(value, str) and bool(value.strip()) and len(value.encode("utf8")) <= 4096
     if (main.get("CFBundleIdentifier") != "jp.mon.desktop"
+            or main.get("CFBundleName") != product_name
+            or main.get("CFBundleDisplayName") != product_name
             or main.get("CFBundleShortVersionString") != version
             or main.get("CFBundleVersion") != version
             or main.get("LSMinimumSystemVersion") != "15.0"
             or main.get("CFBundleExecutable") != "mon-desktop"
             or not purpose(main, "NSMicrophoneUsageDescription")
             or not purpose(main, "NSAudioCaptureUsageDescription")):
-        raise ValueError("production app identifier/version/minimum OS/executable does not match")
+        raise ValueError("production app name/identifier/version/minimum OS/executable does not match")
     main_executable = private_path(app / "Contents/MacOS/mon-desktop")
     capture = app / "Contents/Resources/MONCaptureProbe.app"
     private_path(capture, directory=True)
     info = read_plist(capture / "Contents/Info.plist")
     if (info.get("CFBundleIdentifier") != "app.mon.capture.probe"
             or info.get("CFBundleExecutable") != "mon-macos-capture"
+            or info.get("CFBundleName") != "MinutesOn Capture Helper"
+            or info.get("CFBundleDisplayName") != "MinutesOn Capture Helper"
             or not purpose(info, "NSMicrophoneUsageDescription")
             or not purpose(info, "NSAudioCaptureUsageDescription")):
         raise ValueError("capture helper identity or privacy declarations are missing")
@@ -370,10 +408,10 @@ def build(output, identity, team, profile, environment):
     private_path(output.parent, directory=True)
     if shutil.disk_usage(output.parent).free < 4 * 1024 ** 3:
         raise ValueError("at least 4GiB free is required for the temporary build and copies")
-    config = json.loads((REPOSITORY / "app/src-tauri/tauri.conf.json").read_text())
+    config = release_configuration()
     version = config["version"]
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-        raise ValueError("distribution version must be a numeric release version")
+    product_name = config["productName"]
+    bundle_name = product_name + ".app"
     policy = REPOSITORY / "app/src-tauri/release-entitlements"
     for name, expected in POLICIES.items():
         if read_plist(policy / name) != expected:
@@ -390,11 +428,11 @@ def build(output, identity, team, profile, environment):
         timings["buildSeconds"] = round(time.monotonic() - started, 3)
         with (output / "preparation-build.log").open("xb") as stream:
             stream.write(stdout + stderr)
-        built = cache / "release/bundle/macos/mon.app"
-        capture, embedding = layout(built, version)
-        app = output / "mon.app"
+        built = cache / "release/bundle/macos" / bundle_name
+        capture, embedding = layout(built, version, product_name)
+        app = output / bundle_name
         command(["/usr/bin/ditto", str(built), str(app)], timeout=120)
-        capture, embedding = layout(app, version)
+        capture, embedding = layout(app, version, product_name)
         verify_notices(app)
         verify_asr_runtime(app)
         verify_inference_runtime(app)
@@ -409,17 +447,17 @@ def build(output, identity, team, profile, environment):
         if profile is not None:
             # Staple the nested app before constructing the final DMG. Never
             # rebuild or mutate a DMG after obtaining that DMG's ticket.
-            archive = output / "mon-notary.zip"
+            archive = output / f"{product_name}-notary.zip"
             command(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], timeout=120)
             requests.append(notarize(archive, profile))
             command(["/usr/bin/xcrun", "stapler", "staple", str(app)], timeout=180)
             command(["/usr/bin/xcrun", "stapler", "validate", str(app)], timeout=180)
         image_source = output / "image-source"
         image_source.mkdir(mode=0o700)
-        command(["/usr/bin/ditto", str(app), str(image_source / "mon.app")], timeout=120)
+        command(["/usr/bin/ditto", str(app), str(image_source / bundle_name)], timeout=120)
         (image_source / "Applications").symlink_to("/Applications")
-        dmg = output / f"mon_{version}_aarch64.dmg"
-        command(["/usr/bin/hdiutil", "create", "-volname", "MON", "-srcfolder", str(image_source),
+        dmg = output / f"{product_name}_{version}_aarch64.dmg"
+        command(["/usr/bin/hdiutil", "create", "-volname", product_name, "-srcfolder", str(image_source),
                  "-format", "UDZO", "-nospotlight", str(dmg)], timeout=300)
         command(["/usr/bin/hdiutil", "verify", str(dmg)], timeout=120)
         sign(dmg, identity, team)
@@ -441,7 +479,7 @@ def build(output, identity, team, profile, environment):
         if cache.is_symlink() or (now.st_dev, now.st_ino) != (cache_identity.st_dev, cache_identity.st_ino):
             raise ValueError("build cache identity changed; preserve instead of cleanup")
         shutil.rmtree(cache)
-        result = {"schemaVersion": 1, "version": version, "teamId": team,
+        result = {"schemaVersion": 1, "productName": product_name, "version": version, "teamId": team,
                   "dmg": dmg.name, "dmgSha256": digest(dmg), "dmgBytes": dmg.stat().st_size,
                   "notarization": "tickets_validated" if profile else "not_requested",
                   "notaryRequestIds": requests, "runtimeQA": "not_verified", "gatekeeper": "not_verified",

@@ -580,7 +580,7 @@ pub(crate) fn read(
     let mut magic = [0; 8];
     input.read_exact(&mut magic).map_err(|e| e.to_string())?;
     if &magic != MAGIC {
-        return Err("MONバックアップ形式ではありません".into());
+        return Err("MinutesOnバックアップ形式ではありません".into());
     }
     let mut length = [0; 4];
     let mut expected = [0; 32];

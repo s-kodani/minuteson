@@ -28,7 +28,7 @@ pub(crate) fn resources() -> Result<PathBuf, String> {
 }
 pub(crate) fn catalog(root: &Path) -> Result<Vec<u8>, String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
-    let mut source = Source::open(&root, "catalog.json")?;
+    let mut source = Source::open_bundled(&root, "catalog.json")?;
     let mut bytes = Vec::new();
     (&mut source.file)
         .take(512 * 1024 + 1)
@@ -61,7 +61,7 @@ pub(crate) fn fetch(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
-    let mut source = Source::open(&root, "runtime.tar")?;
+    let mut source = Source::open_bundled(&root, "runtime.tar")?;
     let mut digest = Sha256::new();
     let mut count = 0u64;
     let mut buffer = [0u8; 65536];
@@ -97,7 +97,7 @@ pub(crate) fn embedding() -> Result<PathBuf, String> {
         sha256: String,
     }
     let root = resources()?;
-    let mut source = Source::open(&root, "embedding-index.json")?;
+    let mut source = Source::open_bundled(&root, "embedding-index.json")?;
     let mut bytes = Vec::new();
     (&mut source.file)
         .take(4097)

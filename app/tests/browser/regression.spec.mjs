@@ -5,15 +5,17 @@ import { browserSuites, fixtureReadiness } from "../browser-suites.mjs";
 import { applyMinutesFixtureTheme } from "../minutes-browser-helpers.js";
 import { applyPlaybackFixtureTheme } from "../playback-browser-helpers.js";
 
-const selected = process.env.MON_BROWSER_SUITES ? new Set(process.env.MON_BROWSER_SUITES.split(",")) : null;
+const selected = process.env.MON_BROWSER_SUITES ? new Set(process.env.MON_BROWSER_SUITES.split(",").flatMap(name => name === "internal-logs" ? browserSuites.filter(([suite]) => suite.startsWith("internal-logs-")).map(([suite]) => suite) : [name])) : null;
 const suites = browserSuites.filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty browser suite selection");
+const failed = process.env.MON_BROWSER_FAILED_TESTS ? new Set(JSON.parse(process.env.MON_BROWSER_FAILED_TESTS)) : null;
 
 for (const [name, fixture, source] of suites) {
+  if (failed && !failed.has(name)) continue;
   test(name, async ({ page, baseURL }, info) => {
-    // Tracing the 1,000-row history, filtering and recovery flow needs more time.
-    if (name === "internal-logs") test.setTimeout(240_000);
-    page.setDefaultTimeout(name === "internal-logs" ? 30_000 : 10_000);
+    page.setDefaultTimeout(name.startsWith("internal-logs-") ? 30_000 : 10_000);
+    // Cold Vite module loads have a separate budget from control interactions.
+    page.setDefaultNavigationTimeout(30_000);
     const port = new URL(baseURL).port;
     const localPort = value => value.replaceAll("1420", port);
     if (fixture) {
@@ -31,6 +33,7 @@ for (const [name, fixture, source] of suites) {
     const screenshot = page.screenshot.bind(page);
     page.screenshot = options => screenshot({ ...options, path: capturePath(options.path) });
     const detailUI = {
+      internalLogsScenario: name.startsWith("internal-logs-") ? name.slice("internal-logs-".length) : undefined,
       prepareClipboard: async () => {
         if (info.project.name === "chromium") await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
         else await page.context().addInitScript(() => {

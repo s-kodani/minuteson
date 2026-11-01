@@ -39,7 +39,7 @@ pub(super) fn create(app: &tauri::AppHandle) -> Result<(), String> {
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone()
     };
-    let name = app.config().product_name.as_deref().unwrap_or("MON");
+    let name = app.config().product_name.as_deref().unwrap_or("MinutesOn");
     let builder = TrayIconBuilder::new()
         .with_id("mon-resident")
         .with_icon(icon)
@@ -148,7 +148,7 @@ pub(super) fn refresh(app: &tauri::AppHandle) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let name = app.config().product_name.as_deref().unwrap_or("MON");
+    let name = app.config().product_name.as_deref().unwrap_or("MinutesOn");
     TRAY.with(|slot| {
         if let Some((icon, item)) = slot.borrow().as_ref() {
             item.set_text(&status);
