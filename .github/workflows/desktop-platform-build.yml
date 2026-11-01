@@ -47,13 +47,13 @@ jobs:
           python-version: '3.12'
       - name: Common tooling tests
         run: python -m unittest discover -s tests -v
-  native:
+  browser:
     strategy:
       fail-fast: false
       matrix:
         os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -70,6 +70,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> app/src-tauri/target
+          key: browser
+          cache-on-failure: true
       - name: Install frontend dependencies
         run: npm ci --prefix app
       - name: Check generated command contracts
@@ -99,7 +101,7 @@ jobs:
       - name: Install browser engine
         working-directory: app
         shell: bash
-        run: npx playwright install --with-deps ${{ runner.os == 'macOS' && 'webkit' || 'chromium' }}
+        run: npx playwright install --with-deps ${{ runner.os == 'macOS' && 'webkit' || 'chromium --only-shell' }}
       - name: Configure macOS browser keyboard navigation
         if: runner.os == 'macOS'
         shell: bash
@@ -117,6 +119,34 @@ jobs:
           name: browser-diagnostics-${{ runner.os }}
           path: output/playwright/
           retention-days: 7
+  native:
+    env:
+      PYTHONUTF8: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> app/src-tauri/target
+          cache-on-failure: true
+      - name: Install frontend dependencies
+        run: npm ci --prefix app
       - name: Rust formatting
         run: cargo fmt --all --check
       - name: Check native application and test compilation
@@ -125,30 +155,9 @@ jobs:
         run: cargo check --manifest-path app/src-tauri/Cargo.toml --locked --tests
       - name: Shared Rust core tests
         run: cargo test --workspace --exclude mon-desktop --locked --lib
-      - name: Common state and startup tests
-        env:
-          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib ipc_acl::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib session::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib startup_attention::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib startup_instance::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib storage::playback::tests
       - name: Windows public signing preflight fails without a certificate
         if: runner.os == 'Windows'
         run: python -m unittest discover -s tests -p test_windows_release_signing.py -v
-      - name: Windows process ownership, dialogs and storage tests
-        env:
-          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib local_engine::windows::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib platform_dialog::tests
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib storage::windows_tests
       - name: Fetch notice source metadata
         if: runner.os == 'Windows'
         run: cargo fetch --manifest-path app/src-tauri/Cargo.toml --locked
@@ -164,11 +173,7 @@ jobs:
           ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MON_WINDOWS_MODEL_OPTIONS = Join-Path $env:RUNNER_TEMP 'mon-windows-model-options.json'
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_integration_tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib windows_five_second
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
+          python tools/mon_ci_native_tests.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
       - name: Build and verify Microsoft Store MSIX
@@ -221,9 +226,7 @@ jobs:
         if: runner.os == 'macOS'
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: |
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
-          cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib swift_generated_pc_only_capture -- --ignored
+        run: python tools/mon_ci_native_tests.py --swift-fixture
       - name: Upload Windows QA installer artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
