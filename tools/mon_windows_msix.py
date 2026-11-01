@@ -28,7 +28,13 @@ RESCAP = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restri
 MIN_OS = "10.0.26100.0"
 RUNTIME_FILES = ("catalog.json", "embedding-index.json", "runtime-index.json", "runtime.tar", "mon-speaker-embedding.exe")
 RUNTIME_DIRS = ("asr", "llama", "llama11960", "sherpa", "whisper", "workers")
-LOGOS = ("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")
+BASE_LOGOS = ("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")
+APP_ICON_SIZES = (16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256)
+APP_ICON_LOGOS = tuple(f"Square44x44Logo.targetsize-{size}{form}.png"
+                       for size in APP_ICON_SIZES
+                       for form in ("", "_altform-unplated", "_altform-lightunplated"))
+LOGOS = BASE_LOGOS + APP_ICON_LOGOS
+PAYLOAD_VERSION = 2
 GENERATED_FILES = {"[Content_Types].xml", "AppxBlockMap.xml"}
 
 
@@ -164,7 +170,74 @@ def stage(root, destination, config):
     return inventory(root, destination)
 
 
-def verify_payload(package, config, files):
+def verify_resource_index(dump, config):
+    """Require shell icon variants under the manifest's logical asset path."""
+    tree = ET.parse(dump)
+    resource_map = tree.find("ResourceMap")
+    if resource_map is None or resource_map.get("name") != config["identityName"]:
+        raise ValueError("PRI resource map does not match the Store package identity")
+    resources = resource_map.findall(".//NamedResource")
+    prefix = f"ms-resource://{config['identityName']}/Files/Assets/"
+    if {r.get("uri") for r in resources} != {prefix + n for n in BASE_LOGOS}:
+        raise ValueError("PRI must index only the manifest's Assets resources")
+    square = next(r for r in resources if r.get("uri") == prefix + "Square44x44Logo.png")
+    expected = {("Assets/Square44x44Logo.png", "", "")}
+    for size in APP_ICON_SIZES:
+        for form in ("", "unplated", "lightunplated"):
+            suffix = "_altform-" + form if form else ""
+            expected.add((f"Assets/Square44x44Logo.targetsize-{size}{suffix}.png", str(size), form))
+    actual = []
+    for candidate in square.findall("Candidate"):
+        qualifiers = {q.get("name"): q.get("value", "").lower()
+                      for q in candidate.findall("QualifierSet/Qualifier")}
+        actual.append((candidate.findtext("Value", "").replace("\\", "/"),
+                       qualifiers.get("TargetSize", ""), qualifiers.get("AlternateForm", "")))
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ValueError("PRI is missing the complete default, unplated or lightunplated icon candidates")
+    paths = [c.findtext("Value", "").replace("\\", "/") for c in resource_map.findall(".//Candidate")]
+    if len(paths) != len(LOGOS) or set(paths) != {"Assets/" + n for n in LOGOS}:
+        raise ValueError("PRI must index exactly the packaged icon assets")
+
+
+def generate_resource_index(root, stage_path, config, work, makepri=None):
+    """Index an Assets-only tree, preserving Files/Assets logical names.
+
+    Starting an index at Assets would strip Assets from its logical resource
+    names. A separate project root keeps the manifest paths and excludes the
+    large inference runtime from resource indexing.
+    """
+    stage_path = evidence.workspace_path(root, stage_path)
+    work = evidence.workspace_path(root, work)
+    if work.is_relative_to(stage_path):
+        raise ValueError("PRI work files must stay outside the package payload")
+    makepri = makepri or sdk_tool("makepri.exe")
+    sources = [(name, regular(root, stage_path / "Assets" / name)) for name in LOGOS]
+    work.mkdir(parents=True, exist_ok=False)
+    inputs = work / "input"
+    (inputs / "Assets").mkdir(parents=True)
+    for name, source in sources:
+        shutil.copyfile(source, inputs / "Assets" / name)
+    config_path = work / "priconfig.xml"
+    subprocess.run([str(makepri), "createconfig", "/cf", str(config_path), "/dq", "lang-ja-JP", "/pv", "10.0.0"], check=True)
+    tree = ET.parse(config_path)
+    # All candidates belong to the main MSIX; do not emit resource packages.
+    packaging = tree.find("packaging")
+    if packaging is not None:
+        tree.getroot().remove(packaging)
+    tree.write(config_path, encoding="utf-8", xml_declaration=True)
+    output = stage_path / "resources.pri"
+    subprocess.run([str(makepri), "new", "/pr", str(inputs), "/cf", str(config_path),
+                    "/in", config["identityName"], "/of", str(output)], check=True)
+    regular(root, output)
+    dump = work / "resources.pri.xml"
+    subprocess.run([str(makepri), "dump", "/if", str(output), "/of", str(dump), "/dt", "detailed"], check=True)
+    verify_resource_index(dump, config)
+    return output
+
+
+def verify_payload(package, config, files, payload_version=1):
+    if payload_version not in (1, PAYLOAD_VERSION):
+        raise ValueError("Unsupported MSIX payload version")
     expected = {}
     for entry in files:
         if (not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256"}
@@ -179,7 +252,9 @@ def verify_payload(package, config, files):
             raise ValueError("Duplicate or debug-only MSIX payload")
         expected[name] = entry
     required = {"AppxManifest.xml", "mon-desktop.exe", "mon-windows-capture.exe", "THIRD_PARTY_NOTICES.txt", "third-party-inventory.json", "notices/nlohmann-json-MIT.txt",
-                *("Assets/" + n for n in LOGOS), *("windows-runtime/" + n for n in RUNTIME_FILES)}
+                *("Assets/" + n for n in BASE_LOGOS), *("windows-runtime/" + n for n in RUNTIME_FILES)}
+    if payload_version == PAYLOAD_VERSION:
+        required.update({"resources.pri", *("Assets/" + n for n in APP_ICON_LOGOS)})
     if not required <= expected.keys():
         raise ValueError("Required MSIX payload is missing")
     with zipfile.ZipFile(package) as archive:
@@ -216,8 +291,9 @@ def finish(root, snapshot_path, stage_path, package, config, output):
     if snapshot.get("schemaVersion") != 1 or snapshot["source"] != evidence.source_identity(root):
         raise ValueError("Build source changed; previous MSIX retained")
     files = inventory(root, stage_path)
-    verify_payload(package, config, files)
-    result = {**snapshot, "kind": "windows-store-msix", "completedAt": evidence.utc_now(), "identity": config,
+    verify_payload(package, config, files, PAYLOAD_VERSION)
+    result = {**snapshot, "kind": "windows-store-msix", "payloadVersion": PAYLOAD_VERSION,
+              "completedAt": evidence.utc_now(), "identity": config,
               "package": artifact(root, package), "files": files, "signing": "microsoft-store-pending",
               "installedVerification": "pending", "certification": "pending", "distributionReady": False}
     evidence.save_new(root, output, result)
@@ -248,7 +324,8 @@ def verify(root, manifest_path, package=None, require_current_source=False):
             raise ValueError("MSIX package differs from its build evidence")
     if actual.stat().st_size != expected["bytes"] or evidence.sha256_file(actual) != expected["sha256"]:
         raise ValueError("Published MSIX differs from its build evidence")
-    verify_payload(actual, manifest["identity"], manifest["files"])
+    # Historical evidence predates qualified icons/PRI and remains verifiable.
+    verify_payload(actual, manifest["identity"], manifest["files"], manifest.get("payloadVersion", 1))
     if require_current_source and manifest["identity"] != configuration(root):
         raise ValueError("Store configuration differs from this build")
     return {"currentSourceMatches": matches, "packageSha256": expected["sha256"], "payloadFiles": len(manifest["files"])}
@@ -296,6 +373,7 @@ def build(root):
         raise ValueError("Build MSIX packages on Windows")
     config = configuration(root)
     makeappx = sdk_tool("makeappx.exe")
+    makepri = sdk_tool("makepri.exe")
     environment = build_environment(root)
     # CreateProcess resolves the executable before applying the child's PATH.
     # Use the discovered absolute path when CMake is installed outside PATH.
@@ -316,6 +394,7 @@ def build(root):
                    cwd=root, env=environment, check=True)
     stage_path = work / "stage"
     stage(root, stage_path, config)
+    generate_resource_index(root, stage_path, config, work / "pri", makepri)
     package = work / (config["displayName"] + "_" + config["version"] + "_x64.msix")
     subprocess.run([str(makeappx), "pack", "/d", str(stage_path), "/p", str(package), "/h", "SHA256", "/no"], check=True)
     manifest = work / "build.json"
@@ -341,7 +420,8 @@ def main():
         if args.command == "build":
             build(ROOT)
         elif args.command == "validate":
-            print(json.dumps({"identity": configuration(ROOT), "makeappx": str(sdk_tool("makeappx.exe"))}, ensure_ascii=True, indent=2))
+            print(json.dumps({"identity": configuration(ROOT), "makeappx": str(sdk_tool("makeappx.exe")),
+                              "makepri": str(sdk_tool("makepri.exe"))}, ensure_ascii=True, indent=2))
         else:
             print(json.dumps(verify(ROOT, args.manifest, args.package, args.require_current_source)))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ET.ParseError) as error:

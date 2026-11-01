@@ -56,8 +56,18 @@ class StorePackageTests(unittest.TestCase):
         path.write_bytes(data)
         return path
 
-    def package_stage(self, *, extra=None, omit=None):
-        files = msix.stage(self.root, self.stage, self.config)
+    def package_stage(self, *, extra=None, omit=None, legacy=False, sdk=False):
+        msix.stage(self.root, self.stage, self.config)
+        if legacy:
+            for name in msix.APP_ICON_LOGOS:
+                (self.stage / "Assets" / name).unlink()
+        elif sdk:
+            msix.generate_resource_index(self.root, self.stage, self.config, self.root / "output/work/pri")
+        else:
+            # Unit fixtures freeze/hash this file; the SDK integration below
+            # checks the actual index and every shell resource candidate.
+            (self.stage / "resources.pri").write_bytes(b"unit PRI fixture")
+        files = msix.inventory(self.root, self.stage)
         with zipfile.ZipFile(self.package, "w") as archive:
             for path in self.stage.rglob("*"):
                 if path.is_file() and path.name != omit:
@@ -109,8 +119,19 @@ class StorePackageTests(unittest.TestCase):
         self.assertIn("windows-runtime/asr/assets/models/bpe.vocab", names)
         self.assertIn("windows-runtime/llama/worker.dll", names)
         self.assertIn("notices/nlohmann-json-MIT.txt", names)
+        self.assertIn("resources.pri", names)
+        self.assertEqual(len(msix.APP_ICON_LOGOS), 42)
+        self.assertTrue({"Assets/" + name for name in msix.APP_ICON_LOGOS} <= names)
         self.assertFalse(any(n.endswith(".pdb") for n in names))
-        msix.verify_payload(self.package, self.config, files)
+        msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
+
+    def test_current_payload_rejects_missing_pri_or_theme_variant(self):
+        files = self.package_stage()
+        for name in ("resources.pri", "Assets/Square44x44Logo.targetsize-24_altform-lightunplated.png"):
+            with self.subTest(missing=name):
+                incomplete = [entry for entry in files if entry["path"] != name]
+                with self.assertRaisesRegex(ValueError, "Required MSIX payload is missing"):
+                    msix.verify_payload(self.package, self.config, incomplete, msix.PAYLOAD_VERSION)
 
     def test_missing_input_fails_before_creating_stage(self):
         (self.root / ".cache/windows-runtime/package/runtime.tar").unlink()
@@ -140,6 +161,7 @@ class StorePackageTests(unittest.TestCase):
     def test_finish_and_verify_bind_source_and_package(self):
         result = self.finish()
         self.assertEqual(result["signing"], "microsoft-store-pending")
+        self.assertEqual(result["payloadVersion"], 2)
         self.assertFalse(result["distributionReady"])
         self.assertTrue(msix.verify(self.root, self.manifest, require_current_source=True)["currentSourceMatches"])
         changed = copy.deepcopy(self.source)
@@ -164,6 +186,20 @@ class StorePackageTests(unittest.TestCase):
         result = msix.verify(self.root, self.manifest, package=published)
         self.assertTrue(result["currentSourceMatches"])
         self.assertEqual(result["packageSha256"], msix.evidence.sha256_file(published))
+
+    def test_historical_evidence_without_qualified_icons_remains_verifiable(self):
+        files = self.package_stage(legacy=True)
+        legacy = {"schemaVersion": 1, "startedAt": "test", "completedAt": "test",
+                  "source": self.source, "kind": "windows-store-msix", "identity": self.config,
+                  "package": msix.artifact(self.root, self.package), "files": files}
+        self.manifest.write_text(json.dumps(legacy), encoding="utf-8")
+        self.assertTrue(msix.verify(self.root, self.manifest)["currentSourceMatches"])
+        with self.assertRaisesRegex(ValueError, "Required MSIX payload is missing"):
+            msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
+        legacy["payloadVersion"] = 999
+        self.manifest.write_text(json.dumps(legacy), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Unsupported MSIX payload version"):
+            msix.verify(self.root, self.manifest)
 
     def test_copy_failure_preserves_previous_and_cleans_temporary(self):
         self.finish()
@@ -198,16 +234,58 @@ class StorePackageTests(unittest.TestCase):
         self.assertFalse((self.root / "output").exists())
 
     @unittest.skipUnless(os.name == "nt", "Windows SDK package validation")
-    def test_makeappx_validates_and_packs_the_manifest(self):
+    def test_sdk_indexes_all_icon_variants_and_packs_the_manifest(self):
         try:
             tool = msix.sdk_tool("makeappx.exe")
+            msix.sdk_tool("makepri.exe")
         except ValueError as error:
             self.skipTest(str(error))
-        files = msix.stage(self.root, self.stage, self.config)
+        msix.stage(self.root, self.stage, self.config)
+        work = self.root / "output/work/pri"
+        msix.generate_resource_index(self.root, self.stage, self.config, work)
+        dump = msix.ET.parse(work / "resources.pri.xml")
+        square = next(r for r in dump.findall(".//NamedResource")
+                      if r.get("uri") == "ms-resource://s-kodani.MinutesOn/Files/Assets/Square44x44Logo.png")
+        for form in ("UNPLATED", "LIGHTUNPLATED"):
+            candidates = [c for c in square.findall("Candidate")
+                          if any(q.get("name") == "AlternateForm" and q.get("value") == form
+                                 for q in c.findall("QualifierSet/Qualifier"))]
+            self.assertEqual(len(candidates), 14)
+            self.assertEqual({int(next(q.get("value") for q in c.findall("QualifierSet/Qualifier")
+                                       if q.get("name") == "TargetSize")) for c in candidates},
+                             {16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256})
+        self.assertEqual({c.findtext("Value").replace("\\", "/") for c in dump.findall(".//Candidate")},
+                         {"Assets/" + name for name in msix.LOGOS})
+        pri_config = msix.ET.parse(work / "priconfig.xml")
+        self.assertEqual(pri_config.find("index/default/qualifier[@name='Language']").get("value"), "ja-JP")
+        self.assertFalse((self.stage / "priconfig.xml").exists())
+        self.assertFalse((self.stage / "resources.pri.xml").exists())
+        self.assertEqual({p.relative_to(work / "input").as_posix() for p in (work / "input").rglob("*") if p.is_file()},
+                         {"Assets/" + name for name in msix.LOGOS})
+        # A file named resources.pri is insufficient: incorrect logical paths
+        # or missing theme candidates must fail the production dump validator.
+        resource_map = dump.find("ResourceMap")
+        resource_map.set("name", "wrong-package")
+        changed = work / "changed.xml"
+        dump.write(changed, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "package identity"):
+            msix.verify_resource_index(changed, self.config)
+        resource_map.set("name", self.config["identityName"])
+        original_uri = square.get("uri")
+        square.set("uri", original_uri.replace("Files/Assets/", "Files/"))
+        dump.write(changed, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "manifest's Assets"):
+            msix.verify_resource_index(changed, self.config)
+        square.set("uri", original_uri)
+        square.remove(candidates[0])
+        dump.write(changed, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "icon candidates"):
+            msix.verify_resource_index(changed, self.config)
+        files = msix.inventory(self.root, self.stage)
         result = subprocess.run([str(tool), "pack", "/d", str(self.stage), "/p", str(self.package), "/h", "SHA256", "/no"],
                                 capture_output=True, text=True, errors="replace")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        msix.verify_payload(self.package, self.config, files)
+        msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
 
 
 if __name__ == "__main__":

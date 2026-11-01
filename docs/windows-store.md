@@ -4,7 +4,7 @@ MinutesOn（略称 mon）のWindows 11 24H2以降・x64向け提出パッケー�
 
 ## 生成
 
-[Windows開発環境](windows-setup.md)のNode.js 24、Python 3.12、Rust/MSVC、Visual Studio 2022、CMakeに加え、Windows SDKのx64 MakeAppxが必要。SDKとVisual Studio同梱CMakeは自動検出する。
+[Windows開発環境](windows-setup.md)のNode.js 24、Python 3.12、Rust/MSVC、Visual Studio 2022、CMakeに加え、Windows SDKのx64 MakeAppxとMakePRIが必要。SDKとVisual Studio同梱CMakeは自動検出する。
 
 ```powershell
 # 識別情報とSDKの確認。アプリや成果物を変更しない。
@@ -25,7 +25,7 @@ npm --prefix app run tauri:windows:store:build
 
 アプリのバージョンは共通Tauri設定の`1.0.0`。MSIXは末尾0を付けた`1.0.0.0`とする。更新時は先頭3要素を増やす。各要素は0～65535、先頭は1以上、末尾はStore用に0を予約する。
 
-生成処理は、ソース記録 → Tauri `--no-bundle`ビルド → 録音ヘルパーのCTest → 専用ステージへのコピー → MakeAppxのスキーマ／意味検証 → パッケージ内全ファイルのSHA-256照合 → 配布用MSIXの置換、の順に行う。既存EXEビルドの署名処理は独立して維持する。Store用ビルドは`MON_WINDOWS_RELEASE_SIGNING=0`を子プロセスに設定し、自前証明書を必須にしない。
+生成処理は、ソース記録 → Tauri `--no-bundle`ビルド → 録音ヘルパーのCTest → 専用ステージへのコピー → MakePRIの索引生成・候補検証 → MakeAppxのスキーマ／意味検証 → パッケージ内全ファイルのSHA-256照合 → 配布用MSIXの置換、の順に行う。既存EXEビルドの署名処理は独立して維持する。Store用ビルドは`MON_WINDOWS_RELEASE_SIGNING=0`を子プロセスに設定し、自前証明書を必須にしない。
 
 - 提出用：`output/windows-store/MinutesOn_1.0.0.0_x64.msix`
 - 証跡・元パッケージ・ステージ：`output/windows-store-work/<build-id>/`
@@ -36,6 +36,18 @@ python tools/mon_windows_msix.py verify --manifest output/windows-store-work/<bu
 ```
 
 Store提出用MSIXは未署名。Microsoft Storeが審査後に署名する。生成成功はインストール・実録音・審査の成功を意味しない。証跡の`installedVerification`と`certification`は`pending`、`distributionReady`は`false`で出力する。
+
+## タスクバーのアイコン
+
+通常のタイル画像だけを同梱すると、Windowsがタスクバーのアイコンにアクセント色の背景を補うことがある。`Square44x44Logo`と同じ画像名の`targetsize`、`altform-unplated`、`altform-lightunplated`を14サイズずつ同梱し、ライト／ダーク両テーマで背景を付けずに表示できるようにする。既存のモノクロアイコンの形・色・透過部分は維持する。
+
+素材は既存のSVGから`node app/scripts/generate-windows-unplated-icons.mjs`で再生成できる（事前に`npm --prefix app ci`）。生成済みPNGをソースに含めるため、通常のMSIXビルドで画像のレンダリングは行わない。
+
+MakePRIはAssetsだけを持つ専用入力を使い、マニフェストに対応する`Files/Assets/Square44x44Logo.png`の候補を索引へ登録する。索引のダンプでStore識別子、論理パス、全サイズ・テーマを照合してから`resources.pri`をMSIXに含める。設定とダンプは`output/windows-store-work/<build-id>/pri/`に残し、パッケージへは含めない。証跡の`payloadVersion: 2`はこの構成を必須とし、従来の証跡も引き続き検証できる。
+
+公開済み・インストール済みと同じバージョンで内容だけが異なるパッケージは、通常の更新として扱えない。既存データを残す場合は、同じName・Publisherのままバージョンを上げて更新する。同じ版数の提出用原本を確認する場合は別の検証環境を使用し、現在の登録やデータを削除して回避しない。Windowsが古いピン留めの画像だけを保持している場合は、修正版の起動後にMinutesOnのピン留め1件を登録し直す。
+
+公式資料：[背景なしアイコンの仕様](https://learn.microsoft.com/en-us/windows/apps/design/iconography/app-icon-construction#app-icon)、[MSIXの資材とリソース索引の生成](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion)、[パッケージIDとバージョン](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/package-identity-overview)。
 
 ## 保存データと実行環境
 
