@@ -28,9 +28,27 @@ def powershell(script, *arguments, environment=None):
 
 
 BUILD_HARNESS = r'''
-param([string]$BuildScript, [string]$CaptureJson, [switch]$Qa, [switch]$Unsigned)
+param([string]$BuildScript, [string]$CaptureJson, [switch]$Qa, [switch]$Unsigned,
+      [string]$CmakeEnvironmentName)
 $ErrorActionPreference = 'Stop'
 $global:BuildCalls = @()
+if ($CmakeEnvironmentName) {
+    # Set these after PowerShell starts: startup normalizes ProgramFiles to
+    # ProgramW6432, overwriting a distinct value inherited from Python.
+    foreach ($name in @('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)')) {
+        $directory = if ($name -eq $CmakeEnvironmentName) { $name } else { 'empty-' + $name }
+        [Environment]::SetEnvironmentVariable($name, (Join-Path $PSScriptRoot $directory), 'Process')
+    }
+}
+function Get-ChildItem {
+    param([string]$LiteralPath, [switch]$Directory, [string]$ErrorAction)
+    # Hide the host's VS installations, including the hardcoded fallback roots.
+    if ($CmakeEnvironmentName -and -not $LiteralPath.StartsWith(
+            $PSScriptRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+    Microsoft.PowerShell.Management\Get-ChildItem @PSBoundParameters
+}
 function Get-Command {
     param([string]$Name, [string]$CommandType, [string]$ErrorAction)
     if ($env:MON_TEST_TOOL_DIRECTORY -and $Name -in @('cmake.exe', 'ctest.exe')) {
@@ -104,18 +122,17 @@ class UnsignedBuildModeTests(unittest.TestCase):
             "CARGO_TARGET_DIR": str(self.root / "cached-signed-target"),
             "TAURI_CONFIG": '{"bundle":{"windows":{"signCommand":"stale-signer"}}}',
         })
+        arguments = []
         if cmake_environment_name:
-            for name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-                environment[name] = str(self.root / ("empty-" + name))
             installation_root = self.root / cmake_environment_name
-            environment[cmake_environment_name] = str(installation_root)
             binary = installation_root / "Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
             binary.mkdir(parents=True, exist_ok=True)
             for name in ("cmake.exe", "ctest.exe"):
                 shutil.copyfile(self.root / "bin" / name, binary / name)
             environment["MON_TEST_TOOL_DIRECTORY"] = str(binary)
+            arguments += ["-CmakeEnvironmentName", cmake_environment_name]
         result = powershell(self.harness, "-BuildScript", self.root / "app/build-windows.ps1",
-                            "-CaptureJson", result_path, *switches, environment=environment)
+                            "-CaptureJson", result_path, *switches, *arguments, environment=environment)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result_path.read_text(encoding="utf-8-sig"))
 
