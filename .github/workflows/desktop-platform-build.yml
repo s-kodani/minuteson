@@ -168,6 +168,11 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: app
         run: npm run tauri:windows:store:build
+      - name: Verify DPI declarations in the linked Windows executable
+        if: runner.os == 'Windows'
+        run: |
+          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
+          python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - name: Upload Microsoft Store MSIX
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4

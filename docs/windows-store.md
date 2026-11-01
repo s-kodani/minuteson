@@ -63,7 +63,9 @@ Add-AppxPackage -Path <検証用コピー.msix>
 4. トレイ常駐、再起動、二重起動制御、全プロセスの終了。
 5. EXE／Store／QA各版のデータ分離、バックアップ・復元による移行。
 6. 同一Identityで増分したバージョンへの更新とデータ保持、アンインストール。
-7. Windows App Certification Kitのデスクトップアプリ検査。XML／HTMLレポートを保存し、失敗を解消してから提出する。
+7. Windows App Certification Kitのデスクトップアプリ検査。XML／HTMLレポートを保存し、必須検査の失敗を解消する。任意検査の指摘は検出根拠と実際の動作への影響を評価し、判断を記録してから提出する。[DPI・プロセス起動の検証記録](verification/windows-store-dpi-process-audit-2026-11-01.md)を参照。
+
+Microsoftの[現在の説明](https://learn.microsoft.com/en-us/windows/msix/package/packaging-uwp-apps#validate-your-app-package-locally)ではWACKは非推奨・保守終了で、ローカルでの任意の事前検査という位置付け。正式な認証はPartner Centerへの提出時に行われる。検査ツールのInfrastructureエラーはアプリの不適合と区別し、埋め込みマニフェスト・実バイナリ等の独立した確認結果と併せて記録する。
 
 ## Partner Centerへの提出
 
