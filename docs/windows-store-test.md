@@ -12,7 +12,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-st
 
 `-CreateCertificate`は初回のみ指定する。以前の一時証明書E4B301…／32A242…は秘密鍵を削除済みで、公開証明書から再署名することはできない。そのため次回だけ新しい検証用証明書が必要になる。
 
-新しい検証用証明書はCurrentUser\Myに非エクスポート可能な鍵として90日保持する。名前・Publisher・署名用途・有効期限・鍵の非エクスポート設定を確認し、以後のビルドで再利用する。二回目以降は`-CreateCertificate`を省く。候補が複数ある場合は自動選択せず、`-CertificateThumbprint '<完全な拇印>'`で指定する。失敗時も鍵は自動削除しない。
+新しい検証用証明書の有効期間は90日。CurrentUser\Myに非エクスポート可能な秘密鍵とともに保存する。名前・Publisher・署名用途・有効期限・鍵の非エクスポート設定を確認し、以後のビルドで再利用する。二回目以降は`-CreateCertificate`を省く。候補が複数ある場合は自動選択せず、`-CertificateThumbprint '<完全な拇印>'`で指定する。失敗時や期限切れ後も鍵は自動削除しない。
 
 準備処理は本番のソース照合を`--require-current-source`と同じ条件で実行し、原本のSHA-256、全同梱ファイル、コピー前後の一致を確認する。署名後はCMSの署名者・公開証明書・署名対象のカタログ／ブロックマップ／Content Typesを照合し、原本の全ペイロードが同じバイト列のままであることを再確認する。SignToolが追加する`AppxSignature.p7x`と`AppxMetadata/CodeIntegrity.cat`だけを署名用追加物として認める。
 
