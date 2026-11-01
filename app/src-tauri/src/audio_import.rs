@@ -70,9 +70,17 @@ impl AudioInfo {
         Ok(())
     }
     pub(crate) fn required_bytes(&self, original: u64) -> Result<u64, String> {
+        self.validate()?;
+        let wav = self
+            .frames
+            .checked_mul(16000)
+            .map(|n| n.div_ceil(u64::from(self.sample_rate)))
+            .and_then(|n| n.checked_mul(2))
+            .ok_or("音声保存に必要な容量が範囲外です")?;
         self.frames
             .checked_mul(u64::from(self.channels))
-            .and_then(|n| n.checked_mul(8))
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(wav))
             .and_then(|n| n.checked_add(original))
             .and_then(|n| n.checked_add(128 * 1024 * 1024))
             .ok_or("音声保存に必要な容量が範囲外です".into())
@@ -255,12 +263,24 @@ pub(crate) fn available_bytes(_: &Path) -> Result<u64, String> {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ImportManifest {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_format: Option<String>,
     pub meeting_id: String,
     pub import_id: String,
     pub original_file_name: String,
     pub info: AudioInfo,
     pub original: FileEvidence,
     pub audio: FileEvidence,
+}
+impl ImportManifest {
+    // Version 1 is retained only to finish an already staged FLAC import.
+    pub(crate) fn decoded_format(&self) -> Result<&str, String> {
+        match (self.schema_version, self.audio_format.as_deref()) {
+            (1, None) => Ok("flac"),
+            (2, Some("caf")) => Ok("caf"),
+            _ => Err("取り込みmanifestの音声形式・形式版が不正です".into()),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -378,7 +398,7 @@ pub(crate) fn import_configured(
             return Err("管理コピーの復号結果が確認した音声と一致しません".into());
         }
         let proof = Fingerprint::capture(&caf, cancelled)?;
-        let mut audio = VerifiedAudio::open_cancellable(
+        let audio = VerifiedAudio::open_cancellable(
             File::open(&caf).map_err(|e| e.to_string())?,
             proof.size,
             &proof.sha256,
@@ -390,20 +410,14 @@ pub(crate) fn import_configured(
         {
             return Err("解析用PCMの形式・長さが復号結果と一致しません".into());
         }
-        let saved = crate::audio::flac::write_segment(
-            &mut audio,
-            0,
-            decoded.frames,
-            &base.join("audio.flac"),
-            cancelled,
-            &|n| progress("converting", n),
-        )
-        .map_err(|e| e.message)?;
         drop(audio);
-        std::fs::remove_file(&caf).map_err(|e| e.to_string())?;
+        // Keep verified decoded PCM for the common single-WAV publisher.
+        // It owns resampling, durable publication and retirement of this CAF.
+        progress("converting", decoded.frames);
         check_cancelled(cancelled)?;
         let manifest = ImportManifest {
-            schema_version: 1,
+            schema_version: 2,
+            audio_format: Some("caf".into()),
             meeting_id: snapshot.meeting_id.clone(),
             import_id: snapshot.id.clone(),
             original_file_name: selected.file_name.clone(),
@@ -413,8 +427,8 @@ pub(crate) fn import_configured(
                 sha256: selected.proof.sha256.clone(),
             },
             audio: FileEvidence {
-                size: saved.size,
-                sha256: saved.sha256,
+                size: proof.size,
+                sha256: proof.sha256,
             },
         };
         let mut pending = tempfile::Builder::new()

@@ -36,19 +36,41 @@ static void mon_reply(uint64_t id, const char *op, const std::string &message = 
     const char *data = line.data(); size_t remaining = line.size();
     while (remaining) { auto n = write(mon_protocol_fd,data,remaining); if (n <= 0) _exit(125); data += n; remaining -= n; }
 }
-static void mon_redirect(const std::string &name, int fd) {
+static void mon_log_name(const std::string &name) {
     // Parent creates each unit's files exclusively before sending a request.
     if (name.empty() || name=="." || name==".." || name.find_first_of("/\\:") != std::string::npos) throw std::runtime_error("invalid log filename");
+}
+#ifdef _WIN32
+static std::filesystem::path mon_log_path(const std::string &directory, const std::string &name) {
+    mon_log_name(name);
+    auto path=mon_wide(directory);
+    if(!std::filesystem::path(path).is_absolute())throw std::runtime_error("invalid unit directory");
+    // Relative Win32/CRT paths can still exceed MAX_PATH after resolving CWD.
+    // Use the extended absolute namespace for opening and reading diagnostics.
+    if(path.rfind(L"\\\\?\\",0)!=0) {
+        if(path.rfind(L"\\\\",0)==0)path=L"\\\\?\\UNC\\"+path.substr(2);
+        else path=L"\\\\?\\"+path;
+    }
+    return std::filesystem::path(path)/mon_wide(name);
+}
+#endif
+static void mon_redirect(const std::string &directory, const std::string &name, int fd) {
+    mon_log_name(name);
     #ifdef _WIN32
-    auto path=mon_wide(name);HANDLE file=CreateFileW(path.c_str(),FILE_APPEND_DATA|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    auto path=mon_log_path(directory,name);HANDLE file=CreateFileW(path.c_str(),FILE_APPEND_DATA|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     BY_HANDLE_FILE_INFORMATION info{};
-    if(file==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot open existing unit log");
+    if(file==INVALID_HANDLE_VALUE) {
+        const DWORD error=GetLastError();
+        throw std::runtime_error("cannot open existing unit log: "+name+" win32="+std::to_string(error)+" path_length="+std::to_string(path.native().size()));
+    }
     if(!GetFileInformationByHandle(file,&info)||(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))||info.nNumberOfLinks!=1){CloseHandle(file);throw std::runtime_error("invalid unit log identity");}
     int opened=_open_osfhandle(reinterpret_cast<intptr_t>(file),_O_APPEND|_O_WRONLY|_O_BINARY);
+    if(opened<0)CloseHandle(file);
     #else
     int opened = open(name.c_str(), O_WRONLY | O_APPEND | O_NOFOLLOW);
     #endif
-    if (opened < 0 || dup2(opened, fd) < 0) throw std::runtime_error("cannot redirect unit output");
+    if (opened < 0) throw std::runtime_error("cannot redirect unit output");
+    if (dup2(opened, fd) < 0) { close(opened); throw std::runtime_error("cannot redirect unit output"); }
     close(opened);
 }
 static int mon_loop(int argc, char **argv, int (*infer)(const std::string &,int,char **)) {
@@ -92,8 +114,8 @@ static int mon_loop(int argc, char **argv, int (*infer)(const std::string &,int,
             #else
             if (directory.empty() || directory[0] != '/' || chdir(directory.c_str())) throw std::runtime_error("invalid unit directory");
             #endif
-            mon_redirect(request.at("stdout"),STDOUT_FILENO);
-            mon_redirect(request.at("stderr"),STDERR_FILENO);
+            mon_redirect(directory,request.at("stdout"),STDOUT_FILENO);
+            mon_redirect(directory,request.at("stderr"),STDERR_FILENO);
             auto args = request.at("args").get<std::vector<std::string>>();
             args.insert(args.begin(),"mon-resident-engine");
             std::vector<char *> pointers; for (auto &arg:args) pointers.push_back(arg.data()); pointers.push_back(nullptr);
@@ -106,7 +128,12 @@ static int mon_loop(int argc, char **argv, int (*infer)(const std::string &,int,
             fflush(nullptr);
             if (result != 0) { mon_reply(id,"error","native inference exit " + std::to_string(result)); return result; }
             if (evidence.empty()) {
-                std::ifstream logs(request.at("stderr").get<std::string>()); std::string row;
+                #ifdef _WIN32
+                std::ifstream logs(mon_log_path(directory,request.at("stderr")));
+                #else
+                std::ifstream logs(request.at("stderr").get<std::string>());
+                #endif
+                std::string row;
                 while (std::getline(logs,row)) if (row.find("using device ") != std::string::npos || row.find("offloaded ") != std::string::npos) evidence += row + "\n";
             }
             #ifdef _WIN32

@@ -11,6 +11,70 @@ pub(crate) struct Directory {
 
 #[cfg(unix)]
 impl Directory {
+    pub(crate) fn identity(&self) -> Result<super::DirectoryIdentity, String> {
+        self.verify()?;
+        super::directory_identity(&self.file)
+    }
+    pub(crate) fn move_child(
+        &self,
+        source: &str,
+        target: &Self,
+        name: &str,
+        expected: &super::DirectoryIdentity,
+    ) -> Result<bool, String> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        self.verify()?;
+        target.verify()?;
+        let from = Self::name(source)?;
+        let to = Self::name(name)?;
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                from.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        if &super::directory_identity(&file)? != expected {
+            return Err("移動するモデル領域が変更されています".into());
+        }
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::renameatx_np(
+                self.file.as_raw_fd(),
+                from.as_ptr(),
+                target.file.as_raw_fd(),
+                to.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                self.file.as_raw_fd(),
+                from.as_ptr(),
+                target.file.as_raw_fd(),
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            ) as i32
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let result = -1;
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EXDEV) {
+                return Ok(false);
+            }
+            return Err(error.to_string());
+        }
+        self.sync()?;
+        target.sync()?;
+        Ok(true)
+    }
     /// Read-only opening: no mkdir, chmod or synchronization of unknown entries.
     pub(crate) fn open_existing(path: &Path) -> Result<Self, String> {
         use std::os::unix::ffi::OsStrExt;

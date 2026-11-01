@@ -115,6 +115,12 @@ test("progress ignores wrong operation/hash/size, regressions and malformed valu
 test("catalog is marker metadata only, keeps attention and rejects duplicates or fake support", () => {
   const entry = { operationId: id, recipeHash: hash, modelName: "fixture", modelVersion: "1", totalBytes: 33, state: "completion_recorded" };
   assert.equal(assertDownloadCatalog({ supported: true, unknownEntries: 1, entries: [entry] }).entries[0].state, "completion_recorded");
+  for (const state of ["pending", "committed"]) {
+    assert.equal(assertDownloadCatalog({ supported: true, unknownEntries: 0, entries: [{ ...entry, placement: { packageId: other, state } }] }).entries[0].placement?.state, state);
+  }
+  for (const placement of [{packageId:"../outside",state:"pending"},{packageId:other,state:"ready"},{packageId:other,state:"pending",directory:"/outside"}]) {
+    assert.throws(() => assertDownloadCatalog({ supported: true, unknownEntries: 0, entries: [{ ...entry, placement }] }));
+  }
   assert.equal(assertDownloadCatalog({ supported: true, unknownEntries: 0, entries: [{ ...entry, state: "attention", recipeHash: null, modelName: null, modelVersion: null, totalBytes: null }] }).entries.length, 1);
   for (const bad of [{ supported: false, unknownEntries: 0, entries: [entry] }, { supported: true, unknownEntries: 0, entries: [entry, entry] }, { supported: true, unknownEntries: 0, entries: [{ ...entry, recipeHash: null }] }]) assert.throws(() => assertDownloadCatalog(bad));
 });

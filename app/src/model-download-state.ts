@@ -15,7 +15,7 @@ export type DownloadRecipe = Omit<Recipe, "schemaVersion" | "manifest" | "source
 export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion: 4; downloadBytes: number; archiveBytes: number; bundledBytes?: number; recipeHash: string; packageReviewHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
-export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded" }[] };
+export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded"; placement?: { packageId: string; state: "pending" | "committed" } }[] };
 export type DownloadProgress = { operationId: string; recipeHash: string; receivedBytes: number; totalBytes: number };
 export type ModelTokenLimits = { maxInputTokens: number; maxOutputTokens: number; maxContextTokens: number; tokenizer: "utf8_byte_bpe" | "gguf" };
 export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview; tokenLimits: ModelTokenLimits | null };
@@ -201,6 +201,11 @@ export function assertDownloadCatalog(value: unknown): DownloadCatalog {
     if (entry.modelName !== null) text(entry.modelName, 256);
     if (entry.modelVersion !== null) text(entry.modelVersion, 128);
     if (entry.totalBytes !== null) size(entry.totalBytes);
+    if (entry.placement !== undefined) {
+      const placement = object(entry.placement); keys(placement, ["packageId", "state"]);
+      identity(placement.packageId);
+      if (entry.state !== "completion_recorded" || !["pending", "committed"].includes(String(placement.state))) fail();
+    }
     if (entry.state !== "attention" && [entry.recipeHash, entry.modelName, entry.modelVersion, entry.totalBytes].some(v => v === null)) fail();
   }
   return structuredClone(value) as DownloadCatalog;

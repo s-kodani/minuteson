@@ -19,3 +19,20 @@ else()
   target_compile_options(mon_transducer_text_test PRIVATE -UNDEBUG)
 endif()
 add_test(NAME transducer_settings_and_bpe COMMAND mon_transducer_text_test)
+
+# Reuse the pinned nlohmann header already acquired for the production workers.
+# Tests never fetch dependencies or require model weights.
+set(MON_JSON_INCLUDE_DIR "" CACHE PATH "Directory containing the pinned json.hpp")
+if(MON_JSON_INCLUDE_DIR)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(mon_worker_protocol_test worker-protocol-test.cpp)
+  target_include_directories(mon_worker_protocol_test PRIVATE "${MON_JSON_INCLUDE_DIR}")
+  target_compile_features(mon_worker_protocol_test PRIVATE cxx_std_17)
+  if(MSVC)
+    target_compile_options(mon_worker_protocol_test PRIVATE /utf-8)
+    target_link_options(mon_worker_protocol_test PRIVATE "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/windows.manifest")
+  endif()
+  add_test(NAME resident_log_paths COMMAND "${Python3_EXECUTABLE}" -X utf8
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/check_worker_log_paths.py" "$<TARGET_FILE:mon_worker_protocol_test>")
+  set_tests_properties(resident_log_paths PROPERTIES TIMEOUT 30)
+endif()

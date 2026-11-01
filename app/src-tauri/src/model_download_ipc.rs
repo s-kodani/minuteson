@@ -3,7 +3,7 @@
 use crate::model_download_recipe::RecipeExt;
 use crate::{model_download_recipe::Recipe, model_inspection::Inspector, Storage};
 use serde::Serialize;
-use tauri::{Manager, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewWindow};
 
 pub(crate) fn hash(value: &str) -> bool {
     value.len() == 64
@@ -189,6 +189,7 @@ pub(crate) async fn read_model_download(
 pub(crate) async fn place_downloaded_model(
     window: WebviewWindow,
     token: String,
+    package_id: Option<String>,
     download_id: String,
     expected_recipe_hash: String,
     expected_review_hash: String,
@@ -201,10 +202,12 @@ pub(crate) async fn place_downloaded_model(
         }
 
         {
-            let package = token.clone();
+            let package = package_id.unwrap_or_else(|| token.clone());
+            id(&package)?;
+            let progress_token = token.clone();
             prepare(window, token, move |app, cancelled| {
                 let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
-                json(crate::model_download::place(
+                json(crate::model_download::place_with_progress(
                     &app.state::<Storage>(),
                     &root.join("models"),
                     &root.join("model-downloads"),
@@ -213,6 +216,7 @@ pub(crate) async fn place_downloaded_model(
                     &package,
                     &expected_review_hash,
                     &|| cancelled(),
+                    &|| { let _ = app.emit("model-placement-progress", serde_json::json!({"operationId": progress_token, "recipeHash": expected_recipe_hash, "phase": "verifying"})); },
                 )?)
             })
             .await
@@ -227,6 +231,7 @@ pub(crate) async fn place_downloaded_model(
 pub(crate) fn get_downloaded_model_placement_result(
     window: WebviewWindow,
     package_id: String,
+    token: Option<String>,
     download_id: String,
     expected_recipe_hash: String,
     expected_review_hash: String,
@@ -240,7 +245,9 @@ pub(crate) fn get_downloaded_model_placement_result(
         }
         // Observe lifetime BEFORE the DB read: seeing active=false cannot race a
         // pre-existing worker's later commit. Cancellation tombstone fences late IPC.
-        let (active, cancelled) = window.state::<Inspector>().status(&package_id)?;
+        let (active, cancelled) = window
+            .state::<Inspector>()
+            .status(token.as_deref().unwrap_or(&package_id))?;
         let receipt = window.state::<Storage>().downloaded_placement_result(
             &package_id,
             &download_id,

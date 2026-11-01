@@ -28,7 +28,7 @@ test("uncertain model writers are retained until cancellation and durable readba
   assert.match(view, /retain\(\{ token, stage, \.\.\.context, startedAtMs: startedAt.current! \}\)/);
   assert.match(view, /if \(lifetime.active\) throw new ModelPreparationWaiting/);
   assert.match(view, /if \(!lifetime.cancelled\) throw Error/);
-  assert.match(view, /item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded/);
+  assert.match(view, /item.packageId === placement.packageId && item.reviewHash === placement.reviewHash && item.placementRecorded/);
   assert.match(view, /assertDownloadCopyResult\(await invoke\("get_downloaded_model_placement_result"/);
   assert.match(view, /result.active \|\| !result.cancelled/);
   assert.match(view, /item.checkOperationId === value.preview\?\.checkOperationId && item.settingsMatch && item.compatibilityCurrent/);

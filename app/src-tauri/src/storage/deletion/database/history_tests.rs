@@ -51,9 +51,9 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
         assert_eq!(trusted_schema(&db).is_ok(), current);
         assert_eq!(
             initialize_database(&mut db).is_ok(),
-            current || matches!(version, 34 | 35)
+            current || matches!(version, 34 | 35 | 36)
         );
-        if matches!(version, 34 | 35) {
+        if matches!(version, 34 | 35 | 36) {
             assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
         } else {
             assert_eq!(schema(&db).unwrap(), before);

@@ -1,5 +1,29 @@
 # Single WAV implementation
 
+## 2026-11-02: direct PCM import, model moves and Windows log paths
+
+- New imports now use managed original -> decoded CAF -> the existing PCM16 mono 16 kHz WAV publisher. They no longer encode/decode an intermediate FLAC or quantize through 24-bit PCM. FLAC input and recovery of already staged version-1 FLAC imports remain supported. Import manifest version 2 explicitly declares CAF; progress text and capacity estimates follow the new path.
+- Schema 37 extends the existing scoped-asset trigger to permit CAF as well as legacy FLAC. Schema-36 upgrades save a private `before-pcm-import.sqlite3` snapshot first; earlier migration SQL/checksums stay unchanged. Existing schema-35 format-5 and schema-36 format-6 backups remain verifiable/restorable. Completed canonical WAVs are not regenerated.
+- Download placement now journals ownership, renames the staged directory without replacing existing files, and performs one full-byte inspection at the destination before recording placement. Only a cross-volume error permits copying. Copy retries retain incomplete attempts rather than overwriting them. Native-owned directory identity, private permissions, exact file inventory and declared hashes are checked; macOS executable permissions are set before use.
+- Persistent placement IDs are separate from cancellation tokens. Catalog placement references let a fresh operation resume after the staging directory has moved; cached receipts cannot cause another download or a new placement ID. The UI distinguishes placement from destination verification. Compatibility checks and profile application remain subsequent steps.
+- The Windows worker opens and rereads unit logs through extended absolute paths. A 262-character physical log path reproduced `cannot open existing unit log` with the previous header; the updated header completed the same request (`output/model-audio-log-comparison.json`). Failure messages include the log name, Win32 error and path length. Existing-file-only opens, identity checks and release of write handles at completion remain enforced.
+
+| Area | Windows x64 | macOS / Apple Silicon |
+| --- | --- | --- |
+| Move/copy fallback and resumable placement | Implemented; native fixtures and real model-byte benchmark passed | Implemented; native build/execution not run here |
+| Import without intermediate FLAC | Six real formats, recovery and backup/restore passed | Shared implementation updated; native build/execution not run here |
+| Worker log paths | Regression reproduced and fixed; CPU/Vulkan inference passed | Windows-specific path conversion excluded; shared signature updated, native execution not run here |
+| Distribution | QA installer built and verified | No Mac artifact produced in this Windows environment |
+
+Final verification:
+
+- Windows Rust: 981 passed, 0 failed, 55 ignored (`output/model-audio-rust-tests-verified.log`). Frontend: 910 passed, 0 failed, 1 skipped (`output/model-audio-frontend-tests-final.log`). TypeScript, Vite production build, command contracts and Rust formatting checks passed.
+- Related browser suites all passed: model selection/import/toast in `output/model-audio-browser-final.log`; progress and interrupted-move retry in `output/model-audio-browser-recovery.log`.
+- Native CTest 3/3 includes eight sequential long-path protocol requests with a live log reader, missing-log refusal and Windows sharing-violation refusal (`output/model-audio-native-checks.log`). Production-worker checks used pinned Whisper tiny for two consecutive CPU units at the long path and a Vulkan trial whose device/backend evidence was checked (`output/model-audio-real-worker-tests.log`). WAV, float WAV, MP3, FLAC, AAC M4A and ALAC M4A imports passed (`output/model-audio-real-import-tests.log`). Native capture tests also passed 8/8 during packaging.
+- Placement comparison used identical 77,691,713-byte model data plus a synthetic launcher, three runs with warm cache and alternating order. Previous copy path: 2283/1751/1792 ms; move path: 189/206/203 ms. Medians: 1792 vs 203 ms, about 89% less placement time. This is a local test-build measurement, not total download/setup time (`output/model-audio-placement-benchmark.log`). Copy fallback was exercised with owned fixtures; a second physical drive was not used.
+- QA installer: `output/windows-qa/MON-QA-setup.exe`, SHA-256 `8ecf0e1001f324f90e715d6a6841dbb554650630a57d23dc6af82f997e1445f2`. Build manifest: `output/windows-qa-work/20261101T165152Z-f739a3434c4648aeb7862215499aa284-build.json`. Independent verification reports `currentSourceMatches: true` and `publishedInstallerVerified: true` (`output/model-audio-published-verification.json`). The installer was not installed or launched against live data.
+- The reported meeting was no longer present at its previously observed storage location, so its actual eight-unit transcription was not rerun. No live meeting DB/audio was modified; the matching failure was reproduced with owned synthetic data instead. Mac execution remains unverified.
+
 Authorized plan (2026-10-26): keep independent capture writes for reliability; finalize to one PCM16 mono 16k WAV; verify before retiring source audio; playback and all analysis share it without audio copies. Migrate all old meetings before startup ready. Isolate legacy readers for later deletion. Preserve completed text/drafts/voice vectors, restart unfinished analysis after migration. Windows and macOS. No four-hour recording test. Source data outside workspace must not be changed during development.
 
 Existing dirty files predate this implementation and include recording clock repair, notifications, backup admission, and user recording layout changes. Preserve them.

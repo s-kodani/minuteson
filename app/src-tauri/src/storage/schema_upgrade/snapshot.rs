@@ -199,7 +199,9 @@ fn save_with(
 ) -> Result<(), String> {
     if !matches!(
         name,
-        "before-single-wav.sqlite3" | "before-followup-intents.sqlite3"
+        "before-single-wav.sqlite3"
+            | "before-followup-intents.sqlite3"
+            | "before-pcm-import.sqlite3"
     ) {
         return Err("未知の移行前DBコピー名です".into());
     }

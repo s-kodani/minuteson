@@ -18,8 +18,8 @@ export interface CommandArguments {
   "get_model_download_lifetime": { "token": string };
   "get_model_download_catalog": { "token": string };
   "read_model_download": { "token": string; "downloadId": string; "expectedRecipeHash": string };
-  "place_downloaded_model": { "token": string; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
-  "get_downloaded_model_placement_result": { "packageId": string; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
+  "place_downloaded_model": { "token": string; "packageId"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
+  "get_downloaded_model_placement_result": { "packageId": string; "token"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
   "cancel_model_inspection": { "token": string };
   "get_model_placements": Record<string, never>;
   "get_model_profiles": Record<string, never>;
@@ -406,6 +406,12 @@ export const commandContracts = {
         "optional": false
       },
       {
+        "name": "package_id",
+        "wireName": "packageId",
+        "type": "Option<String>",
+        "optional": true
+      },
+      {
         "name": "download_id",
         "wireName": "downloadId",
         "type": "String",
@@ -438,6 +444,12 @@ export const commandContracts = {
         "wireName": "packageId",
         "type": "String",
         "optional": false
+      },
+      {
+        "name": "token",
+        "wireName": "token",
+        "type": "Option<String>",
+        "optional": true
       },
       {
         "name": "download_id",

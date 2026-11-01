@@ -10,6 +10,73 @@ pub(crate) struct Directory {
     modified: u64,
 }
 impl Directory {
+    pub(crate) fn identity(&self) -> Result<super::DirectoryIdentity, String> {
+        self.verify()?;
+        super::directory_identity(&self.file)
+    }
+    /// Rename the exact opened child, never replace another destination.
+    /// Only ERROR_NOT_SAME_DEVICE permits a copy fallback.
+    pub(crate) fn move_child(
+        &self,
+        source: &str,
+        target: &Self,
+        name: &str,
+        expected: &super::DirectoryIdentity,
+    ) -> Result<bool, String> {
+        use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+        };
+        Self::name(source)?;
+        Self::name(name)?;
+        self.verify()?;
+        target.verify()?;
+        let file = OpenOptions::new()
+            .access_mode(0x10000 | 0x20000 | 0x80)
+            .share_mode(7)
+            .custom_flags(0x02000000 | 0x00200000)
+            .open(self.path.join(source))
+            .map_err(|e| e.to_string())?;
+        if &super::directory_identity(&file)? != expected {
+            return Err("移動するモデル領域が変更されています".into());
+        }
+        let destination: Vec<u16> = target
+            .path
+            .join(name)
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName) + destination.len() * 2;
+        let mut buffer = vec![0u64; bytes.div_ceil(8)];
+        let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        unsafe {
+            (*info).Anonymous.ReplaceIfExists = false;
+            (*info).RootDirectory = std::ptr::null_mut();
+            (*info).FileNameLength = ((destination.len() - 1) * 2) as u32;
+            std::ptr::copy_nonoverlapping(
+                destination.as_ptr(),
+                (*info).FileName.as_mut_ptr(),
+                destination.len(),
+            );
+            if SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileRenameInfo,
+                info.cast(),
+                bytes as u32,
+            ) == 0
+            {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(17) {
+                    return Ok(false);
+                }
+                return Err(error.to_string());
+            }
+        }
+        self.sync()?;
+        target.sync()?;
+        Ok(true)
+    }
     pub(crate) fn open_existing(path: &Path) -> Result<Self, String> {
         let parents = win::parents(path)?;
         let file = win::directory(path)?;

@@ -460,7 +460,7 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         p.validate()?;
     }
     if !((m.format_version == crate::current_formats::BACKUP
-        && m.schema_version == MIGRATIONS.len())
+        && (m.schema_version == MIGRATIONS.len() || m.schema_version == 36))
         || (m.format_version == 5 && m.schema_version == 35))
     {
         return Err("現在の形式ではないバックアップは復元できません".into());

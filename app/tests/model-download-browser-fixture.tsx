@@ -55,6 +55,7 @@ async function receipt(operationId: string, review: DownloadReview) {
   const manifestHash = await downloadDigest(review.manifest), files = review.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
   return { operationId, recipeHash: review.recipeHash, directory: "/synthetic/payload", installed: false, ready: false, report: { manifest: review.manifest, manifestHash, reviewHash: await downloadDigest([1, review.manifest, manifestHash, files]), files, totalBytes: review.totalBytes, engineCompatibility: "not_verified", publisherAuthenticity: "not_verified", installed: false, ready: false } };
 }
+f.verify = async () => { const call = f.calls.findLast(call => call.command === "place_downloaded_model"); await emit("model-placement-progress", { operationId: call.args.token, recipeHash: call.args.expectedRecipeHash, phase: "verifying" }); };
 f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: downloadTransferBytes(review) }); };
 f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review = await reviewed(f.definition); f.operations.set(id, { review, state: "complete", receipt: await receipt(id, review) }); return id; };
 export const modelDownloadIPC = async (command: string, args: any) => {
@@ -124,13 +125,14 @@ export const modelDownloadIPC = async (command: string, args: any) => {
   if (command === "get_model_download_catalog") {
     if (f.failCatalog) throw Error("模擬取得一覧の読込失敗");
     if (f.active.size) throw Error("模擬モデル準備が実行中");
-    return { supported: true, unknownEntries: 0, entries: Array.from(f.operations, ([operationId, item]: any) => ({ operationId, recipeHash: item.review.recipeHash, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, totalBytes: item.review.totalBytes, state: item.state === "complete" ? "completion_recorded" : "incomplete" })) };
+    return { supported: true, unknownEntries: 0, entries: Array.from(f.operations, ([operationId, item]: any) => ({ operationId, recipeHash: item.review.recipeHash, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, totalBytes: item.review.totalBytes, state: item.state === "complete" ? "completion_recorded" : "incomplete", ...(item.placement ? { placement: item.placement } : {}) })) };
   }
   if (command === "cancel_model_inspection") { if (f.failCancel) throw Error("模擬停止要求の応答喪失"); f.cancelled.add(args.token); return null; }
   if (command === "get_model_download_lifetime") { if (f.failLifetime) throw Error("模擬停止状態の読込失敗"); return { active: f.active.has(args.token), cancelled: f.cancelled.has(args.token) }; }
   if (command === "read_model_download") {
     if (f.active.has(args.downloadId)) throw Error("元の処理がまだ実行中");
     const item = f.operations.get(args.downloadId);
+    if (item?.placement) throw Error("移動済みの取得元は読み戻せません");
     if (!item || f.readMissing) throw Error("模擬取得記録を読めません");
     if (item.review.recipeHash !== args.expectedRecipeHash) throw Error("模擬定義SHAの不一致");
     const result = { state: item.state, review: item.review, receipt: item.state === "complete" ? item.receipt : null };
@@ -154,13 +156,16 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     const item = f.operations.get(args.downloadId);
     if (!item || item.state !== "complete" || item.review.recipeHash !== args.expectedRecipeHash || item.receipt.report.reviewHash !== args.expectedReviewHash) throw Error("模擬コピー対象の不一致");
     if (f.mode === "placeFailure") throw Error("模擬コピー失敗");
+    if (item.placement && item.placement.packageId !== args.packageId) throw Error("配置IDが変更されました");
+    item.placement = { packageId: args.packageId ?? args.token, state: "pending" };
+    if (f.mode === "movedFailure") throw Error("模擬：移動後の検証中断");
     f.active.add(args.token);
-    const result = { packageId: args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
-    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, quantization: item.review.manifest.quantization, modelFiles: item.review.manifest.files.filter((file: any) => !["executable", "runtime_library", "notice"].includes(file.role)).map((file: any) => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
+    const result = { packageId: args.packageId ?? args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
+    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(result.packageId, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(result.packageId, result); item.placement.state = "committed"; f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, quantization: item.review.manifest.quantization, modelFiles: item.review.manifest.files.filter((file: any) => !["executable", "runtime_library", "notice"].includes(file.role)).map((file: any) => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
     if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
     const complete = finish(); if (f.mode === "lost") throw Error("模擬コピー完了応答喪失"); return complete;
   }
-  if (command === "get_downloaded_model_placement_result") return { active: f.active.has(args.packageId), cancelled: f.cancelled.has(args.packageId), receipt: f.placements.get(args.packageId) ?? null };
+  if (command === "get_downloaded_model_placement_result") return { active: f.active.has(args.token ?? args.packageId), cancelled: f.cancelled.has(args.token ?? args.packageId), receipt: f.placements.get(args.packageId) ?? null };
   throw Error(`Unexpected download fixture command: ${command}`);
 };
 mockIPC(modelDownloadIPC, { shouldMockEvents: true });

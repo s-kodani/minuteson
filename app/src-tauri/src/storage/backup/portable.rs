@@ -98,7 +98,7 @@ pub(super) fn schema(version: usize) -> Result<Connection, String> {
 }
 
 pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
-    if !matches!(version, 35 | 36) {
+    if !matches!(version, 35 | 36 | 37) {
         return Err("未対応のバックアップDB形式です".into());
     }
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")

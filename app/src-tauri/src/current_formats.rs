@@ -77,7 +77,7 @@ mod tests {
                 db.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
                     .get::<_, u32>(0))
                     .unwrap(),
-                36
+                37
             );
             assert!(
                 db.query_row("SELECT count(*) FROM model_reference_files", [], |r| r

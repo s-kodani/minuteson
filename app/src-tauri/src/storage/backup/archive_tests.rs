@@ -136,6 +136,7 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
     let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
     let mut versions = (0..MIGRATIONS.len())
         .chain([MIGRATIONS.len() + 1])
+        .filter(|&schema| schema != 36)
         .map(|schema| (crate::current_formats::BACKUP, schema))
         .collect::<Vec<_>>();
     versions.extend([
@@ -172,7 +173,7 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
 }
 
 #[test]
-fn schema35_format5_backup_is_verified_before_additive_restore_to_schema36() {
+fn schema35_format5_backup_is_verified_before_additive_restore_to_current_schema() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -213,8 +214,28 @@ fn schema35_format5_backup_is_verified_before_additive_restore_to_schema36() {
     assert_eq!(target.list_meetings().unwrap().len(), 1);
     assert_eq!(
         verify_migration_history(&target.connection.lock().unwrap()).unwrap(),
-        36
+        MIGRATIONS.len()
     );
+    // The previous shipping version used format 6 with schema 36. Its tables
+    // are unchanged by the PCM-import trigger migration and remain restorable.
+    let mut previous = source.manifest.clone();
+    previous.schema_version = 36;
+    let previous_path = output.path().join("schema36.monbackup");
+    pack(&previous_path, &previous, &payloads(&source));
+    let checked = verified(&previous_path, output.path());
+    assert_eq!(verify_migration_history(&checked.database).unwrap(), 36);
+    let prepared = target
+        .prepare_additive_restore(&previous_path, &|| false, &|_| {})
+        .unwrap();
+    prepared
+        .publish(
+            &target,
+            &prepared.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(target.list_meetings().unwrap().len(), 2);
 }
 
 #[test]

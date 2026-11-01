@@ -141,7 +141,7 @@ export function modelProgress(target: string, stage: string | undefined, transfe
     detail: state === "queued" ? "実行中のAI処理が終わると自動で続行します。" : "準備の結果を自動で確認します。",
   };
   const verifying = stage === "download" && transfer !== null && transfer.receivedBytes === transfer.totalBytes;
-  const label = verifying ? "取得済み · 展開・検証中" : ({ download: "モデルを準備中（取得・再利用）", place: "モデルを配置中", check: "モデルの動作を確認中", preview: "使用設定を確認中", apply: "モデルの使用設定を保存中" } as Record<string, string>)[stage ?? ""] ?? "モデルを準備中";
+  const label = verifying ? "取得済み · 展開・検証中" : ({ download: "モデルを準備中（取得・再利用）", place: "モデルを配置中", place_verify: "配置したモデルを検証中", check: "モデルの動作を確認中", preview: "使用設定を確認中", apply: "モデルの使用設定を保存中" } as Record<string, string>)[stage ?? ""] ?? "モデルを準備中";
   const counting = stage === "download" && !verifying;
   return {
     id: "model-preparation", target, label, startedAtMs,

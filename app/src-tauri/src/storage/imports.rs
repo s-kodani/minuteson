@@ -287,8 +287,8 @@ impl Storage {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        if manifest.schema_version != 1
-            || manifest.import_id != before.id
+        let decoded_format = manifest.decoded_format()?;
+        if manifest.import_id != before.id
             || manifest.meeting_id != before.meeting_id
             || manifest.info != before.info
             || manifest.original_file_name != before.original_file_name
@@ -300,10 +300,14 @@ impl Storage {
         manifest.info.validate()?;
         let original_path = base.join(format!("original.{}", manifest.info.detected_format));
         self.checked_import_file(&original_path, Some(&manifest.original), cancelled)?;
-        let flac_path = base.join("audio.flac");
-        self.checked_import_file(&flac_path, Some(&manifest.audio), cancelled)?;
+        let decoded_path = base.join(if decoded_format == "caf" {
+            "decoded.caf"
+        } else {
+            "audio.flac"
+        });
+        self.checked_import_file(&decoded_path, Some(&manifest.audio), cancelled)?;
         let audio = VerifiedAudio::open_cancellable(
-            File::open(&flac_path).map_err(|e| e.to_string())?,
+            File::open(&decoded_path).map_err(|e| e.to_string())?,
             manifest.audio.size,
             &manifest.audio.sha256,
             cancelled,
@@ -312,7 +316,7 @@ impl Storage {
             || audio.format.sample_rate != manifest.info.sample_rate
             || audio.format.channels != manifest.info.channels
         {
-            return Err("取り込みFLACの実音声と固定条件が一致しません".into());
+            return Err("取り込み音声の実音声と固定条件が一致しません".into());
         }
         drop(audio);
         // Recheck immutable evidence immediately before opening the DB commit.
@@ -350,9 +354,13 @@ impl Storage {
             &tx,
             &before.meeting_id,
             &self.root,
-            &flac_path,
+            &decoded_path,
             &manifest.audio,
-            "audio/flac",
+            if decoded_format == "caf" {
+                "audio/x-caf"
+            } else {
+                "audio/flac"
+            },
             now,
         )?;
         let manifest_id = insert_asset(
@@ -367,7 +375,7 @@ impl Storage {
         tx.execute("UPDATE audio_import_commits SET manifest_asset_id=?2,manifest_hash=?3,error_message=NULL WHERE import_id=?1 AND manifest_asset_id IS NULL",params![id,manifest_id,evidence.sha256]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE audio_imports SET state='ready',original_asset_id=?2,converted_asset_id=?3,error_code=NULL,updated_at=?4 WHERE id=?1",params![id,original,converted,now]).map_err(|e|e.to_string())?;
         let track = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','flac',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported',?7,?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,manifest.info.sample_rate,manifest.info.channels,now,decoded_format]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,?7,?8,'ready',?9)",params![Uuid::new_v4().to_string(),before.meeting_id,track,converted,manifest.info.duration_us,manifest.info.frames as i64,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
         if tx.execute("UPDATE meetings SET lifecycle='imported',duration_us=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?1 AND source_type='audio_import' AND lifecycle='draft'",params![before.meeting_id,manifest.info.duration_us,now]).map_err(|e|e.to_string())?!=1 { return Err("会議の取り込み状態が変更されています".into()); }
         super::analysis_flows::ensure_flow(&tx, &before.meeting_id)?;

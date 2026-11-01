@@ -18,6 +18,8 @@ pub(crate) struct Entry {
     model_version: Option<String>,
     total_bytes: Option<u64>,
     state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement: Option<super::placement::Reference>,
 }
 fn entry(root: &Path, id: String) -> Entry {
     let mut entry = Entry {
@@ -27,6 +29,7 @@ fn entry(root: &Path, id: String) -> Entry {
         model_version: None,
         total_bytes: None,
         state: "attention",
+        placement: None,
     };
     let result = (|| -> Result<(), String> {
         let operation = Directory::open_existing(&root.join(&id))?;
@@ -59,6 +62,12 @@ fn entry(root: &Path, id: String) -> Entry {
                 }
                 proof.verify()?;
                 entry.state = "completion_recorded";
+                entry.placement = super::placement::reference(
+                    &operation,
+                    &id,
+                    &review.recipe_hash,
+                    &completion.review_hash,
+                )?;
             }
         }
         source.verify()?;
@@ -67,6 +76,7 @@ fn entry(root: &Path, id: String) -> Entry {
     })();
     if result.is_err() {
         entry.state = "attention";
+        entry.placement = None;
     }
     entry
 }

@@ -97,6 +97,7 @@ pub(in crate::storage) fn pending_configured(
     std::fs::remove_file(base.join("decoded.caf")).unwrap();
     let manifest = ImportManifest {
         schema_version: 1,
+        audio_format: None,
         meeting_id: import.meeting_id.clone(),
         import_id: import.id.clone(),
         original_file_name: import.original_file_name.clone(),
@@ -513,7 +514,7 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
     assert!(info().required_bytes(u64::MAX).is_err());
     assert_eq!(
         info().required_bytes(44).unwrap(),
-        64000 * 2 * 8 + 44 + 128 * 1024 * 1024
+        64000 * 2 * 4 + 64000 * 2 + 44 + 128 * 1024 * 1024
     );
 }
 
@@ -805,4 +806,101 @@ fn initial_import_rejects_out_of_range_speaker_counts_before_saving() {
             .num_speakers,
         Some(5)
     );
+}
+
+fn pending_pcm(s: &Storage, operation: &str) -> (ImportSnapshot, PathBuf, ImportManifest) {
+    let (snapshot, base, mut manifest) = pending(s, operation);
+    let pcm = (0..64000)
+        .flat_map(|_| [0.25_f32, -0.5_f32])
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let caf = caf_fixture(16000, 2, 3, 32, 4, &pcm);
+    std::fs::write(base.join("decoded.caf"), &caf).unwrap();
+    std::fs::remove_file(base.join("audio.flac")).unwrap();
+    manifest.schema_version = 2;
+    manifest.audio_format = Some("caf".into());
+    manifest.audio = FileEvidence {
+        size: caf.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&caf)),
+    };
+    std::fs::write(
+        base.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    (snapshot, base, manifest)
+}
+
+#[test]
+fn pcm_import_recovers_without_flac_and_roundtrips_canonical_wav_backup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let s = Storage::open(root.join("source")).unwrap();
+    let (snapshot, base, _) = pending_pcm(&s, "pcm-recovery");
+    assert!(s
+        .finalize_audio_import_cancellable(&snapshot.id, &|| true)
+        .is_err());
+    assert!(base.join("decoded.caf").is_file());
+    assert!(!base.join("audio.flac").exists());
+    drop(s);
+    let s = Storage::open(root.join("source")).unwrap();
+    let recovered = s.recover_audio_imports().unwrap();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "{:?}",
+        s.audio_import(&snapshot.id).unwrap()
+    );
+    let plan = s
+        .verify_canonical_audio(&snapshot.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(plan.tracks[0].sample_rate, 16000);
+    assert_eq!(plan.tracks[0].channels, 1);
+    assert!(!base.join("decoded.caf").exists());
+    assert!(!base.join("audio.flac").exists());
+    let mut audio = s
+        .prepare_track_audio(&snapshot.meeting_id, &plan.tracks[0].id, 0, 4_000_000)
+        .unwrap();
+    let value = audio.read_pcm(63999, 1).unwrap();
+    assert!((f32::from_le_bytes(value[..4].try_into().unwrap()) + 0.125).abs() < 0.001);
+    drop(audio);
+    let archive = root.join("pcm.monbackup");
+    s.create_backup_archive(&archive, &|| false).unwrap();
+    let target = Storage::open(root.join("restored")).unwrap();
+    let prepared = target
+        .prepare_additive_restore(&archive, &|| false, &|_| {})
+        .unwrap();
+    let result = prepared.publish(
+        &target,
+        &prepared.preview().confirmation_id,
+        &|| false,
+        &|_| {},
+    );
+    // Restore APIs own collision and ID mapping; verify the published meeting.
+    let result = result.unwrap();
+    target
+        .verify_canonical_audio(&result.meeting_ids[0], &|| false)
+        .unwrap();
+}
+
+#[test]
+fn pcm_import_rejects_ambiguous_or_changed_staging_before_commit() {
+    for changed_bytes in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let s = Storage::open(temp.path().join("data")).unwrap();
+        let (snapshot, base, mut manifest) = pending_pcm(&s, "bad-pcm");
+        if changed_bytes {
+            std::fs::write(base.join("decoded.caf"), b"broken").unwrap();
+        } else {
+            manifest.audio_format = Some("flac".into());
+            std::fs::write(
+                base.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(s.finalize_audio_import(&snapshot.id).is_err());
+        assert_eq!(count(&s, "file_assets", &snapshot.meeting_id), 0);
+        assert!(base.join("original.wav").is_file());
+    }
 }

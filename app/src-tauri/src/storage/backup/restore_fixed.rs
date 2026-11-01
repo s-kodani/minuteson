@@ -434,7 +434,8 @@ impl<'p, 's> FixedData<'p, 's> {
         let mut manifest: ImportManifest =
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
         manifest.info.validate()?;
-        if manifest.schema_version != 1 || manifest.meeting_id != meeting {
+        manifest.decoded_format()?;
+        if manifest.meeting_id != meeting {
             return Err("復元取り込みmanifestの会議・形式が不正です".into());
         }
         let (file_name,info,source_size,source_hash,audio_id):(String,String,i64,String,String)=self.ids.source().database.query_row("SELECT i.original_file_name,p.info_json,p.source_size,p.source_hash,i.converted_asset_id FROM audio_imports i JOIN audio_import_commits p ON p.import_id=i.id AND p.meeting_id=i.meeting_id WHERE i.id=?1 AND i.meeting_id=?2 AND i.state='ready'",params![manifest.import_id,meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;

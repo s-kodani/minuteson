@@ -6,6 +6,7 @@ use crate::model_download_recipe::RecipeExt;
 #[cfg(any(target_os = "macos", windows))]
 mod archive;
 pub(crate) mod catalog;
+mod placement;
 mod reuse;
 #[cfg(target_os = "macos")]
 mod transport;
@@ -192,27 +193,40 @@ pub(crate) fn place(
     expected_review_hash: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<crate::model_placement::PlacementReceipt, String> {
-    let recovered = readback(staging_root, operation_id, expected_recipe_hash, cancelled)?;
-    let receipt = recovered
-        .receipt
-        .as_ref()
-        .ok_or("ダウンロードが未完了です。途中ファイルは保全します")?;
-    if receipt.report.review_hash != expected_review_hash {
-        return Err("ダウンロード実体の確認内容が変更されています".into());
-    }
-    let record = crate::model_placement::PlacementRecord::downloaded(
-        package_id,
-        &receipt.report,
-        recovered.recipe.origin(operation_id)?,
-    )?;
-    crate::model_placement::place_reviewed(
+    place_with_progress(
         storage,
         models_root,
-        &receipt.directory,
-        &receipt.report,
-        &record,
+        staging_root,
+        operation_id,
+        expected_recipe_hash,
+        package_id,
+        expected_review_hash,
         cancelled,
-        &|| recovered.verify(),
+        &|| {},
+    )
+}
+
+pub(crate) fn place_with_progress(
+    storage: &crate::storage::Storage,
+    models_root: &Path,
+    staging_root: &Path,
+    operation_id: &str,
+    expected_recipe_hash: &str,
+    package_id: &str,
+    expected_review_hash: &str,
+    cancelled: &impl Fn() -> bool,
+    verifying: &impl Fn(),
+) -> Result<crate::model_placement::PlacementReceipt, String> {
+    placement::place(
+        storage,
+        models_root,
+        staging_root,
+        operation_id,
+        expected_recipe_hash,
+        package_id,
+        expected_review_hash,
+        cancelled,
+        verifying,
     )
 }
 
@@ -467,11 +481,10 @@ fn stage(
         recipe: recipe.clone(),
     })
     .map_err(|_| "ダウンロード意図を符号化できません")?;
-    // Staging and later managed placement coexist. Reserve BOTH byte sets now,
-    // though later placement must recheck free space on its actual filesystem.
+    // Normal placement renames staging on the same filesystem. A cross-volume
+    // fallback checks the destination's copy capacity when it is needed.
     let required = total
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(recipe.archive_bytes().ok()?))
+        .checked_add(recipe.archive_bytes()?)
         .and_then(|n| n.checked_add(3 * MAX_RECIPE as u64 + 16 * 1024 * 1024))
         .ok_or("ダウンロード必要容量が範囲外です")?;
     let root = Directory::root(staging_root)?;

@@ -34,6 +34,17 @@ async page => {
   check(await count("get_downloaded_model_placement_result") === 1, "failed placement was retried before its original result was fenced");
   results.push("placement failure reconciles in the background after navigating away; retry reuses the Qwen download");
 
+  await boot("movedFailure");
+  await common().waitFor({ state: "hidden" });
+  await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; });
+  await row().getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await row().getByRole("button", { name: "使用中", exact: true }).waitFor();
+  const retries = await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === "place_downloaded_model").map(call => call.args));
+  check(await count("start_model_download") === 1 && retries.length === 2, "moved payload was downloaded again");
+  check(retries[0].packageId === retries[1].packageId && retries[0].token !== retries[1].token, "resume did not keep its placement ID with a fresh cancellation token");
+  check(await count("read_model_download") === 0, "resume tried to read the missing staging payload");
+  results.push("interrupted move resumes its persistent placement with a fresh token, without reading or downloading the old payload");
+
   await boot("delay");
   await page.waitForFunction(() => window.modelDownloadFixture.active.size === 1);
   if (await disclosure.getAttribute('aria-expanded') !== 'true') await disclosure.click();
@@ -49,6 +60,8 @@ async page => {
   await page.screenshot({ path: "output/playwright/model-preparation-waiting.png" });
   await page.evaluate(token => window.operationProgressFixture.emitModelWait(token, false), token);
   await jobs().getByText("モデルを配置中", { exact: true }).waitFor();
+  await page.evaluate(() => window.modelDownloadFixture.verify());
+  await jobs().getByText("配置したモデルを検証中", { exact: true }).waitFor();
   await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; window.modelDownloadFixture.finish(); });
   await common().waitFor({ state: "hidden" });
   await jobs().getByText("進行中のジョブはありません", { exact: true }).waitFor();

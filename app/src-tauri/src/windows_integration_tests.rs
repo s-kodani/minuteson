@@ -581,6 +581,12 @@ fn windows_real_import_four_formats_aac_alac_and_invalid_containers() {
         )
         .unwrap();
         assert_eq!(imported.state, "ready");
+        let base = storage.audio_import_directory(&imported).unwrap();
+        let manifest: crate::audio_import::ImportManifest =
+            serde_json::from_slice(&fs::read(base.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.decoded_format().unwrap(), "caf");
+        assert!(!base.join("audio.flac").exists());
         assert_eq!(
             before,
             crate::local_engine::Fingerprint::capture(&original, &|| false).unwrap()
@@ -689,7 +695,17 @@ fn windows_real_worker_reuses_cpu_model_and_runs_available_vulkan() {
     {
         let _scope = crate::local_engine::resident::Scope::enter(&root, Some(&snapshot)).unwrap();
         for index in 0..2 {
-            let unit = root.join(format!("区間 {index}"));
+            use std::os::windows::ffi::OsStrExt;
+            let prefix = format!("区間 {index} ");
+            // Physical directory length 251, log path length 262: reproduce
+            // the Store installation's failure while keeping CWD under 260.
+            let length =
+                root.as_os_str().encode_wide().count() - 4 + 1 + prefix.encode_utf16().count();
+            let unit = root.join(format!(
+                "{prefix}{}",
+                "x".repeat(251usize.saturating_sub(length))
+            ));
+            assert!(unit.join("stdout.log").as_os_str().encode_wide().count() > 264);
             fs::create_dir(&unit).unwrap();
             fs::write(unit.join("input.wav"), &wav).unwrap();
             crate::transcription::whisper::run_unit(

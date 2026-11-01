@@ -143,6 +143,7 @@ const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery
 const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
 const MIGRATION_35: &str = include_str!("migrations/0035_single_meeting_audio.sql");
 const MIGRATION_36: &str = include_str!("migrations/0036_post_analysis_intents.sql");
+const MIGRATION_37: &str = include_str!("migrations/0037_pcm_audio_import.sql");
 const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
 const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
@@ -947,6 +948,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (34, MIGRATION_34),
     (35, MIGRATION_35),
     (36, MIGRATION_36),
+    (37, MIGRATION_37),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

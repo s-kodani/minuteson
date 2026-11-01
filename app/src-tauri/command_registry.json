@@ -387,6 +387,12 @@
             "optional": false
           },
           {
+            "name": "package_id",
+            "wireName": "packageId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
             "name": "download_id",
             "wireName": "downloadId",
             "type": "String",
@@ -426,6 +432,12 @@
             "wireName": "packageId",
             "type": "String",
             "optional": false
+          },
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "Option<String>",
+            "optional": true
           },
           {
             "name": "download_id",

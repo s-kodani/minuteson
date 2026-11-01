@@ -13,6 +13,26 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::Path;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DirectoryIdentity([u64; 3]);
+pub(crate) fn directory_identity(file: &std::fs::File) -> Result<DirectoryIdentity, String> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let metadata = crate::native_fs::metadata(file).map_err(|e| e.to_string())?;
+    if !metadata.is_dir() {
+        return Err("モデル保存領域がフォルダーではありません".into());
+    }
+    let birth = metadata
+        .created()
+        .map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos()
+        .try_into()
+        .map_err(|_| "フォルダー作成時刻が範囲外です")?;
+    Ok(DirectoryIdentity([metadata.dev(), metadata.ino(), birth]))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct PlacementRecord {

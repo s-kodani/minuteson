@@ -21,7 +21,8 @@ import type { DiarizationPreferences } from "./diarization-state";
 import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 import { modelVocabularySupport } from "./model-vocabulary-support";
 
-type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
+type PlacementInput = { packageId: string; downloadId: string; recipeHash: string; reviewHash: string; totalBytes: number };
+type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; placement?: PlacementInput; verifying?: boolean; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 class ModelPreparationWaiting extends Error {}
 let unresolved: Pending | null = null;
 // A confirmed download is reusable after navigation. No automatic retry or
@@ -49,7 +50,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const mounted = useRef(true), running = useRef(false), blocked = useRef(mustStop);
   blocked.current = mustStop;
   const startedAt = useRef(unresolved?.startedAtMs);
-  const progress = busy || pending ? modelProgress(target, pending?.stage, transfer, !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
+  const progress = busy || pending ? modelProgress(target, pending?.stage === "place" && pending.verifying ? "place_verify" : pending?.stage, transfer, !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
   usePublishProgress("model", [progress]);
   const retain = (value: Pending | null) => { unresolved = value; if (mounted.current) setPending(value); };
   const load = async (publish = true) => {
@@ -151,6 +152,16 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       return value;
     }, { entry, preview });
   };
+  const placeModel = async (placement: PlacementInput, option: OfficialModelOption) => step("place", async token => {
+    let active = true;
+    const unlisten = await listen<{operationId: string; recipeHash: string; phase: string}>("model-placement-progress", event => {
+      if (active && mounted.current && event.payload.operationId === token && event.payload.recipeHash === placement.recipeHash && event.payload.phase === "verifying" && unresolved?.token === token) retain({ ...unresolved, verifying: true });
+    });
+    try {
+      const result = await invoke<ModelPlacementReceipt>("place_downloaded_model", { token, packageId: placement.packageId, downloadId: placement.downloadId, expectedRecipeHash: placement.recipeHash, expectedReviewHash: placement.reviewHash });
+      assertPlacementReceipt(result, placement.packageId, placement.reviewHash); return result;
+    } finally { active = false; unlisten(); }
+  }, { option, placement });
   const useModel = (engine: string, value: string) => {
     return run("モデルを準備しています", async () => {
     if (pending || unresolved) throw Error("モデルの準備が終わるまでお待ちください。");
@@ -162,11 +173,13 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       entry = entries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
       if (!entry) {
         let receipt = downloads.get(option.review.recipeHash);
-        if (!receipt) {
+        {
+          // A cached receipt can now refer to a payload already moved by an
+          // interrupted placement. Resolve its persistent placement first.
           const catalog = assertDownloadCatalog(await invoke("get_model_download_catalog", { token: crypto.randomUUID() }));
           if (!catalog.supported) throw Error("この端末ではモデルをダウンロードできません。");
           const matching = catalog.entries.filter(item => item.recipeHash === option.review.recipeHash)
-            .sort((a, b) => Number(b.state === "completion_recorded") - Number(a.state === "completion_recorded"));
+            .sort((a, b) => Number(b.placement?.state === "pending") - Number(a.placement?.state === "pending") || Number(b.state === "completion_recorded") - Number(a.state === "completion_recorded"));
           for (const recorded of matching) {
             // Fence delayed starts as well as active workers before deciding a
             // previous attempt is terminal. Partial bytes are never adopted.
@@ -175,31 +188,41 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
               if (cause instanceof ModelPreparationWaiting) retain({ token: recorded.operationId, startedAtMs: startedAt.current!, stage: "download", option });
               throw cause;
             }
+            if (recorded.placement) {
+              if (recorded.placement.state === "committed") {
+                if (receipt?.operationId === recorded.operationId) { receipt = undefined; downloads.delete(option.review.recipeHash); }
+                continue;
+              }
+              const placed = await placeModel({ packageId: recorded.placement.packageId, downloadId: recorded.operationId, recipeHash: option.review.recipeHash, reviewHash: option.review.packageReviewHash, totalBytes: option.review.totalBytes }, option);
+              entry = (await load()).placed.find(item => item.packageId === placed.packageId);
+              if (!entry) throw Error("再開したモデルの配置結果がありません。");
+              break;
+            }
+            if (receipt?.operationId === recorded.operationId) break;
             const read = await assertDownloadReadback(await invoke("read_model_download", { token: crypto.randomUUID(), downloadId: recorded.operationId, expectedRecipeHash: option.review.recipeHash }), recorded.operationId, option.review.recipeHash);
             if (read.state === "complete" && read.receipt) {
               receipt = read.receipt; downloads.set(option.review.recipeHash, receipt); break;
             }
           }
         }
-        if (!receipt) receipt = await step("download", async token => {
-          // Subscribe before starting: a fast initial event must not be lost.
-          let active = true;
-          const unlisten = await listen<unknown>("model-download-progress", event => {
-            if (active && mounted.current) setTransfer(current => acceptTransferProgress(current, event.payload, token, option.review.recipeHash, option.review.downloadBytes));
-          });
-          try {
-            if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
-            setTransfer(current => current ?? { receivedBytes: 0, totalBytes: option.review.downloadBytes });
-            const result = await assertDownloadReceipt(await invoke("start_model_download", { token, definition: option.definition, expectedRecipeHash: option.review.recipeHash }), token, option.review);
-            downloads.set(option.review.recipeHash, result); return result;
-          } finally { active = false; unlisten(); }
-        }, { option });
-        const downloaded = receipt;
-        const placed = await step("place", async token => {
-          const result = await invoke<ModelPlacementReceipt>("place_downloaded_model", { token, downloadId: downloaded.operationId, expectedRecipeHash: downloaded.recipeHash, expectedReviewHash: downloaded.report.reviewHash });
-          assertPlacementReceipt(result, token, downloaded.report.reviewHash); return result;
-        }, { option, download: downloaded });
-        entry = (await load()).placed.find(item => item.packageId === placed.packageId);
+        if (!entry) {
+          if (!receipt) receipt = await step("download", async token => {
+            // Subscribe before starting: a fast initial event must not be lost.
+            let active = true;
+            const unlisten = await listen<unknown>("model-download-progress", event => {
+              if (active && mounted.current) setTransfer(current => acceptTransferProgress(current, event.payload, token, option.review.recipeHash, option.review.downloadBytes));
+            });
+            try {
+              if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
+              setTransfer(current => current ?? { receivedBytes: 0, totalBytes: option.review.downloadBytes });
+              const result = await assertDownloadReceipt(await invoke("start_model_download", { token, definition: option.definition, expectedRecipeHash: option.review.recipeHash }), token, option.review);
+              downloads.set(option.review.recipeHash, result); return result;
+            } finally { active = false; unlisten(); }
+          }, { option });
+          const downloaded = receipt;
+          const placed = await placeModel({ packageId: crypto.randomUUID(), downloadId: downloaded.operationId, recipeHash: downloaded.recipeHash, reviewHash: downloaded.report.reviewHash, totalBytes: downloaded.report.totalBytes }, option);
+          entry = (await load()).placed.find(item => item.packageId === placed.packageId);
+        }
       }
     }
     if (!entry) throw Error("使用するモデルを選択してください。");
@@ -225,11 +248,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }
     const current = await load();
     if (value.stage === "place") {
-      const download = value.download;
-      if (!download) throw Error("元の取得結果を確認できません。");
-      const result = assertDownloadCopyResult(await invoke("get_downloaded_model_placement_result", { packageId: value.token, downloadId: download.operationId, expectedRecipeHash: download.recipeHash, expectedReviewHash: download.report.reviewHash }), value.token, download.report.reviewHash, download.report.totalBytes);
+      const placement = value.placement ?? (value.download && { packageId: value.token, downloadId: value.download.operationId, recipeHash: value.download.recipeHash, reviewHash: value.download.report.reviewHash, totalBytes: value.download.report.totalBytes });
+      if (!placement) throw Error("元の取得結果を確認できません。");
+      const result = assertDownloadCopyResult(await invoke("get_downloaded_model_placement_result", { token: value.token, packageId: placement.packageId, downloadId: placement.downloadId, expectedRecipeHash: placement.recipeHash, expectedReviewHash: placement.reviewHash }), placement.packageId, placement.reviewHash, placement.totalBytes);
       if (result.active || !result.cancelled) throw Error("取り込みの停止完了を待っています。");
-      if (result.receipt?.placementRecorded && !current.placed.some(item => item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded && item.bodyRemoved !== true)) throw Error("取り込み結果と現在のモデルが一致しません。");
+      if (result.receipt?.placementRecorded && !current.placed.some(item => item.packageId === placement.packageId && item.reviewHash === placement.reviewHash && item.placementRecorded && item.bodyRemoved !== true)) throw Error("取り込み結果と現在のモデルが一致しません。");
     }
     if (value.stage === "apply" && value.entry && current.catalog.find(item => item.name === "standard")?.components.some(item => item.packageId === value.entry?.packageId && item.checkOperationId === value.preview?.checkOperationId && item.settingsMatch && item.compatibilityCurrent)) {
       if (value.preview && (value.preview.diarizationThreads !== undefined || value.preview.diarizationClusterThresholdMilli !== undefined)) {
