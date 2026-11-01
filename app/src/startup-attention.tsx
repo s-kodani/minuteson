@@ -8,9 +8,11 @@ import { usePlatform } from "./platform";
 import { StartupReset } from "./startup-reset";
 import { ResidencyNotifications } from "./residency-notifications";
 import { StartupLoading } from "./startup-loading";
+import { useAppName } from "./window-environment";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
+  const appName = useAppName();
   const [report, setReport] = useState<StartupReport | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState(false), [quitting, setQuitting] = useState(false);
   const [retryUncertain, setRetryUncertain] = useState(false);
   const current = useRef<StartupReport | null>(null), active = useRef(true), reading = useRef(false), closing = useRef(false);
@@ -33,7 +35,7 @@ function useStartupReport() {
     if (closing.current || retryUncertain || current.current?.phase !== "blocked") return;
     closing.current = true; setQuitting(true); setError("");
     try { await invoke("retry_startup"); }
-    catch (cause) { if (active.current) { setRetryUncertain(true); setError(`再起動の受付を確認できません。MONを終了してから起動し直してください: ${String(cause)}`); } }
+    catch (cause) { if (active.current) { setRetryUncertain(true); setError(`再起動の受付を確認できません。${appName}を終了してから起動し直してください: ${String(cause)}`); } }
     finally { closing.current = false; if (active.current) setQuitting(false); }
   };
   const quit = async () => {
@@ -67,12 +69,13 @@ export function StartupGate({ children }: { children: ReactNode }) {
     : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
+  const appName = useAppName();
   const { report, error, busy, quitting, retryUncertain, read, retry, quit } = state, f = report?.failure;
   const [resetBusy, setResetBusy] = useState(false);
   const normal = new URL(window.location.href); normal.searchParams.delete("window"); normal.hash = "";
   return <main className="startup-attention" aria-label="起動診断"><ToastHost />
     <ResidencyNotifications scope="startup"/>
-    <h1>{report?.platform === "windows" ? "MONの起動と復旧" : "保存先の起動確認"}</h1>
+    <h1>{report?.platform === "windows" ? `${appName}の起動と復旧` : "保存先の起動確認"}</h1>
     <p>通常の操作は停止しています。起動診断の確認と、データの初期化を行えます。</p>
     <ErrorNotice scope="startup" type="desktop-connection" active={!isTauri()}>デスクトップ接続がありません。起動結果を確認できません。</ErrorNotice>
     {(!report || report.phase === "starting") && <p role="status">起動結果を確認できるまで通常操作は利用できません。</p>}
@@ -84,7 +87,7 @@ function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport
       {f.messageTruncated && <p role="status">長い診断の先頭だけを表示しています。完全な診断ではありません。</p>}
       <h3>データを守るための確認</h3>
       <p>起動停止時点のDB・台帳・起動設定・音声は、初期化を実行するまで保持します。空の保存先への自動切替や、ロックファイルの削除は行いません。</p>
-      <p>他のMONが同じ保存先を使用していないか、外付け保存先の接続、空き容量やアクセス権を確認してください。これらが原因だと断定しているわけではありません。解決できなければ、表示された段階・保存先・診断内容を確認担当者へ伝えてください。共有前に個人情報を確認してください。</p>
+      <p>他の{appName}が同じ保存先を使用していないか、外付け保存先の接続、空き容量やアクセス権を確認してください。これらが原因だと断定しているわけではありません。解決できなければ、表示された段階・保存先・診断内容を確認担当者へ伝えてください。共有前に個人情報を確認してください。</p>
       <p>終了後、原因を確認してから明示的に再起動してください。再起動時は保存先を改めて検証します。保存済みのデータを巻き戻す操作ではありません。</p>
     </section>}
     {report?.phase === "blocked" && <StartupReset availability={report.reset} onBusy={setResetBusy} />}

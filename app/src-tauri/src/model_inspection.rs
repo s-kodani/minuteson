@@ -193,15 +193,31 @@ pub(crate) struct Source {
 }
 impl Source {
     pub(crate) fn open(root: &Path, relative: &str) -> Result<Self, String> {
+        Self::open_impl(root, relative, false)
+    }
+    #[cfg(windows)]
+    pub(crate) fn open_bundled(root: &Path, relative: &str) -> Result<Self, String> {
+        Self::open_impl(root, relative, true)
+    }
+    fn open_impl(root: &Path, relative: &str, bundled: bool) -> Result<Self, String> {
+        #[cfg(not(windows))]
+        let _ = bundled;
         if relative != MANIFEST && !crate::model_inspection::relative(relative) {
             return Err("モデル素材の相対パスが不正です".into());
         }
         #[cfg(windows)]
-        let pins = crate::windows_files::parents(
-            &crate::native_fs::join(root, relative)
-                .parent()
-                .ok_or("親がありません")?,
-        )?;
+        let (pins, bundled_file) = {
+            let path = crate::native_fs::join(root, relative);
+            if bundled {
+                let (file, pins) = crate::windows_files::read_bundled(&path)?;
+                (pins, Some(file))
+            } else {
+                (
+                    crate::windows_files::parents(path.parent().ok_or("親がありません")?)?,
+                    None,
+                )
+            }
+        };
         let mut path = root.to_path_buf();
         let mut parents = Vec::new();
         let parts = relative.split('/').collect::<Vec<_>>();
@@ -227,7 +243,10 @@ impl Source {
         #[cfg(not(windows))]
         let file = options.open(&path).map_err(|e| e.to_string())?;
         #[cfg(windows)]
-        let file = crate::windows_files::read(&path, false)?;
+        let file = match bundled_file {
+            Some(file) => file,
+            None => crate::windows_files::read(&path, false)?,
+        };
         unchanged(
             &before,
             &crate::native_fs::metadata(&file).map_err(|e| e.to_string())?,

@@ -35,7 +35,7 @@ $root = Assert-WorkspacePath $OutputRoot
 $folder = if ($Flavor -eq 'qa') { 'windows-qa' } else { 'windows-release' }
 $distribution = Assert-WorkspacePath (Join-Path $root $folder)
 $work = Assert-WorkspacePath (Join-Path $root "$folder-work")
-$name = if ($Flavor -eq 'qa') { 'MON-QA-setup.exe' } else { 'MON-setup.exe' }
+$name = if ($Flavor -eq 'qa') { 'MON-QA-setup.exe' } else { 'MinutesOn-setup.exe' }
 $latest = Assert-WorkspacePath (Join-Path $distribution $name)
 if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or [IO.Path]::GetExtension($source) -ne '.exe') {
     throw 'A built Windows installer executable is required.'
@@ -68,9 +68,9 @@ try {
             if ($entry.PSIsContainer) { throw 'The installer destination is a directory.' }
             continue
         }
-        # Only generated MON installers may be deleted. Preserve diagnostics,
+        # Only generated MinutesOn/MON installers may be deleted. Preserve diagnostics,
         # checksums, scripts and any unfamiliar file outside the download folder.
-        if (-not $entry.PSIsContainer -and $entry.Name -match '^(?:MON-QA-.+-setup|MON(?: QA)?_.+_x64-setup|MON-setup)\.exe$') {
+        if (-not $entry.PSIsContainer -and $entry.Name -match '^(?:MON-QA-.+-setup|MON(?: QA)?_.+_x64-setup|MON-setup|MinutesOn_[0-9]+\.[0-9]+\.[0-9]+_x64-setup|MinutesOn-setup)\.exe$') {
             $obsolete += $entryPath
             continue
         }

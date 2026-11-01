@@ -322,7 +322,7 @@ pub(crate) fn hide_main_to_background(
         let current = report(window.app_handle());
         if !current.can_background {
             let error = current.error.unwrap_or_else(|| {
-                "MONの画面を開き直せることを確認できません。画面を表示したままにします。".into()
+                "アプリの画面を開き直せることを確認できません。画面を表示したままにします。".into()
             });
             set_error(window.app_handle(), error.clone());
             return Err(error);

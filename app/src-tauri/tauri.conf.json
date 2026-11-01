@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mon",
-  "version": "0.1.0",
+  "productName": "MinutesOn",
+  "version": "1.0.0",
   "identifier": "jp.mon.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "mon \u2014 \u4f1a\u8b70\u8a18\u9332",
+        "title": "MinutesOn \u2014 \u4f1a\u8b70\u8a18\u9332",
         "url": "index.html",
         "width": 1280,
         "height": 820,
@@ -23,7 +23,7 @@
       },
       {
         "label": "recorder",
-        "title": "mon \u9332\u97f3\u30d1\u30cd\u30eb",
+        "title": "MinutesOn \u9332\u97f3\u30d1\u30cd\u30eb",
         "url": "index.html?window=recorder",
         "width": 227,
         "height": 101,
@@ -35,7 +35,7 @@
       },
       {
         "label": "recorder-info",
-        "title": "mon \u9332\u97f3\u30d1\u30cd\u30eb\u306e\u8aac\u660e",
+        "title": "MinutesOn \u9332\u97f3\u30d1\u30cd\u30eb\u306e\u8aac\u660e",
         "url": "index.html?window=recorder-info",
         "width": 360,
         "height": 340,
@@ -48,7 +48,7 @@
       },
       {
         "label": "recording-confirmation",
-        "title": "mon \u9332\u97f3\u7d42\u4e86\u306e\u78ba\u8a8d",
+        "title": "MinutesOn \u9332\u97f3\u7d42\u4e86\u306e\u78ba\u8a8d",
         "url": "index.html?window=recording-confirmation",
         "width": 420,
         "height": 280,

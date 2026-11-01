@@ -181,7 +181,7 @@ impl Destination {
             let label = if extension == "md" {
                 "Markdown"
             } else {
-                "MONバックアップ"
+                "MinutesOnバックアップ"
             };
             return Err(format!("絶対パスの{label}保存先を選択してください"));
         }

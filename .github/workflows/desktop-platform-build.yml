@@ -164,6 +164,28 @@ jobs:
           cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
+      - name: Build and verify Microsoft Store MSIX
+        if: runner.os == 'Windows'
+        working-directory: app
+        run: npm run tauri:windows:store:build
+      - name: Upload Microsoft Store MSIX
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minuteson-windows-x64-store
+          path: output/windows-store/*.msix
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Microsoft Store build identity
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minuteson-windows-x64-store-identity
+          path: |
+            output/windows-store-work/*/source.json
+            output/windows-store-work/*/build.json
+          if-no-files-found: error
+          retention-days: 7
       - name: macOS Swift compiler and capture regression tests
         if: runner.os == 'macOS'
         shell: bash

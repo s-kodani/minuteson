@@ -162,13 +162,13 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
     inventory = {"schemaVersion": 1, "target": target,
                  "scope": "resolved Cargo normal/build dependencies and npm production dependencies",
                  "licenseReview": "not_verified", "distributionReady": False,
-                 "excluded": ["MON-owned code", "Rust standard library/toolchain", ("Apple SDK/system frameworks" if target == "aarch64-apple-darwin" else "Microsoft Windows SDK/system libraries"),
+                 "excluded": ["MinutesOn-owned code", "Rust standard library/toolchain", ("Apple SDK/system frameworks" if target == "aarch64-apple-darwin" else "Microsoft Windows SDK/system libraries"),
                               "separately obtained AI engines/models/runtime libraries"],
                  "lockHashes": {name: sha((repository / relative).read_bytes()) for name, relative in
                                 (("cargo", "Cargo.lock"), ("npm", "app/package-lock.json"))},
                  "supplementManifestSha256": sha(index_bytes),
                  "packages": [], "missingNoticeTexts": [], "referenceOnlyPackages": []}
-    chunks = [b"MON third-party dependency notices\n\n"
+    chunks = [b"MinutesOn third-party dependency notices\n\n"
               b"Collected package-provided texts, NOT a license clearance.\n"
               b"See third-party-inventory.json for scope, missing texts and exact versions.\n"
               b"Source availability, additional notices and model/engine licenses need review.\n\n"]

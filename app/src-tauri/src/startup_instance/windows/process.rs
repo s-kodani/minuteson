@@ -124,7 +124,7 @@ impl Target {
         if actual.to_string_lossy().to_lowercase() != executable.to_string_lossy().to_lowercase()
             || sid(handle.as_raw_handle())? != crate::windows_files::current_sid()?
         {
-            return Err("同じ実行ファイル・利用者のMONではないため操作しません".into());
+            return Err("同じ実行ファイル・利用者のアプリではないため操作しません".into());
         }
         let start = created(handle.as_raw_handle())?;
         Ok(Self {
@@ -173,7 +173,7 @@ impl Target {
         if unsafe { WaitForSingleObject(self.handle.as_raw_handle(), timeout.as_millis() as u32) }
             != WAIT_OBJECT_0
         {
-            return Err("MONの終了が未確認です。再起動していません。".into());
+            return Err("アプリの終了が未確認です。再起動していません。".into());
         }
         Ok(())
     }

@@ -92,6 +92,7 @@ export interface Recipe {
 export interface WindowEnvironment {
   capabilities: Capabilities;
   platform: Platform;
+  productName: string;
   role: WindowRole;
   schemaVersion: number;
 }

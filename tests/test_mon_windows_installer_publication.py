@@ -24,19 +24,32 @@ class InstallerPublicationTests(unittest.TestCase):
         self.source = self.root / 'built-setup.exe'
         self.source.write_bytes(b'MZ' + b'first installer payload' * 20)
 
-    def publish(self, *, source=None, output=None, success=True, manifest=None):
+    def publish(self, *, source=None, output=None, success=True, manifest=None, flavor=None):
         command = [
             'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
             '-Installer', str(source or self.source), '-OutputRoot', str(output or self.root),
         ]
         if manifest:
             command += ['-BuildManifest', str(manifest)]
+        if flavor:
+            command += ['-Flavor', flavor]
         result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
             self.assertNotEqual(result.returncode, 0)
         return result
+
+    def test_release_uses_formal_name_and_preserves_qa_installer(self):
+        self.publish()
+        release = self.root / 'windows-release'
+        release.mkdir()
+        (release / 'MON-setup.exe').write_bytes(b'old release')
+        (release / 'MinutesOn_1.0.0_x64-setup.exe').write_bytes(b'old versioned release')
+        self.publish(flavor='release')
+        self.assertEqual([p.name for p in release.iterdir()], ['MinutesOn-setup.exe'])
+        self.assertEqual((release / 'MinutesOn-setup.exe').read_bytes(), self.source.read_bytes())
+        self.assertEqual((self.download / 'MON-QA-setup.exe').read_bytes(), self.source.read_bytes())
 
     def test_repeated_publication_leaves_only_latest_and_preserves_diagnostics(self):
         (self.download / 'MON-QA-old-setup.exe').write_bytes(b'old')

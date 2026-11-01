@@ -206,6 +206,7 @@ pub struct Capabilities {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WindowEnvironment {
     pub schema_version: u32,
+    pub product_name: String,
     pub platform: Platform,
     pub role: WindowRole,
     pub capabilities: Capabilities,

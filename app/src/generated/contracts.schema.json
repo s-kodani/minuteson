@@ -676,6 +676,9 @@
         "platform": {
           "$ref": "#/definitions/Platform"
         },
+        "productName": {
+          "type": "string"
+        },
         "role": {
           "$ref": "#/definitions/WindowRole"
         },
@@ -688,6 +691,7 @@
       "required": [
         "capabilities",
         "platform",
+        "productName",
         "role",
         "schemaVersion"
       ],

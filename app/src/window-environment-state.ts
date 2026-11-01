@@ -8,6 +8,6 @@ export function windowRole(search: string): WindowRole {
   return value as WindowRole;
 }
 export function checkedWindowEnvironment(value: unknown, expectedRole: WindowRole): WindowEnvironment {
-  if (!validateWindowEnvironment(value) || value.schemaVersion !== 1 || value.role !== expectedRole) throw Error("ウィンドウの接続情報が一致しません。");
+  if (!validateWindowEnvironment(value) || value.schemaVersion !== 1 || value.role !== expectedRole || !value.productName.trim() || value.productName.length > 256 || /[\u0000-\u001f\u007f]/u.test(value.productName)) throw Error("ウィンドウの接続情報が一致しません。");
   return value as WindowEnvironment;
 }

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
@@ -20,16 +20,121 @@ IDENTITY = f"Developer ID Application: Test Team ({TEAM})"
 REQUEST = "a3a0c196-188e-4ec0-99d2-55be4cb4e327"
 
 
+class ReleaseConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.config = self.root / "app/src-tauri"
+        self.config.mkdir(parents=True)
+        self.write("tauri.conf.json", {"productName": "MinutesOn", "version": "1.0.0",
+                                      "identifier": "jp.mon.desktop"})
+        self.write("tauri.macos.conf.json", {})
+        self.write("tauri.release.conf.json", {})
+
+    def write(self, name, value):
+        (self.config / name).write_text(json.dumps(value), encoding="utf8")
+
+    def test_release_name_and_version_follow_tauri_platform_and_explicit_overrides(self):
+        self.write("tauri.macos.conf.json", {"productName": "MinutesOn Mac",
+                                           "bundle": {"targets": ["app"]}})
+        self.write("tauri.release.conf.json", {"productName": "MinutesOn", "version": "1.0.1",
+                                             "bundle": {"active": True}})
+        config = release.release_configuration(self.root)
+        self.assertEqual(config["productName"], "MinutesOn")
+        self.assertEqual(config["version"], "1.0.1")
+        self.assertEqual(config["identifier"], "jp.mon.desktop")
+        self.assertEqual(config["bundle"], {"targets": ["app"], "active": True})
+
+    def test_unsafe_product_names_cannot_escape_or_change_artifact_paths(self):
+        for name in [None, "", " ", "MinutesOn ", ".", "..", "../MinutesOn", "a/b", "a\\b",
+                     "a:b", "-option", "MinutesOn.", "MinutesOn\n", "a" * 129]:
+            with self.subTest(name=name):
+                self.write("tauri.release.conf.json", {"productName": name})
+                with self.assertRaises(ValueError):
+                    release.release_configuration(self.root)
+
+    def test_release_configuration_requires_numeric_version_and_object_overrides(self):
+        for value in [{"version": "1.0.0-beta"}, {"version": 1}, {"version": None}, []]:
+            with self.subTest(value=value):
+                self.write("tauri.release.conf.json", value)
+                with self.assertRaises(ValueError):
+                    release.release_configuration(self.root)
+
+    def test_shipped_privacy_explanations_use_formal_product_name(self):
+        for name in ("app/src-tauri/release-entitlements/Info.plist", "probes/macos-capture/Info.plist"):
+            info = plistlib.loads((release.REPOSITORY / name).read_bytes())
+            for key in ("NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"):
+                with self.subTest(plist=name, key=key):
+                    self.assertIn("MinutesOn", info[key])
+        self.assertEqual(info["CFBundleName"], "MinutesOn Capture Helper")
+        self.assertEqual(info["CFBundleDisplayName"], "MinutesOn Capture Helper")
+        self.assertEqual(info["CFBundleIdentifier"], "app.mon.capture.probe")
+        self.assertEqual(info["CFBundleExecutable"], "mon-macos-capture")
+
+    def test_pipeline_uses_effective_name_for_bundle_signing_and_disk_image(self):
+        # Only the macOS command boundary is synthetic; actual copies, paths,
+        # config merging, result recording and cache cleanup run on this host.
+        self.write("tauri.release.conf.json", {"productName": "MinutesOn Preview"})
+        policy = self.config / "release-entitlements"
+        policy.mkdir()
+        for name, value in release.POLICIES.items():
+            (policy / name).write_bytes(plistlib.dumps(value))
+        commands = []
+        signed = []
+
+        def command(argv, **kwargs):
+            commands.append(argv)
+            if Path(argv[0]).name == "tauri":
+                built = Path(kwargs["env"]["CARGO_TARGET_DIR"]) / "release/bundle/macos/MinutesOn Preview.app"
+                built.mkdir(parents=True)
+                (built / "source").write_bytes(b"synthetic application")
+            elif Path(argv[0]).name == "ditto":
+                shutil.copytree(argv[-2], argv[-1])
+            elif Path(argv[0]).name == "hdiutil" and "create" in argv:
+                Path(argv[-1]).write_bytes(b"synthetic disk image")
+            return b"", b""
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(release, "REPOSITORY", self.root))
+            stack.enter_context(patch.object(release.sys, "platform", "darwin"))
+            stack.enter_context(patch.object(release, "command", side_effect=command))
+            stack.enter_context(patch.object(release.shutil, "disk_usage", return_value=type("Disk", (), {"free": 8 * 1024 ** 3})()))
+            stack.enter_context(patch.object(release, "layout", side_effect=lambda app, version, name: (
+                app / "Contents/Resources/MONCaptureProbe.app", app / "Contents/Resources/mon-speaker-embedding")))
+            for name in ("verify_notices", "verify_asr_runtime", "verify_inference_runtime"):
+                stack.enter_context(patch.object(release, name, return_value={}))
+            for name in ("sign_asr_runtime", "sign_inference_runtime", "verify_signature"):
+                stack.enter_context(patch.object(release, name))
+            stack.enter_context(patch.object(release, "sign", side_effect=lambda path, *args: signed.append(path.name)))
+            # Creating the Applications alias itself is covered by POSIX tests.
+            stack.enter_context(patch.object(Path, "symlink_to"))
+            output = self.root / "distribution"
+            result = release.build(output, IDENTITY, TEAM, None, {})
+
+        self.assertTrue((output / "MinutesOn Preview.app/source").is_file())
+        self.assertTrue((output / "image-source/MinutesOn Preview.app/source").is_file())
+        self.assertEqual(signed, ["MONCaptureProbe.app", "mon-speaker-embedding", "MinutesOn Preview.app",
+                                  "MinutesOn Preview_1.0.0_aarch64.dmg"])
+        creation = next(argv for argv in commands if "create" in argv)
+        self.assertEqual(creation[creation.index("-volname") + 1], "MinutesOn Preview")
+        self.assertEqual(result["productName"], "MinutesOn Preview")
+        self.assertEqual(result["dmg"], "MinutesOn Preview_1.0.0_aarch64.dmg")
+        self.assertFalse(result["distributionReady"])
+        self.assertFalse(Path(result["buildCache"]).exists())
+
+
 @unittest.skipIf(os.name == "nt", "The macOS release fixtures require POSIX runtime packaging and permissions")
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.app = self.root / "mon.app"
+        self.app = self.root / "MinutesOn.app"
         self.app.mkdir()
         self.calls = []
-        main = {"CFBundleIdentifier": "jp.mon.desktop", "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "0.1.0",
+        main = {"CFBundleIdentifier": "jp.mon.desktop", "CFBundleShortVersionString": "1.0.0", "CFBundleVersion": "1.0.0",
+                "CFBundleName": "MinutesOn", "CFBundleDisplayName": "MinutesOn",
                 "LSMinimumSystemVersion": "15.0", "CFBundleExecutable": "mon-desktop",
                 "NSMicrophoneUsageDescription": "microphone", "NSAudioCaptureUsageDescription": "audio"}
         self.plist(self.app / "Contents/Info.plist", main)
@@ -37,6 +142,7 @@ class ReleaseTests(unittest.TestCase):
         self.capture = self.app / "Contents/Resources/MONCaptureProbe.app"
         self.plist(self.capture / "Contents/Info.plist", {
             "CFBundleIdentifier": "app.mon.capture.probe", "CFBundleExecutable": "mon-macos-capture",
+            "CFBundleName": "MinutesOn Capture Helper", "CFBundleDisplayName": "MinutesOn Capture Helper",
             "NSMicrophoneUsageDescription": "microphone", "NSAudioCaptureUsageDescription": "audio"})
         self.file(self.capture / "Contents/MacOS/mon-macos-capture")
         self.file(self.capture / "Contents/Resources/PrivacyInfo.xcprivacy")
@@ -95,7 +201,7 @@ class ReleaseTests(unittest.TestCase):
             # executable, ticket or distribution proof is used in this test.
             binary = Path(argv[-1])
             binary.write_bytes(binary.read_bytes() + b" synthetic Developer ID signature")
-        if "--sign" in argv and Path(argv[-1]).name == "mon.app":
+        if "--sign" in argv and Path(argv[-1]).name == "MinutesOn.app":
             # Repacking must finish before the enclosing resource seal is made.
             directory = Path(argv[-1]) / "Contents/Resources/asr-runtime"
             index = release.asr_module().verify_package(directory)
@@ -148,24 +254,25 @@ class ReleaseTests(unittest.TestCase):
 
     def test_layout_checks_actual_binary_name_identifier_version_privacy_helpers_and_architecture(self):
         with patch.object(release, "command", side_effect=self.signed):
-            self.assertEqual(release.layout(self.app, "0.1.0"), (self.capture, self.embedding))
+            self.assertEqual(release.layout(self.app, "1.0.0", "MinutesOn"), (self.capture, self.embedding))
         self.assertEqual(sum("-archs" in argv for argv in self.calls), 3)
         info_path = self.app / "Contents/Info.plist"
         original = release.read_plist(info_path)
         for key, value in [("CFBundleIdentifier", "jp.mon.desktop.qa"), ("CFBundleExecutable", "mon"),
+                           ("CFBundleName", "mon"), ("CFBundleDisplayName", "MON QA"),
                            ("CFBundleShortVersionString", "0.2.0"), ("LSMinimumSystemVersion", "14.0"),
                            ("CFBundleVersion", "0.2.0"), ("NSMicrophoneUsageDescription", ""),
                            ("NSMicrophoneUsageDescription", True), ("NSAudioCaptureUsageDescription", "")]:
             self.plist(info_path, {**original, key: value})
             with self.subTest(key=key), patch.object(release, "command") as command, self.assertRaises(ValueError):
-                release.layout(self.app, "0.1.0")
+                release.layout(self.app, "1.0.0", "MinutesOn")
             command.assert_not_called()
         self.plist(info_path, original)
         with patch.object(release, "command", return_value=(b"x86_64 arm64", b"")), self.assertRaises(ValueError):
-            release.layout(self.app, "0.1.0")
+            release.layout(self.app, "1.0.0", "MinutesOn")
         self.embedding.chmod(0o644)
         with patch.object(release, "command", side_effect=self.signed), self.assertRaises(ValueError):
-            release.layout(self.app, "0.1.0")
+            release.layout(self.app, "1.0.0", "MinutesOn")
 
     def test_layout_rejects_missing_and_linked_helper(self):
         for linked in [False, True]:
@@ -173,7 +280,7 @@ class ReleaseTests(unittest.TestCase):
             if linked:
                 self.embedding.symlink_to(self.app / "Contents/MacOS/mon-desktop")
             with self.subTest(linked=linked), patch.object(release, "command") as command, self.assertRaises(ValueError):
-                release.layout(self.app, "0.1.0")
+                release.layout(self.app, "1.0.0", "MinutesOn")
             command.assert_not_called()
 
     def test_signs_one_component_not_deep_and_verifies_apple_anchor_team_runtime_timestamp_and_policy(self):
@@ -252,7 +359,7 @@ class ReleaseTests(unittest.TestCase):
                 raise ValueError("synthetic phase failure")
             if Path(argv[0]).name == "tauri":
                 cache = Path(kwargs["env"]["CARGO_TARGET_DIR"])
-                shutil.copytree(self.app, cache / "release/bundle/macos/mon.app")
+                shutil.copytree(self.app, cache / "release/bundle/macos/MinutesOn.app")
                 self.assertFalse(set(kwargs["env"]) & set((*release.NOTARY_ENV, "APPLE_SIGNING_IDENTITY")))
             elif Path(argv[0]).name == "ditto":
                 if "-c" in argv:
@@ -271,13 +378,16 @@ class ReleaseTests(unittest.TestCase):
             if len(self.calls) == before + 2:
                 self.calls.pop()
             return result
-        with patch.object(release.sys, "platform", "darwin"), patch.object(release, "command", side_effect=single), patch.object(release.shutil, "disk_usage", return_value=type("Disk", (), {"free": 8 * 1024 ** 3})()):
+        with patch.object(release.sys, "platform", "darwin"), patch.object(release, "release_configuration", return_value={"productName": "MinutesOn", "version": "1.0.0"}), patch.object(release, "command", side_effect=single), patch.object(release.shutil, "disk_usage", return_value=type("Disk", (), {"free": 8 * 1024 ** 3})()):
             return output, release.build(output, IDENTITY, TEAM, profile, {"APPLE_PASSWORD": "secret", "PATH": "keep"})
 
     def test_sign_only_pipeline_is_inside_out_creates_new_dmg_and_never_uploads_staples_or_launches(self):
         output, result = self.pipeline()
         signs = [argv for argv in self.calls if "--sign" in argv]
-        self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", *release.WORKER_NAMES, "MONCaptureProbe.app", "mon-speaker-embedding", "mon.app", "mon_0.1.0_aarch64.dmg"])
+        self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", *release.WORKER_NAMES, "MONCaptureProbe.app", "mon-speaker-embedding", "MinutesOn.app", "MinutesOn_1.0.0_aarch64.dmg"])
+        creation = next(argv for argv in self.calls if "hdiutil" in argv[0] and "create" in argv)
+        self.assertEqual(creation[creation.index("-volname") + 1], "MinutesOn")
+        self.assertEqual(result["productName"], "MinutesOn")
         self.assertFalse(any("notarytool" in argv or "stapler" in argv or Path(argv[0]).name == "open" for argv in self.calls))
         self.assertEqual(result["notarization"], "not_requested")
         self.assertFalse(result["distributionReady"])
@@ -298,7 +408,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual([p.name for p in output.iterdir() if p.name.startswith("mon-asr-")], [])
         runtime = release.asr_module()
         original, old_files = runtime.package_contents(self.app / "Contents/Resources/asr-runtime")
-        sealed, files = runtime.package_contents(output / "mon.app/Contents/Resources/asr-runtime")
+        sealed, files = runtime.package_contents(output / "MinutesOn.app/Contents/Resources/asr-runtime")
         self.assertEqual(original["runtimeSigning"], "ad_hoc_only")
         self.assertEqual(sealed["signingTeamId"], TEAM)
         self.assertNotEqual(files["bin/whisper-cli"], old_files["bin/whisper-cli"])
@@ -309,7 +419,7 @@ class ReleaseTests(unittest.TestCase):
         _, result = self.pipeline("existing-explicit-profile")
         uploads = [i for i, argv in enumerate(self.calls) if "notarytool" in argv]
         creation = next(i for i, argv in enumerate(self.calls) if "hdiutil" in argv[0] and "create" in argv)
-        app_staple = next(i for i, argv in enumerate(self.calls) if "stapler" in argv and "staple" in argv and argv[-1].endswith("mon.app"))
+        app_staple = next(i for i, argv in enumerate(self.calls) if "stapler" in argv and "staple" in argv and argv[-1].endswith("MinutesOn.app"))
         dmg_staple = next(i for i, argv in enumerate(self.calls) if "stapler" in argv and "staple" in argv and argv[-1].endswith(".dmg"))
         self.assertEqual(len(uploads), 2)
         self.assertLess(uploads[0], app_staple)
@@ -325,7 +435,7 @@ class ReleaseTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
             self.pipeline(fail_at="create")
         output = self.root / "distribution"
-        self.assertTrue((output / "mon.app").is_dir())
+        self.assertTrue((output / "MinutesOn.app").is_dir())
         self.assertTrue((output / "preparation-build.log").is_file())
         self.assertFalse((output / "build-result.json").exists())
 
@@ -446,7 +556,7 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(self, "signed", side_effect=refuse), redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
             self.pipeline("existing-explicit-profile")
         self.assertEqual(source.read_bytes(), before)
-        self.assertFalse(any("notarytool" in argv or ("--sign" in argv and argv[-1].endswith("mon.app")) for argv in self.calls))
+        self.assertFalse(any("notarytool" in argv or ("--sign" in argv and argv[-1].endswith("MinutesOn.app")) for argv in self.calls))
         self.assertFalse((self.root / "distribution/build-result.json").exists())
 
     def test_asr_metadata_alone_cannot_substitute_for_native_certificate_verification(self):

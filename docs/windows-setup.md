@@ -1,4 +1,6 @@
-# Windows開発環境とMON QAビルド
+# MinutesOnのWindows開発環境とMON QAビルド
+
+Microsoft Store向けの本番MSIXは[Store用MSIXの生成・検証・提出準備](windows-store.md)を参照。直接配布版は署名済み`MinutesOn-setup.exe`、QA版は`MON-QA-setup.exe`として作成する。
 
 Windows 11 24H2以降・x64向けのローカルビルド手順。リポジトリのルートでPowerShellから実行する。WASAPI録音、取り込み、バックアップ・復元、削除、保存先変更、声の登録・照合・補完とCPU／Vulkan推論を接続した。最新の32項目別の実装根拠・試験・実機残件は[対応記録](verification/windows-parity-implementation-2026-10-24.md)を参照。以下の過去のビルド記録にある未対応の説明は、その時点の状態を示す。
 
@@ -123,7 +125,7 @@ QAの製品名は `MON QA`、識別子は `jp.mon.desktop.qa`。通常版と区�
 
 ```text
 QA版: output/windows-qa/MON-QA-setup.exe
-公開版: output/windows-release/MON-setup.exe
+公開版: output/windows-release/MinutesOn-setup.exe
 ```
 
 `app/build-windows.ps1` は、ビルド成功・公開版の署名確認後に `tools/publish-windows-installer.ps1` で配布先を更新する。配布先にはログ・画像・検証スクリプト・ハッシュファイルを置かない。既知の過去のMONインストーラーは削除し、それ以外のファイルは `output/windows-qa-work/` または `output/windows-release-work/` に移す。検証結果やビルドログは最初からこれらの作業用フォルダーに保存する。ビルド内部の生成物は引き続き `app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/` にある。

@@ -1,6 +1,8 @@
 # macOS配布用アプリとDMGの明示ビルド
 
-対象はmacOS 15以降・Apple Silicon。これは配布工程の実装であり、Developer ID署名・公証済み配布物や実機更新を検証済みにするものではない。通常の開発ビルドとMON QAは既存のアドホック署名のまま。Windows配布・CIは保留する。
+対象はmacOS 15以降・Apple SiliconのMinutesOn（略称 mon）。これは配布工程の実装であり、Developer ID署名・公証済み配布物や実機更新を検証済みにするものではない。通常の開発ビルドとMON QAは既存のアドホック署名のまま。Windowsの配布は[Store向けMSIXビルド](windows-store.md)と[EXEビルド](windows-setup.md)を参照する。
+
+正式名はWindows・macOSともMinutesOn。通常版の出力名は`MinutesOn.app`、`MinutesOn_1.0.0_aarch64.dmg`、DMGのボリューム名は`MinutesOn`となる。これらの名称と版はTauriの基本設定・macOS設定・配布設定を統合した値から生成する。内部の`mon-desktop`、録音ヘルパー名、通常版の識別子`jp.mon.desktop`は維持する。
 
 ## 前提と明示指定
 
@@ -21,7 +23,7 @@ npm run tauri:release:build -- --team-id ABCDE12345 --sign-only --output-dir "$m
 
 ## 署名を分ける
 
-Tauriの準備用プロファイルはアドホックのappだけを生成し、署名／公証用のApple環境変数を子へ渡さない。生成物を新規出力へコピーし、通常版`jp.mon.desktop`・版・最低OS・実行ファイル`mon-desktop`・arm64・録音用途の説明・両ヘルパーを確認する。QAを通常版の成果物として採用しない。
+Tauriの準備用プロファイルはアドホックのappだけを生成し、署名／公証用のApple環境変数を子へ渡さない。生成物を新規出力へコピーし、正式表示名・通常版`jp.mon.desktop`・版・最低OS・実行ファイル`mon-desktop`・arm64・録音用途の説明・両ヘルパーを確認する。QAを通常版の成果物として採用しない。
 
 | 対象 | Hardened Runtimeのentitlements |
 |---|---|
@@ -51,13 +53,13 @@ Invalid・処理中・不正応答・署名／ticket検証失敗は成功にし�
 
 ## 結果と未検証ゲート
 
-Macの準備ビルドはオフラインで依存通知文を収集し、`Contents/Resources/THIRD_PARTY_NOTICES.txt`と`third-party-inventory.json`を同梱する。現在のCargo normal/build依存・npm production依存を保守的に対象とし、正確な使用版・申告ライセンス・収集文の容量／SHA・lock SHA・候補が見つからない依存を記録する。MON自身、標準ライブラリ／Apple SDK、別導入のAIエンジン・モデル等は別確認。全収集物の存在は条件充足の証明ではなく、欠落文・追加NOTICE・対応ソースの取得案内等の確認を残す。[同梱範囲と実検証](verification/macos-dependency-notices-2026-10-10.md)を参照。
+Macの準備ビルドはオフラインで依存通知文を収集し、`Contents/Resources/THIRD_PARTY_NOTICES.txt`と`third-party-inventory.json`を同梱する。現在のCargo normal/build依存・npm production依存を保守的に対象とし、正確な使用版・申告ライセンス・収集文の容量／SHA・lock SHA・候補が見つからない依存を記録する。MinutesOn自身、標準ライブラリ／Apple SDK、別導入のAIエンジン・モデル等は別確認。全収集物の存在は条件充足の証明ではなく、欠落文・追加NOTICE・対応ソースの取得案内等の確認を残す。[同梱範囲と実検証](verification/macos-dependency-notices-2026-10-10.md)を参照。
 
 コピー後と最終検査後に通知文の容量／SHA・現在のlock・未承認状態を照合し、欠落・旧版・改変・自己承認を拒否する。さらに現在のlocked・offline Cargo metadataとnpm lock／配置済みproduction依存、固定補完indexからメモリ上で再収集し、通知本文の全bytesと全inventoryを照合する。本文を保ったまま不足一覧やpackage情報を変えても拒否する。再収集で通信／build／file書換えは行わず、不一致は署名・送信前に停止する。[回帰と実offline照合](verification/macos-notice-source-verification-2026-10-11.md)。build-resultの`dependencyNotices`は`collected_not_reviewed`であり、ライセンス全体の確認には昇格しない。
 
 パッケージに本文がない場合の補完資料はcrateの正確な版・申告・配布checksum・公開VCS commit／pathに固定し、出典／容量／SHAを保持する。`upstream_license_reference`は説明・参照だけで、不足本文を解消しない。配布時の照合は補完index SHAにも及ぶ。MPL対象の正確な版の公開ソースarchive URLとSHAは通知文にも含める。通常ビルドでは通信せず、ソースの実取得確認や最終的な配布条件確認は別。現在の不足12件、SDK由来等の残条件、実11件のarchive照合については[版固定補完の記録](verification/macos-notice-supplements-2026-10-10.md)を参照。
 
-正常なビルド結果は`build-result.json`に新規保存する。版・Team・DMG名・容量・SHA、公証要求ID／ticketの状態、工程時間と回収済みキャッシュの場所を含む。手動ビルドの結果であり、取得モデルの互換性や会議品質の証拠ではない。
+正常なビルド結果は`build-result.json`に新規保存する。製品名・版・Team・DMG名・容量・SHA、公証要求ID／ticketの状態、工程時間と回収済みキャッシュの場所を含む。手動ビルドの結果であり、取得モデルの互換性や会議品質の証拠ではない。
 
 `asrRuntime.developerIdSigning: verified`は、明示Teamに対する内包CLIの実署名検査が成功した場合だけ記録する。appのticketをCLI単体の公証・Gatekeeper・導入確認の代用にせず、`standaloneNotarization`・`nativeOnboarding`・`licenseReview`は`not_verified`を保持する。現在は証明書／公証profile未準備のため、この経路の検証は合成コマンドと導入側の回帰までであり、正式署名済み成果物はない。
 

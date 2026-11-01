@@ -10,7 +10,7 @@ enum CaptureFailureGuide {
     let detail = "\(operation): Core Audio status \(status)"
     if status == kAudioDevicePermissionsError {
       return .permission(
-        "PC音声の取得がOSで許可されていません。システム設定 → プライバシーとセキュリティ → システムオーディオ録音のみで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。許可する場合はご自身で設定を変更し、アプリを再起動してください。画面の収録許可は要求しません。自動で許可変更・再試行はしません。詳細: \(detail)"
+        "PC音声の取得がOSで許可されていません。システム設定 → プライバシーとセキュリティ → システムオーディオ録音のみで、MinutesOn、MON QA または MinutesOn Capture Helper（録音ヘルパー）の許可を確認してください。許可する場合はご自身で設定を変更し、アプリを再起動してください。画面の収録許可は要求しません。自動で許可変更・再試行はしません。詳細: \(detail)"
       )
     }
     return .capture(
@@ -24,7 +24,7 @@ enum CaptureFailureGuide {
       detail.code == SCStreamError.Code.userDeclined.rawValue
     {
       return .permission(
-        "PC音声の取得がOSで許可されていません。この録音方式（ScreenCaptureKit）は、システム設定 → プライバシーとセキュリティ → 画面収録とシステムオーディオ録音の許可を確認します。「システムオーディオ録音のみ」とは別の許可です。MON QA または MON Capture Probe（録音ヘルパー）の設定を確認し、許可する場合はご自身で変更してアプリを再起動してください。映像は保存しませんが、OS上の許可は画面へのアクセスも含むため、許可範囲を確認してください。自動で許可変更・再試行はしません。詳細: \(error)"
+        "PC音声の取得がOSで許可されていません。この録音方式（ScreenCaptureKit）は、システム設定 → プライバシーとセキュリティ → 画面収録とシステムオーディオ録音の許可を確認します。「システムオーディオ録音のみ」とは別の許可です。MinutesOn、MON QA または MinutesOn Capture Helper（録音ヘルパー）の設定を確認し、許可する場合はご自身で変更してアプリを再起動してください。映像は保存しませんが、OS上の許可は画面へのアクセスも含むため、許可範囲を確認してください。自動で許可変更・再試行はしません。詳細: \(error)"
       )
     }
     return .capture("PC音声の取得対象を準備できませんでした。対象アプリ・ディスプレイの状態を確認してください。権限拒否とは断定できません。詳細: \(error)")
@@ -45,7 +45,7 @@ enum CaptureFailureGuide {
       reason = "マイク権限の状態を確認できませんでした。"
     }
     return reason
-      + " システム設定 → プライバシーとセキュリティ → マイクで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。設定変更後はアプリを再起動してマイク一覧を再確認してください。"
+      + " システム設定 → プライバシーとセキュリティ → マイクで、MinutesOn、MON QA または MinutesOn Capture Helper（録音ヘルパー）の許可を確認してください。設定変更後はアプリを再起動してマイク一覧を再確認してください。"
   }
 
   static func microphoneInitialization(_ error: Error) -> String {

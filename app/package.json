@@ -1,7 +1,7 @@
 {
   "name": "mon-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "tauri:release:build": "python3 ../tools/mon_macos_release.py",
     "tauri:windows:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1",
     "tauri:windows:qa:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Qa",
+    "tauri:windows:store:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows-store.ps1",
     "test:browser": "node tests/run-browser-checks.mjs",
     "test:browser:list": "playwright test --list",
     "generate:contracts": "node scripts/gen-contracts.mjs",

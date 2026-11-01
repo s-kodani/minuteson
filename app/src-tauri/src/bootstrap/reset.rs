@@ -52,7 +52,7 @@ impl RootLease {
             return Err("保存先の排他ファイルが不正です".into());
         }
         file.try_lock()
-            .map_err(|e| format!("他のMONが保存先を使用中、または排他を取得できません: {e}"))?;
+            .map_err(|e| format!("他のアプリが保存先を使用中、または排他を取得できません: {e}"))?;
         let lease = Arc::new(Self {
             file,
             root: root.into(),
@@ -61,7 +61,7 @@ impl RootLease {
         });
         lease.verify(root)?;
         if !resetting && exists(&root.join(PENDING))? {
-            return Err("未完了の初期化があります。元の起動設定でMONを起動してください".into());
+            return Err("未完了の初期化があります。元の起動設定でアプリを起動してください".into());
         }
         Ok(lease)
     }
@@ -256,7 +256,7 @@ pub(crate) fn inspect(bootstrap: &Bootstrap, data: &Path) -> Result<Selection, S
     if exists(&selection.config.path.join(JOURNAL))?
         || exists(&selection.meeting.path.join(PENDING))?
     {
-        return Err("未完了の初期化があります。MONを再起動して回復してください".into());
+        return Err("未完了の初期化があります。アプリを再起動して回復してください".into());
     }
     // Probe writable directories without reading any rejected DB/model content.
     for root in [&selection.config, &selection.data, &selection.meeting] {
@@ -636,7 +636,7 @@ pub(crate) fn destination(
     for ancestor in parent.ancestors() {
         for name in [DB, ROOT_LOCK, PENDING, ".mon-scratch.sqlite3"] {
             if exists(&ancestor.join(name))? {
-                return Err("使用中または既存のMON保存先には退避できません".into());
+                return Err("使用中または既存のアプリ保存先には退避できません".into());
             }
         }
     }
@@ -817,7 +817,7 @@ fn capture_writer_leases(data: &Path) -> Result<Vec<File>, String> {
                 return Err("録音前テストの排他ファイルを確認できません".into());
             }
             file.try_lock()
-                .map_err(|e| format!("以前の取得プロセスまたは他のMONが使用中です: {e}"))?;
+                .map_err(|e| format!("以前の取得プロセスまたは他のアプリが使用中です: {e}"))?;
             leases.push(file);
         }
     }
@@ -1205,7 +1205,7 @@ pub(crate) fn recover(config: &Path, data: &Path) -> Result<(), String> {
         return Err("初期化の排他ファイルが不正です".into());
     }
     lock.try_lock()
-        .map_err(|e| format!("初期化の回復は他のMONが終了してから行います: {e}"))?;
+        .map_err(|e| format!("初期化の回復は他のアプリが終了してから行います: {e}"))?;
     let lock = BootstrapLock(lock);
     let (digest, j): (String, Journal) =
         serde_json::from_slice(&read_private(&path, MAX_RECORD)?).map_err(err)?;

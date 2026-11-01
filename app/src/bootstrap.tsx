@@ -26,7 +26,7 @@ async function start() {
   if (isTauri()) {
     if (getCurrentWindow().label !== role) throw Error("ウィンドウの役割と接続先が一致しません。");
     environment = checkedWindowEnvironment(await invoke("get_window_environment"), role);
-  } else environment = { schemaVersion: 1, role, platform: "other", capabilities: { voiceIdentity: false } };
+  } else environment = { schemaVersion: 1, productName: "MinutesOn", role, platform: "other", capabilities: { voiceIdentity: false } };
   if (environment.platform === "windows" && ["recorder", "recorder-info", "recording-confirmation"].includes(role)) document.documentElement.dataset.floatingWindow = "windows";
   const desktopWindow = <ThemeProvider><RecorderOperationProvider>{role === "recording-confirmation" ? <RecordingConfirmationWindow /> : role === "recorder-info" ? <RecorderInfoWindow /> : <RecordingInputProvider windowLabel="recorder"><RecorderPanel /></RecordingInputProvider>}</RecorderOperationProvider></ThemeProvider>;
   root.render(<WindowEnvironmentProvider value={environment}><WindowsDesktopFrame><Suspense fallback={<StartupLoading />}>{role === "startup-attention" ? <StartupAttentionWindow /> : role === "main" ? <StartupGate><ThemeProvider><MainDesktopWindow /></ThemeProvider></StartupGate> : desktopWindow}</Suspense></WindowsDesktopFrame></WindowEnvironmentProvider>);

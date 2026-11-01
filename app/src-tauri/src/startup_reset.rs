@@ -175,7 +175,9 @@ pub(crate) async fn get_startup_reset_preview(
                 return Err("初期化の操作中です".into());
             }
             if inner.snapshot.operation_id.is_some() {
-                return Err("初期化は受付済みです。状態を確認し、MONを再起動してください".into());
+                return Err(
+                    "初期化は受付済みです。状態を確認し、アプリを再起動してください".into(),
+                );
             }
             #[cfg(any(target_os = "macos", windows))]
             {
@@ -366,7 +368,7 @@ pub(crate) fn start_startup_reset(
                     inner.snapshot.busy = false;
                     inner.snapshot.completed = result.is_ok();
                     inner.snapshot.message = if result.is_ok() {
-                        "初期化が完了しました。MONを再起動しています".into()
+                        "初期化が完了しました。アプリを再起動しています".into()
                     } else {
                         "初期化を完了できませんでした".into()
                     };
@@ -382,7 +384,7 @@ pub(crate) fn start_startup_reset(
                             if let Ok(mut inner) = state.inner.lock() {
                                 inner.snapshot.error = Some(e.to_string());
                                 inner.snapshot.message =
-                                    "初期化は完了しました。MONを再起動してください".into();
+                                    "初期化は完了しました。アプリを再起動してください".into();
                             }
                         }
                     }

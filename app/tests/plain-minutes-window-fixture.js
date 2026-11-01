@@ -26,7 +26,7 @@ export async function installPlainMinutesWindowFixture(page) {
       transformCallback: fn => { const id=++sequence; callbacks.set(id,fn); return id; }, unregisterCallback: id=>callbacks.delete(id),
       invoke: async (cmd,args={}) => {
         data.calls.push({cmd,args:copy(args)});
-        if(cmd==="get_window_environment") return {schemaVersion:1,role:"main",platform:"macos",capabilities:{voiceIdentity:true}};
+        if(cmd==="get_window_environment") return {schemaVersion:1,productName:"MinutesOn",role:"main",platform:"macos",capabilities:{voiceIdentity:true}};
         if(cmd==="get_startup_report") return {schemaVersion:1,phase:"ready",failure:null};
         if(cmd==="get_recorder_operation_notices") {
           const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");

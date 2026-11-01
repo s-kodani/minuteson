@@ -49,4 +49,4 @@ function Workspace() {
     <CommonModal open={modal} onDismiss={() => setModal(false)} aria-label="タイトルバー確認" dismissLabel="確認を閉じる"><h2>確認</h2><div style={{height:1800}}>長い確認内容</div></CommonModal>
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<WindowEnvironmentProvider value={{schemaVersion:1,role:"main",platform:"windows",capabilities:{voiceIdentity:true}}}><WindowsDesktopFrame><StartupGate><ThemeProvider><Workspace /></ThemeProvider></StartupGate></WindowsDesktopFrame></WindowEnvironmentProvider>);
+createRoot(document.getElementById("root")!).render(<WindowEnvironmentProvider value={{schemaVersion:1,productName:"MinutesOn",role:"main",platform:"windows",capabilities:{voiceIdentity:true}}}><WindowsDesktopFrame><StartupGate><ThemeProvider><Workspace /></ThemeProvider></StartupGate></WindowsDesktopFrame></WindowEnvironmentProvider>);

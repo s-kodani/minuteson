@@ -40,9 +40,9 @@ export function closeMessage(c: CloseContext) {
   parts.push("未保存編集を保存し、実際の停止を確認してからアプリを終了します。受付の応答が失われても取消・終了を自動再送しません。");
   return parts.join("\n");
 }
-export function closeTarget(c: CloseContext) {
+export function closeTarget(c: CloseContext, productName = "MinutesOn") {
   const s = c.data;
-  return [importNeedsConsent(c.importing) ? c.importing.fileName ?? "選択中の音声取り込み" : "", dataNeedsConsent(s) ? s.backupPreview?.destination ?? s.relocationPreview?.destination ?? s.deletionPreview?.title ?? s.audioDeletionPreview?.meetingId ?? s.restorePreview?.meetingTitles.join("、") ?? "確認中のデータ操作" : "", c.activity.recordingRecoveryBusy ? "録音の回復" : c.activity.analysisBusy || c.activity.modelPreparationBusy ? "実行中の解析・モデル準備" : ""].filter(Boolean).join(" / ") || "mon";
+  return [importNeedsConsent(c.importing) ? c.importing.fileName ?? "選択中の音声取り込み" : "", dataNeedsConsent(s) ? s.backupPreview?.destination ?? s.relocationPreview?.destination ?? s.deletionPreview?.title ?? s.audioDeletionPreview?.meetingId ?? s.restorePreview?.meetingTitles.join("、") ?? "確認中のデータ操作" : "", c.activity.recordingRecoveryBusy ? "録音の回復" : c.activity.analysisBusy || c.activity.modelPreparationBusy ? "実行中の解析・モデル準備" : ""].filter(Boolean).join(" / ") || productName;
 }
 export async function waitForImportStop(token: string, read: () => Promise<ImportSnapshot>, wait: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, 200)), now: () => number = Date.now) {
   const deadline = now() + 120_000;

@@ -1,6 +1,6 @@
 //! Window metadata is available before storage admission and never opens data.
 use mon_contracts::{Capabilities, Platform, WindowEnvironment, WindowRole};
-use tauri::WebviewWindow;
+use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
 pub(crate) fn get_window_environment(
@@ -17,6 +17,12 @@ pub(crate) fn get_window_environment(
         };
         Ok(WindowEnvironment {
             schema_version: 1,
+            product_name: window
+                .app_handle()
+                .config()
+                .product_name
+                .clone()
+                .unwrap_or_else(|| "MinutesOn".into()),
             platform,
             role,
             capabilities: Capabilities {

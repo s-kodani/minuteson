@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { CommonModal } from "./common-modal";
 import { checkedResetPreview, checkedResetSnapshot, resetRequest, type ResetAvailability, type ResetPreview, type ResetSnapshot } from "./startup-reset-state";
 import { StartupResetForm } from "./startup-reset-form";
+import { useAppName } from "./window-environment";
 
 export function StartupReset({ availability, onBusy }: { availability?: ResetAvailability; onBusy: (busy: boolean) => void }) {
+  const appName = useAppName();
   const [preview, setPreview] = useState<ResetPreview | null>(null), [archive, setArchive] = useState(true), [selecting, setSelecting] = useState(false), [loading, setLoading] = useState(false), [snapshot, setSnapshot] = useState<ResetSnapshot | null>(null), [error, setError] = useState(""), [uncertain, setUncertain] = useState(false);
   const active = useRef(true), executing = useRef(false), reading = useRef(false), generation = useRef(0), opener = useRef<HTMLButtonElement>(null);
   const busy = !!snapshot?.busy || uncertain;
@@ -50,10 +52,10 @@ export function StartupReset({ availability, onBusy }: { availability?: ResetAva
     {allowed?.available === false && <p role="status">利用できない理由：{allowed.reason}</p>}
     <button type="button" ref={opener} disabled={busy || loading || selecting || !!snapshot?.operationId} onClick={() => void prepare()}>{allowed?.available === false ? "初期化の可否を再確認" : "データを初期化"}</button>
     {!preview && snapshot?.message && <p role="status">{snapshot.message}</p>}
-    {snapshot?.operationId && !snapshot.busy && <button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>MONを再起動</button>}
+    {snapshot?.operationId && !snapshot.busy && <button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>{appName}を再起動</button>}
     {!preview && (error || snapshot?.error) && <p role="alert">{error || snapshot?.error}</p>}
     <CommonModal open={!!preview?.availability.available} blocked={busy || selecting || loading} hideDismissButton onDismiss={() => { if (!busy && !selecting) setPreview(null); }} restoreTarget={() => opener.current} aria-labelledby="startup-reset-title" aria-describedby="startup-reset-description">
-      {preview && <StartupResetForm preview={preview} archive={archive} busy={busy} accepted={!!snapshot?.operationId} selecting={selecting} message={snapshot?.message ?? ""} error={snapshot?.error || error} onArchive={setArchive} onChoose={() => void choose()} onCancel={() => setPreview(null)} onStart={() => { if (snapshot?.operationId) void invoke("retry_startup").catch(cause => setError(String(cause))); else void start(); }} />}
+      {preview && <StartupResetForm productName={appName} preview={preview} archive={archive} busy={busy} accepted={!!snapshot?.operationId} selecting={selecting} message={snapshot?.message ?? ""} error={snapshot?.error || error} onArchive={setArchive} onChoose={() => void choose()} onCancel={() => setPreview(null)} onStart={() => { if (snapshot?.operationId) void invoke("retry_startup").catch(cause => setError(String(cause))); else void start(); }} />}
     </CommonModal>
   </section>;
 }

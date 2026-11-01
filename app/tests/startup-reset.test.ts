@@ -37,6 +37,7 @@ test("actual reset form shows native paths, model deletion, two archive radios a
   for (const windows of [false, true]) {
     const p = preview(windows);
     const html = renderToStaticMarkup(StartupResetForm({ ...props, preview: p }));
+    assert.ok(html.includes("MinutesOnを起動し直します"));
     assert.match(html, /モデル本体とダウンロード途中のモデルデータは、退避の有無にかかわらず削除/u);
     assert.ok(html.includes(p.meetingRoot!));assert.ok(html.includes(p.archivePath!));
     assert.equal((html.match(/type="radio"/gu) ?? []).length, 2);
@@ -49,6 +50,9 @@ test("actual reset form shows native paths, model deletion, two archive radios a
     const busy = renderToStaticMarkup(StartupResetForm({ ...props, busy: true }));
     assert.equal((busy.match(/<button[^>]*disabled/gu) ?? []).length, 3);
   }
+  const qa = renderToStaticMarkup(StartupResetForm({ ...props, productName: "MON QA", accepted: true }));
+  assert.ok(qa.includes("MON QAを起動し直します"));
+  assert.ok(qa.includes("MON QAを再起動"));
 });
 test("reset IPC is startup-only and available only to the main window", () => {
   const native = readFileSync(new URL("../src-tauri/src/startup_attention.rs", import.meta.url), "utf8");
