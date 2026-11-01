@@ -1,6 +1,6 @@
 [package]
 name = "mon-desktop"
-version = "1.0.0"
+version = "1.0.1"
 description = "Local meeting recording and minutes"
 edition = "2021"
 

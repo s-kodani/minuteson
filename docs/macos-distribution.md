@@ -2,7 +2,7 @@
 
 対象はmacOS 15以降・Apple SiliconのMinutesOn（略称 mon）。これは配布工程の実装であり、Developer ID署名・公証済み配布物や実機更新を検証済みにするものではない。通常の開発ビルドとMON QAは既存のアドホック署名のまま。Windowsの配布は[Store向けMSIXビルド](windows-store.md)と[EXEビルド](windows-setup.md)を参照する。
 
-正式名はWindows・macOSともMinutesOn。通常版の出力名は`MinutesOn.app`、`MinutesOn_1.0.0_aarch64.dmg`、DMGのボリューム名は`MinutesOn`となる。これらの名称と版はTauriの基本設定・macOS設定・配布設定を統合した値から生成する。内部の`mon-desktop`、録音ヘルパー名、通常版の識別子`jp.mon.desktop`は維持する。
+正式名はWindows・macOSともMinutesOn。通常版の出力名は`MinutesOn.app`、`MinutesOn_1.0.1_aarch64.dmg`、DMGのボリューム名は`MinutesOn`となる。これらの名称と版はTauriの基本設定・macOS設定・配布設定を統合した値から生成する。内部の`mon-desktop`、録音ヘルパー名、通常版の識別子`jp.mon.desktop`は維持する。
 
 ## 前提と明示指定
 

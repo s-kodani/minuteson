@@ -134,13 +134,13 @@ class TauriPlatformTests(unittest.TestCase):
     def test_public_brand_versions_and_store_data_identity(self):
         self.assertEqual(self.base["productName"], "MinutesOn")
         self.assertTrue(all(window["title"].startswith("MinutesOn") for window in self.base["app"]["windows"]))
-        self.assertEqual(self.base["version"], "1.0.0")
+        self.assertEqual(self.base["version"], "1.0.1")
         package = json.loads((ROOT / "app/package.json").read_text(encoding="utf8"))
         lock = json.loads((ROOT / "app/package-lock.json").read_text(encoding="utf8"))
         cargo = tomllib.loads((TAURI / "Cargo.toml").read_text(encoding="utf8"))
         cargo_lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf8"))
         self.assertEqual({package["version"], lock["version"], lock["packages"][""]["version"], cargo["package"]["version"],
-                          next(p["version"] for p in cargo_lock["package"] if p["name"] == "mon-desktop")}, {"1.0.0"})
+                          next(p["version"] for p in cargo_lock["package"] if p["name"] == "mon-desktop")}, {"1.0.1"})
         store = merge(self.base, configuration("tauri.windows.store.conf.json"))
         self.assertEqual(store["identifier"], "jp.mon.desktop.store")
         self.assertNotEqual(store["identifier"], self.base["identifier"])

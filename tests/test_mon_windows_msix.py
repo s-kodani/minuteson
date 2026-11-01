@@ -85,7 +85,7 @@ class StorePackageTests(unittest.TestCase):
 
     def test_store_identity_version_isolated_id_and_permissions(self):
         self.assertEqual(self.config["identityName"], "s-kodani.MinutesOn")
-        self.assertEqual(self.config["version"], "1.0.0.0")
+        self.assertEqual(self.config["version"], "1.0.1.0")
         self.assertEqual(self.config["tauriIdentifier"], "jp.mon.desktop.store")
         xml = msix.ET.fromstring(msix.manifest_xml(self.config))
         identity = xml.find("{" + msix.FOUNDATION + "}Identity")

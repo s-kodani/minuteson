@@ -23,16 +23,16 @@ npm --prefix app run tauri:windows:store:build
 | Package/Properties/PublisherDisplayName | s-kodani |
 | Store表示名 | MinutesOn |
 
-アプリのバージョンは共通Tauri設定の`1.0.0`。MSIXは末尾0を付けた`1.0.0.0`とする。更新時は先頭3要素を増やす。各要素は0～65535、先頭は1以上、末尾はStore用に0を予約する。
+アプリのバージョンは共通Tauri設定の`1.0.1`。MSIXは末尾0を付けた`1.0.1.0`とする。更新時は先頭3要素を増やす。各要素は0～65535、先頭は1以上、末尾はStore用に0を予約する。
 
 生成処理は、ソース記録 → Tauri `--no-bundle`ビルド → 録音ヘルパーのCTest → 専用ステージへのコピー → MakePRIの索引生成・候補検証 → MakeAppxのスキーマ／意味検証 → パッケージ内全ファイルのSHA-256照合 → 配布用MSIXの置換、の順に行う。既存EXEビルドの署名処理は独立して維持する。Store用ビルドは`MON_WINDOWS_RELEASE_SIGNING=0`を子プロセスに設定し、自前証明書を必須にしない。
 
-- 提出用：`output/windows-store/MinutesOn_1.0.0.0_x64.msix`
+- 提出用：`output/windows-store/MinutesOn_1.0.1.0_x64.msix`
 - 証跡・元パッケージ・ステージ：`output/windows-store-work/<build-id>/`
 - 証跡：`source.json`と`build.json`。ソース・パッケージ・全同梱物のハッシュを含む。
 
 ```powershell
-python tools/mon_windows_msix.py verify --manifest output/windows-store-work/<build-id>/build.json --package output/windows-store/MinutesOn_1.0.0.0_x64.msix --require-current-source
+python tools/mon_windows_msix.py verify --manifest output/windows-store-work/<build-id>/build.json --package output/windows-store/MinutesOn_1.0.1.0_x64.msix --require-current-source
 ```
 
 Store提出用MSIXは未署名。Microsoft Storeが審査後に署名する。生成成功はインストール・実録音・審査の成功を意味しない。証跡の`installedVerification`と`certification`は`pending`、`distributionReady`は`false`で出力する。
