@@ -100,6 +100,13 @@ jobs:
         working-directory: app
         shell: bash
         run: npx playwright install --with-deps ${{ runner.os == 'macOS' && 'webkit' || 'chromium' }}
+      - name: Configure macOS browser keyboard navigation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Match the regression tests' Tab navigation through all controls.
+          defaults write org.webkit.Playwright AppleKeyboardUIMode -int 2
+          defaults read org.webkit.Playwright AppleKeyboardUIMode
       - name: Browser regression tests
         working-directory: app
         run: npm run test:browser
