@@ -26,7 +26,7 @@ Windows・macOSでは、MinutesOnを起動済みの状態で再度起動する�
 
 macOSで保存先の起動設定や台帳の検証に失敗した場合は、通常操作を開始せず起動診断を表示します。診断の再読込は保持した情報だけを読み、保存先の再検査・修復・回収はしません。DB・台帳・設定を削除して再初期化させず、表示された段階・診断と保存先を確認してください。詳細は[保存先の起動拒否時の案内](docs/verification/storage-startup-attention-2026-10-10.md)を参照してください。
 
-macOSのDMG版とWindowsのEXE版は手動更新、WindowsのStore版はMicrosoft Storeによる更新を使用します。保存データは保持し、検証済みのDB schema 34／35から36への限定的な追加移行に対応します。移行前のDBコピーを残し、過去会議の自動処理は開始しません。バックアップは形式6で作成し、形式5・schema35も検証して追加復元できます。その他の旧形式を一律に変換する機能はありません。[macOS手動更新の準備とデータ保持](docs/manual-update-macos.md)を参照してください。署名・公証済みDMGの配布と実機更新はまだ未検証です。
+macOSのDMG版とWindowsのEXE版は手動更新、WindowsのStore版はMicrosoft Storeによる更新を使用します。保存データは保持し、検証済みのDB schema 34／35／36から37への限定的な追加移行に対応します。移行前のDBコピーを残し、過去会議の自動処理は開始しません。バックアップは形式6・schema37で作成し、形式6・schema36と形式5・schema35も検証して追加復元できます。その他の旧形式を一律に変換する機能はありません。[macOS手動更新の準備とデータ保持](docs/manual-update-macos.md)を参照してください。署名・公証済みDMGの配布と実機更新はまだ未検証です。
 
 配布工程の[macOS明示ビルド](docs/macos-distribution.md)は、証明書・Team・新規出力と署名のみ／公証profileの別指定を必要とします。準備app・アドホックDMGの検査は実施しましたが、実Developer ID署名・公証・配布条件・Gatekeeper・実機更新の完了ではありません。
 

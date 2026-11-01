@@ -2,7 +2,11 @@
 mod mp3;
 mod pcm;
 use crate::audio::VerifiedAudio;
-use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
+#[cfg(target_os = "macos")]
+use crate::local_engine::ManagedChild;
+#[cfg(not(target_os = "macos"))]
+use crate::local_engine::OwnedCommand;
+use crate::local_engine::{Fingerprint, StableFile};
 use crate::storage::{imports::ImportSnapshot, Storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -162,9 +166,20 @@ pub(crate) fn decode(
         .prefix(".mon-import-report-")
         .tempfile_in(scratch)
         .map_err(|e| e.to_string())?;
+    // The Mac helper checks getppid() against MON's PID while decoding. A
+    // guardian in between makes every native AAC/ALAC import look orphaned.
+    // Keep its direct-parent protocol and reap this exact child on cancellation.
+    #[cfg(target_os = "macos")]
+    let mut launch = std::process::Command::new(&helper.path);
+    #[cfg(target_os = "macos")]
+    mon_native::process::configure(&mut launch, mon_native::process::Purpose::Import);
+    #[cfg(not(target_os = "macos"))]
     let mut launch = OwnedCommand::for_purpose(&helper.path, mon_native::process::Purpose::Import)?;
-    launch
-        .command
+    #[cfg(target_os = "macos")]
+    let command = &mut launch;
+    #[cfg(not(target_os = "macos"))]
+    let command = &mut launch.command;
+    command
         .arg("--import-audio")
         .arg(input)
         .arg(output.unwrap_or(Path::new("-")))
@@ -174,7 +189,10 @@ pub(crate) fn decode(
             report.as_file().try_clone().map_err(|e| e.to_string())?,
         ))
         .stderr(Stdio::null());
-    crate::local_engine::native_environment(&mut launch.command);
+    crate::local_engine::native_environment(command);
+    #[cfg(target_os = "macos")]
+    let mut child = ManagedChild::direct(launch.spawn().map_err(|e| e.to_string())?);
+    #[cfg(not(target_os = "macos"))]
     let mut child = launch.spawn().map_err(|e| e.to_string())?;
     let started = Instant::now();
     let status = loop {

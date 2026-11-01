@@ -667,6 +667,7 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
     std::fs::write(&input, wav()).unwrap();
     for (name, codec, format) in [
         ("wav", "pcm_s16le", "wav"),
+        ("float-wav", "pcm_f32le", "wav"),
         ("mp3", "libmp3lame", "mp3"),
         ("aac", "aac", "ipod"),
         ("alac", "alac", "ipod"),
@@ -695,10 +696,10 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
         .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(
             selected.info.detected_format,
-            if name == "aac" || name == "alac" {
-                "m4a"
-            } else {
-                name
+            match name {
+                "aac" | "alac" => "m4a",
+                "float-wav" => "wav",
+                _ => name,
             }
         );
         assert_eq!(selected.info.channels, 2);
@@ -719,8 +720,13 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
         std::fs::rename(&source, root.path().join(format!("moved-{name}"))).unwrap();
         drop(s);
         let s = Storage::open(root.path().join(format!("store-{name}"))).unwrap();
-        let plan = s.recorded_audio_plan(&saved.meeting_id).unwrap();
-        assert_eq!(plan.tracks[0].kind, "imported");
+        let plan = s
+            .verify_canonical_audio(&saved.meeting_id, &|| false)
+            .unwrap();
+        assert_eq!(plan.tracks.len(), 1);
+        assert_eq!(plan.tracks[0].kind, "processed");
+        assert_eq!(plan.tracks[0].sample_rate, 16000);
+        assert_eq!(plan.tracks[0].channels, 1);
         assert_eq!(count(&s, "recording_sessions", &saved.meeting_id), 0);
         let mut audio = s
             .prepare_track_audio(
@@ -730,18 +736,31 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
                 saved.info.duration_us,
             )
             .unwrap();
-        assert_eq!(audio.channels, 2);
+        assert_eq!(audio.channels, 1);
         assert!(!audio.read_pcm(0, 1).unwrap().is_empty());
+        if matches!(name, "wav" | "float-wav" | "alac" | "flac") {
+            let value = audio.read_pcm(63999, 1).unwrap();
+            assert!((f32::from_le_bytes(value[..4].try_into().unwrap()) + 0.125).abs() < 0.001);
+        }
         let original = s
             .audio_import_directory(&saved)
             .unwrap()
             .join(format!("original.{}", saved.info.detected_format));
-        assert_eq!(
-            Fingerprint::capture(&original, &crate::test_support::never_cancelled)
-                .unwrap()
-                .sha256,
-            proof.sha256
-        );
+        assert!(!original.exists());
+        let directory = s.audio_import_directory(&saved).unwrap();
+        assert!(!directory.join("decoded.caf").exists());
+        assert!(!directory.join("audio.flac").exists());
+        let source_hash: String = s
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT source_hash FROM audio_import_commits WHERE import_id=?1",
+                [&saved.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_hash, proof.sha256);
     }
     let video = root.path().join("video.m4a");
     let result = Command::new(&ffmpeg)

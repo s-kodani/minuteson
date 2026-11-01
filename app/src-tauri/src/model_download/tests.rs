@@ -554,17 +554,7 @@ fn downloaded_placement_is_distinct_idempotent_private_and_persistent_without_ex
             & 0o777,
         0o700
     );
-    assert_eq!(
-        receipt
-            .directory
-            .join("bin/whisper")
-            .metadata()
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
+    assert!(!receipt.directory.exists());
     drop(storage);
     let db = rusqlite::Connection::open(meetings.path().join("meetings.sqlite3")).unwrap();
     let json: String = db
@@ -689,7 +679,7 @@ fn download_record_rejects_origin_schema_hash_and_database_source_relabel() {
 }
 
 #[test]
-fn interrupted_downloaded_copy_remains_unavailable_after_restart_and_preserves_partial() {
+fn interrupted_downloaded_move_remains_unavailable_after_restart_and_resumes_same_package() {
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
     let operation = id();
@@ -713,10 +703,10 @@ fn interrupted_downloaded_copy_remains_unavailable_after_restart_and_preserves_p
     let bytes = std::fs::read(&file).unwrap();
     drop(storage);
     let reopened = crate::storage::Storage::open(meetings.path().into()).unwrap();
-    let entry = &reopened.list_model_placements().unwrap()[0];
-    assert_eq!(entry.source_type, "download");
-    assert!(!entry.placement_recorded && !entry.ready);
-    assert!(place(
+    // The move journal permits recovery, but no DB placement is published
+    // until destination inspection has completed.
+    assert!(reopened.list_model_placements().unwrap().is_empty());
+    let placed = place(
         &reopened,
         &models,
         &root,
@@ -724,14 +714,19 @@ fn interrupted_downloaded_copy_remains_unavailable_after_restart_and_preserves_p
         &receipt.recipe_hash,
         &package,
         &receipt.report.review_hash,
-        &crate::test_support::never_cancelled
+        &crate::test_support::never_cancelled,
     )
-    .is_err());
+    .unwrap();
+    assert!(placed.placement_recorded && !placed.ready);
+    let entries = reopened.list_model_placements().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].package_id, package);
+    assert_eq!(entries[0].source_type, "download");
     assert_eq!(bytes, std::fs::read(file).unwrap());
 }
 
 #[test]
-fn downloaded_copy_rechecks_intent_evidence_before_committing() {
+fn downloaded_move_rechecks_intent_evidence_before_committing() {
     use std::cell::Cell;
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
@@ -758,16 +753,14 @@ fn downloaded_copy_rechecks_intent_evidence_before_committing() {
                     .metadata()
                     .is_ok_and(|m| m.len() > 0)
             {
-                std::fs::write(root.join(&operation).join(INTENT), b"changed during copy").unwrap();
+                std::fs::write(root.join(&operation).join(INTENT), b"changed during move").unwrap();
                 changed.set(true);
             }
             false
         },
     );
     assert!(changed.get() && result.is_err());
-    let row = &storage.list_model_placements().unwrap()[0];
-    assert_eq!(row.source_type, "download");
-    assert!(!row.placement_recorded && !row.ready);
+    assert!(storage.list_model_placements().unwrap().is_empty());
     assert!(models.join(&package).exists());
 }
 
