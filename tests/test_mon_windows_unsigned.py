@@ -1,0 +1,242 @@
+"""Unsigned release admission, cache isolation and read-only PE verification.
+
+The build tests stop at a mocked npm invocation. PE fixtures are compiled but
+never launched; these tests do not create certificates, sign files or alter trust.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILD = ROOT / "app/build-windows.ps1"
+VERIFY = ROOT / "tools/assert-windows-unsigned.ps1"
+POWERSHELL = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+
+
+def powershell(script, *arguments, environment=None):
+    return subprocess.run(
+        [*POWERSHELL, str(script), *map(str, arguments)], env=environment,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+    )
+
+
+BUILD_HARNESS = r'''
+param([string]$BuildScript, [string]$CaptureJson, [switch]$Qa, [switch]$Unsigned)
+$ErrorActionPreference = 'Stop'
+$global:BuildCalls = @()
+function python {
+    $global:BuildCalls += [pscustomobject]@{ tool = 'python'; arguments = @($args) }
+    $global:LASTEXITCODE = 0
+}
+function npm {
+    $global:BuildCalls += [pscustomobject]@{
+        tool = 'npm'; arguments = @($args)
+        releaseSigning = $env:MON_WINDOWS_RELEASE_SIGNING
+        targetDirectory = $env:CARGO_TARGET_DIR
+        inheritedTauriConfig = $env:TAURI_CONFIG
+    }
+    $global:LASTEXITCODE = 87
+}
+$failure = $null
+try {
+    $arguments = @{}
+    if ($Qa) { $arguments.Qa = $true }
+    if ($Unsigned) { $arguments.Unsigned = $true }
+    & $BuildScript @arguments
+} catch { $failure = $_.Exception.Message }
+[ordered]@{ failure = $failure; calls = @($global:BuildCalls) } |
+    ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $CaptureJson -Encoding UTF8
+'''
+
+
+@unittest.skipUnless(os.name == "nt", "Windows PowerShell build admission")
+class UnsignedBuildModeTests(unittest.TestCase):
+    def setUp(self):
+        (ROOT / "output").mkdir(exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(prefix="unsigned-build-test-", dir=ROOT / "output")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        (self.root / "app").mkdir()
+        (self.root / "tools").mkdir()
+        (self.root / "bin").mkdir()
+        shutil.copyfile(BUILD, self.root / "app/build-windows.ps1")
+        self.sentinel = self.root / "signer-invoked.txt"
+        (self.root / "tools/sign-windows.ps1").write_text(
+            "param([switch]$ValidateOnly, [string]$Path)\n"
+            "'signer preflight' | Set-Content -LiteralPath $env:MON_TEST_SIGNER_SENTINEL\n"
+            "throw 'SIGNER_PREFLIGHT_REQUIRED'\n", encoding="utf-8",
+        )
+        # Discovery only: npm is intercepted before CTest can ever be launched.
+        (self.root / "bin/ctest.exe").write_bytes(b"MZ inert discovery sentinel; never executed")
+        (self.root / "bin/cmake.exe").write_bytes(b"MZ inert discovery sentinel; never executed")
+        self.harness = self.root / "build-harness.ps1"
+        self.harness.write_text(BUILD_HARNESS, encoding="utf-8")
+
+    def invoke(self, *switches):
+        result_path = self.root / "result.json"
+        environment = dict(os.environ)
+        environment.update({
+            "PATH": str(self.root / "bin") + os.pathsep + environment["PATH"],
+            "MON_TEST_SIGNER_SENTINEL": str(self.sentinel),
+            "MON_WINDOWS_RELEASE_SIGNING": "0",
+            "MON_WINDOWS_CERTIFICATE_THUMBPRINT": "0" * 40,
+            "CARGO_TARGET_DIR": str(self.root / "cached-signed-target"),
+            "TAURI_CONFIG": '{"bundle":{"windows":{"signCommand":"stale-signer"}}}',
+        })
+        result = powershell(self.harness, "-BuildScript", self.root / "app/build-windows.ps1",
+                            "-CaptureJson", result_path, *switches, environment=environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result_path.read_text(encoding="utf-8-sig"))
+
+    def test_qa_and_unsigned_are_rejected_before_signing_or_build_hooks(self):
+        result = self.invoke("-Qa", "-Unsigned")
+        self.assertIn("cannot be combined", result["failure"])
+        self.assertEqual(result["calls"], [])
+        self.assertFalse(self.sentinel.exists())
+        self.assertFalse((self.root / "output").exists())
+        self.assertFalse((self.root / "app/src-tauri/target-unsigned").exists())
+
+    def test_default_release_still_requires_signer_even_with_unsigned_environment(self):
+        result = self.invoke()
+        self.assertIn("SIGNER_PREFLIGHT_REQUIRED", result["failure"])
+        self.assertTrue(self.sentinel.is_file())
+        self.assertEqual(result["calls"], [])
+        self.assertFalse((self.root / "output").exists())
+
+    def test_explicit_unsigned_bypasses_signer_and_ignores_signed_build_cache(self):
+        result = self.invoke("-Unsigned")
+        self.assertIn("Tauri build failed", result["failure"])
+        self.assertFalse(self.sentinel.exists())
+        npm_calls = [call for call in result["calls"] if call["tool"] == "npm"]
+        self.assertEqual(len(npm_calls), 1)
+        invocation = npm_calls[0]
+        self.assertEqual(invocation["releaseSigning"], "0")
+        self.assertIsNone(invocation["inheritedTauriConfig"])
+        self.assertEqual(Path(invocation["targetDirectory"]).resolve(),
+                         self.root / "app/src-tauri/target-unsigned")
+        arguments = invocation["arguments"]
+        self.assertNotIn("src-tauri/tauri.qa.conf.json", arguments)
+        overlays = [json.loads(value) for value in arguments if value.startswith("{")]
+        self.assertTrue(overlays, "Unsigned build must explicitly clear inherited signing configuration")
+        windows = overlays[-1]["bundle"]["windows"]
+        self.assertIn("signCommand", windows)
+        self.assertIsNone(windows["signCommand"])
+        self.assertIn("certificateThumbprint", windows)
+        self.assertIsNone(windows["certificateThumbprint"])
+        evidence_calls = [call for call in result["calls"] if call["tool"] == "python"]
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertIn("windows-unsigned-work", " ".join(evidence_calls[0]["arguments"]))
+
+
+VERIFY_HARNESS = r'''
+param([string]$Verifier, [string]$InputsJson, [string]$Status)
+$ErrorActionPreference = 'Stop'
+if ($Status) {
+    $global:ForcedSignatureStatus = $Status
+    function Get-AuthenticodeSignature {
+        param([string]$LiteralPath)
+        [pscustomobject]@{
+            Status = [System.Enum]::Parse([System.Management.Automation.SignatureStatus], $global:ForcedSignatureStatus)
+            SignerCertificate = $null; TimeStamperCertificate = $null; Path = $LiteralPath
+        }
+    }
+}
+$paths = [string[]](Get-Content -LiteralPath $InputsJson -Raw | ConvertFrom-Json)
+@(& $Verifier -Path $paths) | ConvertTo-Json -Depth 5 -Compress
+'''
+
+
+@unittest.skipUnless(os.name == "nt", "Windows PE and Authenticode verification")
+class UnsignedPEVerificationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        windows = Path(os.environ.get("WINDIR", r"C:\Windows"))
+        candidates = [windows / "Microsoft.NET" / name / "v4.0.30319/csc.exe"
+                      for name in ("Framework64", "Framework")]
+        compiler = next((path for path in candidates if path.is_file()), None)
+        if compiler is None:
+            raise unittest.SkipTest(".NET Framework C# compiler is needed for an unsigned PE fixture")
+        (ROOT / "output").mkdir(exist_ok=True)
+        cls.directory = tempfile.TemporaryDirectory(prefix="unsigned-pe-test-", dir=ROOT / "output")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name).resolve()
+        source = cls.root / "fixture.cs"
+        source.write_text("internal static class Fixture { static void Main() {} }\n", encoding="utf-8")
+        binary = cls.root / "unsigned-fixture.exe"
+        result = subprocess.run([str(compiler), "/nologo", "/target:exe", "/debug-", "/optimize+",
+                                 "/out:" + str(binary), str(source)], capture_output=True, timeout=30)
+        if result.returncode:
+            raise RuntimeError("Unsigned test fixture compilation failed: " + result.stderr.decode(errors="replace"))
+        cls.unsigned = binary.read_bytes()
+        cls.harness = cls.root / "verify-harness.ps1"
+        cls.harness.write_text(VERIFY_HARNESS, encoding="utf-8")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="case-", dir=self.root)
+        self.addCleanup(self.temp.cleanup)
+        self.case = Path(self.temp.name)
+
+    def verify(self, *payloads, status=None):
+        paths = []
+        for index, data in enumerate(payloads):
+            path = self.case / f"fixture-{index}.exe"
+            path.write_bytes(data)
+            paths.append(path)
+        inputs = self.case / "inputs.json"
+        inputs.write_text(json.dumps([str(path) for path in paths]), encoding="utf-8")
+        args = ["-Verifier", VERIFY, "-InputsJson", inputs]
+        if status:
+            args += ["-Status", status]
+        result = powershell(self.harness, *args)
+        for path, data in zip(paths, payloads):
+            self.assertEqual(path.read_bytes(), data, "Unsigned verifier must never strip or modify files")
+        return result
+
+    def test_real_unsigned_pe_files_are_accepted_without_modification(self):
+        result = self.verify(self.unsigned, self.unsigned)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        entries = json.loads(result.stdout.lstrip("\ufeff"))
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertEqual(entry["authenticodeStatus"], "NotSigned")
+            self.assertFalse(entry["embeddedCertificateTable"])
+            self.assertEqual(entry["bytes"], len(self.unsigned))
+            self.assertEqual(entry["sha256"], hashlib.sha256(self.unsigned).hexdigest())
+
+    def test_certificate_table_is_rejected_even_if_windows_reports_not_signed(self):
+        pe = struct.unpack_from("<I", self.unsigned, 0x3c)[0]
+        optional = pe + 24
+        magic = struct.unpack_from("<H", self.unsigned, optional)[0]
+        security = optional + (96 if magic == 0x10b else 112) + 4 * 8
+        for offset, size in ((len(self.unsigned), 40), (len(self.unsigned), 0), (0, 40)):
+            with self.subTest(offset=offset, size=size):
+                altered = bytearray(self.unsigned)
+                struct.pack_into("<II", altered, security, offset, size)
+                altered.extend(struct.pack("<IHH", 40, 0x200, 2) + b"certificate table test fixture!!".ljust(32, b"!"))
+                result = self.verify(bytes(altered), status="NotSigned")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Embedded certificate table exists", result.stderr)
+
+    def test_every_non_not_signed_status_is_rejected(self):
+        for status in ("Valid", "HashMismatch", "NotTrusted", "UnknownError", "NotSupportedFileFormat", "Incompatible"):
+            with self.subTest(status=status):
+                result = self.verify(self.unsigned, status=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Authenticode status must be NotSigned", result.stderr)
+
+    def test_pe_looking_garbage_is_not_accepted_as_unsigned(self):
+        for payload in (b"MZnot a PE", b"not an executable", b"MZ" + b"\0" * 510):
+            with self.subTest(payload=payload[:20]):
+                result = self.verify(payload, status="NotSigned")
+                self.assertNotEqual(result.returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

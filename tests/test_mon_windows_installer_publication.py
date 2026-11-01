@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,28 @@ SCRIPT = ROOT / 'tools/publish-windows-installer.ps1'
 
 @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell publication')
 class InstallerPublicationTests(unittest.TestCase):
+    @classmethod
+    def unsigned_fixture(cls):
+        if hasattr(cls, '_unsigned_pe'):
+            return cls._unsigned_pe
+        compiler = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        if not compiler.is_file():
+            raise unittest.SkipTest('Windows .NET Framework C# compiler is required for unsigned PE fixtures')
+        (ROOT / 'output').mkdir(exist_ok=True)
+        cls.fixture_temp = tempfile.TemporaryDirectory(prefix='installer-publication-pe-', dir=ROOT / 'output')
+        cls.fixture_root = Path(cls.fixture_temp.name).resolve()
+        if not cls.fixture_root.is_relative_to((ROOT / 'output').resolve()):
+            raise AssertionError('Fixture cleanup must stay inside workspace output')
+        cls.addClassCleanup(cls.fixture_temp.cleanup)
+        source = cls.fixture_root / 'fixture.cs'
+        source.write_text('public static class Fixture { public static void Main() {} }\n', encoding='utf8')
+        cls._unsigned_pe = cls.fixture_root / 'unsigned-fixture.exe'
+        result = subprocess.run([str(compiler), '/nologo', '/target:exe', '/platform:x64', '/optimize+',
+                                 '/out:' + str(cls._unsigned_pe), str(source)], capture_output=True)
+        if result.returncode:
+            raise AssertionError('Could not compile unsigned PE fixture: ' + result.stderr.decode(errors='replace'))
+        return cls._unsigned_pe
+
     def setUp(self):
         (ROOT / 'output').mkdir(exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(prefix='installer-publication-test-', dir=ROOT / 'output')
@@ -50,6 +73,62 @@ class InstallerPublicationTests(unittest.TestCase):
         self.assertEqual([p.name for p in release.iterdir()], ['MinutesOn-setup.exe'])
         self.assertEqual((release / 'MinutesOn-setup.exe').read_bytes(), self.source.read_bytes())
         self.assertEqual((self.download / 'MON-QA-setup.exe').read_bytes(), self.source.read_bytes())
+
+    def test_unsigned_publication_preserves_store_release_and_qa(self):
+        shutil.copyfile(self.unsigned_fixture(), self.source)
+        self.publish()
+        self.publish(flavor='release')
+        store = self.root / 'windows-store/MinutesOn_1.0.1.0_x64.msix'
+        store.parent.mkdir()
+        store.write_bytes(b'preserve existing Microsoft Store package')
+        preserved = {path: path.read_bytes() for path in (store, self.download / 'MON-QA-setup.exe',
+                                                         self.root / 'windows-release/MinutesOn-setup.exe')}
+        self.publish(flavor='unsigned')
+        distribution = self.root / 'windows-unsigned'
+        published = distribution / 'MinutesOn-unsigned-setup.exe'
+        self.assertEqual([p.name for p in distribution.iterdir()], [published.name])
+        self.assertEqual(published.read_bytes(), self.source.read_bytes())
+        # A later unsigned build replaces only its own fixed-name download.
+        self.source.write_bytes(self.unsigned_fixture().read_bytes() + b'unsigned build update')
+        self.publish(flavor='unsigned')
+        self.assertEqual(published.read_bytes(), self.source.read_bytes())
+        for path, original in preserved.items():
+            self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(list((self.root / 'windows-unsigned-work').glob('.installer-*')), [])
+
+    def test_unsigned_invalid_pe_is_rejected_before_output_creation(self):
+        self.source.write_bytes(b'MZnot a complete PE executable')
+        self.publish(flavor='unsigned', success=False)
+        self.assertFalse((self.root / 'windows-unsigned').exists())
+        self.assertFalse((self.root / 'windows-unsigned-work').exists())
+
+    def test_unsigned_embedded_signature_table_is_rejected_before_output_creation(self):
+        data = bytearray(self.unsigned_fixture().read_bytes())
+        pe = struct.unpack_from('<I', data, 0x3c)[0]
+        optional = pe + 24
+        self.assertEqual(struct.unpack_from('<H', data, optional)[0], 0x20b)
+        certificate_offset = (len(data) + 7) & ~7
+        certificate = struct.pack('<IHH', 16, 0x200, 2) + b'NOTACMS!'
+        struct.pack_into('<II', data, optional + 112 + 4 * 8, certificate_offset, len(certificate))
+        data.extend(b'\0' * (certificate_offset - len(data)))
+        data.extend(certificate)
+        self.source.write_bytes(data)
+        self.publish(flavor='unsigned', success=False)
+        self.assertFalse((self.root / 'windows-unsigned').exists())
+        self.assertFalse((self.root / 'windows-unsigned-work').exists())
+
+    def test_unsigned_failed_preflight_retains_previous_installer_and_diagnostics(self):
+        shutil.copyfile(self.unsigned_fixture(), self.source)
+        self.publish(flavor='unsigned')
+        published = self.root / 'windows-unsigned/MinutesOn-unsigned-setup.exe'
+        previous = published.read_bytes()
+        diagnostics = published.parent / 'build.log'
+        diagnostics.write_text('preserve diagnostics', encoding='utf8')
+        self.source.write_bytes(b'MZinvalid next build')
+        self.publish(flavor='unsigned', success=False)
+        self.assertEqual(published.read_bytes(), previous)
+        self.assertEqual(diagnostics.read_text(encoding='utf8'), 'preserve diagnostics')
+        self.assertEqual(list((self.root / 'windows-unsigned-work').glob('.installer-*')), [])
 
     def test_repeated_publication_leaves_only_latest_and_preserves_diagnostics(self):
         (self.download / 'MON-QA-old-setup.exe').write_bytes(b'old')

@@ -12,6 +12,7 @@
     "tauri:release:build": "python3 ../tools/mon_macos_release.py",
     "tauri:windows:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1",
     "tauri:windows:qa:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Qa",
+    "tauri:windows:unsigned:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1 -Unsigned",
     "tauri:windows:store:build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows-store.ps1",
     "test:browser": "node tests/run-browser-checks.mjs",
     "test:browser:list": "playwright test --list",

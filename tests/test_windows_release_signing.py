@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(os.name == "nt", "Windows certificate store and PowerShell")
 class WindowsReleaseSigning(unittest.TestCase):
     def test_missing_certificate_never_modifies_or_accepts_artifact(self):
-        with tempfile.TemporaryDirectory() as directory:
+        (ROOT / "output").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-signing-test-", dir=ROOT / "output") as directory:
             artifact = Path(directory) / "qa.exe"
             original = b"QA-only fixture: no private key or public signature"
             artifact.write_bytes(original)

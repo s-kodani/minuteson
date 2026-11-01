@@ -1,10 +1,14 @@
 # MinutesOnのWindows開発環境とMinutesOn QAビルド
 
-Microsoft Store向けの本番MSIXは[Store用MSIXの生成・検証・提出準備](windows-store.md)を参照。直接配布版は署名済み`MinutesOn-setup.exe`、QA版は`MON-QA-setup.exe`として作成する。
+Microsoft Store向けの本番MSIXは[Store用MSIXの生成・検証・提出準備](windows-store.md)を参照。直接配布版は署名済み`MinutesOn-setup.exe`、明示的な未署名版は`MinutesOn-unsigned-setup.exe`、QA版は`MON-QA-setup.exe`として作成する。
 
 Windows 11 24H2以降・x64向けのローカルビルド手順。リポジトリのルートでPowerShellから実行する。WASAPI録音、取り込み、バックアップ・復元、削除、保存先変更、声の登録・照合・補完とCPU／Vulkan推論を接続した。最新の32項目別の実装根拠・試験・実機残件は[対応記録](verification/windows-parity-implementation-2026-10-24.md)を参照。以下の過去のビルド記録にある未対応の説明は、その時点の状態を示す。
 
 公開用は `powershell -File app/build-windows.ps1` を使い、`MON_WINDOWS_CERTIFICATE_THUMBPRINT` にCurrentUser\\Myの指定Code Signing証明書、`MON_WINDOWS_TIMESTAMP_URL` に証明書提供元のHTTPS RFC3161サービスを指定する。秘密鍵・証明書・署名・タイムスタンプ・検証のいずれかが欠ければ公開ビルドを失敗とする。証明書が未提供のため、実際の公開署名は実施していない。QA用は `-Qa` を指定し、未署名成果物として区別する。
+
+通常のMinutesOnを未署名のNSISで作る場合は、`npm.cmd --prefix app run tauri:windows:unsigned:build`、または`powershell -File app/build-windows.ps1 -Unsigned`を明示する。製品名・識別子・機能は通常版と同じで、QA版への切替ではない。署名用証明書は不要だが、Windowsの発行元表示は未確認の発行元となる。MSIXは作成・変更しない。
+
+未署名ビルドは専用の`app/src-tauri/target-unsigned/`で本体を構築し、継承した`TAURI_CONFIG`と署名指定を無効化する。本体・録音／推論ヘルパー・インストーラーのAuthenticode状態とPE証明書テーブルが未署名であることを確認した場合だけ配布物を更新する。第三者配布物のDLL署名を削除・変更しない。`-Qa`と`-Unsigned`の同時指定は出力作成前に拒否する。既定の署名必須ビルドとQAビルドは引き続き個別に使える。
 
 ## 必要なツール
 
@@ -126,9 +130,12 @@ QAの製品名は `MinutesOn QA`、識別子は `jp.mon.desktop.qa`。通常版�
 ```text
 QA版: output/windows-qa/MON-QA-setup.exe
 公開版: output/windows-release/MinutesOn-setup.exe
+未署名通常版: output/windows-unsigned/MinutesOn-unsigned-setup.exe
 ```
 
 `app/build-windows.ps1` は、ビルド成功・公開版の署名確認後に `tools/publish-windows-installer.ps1` で配布先を更新する。配布先にはログ・画像・検証スクリプト・ハッシュファイルを置かない。既知の過去のMONインストーラーは削除し、それ以外のファイルは `output/windows-qa-work/` または `output/windows-release-work/` に移す。検証結果やビルドログは最初からこれらの作業用フォルダーに保存する。ビルド内部の生成物は引き続き `app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/` にある。
+
+未署名通常版の配布と証跡は`output/windows-unsigned/`と`output/windows-unsigned-work/`に分離する。`<build-id>-unsigned.json`に未署名検査の各パス・SHA-256を保存し、既存のソース／本体／ヘルパー／インストーラー照合とCTestも通す。失敗時は既存の配布物を保持する。内部のNSIS出力は`app/src-tauri/target-unsigned/x86_64-pc-windows-msvc/release/bundle/nsis/`となる。
 
 ```powershell
 Get-ChildItem -LiteralPath output/windows-qa |
