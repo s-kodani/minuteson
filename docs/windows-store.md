@@ -37,6 +37,8 @@ python tools/mon_windows_msix.py verify --manifest output/windows-store-work/<bu
 
 Store提出用MSIXは未署名。Microsoft Storeが審査後に署名する。生成成功はインストール・実録音・審査の成功を意味しない。証跡の`installedVerification`と`certification`は`pending`、`distributionReady`は`false`で出力する。
 
+ローカル検証には、この原本をコピーして同じ版数のまま署名したものを使う。検証用だけ版数やマニフェストを変更しない。準備と証明書の再利用は[ローカル検証手順](windows-store-test.md)を参照する。
+
 ## タスクバーのアイコン
 
 通常のタイル画像だけを同梱すると、Windowsがタスクバーのアイコンにアクセント色の背景を補うことがある。`Square44x44Logo`と同じ画像名の`targetsize`、`altform-unplated`、`altform-lightunplated`を14サイズずつ同梱し、ライト／ダーク両テーマで背景を付けずに表示できるようにする。既存のモノクロアイコンの形・色・透過部分は維持する。
