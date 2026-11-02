@@ -98,3 +98,7 @@
   .recording-input-table td::before{content:attr(data-label);display:block;color:var(--muted);font-size:12px;margin-bottom:4px;}
   .capture-test-dialog .recording-track-status{grid-template-columns:minmax(0,1fr);}
 }
+
+.recording-vocabulary{display:grid;gap:8px;min-width:0;}
+.recording-vocabulary h3{font-size:14px;margin:0;}
+.recording-vocabulary .options-modal-trigger{justify-self:start;}

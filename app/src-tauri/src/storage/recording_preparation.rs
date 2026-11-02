@@ -1,4 +1,4 @@
-use super::{now_ms, Meeting, Storage};
+use super::{now_ms, Meeting, Storage, VocabularyEntry};
 use rusqlite::params;
 use uuid::Uuid;
 
@@ -7,7 +7,17 @@ impl Storage {
     // admission. Opening or cancelling UI preparation never calls this method.
     // Existing IDs are rejected, not adopted or overwritten. Lost replies are
     // reconciled by reading the known ID; capture is never automatically replayed.
+    #[cfg(test)]
     pub(crate) fn create_recording_draft(&self, id: &str, title: &str) -> Result<Meeting, String> {
+        self.create_recording_draft_with_vocabulary(id, title, &[])
+    }
+
+    pub(crate) fn create_recording_draft_with_vocabulary(
+        &self,
+        id: &str,
+        title: &str,
+        vocabulary: &[VocabularyEntry],
+    ) -> Result<Meeting, String> {
         self.require_data_writable()?;
         let parsed = Uuid::parse_str(id).map_err(|_| "録音準備の識別子が不正です")?;
         if parsed.get_version_num() != 4
@@ -30,13 +40,14 @@ impl Storage {
             updated_at: now,
             lock_version: 0,
         };
-        let db = self
+        let mut db = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        let tx = db.transaction().map_err(|e| e.to_string())?;
         // Keep the check and insert under the existing connection/authorizer.
         // The primary key is the final concurrency guard. No INSERT OR REPLACE.
-        let exists: bool = db
+        let exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1)",
                 [id],
@@ -49,7 +60,9 @@ impl Storage {
                     .into(),
             );
         }
-        db.execute("INSERT INTO meetings(id,title,lifecycle,created_at,updated_at) VALUES(?1,?2,'draft',?3,?3)", params![id,title,now]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO meetings(id,title,lifecycle,created_at,updated_at) VALUES(?1,?2,'draft',?3,?3)", params![id,title,now]).map_err(|e| e.to_string())?;
+        super::vocabulary::save_initial_vocabulary(&tx, id, vocabulary, None)?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(meeting)
     }
 }
@@ -189,5 +202,71 @@ mod tests {
         assert_eq!(saved.lifecycle, "recording");
         assert_eq!(saved.source_type.as_deref(), Some("recording"));
         assert!(storage.create_recording_draft(&id, "確認済み").is_err());
+    }
+    fn entry(term: &str) -> VocabularyEntry {
+        VocabularyEntry {
+            id: Uuid::new_v4().to_string(),
+            term: term.into(),
+            reading: Some("てんけんび".into()),
+            note: Some("会議の補足".into()),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn recording_vocabulary_is_saved_with_meeting_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let terms = vec![
+            entry("点検日"),
+            VocabularyEntry {
+                enabled: false,
+                ..entry("別の用語")
+            },
+        ];
+        {
+            let storage = Storage::open(dir.path().to_owned()).unwrap();
+            storage
+                .create_recording_draft_with_vocabulary(&id, "用語を含む録音", &terms)
+                .unwrap();
+            assert_eq!(storage.vocabulary_book(Some(&id)).unwrap().payload, terms);
+            assert!(storage.vocabulary_book(None).unwrap().payload.is_empty());
+            assert!(storage
+                .create_recording_draft_with_vocabulary(&id, "上書き", &[])
+                .is_err());
+            assert_eq!(storage.vocabulary_book(Some(&id)).unwrap().payload, terms);
+        }
+        let reopened = Storage::open(dir.path().to_owned()).unwrap();
+        assert_eq!(reopened.vocabulary_book(Some(&id)).unwrap().payload, terms);
+        assert_eq!(
+            reopened.get_meeting(&id).unwrap().unwrap().title,
+            "用語を含む録音"
+        );
+    }
+
+    #[test]
+    fn invalid_or_failed_vocabulary_rolls_back_the_whole_recording_draft() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().to_owned()).unwrap();
+        for terms in [
+            vec![entry("")],
+            vec![entry("重複"), entry("重複")],
+            vec![entry(&"語".repeat(201))],
+        ] {
+            let id = Uuid::new_v4().to_string();
+            assert!(storage
+                .create_recording_draft_with_vocabulary(&id, "保存しない", &terms)
+                .is_err());
+            assert!(storage.get_meeting(&id).unwrap().is_none());
+        }
+        storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_recording_term BEFORE INSERT ON vocabulary_entries BEGIN SELECT RAISE(ABORT,'synthetic term write failure'); END;").unwrap();
+        let id = Uuid::new_v4().to_string();
+        assert!(storage
+            .create_recording_draft_with_vocabulary(&id, "部分保存しない", &[entry("点検日")])
+            .is_err());
+        assert!(storage.get_meeting(&id).unwrap().is_none());
+        let db = storage.connection.lock().unwrap();
+        let counts: (i64, i64, i64) = db.query_row("SELECT (SELECT count(*) FROM vocabulary_scopes WHERE meeting_id IS NOT NULL),(SELECT count(*) FROM vocabulary_entries),(SELECT count(*) FROM recording_sessions)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(counts, (0, 0, 0));
     }
 }

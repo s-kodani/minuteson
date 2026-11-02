@@ -2642,6 +2642,7 @@ async fn start_recording(
     capture_scope: capture_scope::CaptureScope,
     new_title: Option<String>,
     num_speakers: Option<u32>,
+    meeting_vocabulary: Option<Vec<storage::VocabularyEntry>>,
 ) -> Result<RecordingSnapshot, mon_contracts::AppError> {
     let result: Result<RecordingSnapshot, String> = async move {
         if window.label() != "main" {
@@ -2650,6 +2651,9 @@ async fn start_recording(
         let app = window.app_handle().clone();
         let speaker_counts = storage::recordings::SpeakerCounts { num_speakers };
         speaker_counts.validate()?;
+        if new_title.is_none() && meeting_vocabulary.is_some() {
+            return Err("既存会議の用語は会議の用語画面で保存してください".into());
+        }
         tauri::async_runtime::spawn_blocking(move || {
             RecorderController::with_transition(&app, || {
                 app.state::<capture_test::CaptureTests>().require_empty()?;
@@ -2669,7 +2673,11 @@ async fn start_recording(
                 RecorderController::require_scope(&app, &capture_scope)?;
                 if let Some(title) = new_title {
                     app.state::<Storage>()
-                        .create_recording_draft(&meeting_id, &title)?;
+                        .create_recording_draft_with_vocabulary(
+                            &meeting_id,
+                            &title,
+                            &meeting_vocabulary.unwrap_or_default(),
+                        )?;
                 }
                 ImportController::prepare_recording(&app)?;
                 let result = AnalysisController::prepare_recording(&app).and_then(|_| {

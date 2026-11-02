@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {newRecordingPreparation,recordingTitle,sameRecordingPreparation,validRecordingTitle} from "../src/recording-preparation-state.ts";
+import {newRecordingPreparation,recordingTitle,sameRecordingPreparation,validRecordingTitle,validRecordingPreparation} from "../src/recording-preparation-state.ts";
 
 const id="735027d4-a03e-43d3-830a-21e767dfaf88";
 test("preparation fills a local wall-clock title without persisting or starting",()=>{
   const now=new Date(2026,9,8,9,4,23);
-  assert.deepEqual(newRecordingPreparation(id,now),{id,title:"2026/10/08 09:04の会議",submitted:false,numSpeakers:null});
+  assert.deepEqual(newRecordingPreparation(id,now),{id,title:"2026/10/08 09:04の会議",submitted:false,numSpeakers:null,meetingVocabulary:[]});
   assert.equal(recordingTitle(new Date(2026,0,2,0,0)),"2026/01/02 00:00の会議");
 });
 test("title admission matches Rust Unicode character count and trims",()=>{
@@ -29,4 +29,19 @@ test("recording confirmation binds the meeting speaker limit",()=>{
  const p=newRecordingPreparation("00000000-0000-4000-8000-000000000001",new Date(2026,9,20));
  assert.equal(p.numSpeakers,null);
  assert.equal(sameRecordingPreparation(p,{...p,numSpeakers:2}),false);
+});
+
+const term={id:"00000000-0000-4000-8000-000000000002",term:"点検日",reading:"てんけんび",note:null,enabled:true};
+test("recording confirmation binds the full vocabulary and rejects incomplete entries",()=>{
+ const p={...newRecordingPreparation(id,new Date()),meetingVocabulary:[term]};
+ assert.equal(validRecordingPreparation(p),true);
+ assert.equal(sameRecordingPreparation(structuredClone(p),p),true);
+ for(const patch of [{term:"別の用語"},{reading:"べつ"},{note:"補足"},{enabled:false}]){
+  assert.equal(sameRecordingPreparation({...p,meetingVocabulary:[{...term,...patch}]},p),false);
+ }
+ assert.equal(sameRecordingPreparation({...p,meetingVocabulary:[]},p),false);
+ assert.equal(validRecordingPreparation({...p,meetingVocabulary:[{...term,term:""}]}),false);
+ assert.equal(validRecordingPreparation({...p,meetingVocabulary:[term,{...term,id:crypto.randomUUID()}]}),false);
+ assert.equal(validRecordingPreparation({...p,submitted:true}),false);
+ assert.equal(newRecordingPreparation(id,new Date()).meetingVocabulary.length,0);
 });

@@ -94,7 +94,7 @@ pub(crate) fn validate(entries: &[VocabularyEntry]) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) fn save_initial_import_vocabulary(
+pub(super) fn save_initial_vocabulary(
     db: &Connection,
     meeting: &str,
     entries: &[VocabularyEntry],
