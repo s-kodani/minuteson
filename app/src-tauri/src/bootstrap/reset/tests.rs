@@ -475,23 +475,29 @@ fn duplicate_storage_open_preserves_the_original_sqlite_process_locks() {
 
 #[test]
 fn startup_reset_removes_registered_voice_files_and_includes_them_in_raw_archives() {
-    for archive in [false,true] {
-        let f=Fixture::new(false);
-        let person=Uuid::new_v4().to_string();
-        let sample=Uuid::new_v4().to_string();
-        let relative=format!("voices/{person}/{sample}.wav");
-        let clip=f.root.join(&relative);
+    for archive in [false, true] {
+        let f = Fixture::new(false);
+        let person = Uuid::new_v4().to_string();
+        let sample = Uuid::new_v4().to_string();
+        let relative = format!("voices/{person}/{sample}.wav");
+        let clip = f.root.join(&relative);
         std::fs::create_dir_all(clip.parent().unwrap()).unwrap();
-        std::fs::write(&clip,b"REGISTERED VOICE").unwrap();
-        let (b,s,id)=f.prepare();
-        let parent=f._temp.path().canonicalize().unwrap();
-        let to=destination(&s,&parent,&id).unwrap();
-        execute(b,&s,&id,archive.then_some(to.as_path()),&|_|{}).unwrap();
+        std::fs::write(&clip, b"REGISTERED VOICE").unwrap();
+        let (b, s, id) = f.prepare();
+        let parent = f._temp.path().canonicalize().unwrap();
+        let to = destination(&s, &parent, &id).unwrap();
+        execute(b, &s, &id, archive.then_some(to.as_path()), &|_| {}).unwrap();
         f.fresh();
         assert!(!f.root.join("voices").exists());
         if archive {
-            let found=std::fs::read_dir(&to).unwrap().any(|entry|entry.unwrap().path().join(format!("{person}/{sample}.wav")).is_file());
-            assert!(found,"raw reset archive omitted the voice tree");
+            let found = std::fs::read_dir(&to).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .join(format!("{person}/{sample}.wav"))
+                    .is_file()
+            });
+            assert!(found, "raw reset archive omitted the voice tree");
         }
     }
 }

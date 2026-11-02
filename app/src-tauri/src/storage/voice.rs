@@ -3,12 +3,15 @@ use super::*;
 use crate::voice::{self, Plan, Window};
 use rusqlite::{Transaction, TransactionBehavior};
 use std::collections::{BTreeMap, BTreeSet};
-mod enrollment;
 pub(crate) mod audio;
+mod enrollment;
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all="camelCase")]
-pub(crate) struct PersonMutation { pub audio_cleanup_pending: bool, pub audio_cleanup_error: Option<String> }
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersonMutation {
+    pub audio_cleanup_pending: bool,
+    pub audio_cleanup_error: Option<String>,
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SampleView {
@@ -94,9 +97,10 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
         let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at,coalesce(a.state,'pending'),a.error_message FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE person_id=?1 ORDER BY s.created_at,s.id").map_err(|e|e.to_string())?;
         person.samples = q
             .query_map([&person.id], |r| {
-                let state:String=r.get(8)?;
-                let source_available:bool=r.get(4)?;
-                let audio_available=state=="ready" || (state!="unavailable" && source_available);
+                let state: String = r.get(8)?;
+                let source_available: bool = r.get(4)?;
+                let audio_available =
+                    state == "ready" || (state != "unavailable" && source_available);
                 Ok(SampleView {
                     id: r.get(0)?,
                     model_hash: r.get(1)?,
@@ -356,7 +360,9 @@ impl Storage {
         sample_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<crate::playback::PreparedAudio, String> {
-        if let Some(audio) = self.saved_voice_playback(sample_id, cancelled)? { return Ok(audio); }
+        if let Some(audio) = self.saved_voice_playback(sample_id, cancelled)? {
+            return Ok(audio);
+        }
         let resolve = || -> Result<(String, String, i64, i64), String> {
             if cancelled() {
                 return Err("音声の再生準備を取り消しました".into());
@@ -442,7 +448,9 @@ impl Storage {
         {
             return Err("人物登録が変更されています。再読込してください".into());
         }
-        if sample_id.is_some() || name.is_none() { self.journal_voice_deletion(&tx, id, sample_id.as_deref())?; }
+        if sample_id.is_some() || name.is_none() {
+            self.journal_voice_deletion(&tx, id, sample_id.as_deref())?;
+        }
         if let Some(sample) = sample_id {
             if tx
                 .execute(
@@ -472,8 +480,11 @@ impl Storage {
         }
         tx.commit().map_err(|e| e.to_string())?;
         drop(db);
-        let error=self.recover_voice_audio().err();
-        Ok(PersonMutation{audio_cleanup_pending:error.is_some(),audio_cleanup_error:error})
+        let error = self.recover_voice_audio().err();
+        Ok(PersonMutation {
+            audio_cleanup_pending: error.is_some(),
+            audio_cleanup_error: error,
+        })
     }
     pub(crate) fn start_voice(&self, request: Start) -> Result<JobSnapshot, String> {
         self.start_voice_observed(request, false, None)
@@ -678,15 +689,28 @@ impl Storage {
         let _voice_lock = self.lock_voice_audio()?;
         self.recover_voice_audio()?;
         let _clip_cleanup = audio::Cleanup(self);
-        let registration_person = plan.person_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let registration_person = plan
+            .person_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let mut clips = Vec::new();
         if spec.kind == JobKind::VoiceRegistration {
             self.check_voice_plan(spec, plan)?;
             for (window, vector) in &features {
                 voice::normalize(vector)?;
-                if !plan.windows.contains(window) { return Err("登録音声の区間が一致しません".into()); }
+                if !plan.windows.contains(window) {
+                    return Err("登録音声の区間が一致しません".into());
+                }
                 let id = Uuid::new_v4().to_string();
-                clips.push(self.stage_voice_clip(&registration_person, &id, &spec.meeting_id, &window.track_id, window.start_us, window.end_us, &|| self.get_job(job_id).map_or(true, |j| j.state != "running"))?);
+                clips.push(self.stage_voice_clip(
+                    &registration_person,
+                    &id,
+                    &spec.meeting_id,
+                    &window.track_id,
+                    window.start_us,
+                    window.end_us,
+                    &|| self.get_job(job_id).map_or(true, |j| j.state != "running"),
+                )?);
             }
         }
         let mut db = self
@@ -753,7 +777,9 @@ impl Storage {
             for ((window, vector), clip) in features.into_iter().zip(&clips) {
                 tx.execute("INSERT INTO voice_samples(id,person_id,model_hash,extractor_version,dimension,vector,source_meeting_id,source_analysis_id,source_track_id,start_us,end_us,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![clip.id,person,plan.engine.embedding_model.sha256,voice::EXTRACTOR,vector.len() as i64,voice::encode(&vector)?,spec.meeting_id,spec.input_analysis_id,window.track_id,window.start_us,window.end_us,now_ms()?]).map_err(|e|e.to_string())?;
             }
-            for clip in &clips { clip.insert(&tx)?; }
+            for clip in &clips {
+                clip.insert(&tx)?;
+            }
             tx.execute(
                 "UPDATE voice_people SET version=version+1 WHERE id=?1",
                 [&person],
@@ -807,7 +833,13 @@ impl Storage {
                 }
             })?;
         }
-        for clip in &clips { tx.execute("DELETE FROM voice_audio_operations WHERE sample_key=?1 AND kind='install'", [&clip.id]).map_err(|e|e.to_string())?; }
+        for clip in &clips {
+            tx.execute(
+                "DELETE FROM voice_audio_operations WHERE sample_key=?1 AND kind='install'",
+                [&clip.id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         let checkpoint = "{\"voiceResult\":true}";
         let sequence: i64 = tx
             .query_row(

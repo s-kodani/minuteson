@@ -242,7 +242,7 @@ impl Snapshot<'_> {
                 size,
                 sha256,
                 asset_id: Some(asset.id.clone()),
-                meeting_id: (!asset.meeting_id.is_empty()).then(||asset.meeting_id.clone()),
+                meeting_id: (!asset.meeting_id.is_empty()).then(|| asset.meeting_id.clone()),
                 source_size: Some(asset.size_bytes as u64),
                 source_sha256: Some(asset.content_hash.clone()),
                 transform,
@@ -515,7 +515,9 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             || e.asset_id
                 .as_deref()
                 .is_none_or(|id| !identifier(id) || !ids.insert(id))
-            || e.meeting_id.as_ref().map_or(m.schema_version < 38, |id| !meetings.contains(id))
+            || e.meeting_id
+                .as_ref()
+                .map_or(m.schema_version < 38, |id| !meetings.contains(id))
             || e.source_size.is_none()
             || e.source_sha256
                 .as_deref()
@@ -757,21 +759,33 @@ fn validate_inventory(
     }
     if m.schema_version >= 38 {
         let mut q=db.prepare("SELECT id,relative_path,size_bytes,content_hash,frame_count,state FROM voice_sample_audio").map_err(|e|e.to_string())?;
-        let mut rows=q.query([]).map_err(|e|e.to_string())?;
-        while let Some(r)=rows.next().map_err(|e|e.to_string())? {
-            let state:String=r.get(5).map_err(|e|e.to_string())?;
-            if state == "unavailable" { continue; }
-            if state != "ready" { return Err("未保存の登録音声がバックアップにあります".into()); }
-            let id:String=r.get(0).map_err(|e|e.to_string())?;
-            let e=entries.get(&id).ok_or("登録音声がバックアップにありません")?;
-            let path:String=r.get(1).map_err(|e|e.to_string())?;
-            let size:i64=r.get(2).map_err(|e|e.to_string())?;
-            let hash:String=r.get(3).map_err(|e|e.to_string())?;
-            let frames:i64=r.get(4).map_err(|e|e.to_string())?;
-            if e.meeting_id.is_some() || e.path!=path || e.source_size!=Some(size as u64) || e.source_sha256.as_deref()!=Some(&hash) || frames<=0 || Some(size)!=frames.checked_mul(2).and_then(|n|n.checked_add(44)) {
+        let mut rows = q.query([]).map_err(|e| e.to_string())?;
+        while let Some(r) = rows.next().map_err(|e| e.to_string())? {
+            let state: String = r.get(5).map_err(|e| e.to_string())?;
+            if state == "unavailable" {
+                continue;
+            }
+            if state != "ready" {
+                return Err("未保存の登録音声がバックアップにあります".into());
+            }
+            let id: String = r.get(0).map_err(|e| e.to_string())?;
+            let e = entries
+                .get(&id)
+                .ok_or("登録音声がバックアップにありません")?;
+            let path: String = r.get(1).map_err(|e| e.to_string())?;
+            let size: i64 = r.get(2).map_err(|e| e.to_string())?;
+            let hash: String = r.get(3).map_err(|e| e.to_string())?;
+            let frames: i64 = r.get(4).map_err(|e| e.to_string())?;
+            if e.meeting_id.is_some()
+                || e.path != path
+                || e.source_size != Some(size as u64)
+                || e.source_sha256.as_deref() != Some(&hash)
+                || frames <= 0
+                || Some(size) != frames.checked_mul(2).and_then(|n| n.checked_add(44))
+            {
                 return Err("登録音声のバックアップ情報が一致しません".into());
             }
-            count+=1;
+            count += 1;
         }
     }
     if count != entries.len() + omitted.len() {
@@ -853,10 +867,21 @@ fn validate_portability(
             if manifest.schema_version < 38 || entry.transform != Transform::Identity {
                 return Err("登録音声の可搬化指定が不正です".into());
             }
-            let frames:i64=db.query_row("SELECT frame_count FROM voice_sample_audio WHERE id=?1 AND state='ready'",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
-            let (file,_)=open_source(assets.get(id).ok_or("登録音声がありません")?)?;
-            let audio=crate::audio::VerifiedAudio::open_cancellable(file,entry.size,&entry.sha256,cancelled)?;
-            if !audio.format.is_voice_clip() || audio.format.frames!=frames as u64 {
+            let frames: i64 = db
+                .query_row(
+                    "SELECT frame_count FROM voice_sample_audio WHERE id=?1 AND state='ready'",
+                    [id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            let (file, _) = open_source(assets.get(id).ok_or("登録音声がありません")?)?;
+            let audio = crate::audio::VerifiedAudio::open_cancellable(
+                file,
+                entry.size,
+                &entry.sha256,
+                cancelled,
+            )?;
+            if !audio.format.is_voice_clip() || audio.format.frames != frames as u64 {
                 return Err("バックアップの登録音声の形式・長さが不正です".into());
             }
             continue;

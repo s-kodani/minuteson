@@ -695,8 +695,19 @@ fn read_assets_with_deleted(
 
 fn source_path(storage: &Storage, asset: &FileAsset) -> Result<PathBuf, String> {
     if asset.meeting_id.is_empty() {
-        let person:String=storage.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT person_id FROM voice_samples WHERE id=?1",[&asset.id],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if super::voice::audio::relative(&person,&asset.id)? != asset.relative_path {return Err("登録音声の所属が一致しません".into());}
+        let person: String = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?
+            .query_row(
+                "SELECT person_id FROM voice_samples WHERE id=?1",
+                [&asset.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if super::voice::audio::relative(&person, &asset.id)? != asset.relative_path {
+            return Err("登録音声の所属が一致しません".into());
+        }
         let (dir, leaf) = super::voice::audio::file(storage.root(), &asset.relative_path, false)?;
         dir.required(&leaf, false)?;
         return Ok(dir.path.join(leaf));
@@ -865,3 +876,7 @@ mod edit_recovery_tests;
 #[cfg(all(test, unix))]
 #[path = "backup/voice_tests.rs"]
 mod voice_tests;
+
+#[cfg(test)]
+#[path = "backup/voice_audio_tests.rs"]
+mod voice_audio_tests;

@@ -795,7 +795,11 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    for table in ["maintenance_operations", "maintenance_paths", "voice_audio_operations"] {
+    for table in [
+        "maintenance_operations",
+        "maintenance_paths",
+        "voice_audio_operations",
+    ] {
         assert_eq!(
             source
                 .database

@@ -26,8 +26,12 @@ pub struct PcmFormat {
 
 impl PcmFormat {
     pub(crate) fn is_voice_clip(&self) -> bool {
-        self.sample_rate == 16_000 && self.channels == 1 && self.data_offset == 44
-            && self.bytes_per_frame == 2 && !self.float && self.little_endian
+        self.sample_rate == 16_000
+            && self.channels == 1
+            && self.data_offset == 44
+            && self.bytes_per_frame == 2
+            && !self.float
+            && self.little_endian
     }
     pub(crate) fn is_raw_recording_segment(&self) -> bool {
         self.data_offset == 68

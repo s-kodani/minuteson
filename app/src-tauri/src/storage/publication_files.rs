@@ -274,28 +274,53 @@ impl Directory {
         crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         self.verify()
     }
-    pub(in crate::storage) fn remove_empty_child(&self, leaf: &str, expected: &Identity) -> Result<bool,String> {
+    pub(in crate::storage) fn remove_empty_child(
+        &self,
+        leaf: &str,
+        expected: &Identity,
+    ) -> Result<bool, String> {
         self.verify()?;
-        let child=Self::open(&self.path.join(leaf))?;
-        if child.identity != *expected { return Err("登録音声のフォルダーが差し替えられています".into()); }
+        let child = Self::open(&self.path.join(leaf))?;
+        if child.identity != *expected {
+            return Err("登録音声のフォルダーが差し替えられています".into());
+        }
         #[cfg(unix)]
-        if unsafe {libc::unlinkat(self.file.as_raw_fd(),name(leaf)?.as_ptr(),libc::AT_REMOVEDIR)} != 0 {
-            let error=std::io::Error::last_os_error();
-            if error.kind()==std::io::ErrorKind::DirectoryNotEmpty { return Ok(false); }
+        if unsafe {
+            libc::unlinkat(
+                self.file.as_raw_fd(),
+                name(leaf)?.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        } != 0
+        {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::DirectoryNotEmpty {
+                return Ok(false);
+            }
             return Err(error.to_string());
         }
         #[cfg(windows)]
         {
-            if std::fs::read_dir(&child.path).map_err(|e|e.to_string())?.next().is_some() {return Ok(false);}
-            let native=crate::windows_files::Identity::file(&child.file)?;
-            let path=child.path.clone();
+            if std::fs::read_dir(&child.path)
+                .map_err(|e| e.to_string())?
+                .next()
+                .is_some()
+            {
+                return Ok(false);
+            }
+            let native = crate::windows_files::Identity::file(&child.file)?;
+            let path = child.path.clone();
             drop(child);
-            crate::windows_files::remove_owned(&path,&native,true)?;
+            crate::windows_files::remove_owned(&path, &native, true)?;
         }
-        crate::native_fs::sync_handle(&self.file).map_err(|e|e.to_string())?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         Ok(true)
     }
-    pub(in crate::storage) fn remove_owned(&self, leaf: &str, identity: &Identity) -> Result<(), String> {
+    pub(in crate::storage) fn remove_owned(
+        &self,
+        leaf: &str,
+        identity: &Identity,
+    ) -> Result<(), String> {
         self.verify()?;
         identity.require(&self.required(leaf, false)?)?;
         #[cfg(unix)]
@@ -303,10 +328,17 @@ impl Directory {
             return Err(std::io::Error::last_os_error().to_string());
         }
         #[cfg(windows)]
-        crate::windows_files::remove_owned(&self.path.join(leaf),&crate::windows_files::Identity {
-            device:identity.device,inode:identity.inode,birth_seconds:identity.birth.0,birth_nanos:identity.birth.1,
-        },false)?;
-        crate::native_fs::sync_handle(&self.file).map_err(|e|e.to_string())?;
+        crate::windows_files::remove_owned(
+            &self.path.join(leaf),
+            &crate::windows_files::Identity {
+                device: identity.device,
+                inode: identity.inode,
+                birth_seconds: identity.birth.0,
+                birth_nanos: identity.birth.1,
+            },
+            false,
+        )?;
+        crate::native_fs::sync_handle(&self.file).map_err(|e| e.to_string())?;
         self.verify()
     }
     pub(in crate::storage) fn json(

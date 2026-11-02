@@ -758,15 +758,20 @@ fn sigkill_during_native_copy_or_after_sealing_recovers_only_owned_copy_and_keep
 
 #[test]
 fn native_image_copies_registry_owned_voice_clips_and_validates_their_hashes() {
-    let (_root,storage,meeting,speaker)=crate::storage::voice::tests::fixture();
-    let person=crate::storage::voice::tests::register(&storage,&meeting,&speaker);
-    let id=storage.voice_people().unwrap()[0].samples[0].id.clone();
-    let relative=crate::storage::voice::audio::relative(&person,&id).unwrap();
-    let bytes=std::fs::read(storage.root().join(&relative)).unwrap();
-    let snapshot=storage.prepare_relocation_snapshot(&||false).unwrap();
-    snapshot.verify(&||false).unwrap();
-    assert_eq!(std::fs::read(snapshot.image().join(&relative)).unwrap(),bytes);
-    let file=snapshot.image().join(relative);
-    let mut changed=bytes;changed[44]^=1;std::fs::write(file,changed).unwrap();
-    assert!(snapshot.verify(&||false).is_err());
+    let (_root, storage, meeting, speaker) = crate::storage::voice::tests::fixture();
+    let person = crate::storage::voice::tests::register(&storage, &meeting, &speaker);
+    let id = storage.voice_people().unwrap()[0].samples[0].id.clone();
+    let relative = crate::storage::voice::audio::relative(&person, &id).unwrap();
+    let bytes = std::fs::read(storage.root().join(&relative)).unwrap();
+    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    snapshot.verify(&|| false).unwrap();
+    assert_eq!(
+        std::fs::read(snapshot.image().join(&relative)).unwrap(),
+        bytes
+    );
+    let file = snapshot.image().join(relative);
+    let mut changed = bytes;
+    changed[44] ^= 1;
+    std::fs::write(file, changed).unwrap();
+    assert!(snapshot.verify(&|| false).is_err());
 }

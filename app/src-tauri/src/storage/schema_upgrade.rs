@@ -39,13 +39,21 @@ pub(super) fn upgrade(db: &mut Connection) -> Result<(), Box<dyn Error>> {
             snapshot::save(db, snapshot_name)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(sql)?;
-            tx.execute("INSERT INTO schema_migrations VALUES(?1,?2,?3)",
-                params![to as i64, format!("{:x}", Sha256::digest(sql.as_bytes())), now_ms()?])?;
+            tx.execute(
+                "INSERT INTO schema_migrations VALUES(?1,?2,?3)",
+                params![
+                    to as i64,
+                    format!("{:x}", Sha256::digest(sql.as_bytes())),
+                    now_ms()?
+                ],
+            )?;
             tx.commit()?;
             version = to;
         }
     }
-    if version != MIGRATIONS.len() { return Err("非対応の移行元DBです".into()); }
+    if version != MIGRATIONS.len() {
+        return Err("非対応の移行元DBです".into());
+    }
 
     Ok(())
 }
@@ -98,19 +106,46 @@ mod tests {
     }
     #[test]
     fn schema37_voice_audio_upgrade_keeps_features_and_queues_existing_samples() {
-        let mut db=schema35();
-        for (version,sql) in [(36,MIGRATION_36),(37,MIGRATION_37)] {
+        let mut db = schema35();
+        for (version, sql) in [(36, MIGRATION_36), (37, MIGRATION_37)] {
             db.execute_batch(sql).unwrap();
-            db.execute("INSERT INTO schema_migrations VALUES(?1,?2,0)",params![version,format!("{:x}",Sha256::digest(sql.as_bytes()))]).unwrap();
+            db.execute(
+                "INSERT INTO schema_migrations VALUES(?1,?2,0)",
+                params![version, format!("{:x}", Sha256::digest(sql.as_bytes()))],
+            )
+            .unwrap();
         }
-        let vector=crate::voice::encode(&[1.,0.]).unwrap();
-        db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)",[]).unwrap();
+        let vector = crate::voice::encode(&[1., 0.]).unwrap();
+        db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)", [])
+            .unwrap();
         db.execute("INSERT INTO voice_samples VALUES('sample','person',?1,?2,2,?3,NULL,NULL,NULL,0,1000000,0)",params!["a".repeat(64),crate::voice::EXTRACTOR,vector]).unwrap();
-        upgrade(&mut db).unwrap();upgrade(&mut db).unwrap();
-        assert_eq!(verify_migration_history(&db).unwrap(),38);
-        assert_eq!(db.query_row("SELECT vector FROM voice_samples WHERE id='sample'",[],|r|r.get::<_,Vec<u8>>(0)).unwrap(),vector);
-        assert_eq!(db.query_row("SELECT state FROM voice_sample_audio WHERE id='sample'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");
-        assert_eq!(db.query_row("SELECT count(*) FROM voice_sample_audio",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        upgrade(&mut db).unwrap();
+        upgrade(&mut db).unwrap();
+        assert_eq!(verify_migration_history(&db).unwrap(), 38);
+        assert_eq!(
+            db.query_row(
+                "SELECT vector FROM voice_samples WHERE id='sample'",
+                [],
+                |r| r.get::<_, Vec<u8>>(0)
+            )
+            .unwrap(),
+            vector
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT state FROM voice_sample_audio WHERE id='sample'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "pending"
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM voice_sample_audio", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
     fn schema35() -> Connection {
         schema35_at(Connection::open_in_memory().unwrap())

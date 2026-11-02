@@ -1536,15 +1536,20 @@ async fn manage_voice_person(
 }
 #[tauri::command]
 async fn retry_voice_audio_storage(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
-    let result: Result<(),String> = async move {
-        let app=minutes_app(&window)?;
+    let result: Result<(), String> = async move {
+        let app = minutes_app(&window)?;
         tauri::async_runtime::spawn_blocking(move || {
-            let result=app.state::<Storage>().preserve_voice_audio(None,&||false);
-            let _=app.emit("voice-identity-changed",());
+            let result = app.state::<Storage>().preserve_voice_audio(None, &|| false);
+            let _ = app.emit("voice-identity-changed", ());
             result
-        }).await.map_err(|e|e.to_string())?
-    }.await;
-    result.map_err(|message|mon_contracts::AppError::from_command("retry_voice_audio_storage",message))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("retry_voice_audio_storage", message)
+    })
 }
 #[tauri::command]
 async fn decide_voice_match(
@@ -3249,8 +3254,10 @@ pub fn run() {
                             .migration_progress(done, total, meeting);
                     })?;
                     handle.state::<startup_attention::Startup>().ready()?;
-                    if let Err(error)=storage.preserve_voice_audio(None,&||false) {internal_logs::report_error("voice_audio",&error);}
-                    let _=handle.emit("voice-identity-changed",());
+                    if let Err(error) = storage.preserve_voice_audio(None, &|| false) {
+                        internal_logs::report_error("voice_audio", &error);
+                    }
+                    let _ = handle.emit("voice-identity-changed", ());
                     internal_logs::phase("application", None, None, "ready", None);
                     Ok(())
                 })();

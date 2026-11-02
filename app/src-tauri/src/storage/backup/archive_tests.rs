@@ -136,7 +136,7 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
     let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
     let mut versions = (0..MIGRATIONS.len())
         .chain([MIGRATIONS.len() + 1])
-                .map(|schema| (crate::current_formats::BACKUP, schema))
+        .map(|schema| (crate::current_formats::BACKUP, schema))
         .collect::<Vec<_>>();
     versions.extend([
         (1, MIGRATIONS.len()),
@@ -220,7 +220,7 @@ fn schema35_format5_backup_is_verified_before_additive_restore_to_current_schema
     let mut previous = source.manifest.clone();
     previous.schema_version = 36;
     previous.format_version = 6;
-    previous.tables.retain(|t|t.name != "voice_sample_audio");
+    previous.tables.retain(|t| t.name != "voice_sample_audio");
     let previous_path = output.path().join("schema36.monbackup");
     pack(&previous_path, &previous, &payloads(&source));
     let checked = verified(&previous_path, output.path());

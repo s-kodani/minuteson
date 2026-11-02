@@ -364,11 +364,25 @@ fn assets(db: &Connection, tree: &[Observed]) -> Result<Vec<Asset>, String> {
         all.push(asset);
     }
     for asset in super::super::voice::audio::assets(db)? {
-        let e=files.get(asset.relative_path.as_str()).ok_or("移動対象の登録音声がありません")?;
-        if e.directory || e.size!=asset.size_bytes as u64 || e.hash.as_deref()!=Some(&asset.content_hash) {return Err("移動対象の登録音声が一致しません".into());}
-        all.push(Asset{id:asset.id,meeting_id:String::new(),relative_path:asset.relative_path,size:e.size,hash:asset.content_hash,state:asset.state});
+        let e = files
+            .get(asset.relative_path.as_str())
+            .ok_or("移動対象の登録音声がありません")?;
+        if e.directory
+            || e.size != asset.size_bytes as u64
+            || e.hash.as_deref() != Some(&asset.content_hash)
+        {
+            return Err("移動対象の登録音声が一致しません".into());
+        }
+        all.push(Asset {
+            id: asset.id,
+            meeting_id: String::new(),
+            relative_path: asset.relative_path,
+            size: e.size,
+            hash: asset.content_hash,
+            state: asset.state,
+        });
     }
-    all.sort_by(|a,b|a.id.cmp(&b.id));
+    all.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(all)
 }
 
@@ -649,7 +663,11 @@ impl NativeSnapshot<'_> {
         // files. Only the sealed single DB image and managed trees belong here.
         for name in std::fs::read_dir(&self.image).map_err(|e| e.to_string())? {
             let name = name.map_err(|e| e.to_string())?.file_name();
-            if name != "meetings.sqlite3" && name != "meetings" && name != "temp" && name != "voices" {
+            if name != "meetings.sqlite3"
+                && name != "meetings"
+                && name != "temp"
+                && name != "voices"
+            {
                 return Err("移動用領域に未確認のファイルがあります".into());
             }
         }

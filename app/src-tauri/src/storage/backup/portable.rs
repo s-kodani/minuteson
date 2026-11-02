@@ -129,7 +129,10 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     let version = verify_migration_history(db).map_err(|e| e.to_string())?;
     let expected: BTreeSet<String> = TABLES
         .iter()
-        .filter(|&&name| (version >= 36 || name != "post_analysis_intents") && (version >= 38 || name != "voice_sample_audio"))
+        .filter(|&&name| {
+            (version >= 36 || name != "post_analysis_intents")
+                && (version >= 38 || name != "voice_sample_audio")
+        })
         .chain(
             [
                 "app_settings",
@@ -156,7 +159,10 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     }
     TABLES
         .iter()
-        .filter(|&&name| (version >= 36 || name != "post_analysis_intents") && (version >= 38 || name != "voice_sample_audio"))
+        .filter(|&&name| {
+            (version >= 36 || name != "post_analysis_intents")
+                && (version >= 38 || name != "voice_sample_audio")
+        })
         .map(|&name| {
             let columns = db
                 .prepare(&format!("PRAGMA table_info(\"{name}\")"))
@@ -634,7 +640,9 @@ pub(super) fn dump(
                     _ => Err("バックアップ識別子が不正です".into()),
                 }
             };
-            let file = if table.name == "file_assets" || (table.name == "voice_sample_audio" && text("state")? == "ready") {
+            let file = if table.name == "file_assets"
+                || (table.name == "voice_sample_audio" && text("state")? == "ready")
+            {
                 Some(
                     assets
                         .get(&text("id")?)
@@ -679,7 +687,9 @@ pub(super) fn dump(
                         *cell = Cell::Text("missing".into());
                     }
                 }
-                if table.name == "voice_sample_audio" && column.name == "error_message" { *cell = Cell::Null; }
+                if table.name == "voice_sample_audio" && column.name == "error_message" {
+                    *cell = Cell::Null;
+                }
                 if table.name == "audio_tracks" && column.name == "device_label" {
                     *cell = Cell::Null;
                 }

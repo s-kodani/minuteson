@@ -110,15 +110,23 @@ impl<'a> Installed<'a> {
             install.create_directory(path.clone())?;
             install.create_directory(path.join("restored"))?;
         }
-        let voice_assets=crate::storage::voice::audio::assets(sealed.connection())?;
+        let voice_assets = crate::storage::voice::audio::assets(sealed.connection())?;
         if !voice_assets.is_empty() {
-            let parent=root.join("voices");
+            let parent = root.join("voices");
             match crate::native_fs::symlink_metadata(&parent) {
-                Err(e) if e.kind()==std::io::ErrorKind::NotFound => install.create_directory(parent.clone())?,
-                Err(e)=>return Err(e.to_string()), Ok(_)=>directory(&parent)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    install.create_directory(parent.clone())?
+                }
+                Err(e) => return Err(e.to_string()),
+                Ok(_) => directory(&parent)?,
             }
-            let people:std::collections::BTreeSet<_>=voice_assets.iter().map(|a|a.relative_path.split('/').nth(1).unwrap().to_owned()).collect();
-            for person in people {install.create_directory(parent.join(person))?;}
+            let people: std::collections::BTreeSet<_> = voice_assets
+                .iter()
+                .map(|a| a.relative_path.split('/').nth(1).unwrap().to_owned())
+                .collect();
+            for person in people {
+                install.create_directory(parent.join(person))?;
+            }
         }
         let source_root = sealed.root_path()?;
         let mut query = sealed.connection().prepare("SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets WHERE state='ready' UNION ALL SELECT id,'',relative_path,'audio/wav',size_bytes,content_hash,state FROM voice_sample_audio WHERE state='ready' ORDER BY id").map_err(|e|e.to_string())?;
@@ -134,7 +142,9 @@ impl<'a> Installed<'a> {
                 content_hash: row.get(5).map_err(|e| e.to_string())?,
                 state: row.get(6).map_err(|e| e.to_string())?,
             };
-            if (!asset.meeting_id.is_empty() && asset.relative_path != format!("meetings/{}/restored/{}", asset.meeting_id, asset.id))
+            if (!asset.meeting_id.is_empty()
+                && asset.relative_path
+                    != format!("meetings/{}/restored/{}", asset.meeting_id, asset.id))
                 || asset.size_bytes < 0
             {
                 return Err("追加復元の管理パスが不正です".into());
