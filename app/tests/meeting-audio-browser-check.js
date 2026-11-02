@@ -7,9 +7,9 @@ async (page, capturePath, detailUI) => {
   const speed = player.getByRole('combobox', { name: '速度', exact: true });
   const count = command => page.evaluate(command => window.monBrowserFixture.calls.filter(call => call.command === command).length, command);
   const error = () => page.getByRole('alert').filter({ hasText: '音声を再生できません' });
-  const boot = async (source = 'recording') => {
+  const boot = async (source = 'recording', settings = {}) => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
-    await page.evaluate(source => window.monBrowserFixture.setMeetingSource('meeting-0', source), source);
+    await page.evaluate(({source,settings}) => { window.monBrowserFixture.setMeetingSource('meeting-0', source); Object.assign(window.monBrowserFixture, settings); }, {source,settings});
     await page.getByRole('button', { name: '会議A', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.meeting-playback-dock .audio-player button[aria-label="再生"]')?.disabled);
     await player.waitFor();
@@ -20,7 +20,10 @@ async (page, capturePath, detailUI) => {
     await boot(source);
     check(await dock.getByRole('button', { name: '再生設定', exact: true }).count() === 0, 'removed playback settings remain');
     check(await count('prepare_meeting_playback') === 0, 'initial bar prepared audio without playback');
+    check((await player.innerText()).includes('0:00 / 60:00'), 'initial bar did not show saved duration');
+    check(await count('read_playback_chunk') === 0, 'initial duration read PCM');
     await play(); await pause();
+    check((await player.innerText()).includes('/ 60:00'), 'prepared duration differs from saved duration');
     check(await slider.getAttribute('max') === '57600000', 'meeting timeline is not the complete 16 kHz hour');
     check(await page.evaluate(() => window.monBrowserFixture.calls.find(call => call.command === 'prepare_meeting_playback').args.request.mode) === 'mixed', 'source did not request canonical meeting audio');
     await slider.fill('320000'); await speed.selectOption('1.5');
@@ -31,6 +34,8 @@ async (page, capturePath, detailUI) => {
       check(await dock.evaluate(element => element.scrollWidth <= element.clientWidth + 1 && element.getBoundingClientRect().bottom <= innerHeight + 1), 'playback dock overflowed');
       await page.screenshot({ path: capturePath(`canonical-${source}-${width}-${theme}.png`) });
     }
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('mon-audio-start', { detail:'fixture-other-owner' })));
+    await page.waitForFunction(() => document.querySelector('.meeting-playback-dock .audio-player')?.textContent.includes('0:00 / 60:00'));
     results.push(`${source}: canonical audio uses the entire 16 kHz timeline and preserves position, speed and node across themes and widths`);
   }
   await page.setViewportSize({ width: 1200, height: 900 });
@@ -46,5 +51,23 @@ async (page, capturePath, detailUI) => {
   await page.locator('.sidebar').getByRole('button', { name: '設定', exact: true }).click(); await dock.waitFor({ state: 'hidden' });
   await page.waitForFunction(() => window.monBrowserFixture.calls.some(call => call.command === 'close_playback'));
   results.push('leaving the meeting releases playback without resuming in settings');
+  await boot('recording', { meetingDurations: { 'meeting-0': 61_999_999, 'meeting-1': 125_000_000 } });
+  check((await player.innerText()).includes('0:00 / 1:01'), 'initial duration did not use the existing minute/second format');
+  await page.evaluate(() => { window.monBrowserFixture.holdMeetingSummaries = true; });
+  await page.locator('.sidebar').getByRole('button', { name:'会議一覧', exact:true }).click();
+  await page.getByRole('button', { name: '会議B', exact: true }).click();
+  await page.waitForFunction(() => window.monBrowserFixture.pendingMeetingSummaries?.some(item => item.meetingId === 'meeting-1'));
+  check((await player.innerText()).includes('0:00 / --:--') && !(await player.innerText()).includes('/ 1:01'), 'switch retained previous meeting duration while loading');
+  await page.evaluate(() => { for (const pending of window.monBrowserFixture.pendingMeetingSummaries) pending.release(); });
+  await page.waitForFunction(() => document.querySelector('.meeting-playback-dock .audio-player')?.textContent.includes('0:00 / 2:05'));
+  check(await count('prepare_meeting_playback') === 0 && await count('read_playback_chunk') === 0, 'duration-only meeting switch prepared or read audio');
+  results.push('meeting switch clears the previous duration and publishes the new summary without playback');
+  await boot();
+  await page.evaluate(() => { window.monBrowserFixture.meetingSummaryFailure = true; });
+  await page.locator('.sidebar').getByRole('button', { name:'会議一覧', exact:true }).click();
+  await page.getByRole('button', { name: '会議B', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: '模擬の保存音声確認失敗' }).waitFor();
+  check((await player.innerText()).includes('0:00 / --:--') && await player.getByRole('button', { name: '再生', exact: true }).isDisabled(), 'failed summary retained a duration or enabled playback');
+  results.push('summary failure keeps unknown duration and disables playback');
   return { passed: results.length, results };
 }

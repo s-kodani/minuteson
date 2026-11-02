@@ -169,9 +169,14 @@ mockIPC(async (command, args) => {
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
     case "get_model_placements": return structuredClone(fixture.modelPlacements ?? []);
     case "get_model_profiles": return structuredClone(fixture.modelProfiles ?? ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false })));
-    case "get_meeting_audio_summary":
+    case "get_meeting_audio_summary": {
       if(fixture.meetingSummaryFailure) throw Error("模擬の保存音声確認失敗");
-      return {schemaVersion:1,durationUs:fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??["mixed"]};
+      const summary = {schemaVersion:1,durationUs:fixture.meetingDurations?.[args.meetingId]??fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??["mixed"]};
+      if(fixture.holdMeetingSummaries) return new Promise(resolve => {
+        (fixture.pendingMeetingSummaries??=[]).push({meetingId:args.meetingId,release:()=>resolve(summary)});
+      });
+      return summary;
+    }
     case "get_analysis_flow":
       if(fixture.regenerationReadFail)throw Error("模擬解析状態読込失敗");
       return args.meetingId===meetings[0].id?structuredClone(fixture.analysisFlow??null):null;

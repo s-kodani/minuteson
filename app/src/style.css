@@ -1,3 +1,5 @@
+@import "./scrollbars.css";
+
 /* Presentation tokens apply to every window, dialog and editor. */
 .startup-loading{display:grid;place-items:center;width:100%;min-height:100dvh;padding:24px;box-sizing:border-box;text-align:center}.startup-loading p{margin:0}
 .startup-attention > .status-card + .status-card { margin-top:20px; }

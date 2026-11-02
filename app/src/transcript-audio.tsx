@@ -41,7 +41,7 @@ function durationLabel(seconds: number) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-export function useTranscriptAudio(meetingId: string, locked: boolean, options: { inline?: boolean; label?: string; scope?: "meeting" | "interval" | "voice"; idleMeetingMode?:MeetingPlaybackMode; active?: boolean } = {}) {
+export function useTranscriptAudio(meetingId: string, locked: boolean, options: { inline?: boolean; label?: string; scope?: "meeting" | "interval" | "voice"; idleMeetingMode?:MeetingPlaybackMode; idleMeetingDurationUs?:number|null; active?: boolean } = {}) {
   const surface=usePlaybackSurface();
   const [, refresh] = useState(0);
   const [clock] = useState(() => new BrowserAudioClock());
@@ -251,7 +251,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         <input type="range" aria-label={voiceScope ? "登録区間内の再生位置" : intervalScope ? "Markdown区間内の再生位置" : meetingScope ? "会議全体の再生位置" : "発言内の再生位置"} title={!info ? "再生後に位置を変更できます" : undefined} min={0} max={info?.totalFrames ?? 1} step={1} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={!info || preparing || locked} />
         <IconButton label="先頭へ" icon="restart" onClick={() => { player.pause(); player.seek(0); }} disabled={!info || preparing || locked} />
         <label>速度<select value={snapshot.rate} onChange={(event) => player.setRate(Number(event.target.value))} disabled={preparing || locked}>{[0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}</select></label>
-        <span>{info ? `${durationLabel(snapshot.frame / info.sampleRate)} / ${durationLabel(info.totalFrames / info.sampleRate)}` : "0:00 / --:--"}</span>
+        <span>{info ? `${durationLabel(snapshot.frame / info.sampleRate)} / ${durationLabel(info.totalFrames / info.sampleRate)}` : meetingScope && options.idleMeetingDurationUs != null ? `0:00 / ${durationLabel(options.idleMeetingDurationUs / 1_000_000)}` : "0:00 / --:--"}</span>
         {info && <IconButton className="playback-close" label="再生を閉じる" icon="close" onClick={clear} disabled={locked} />}
       </div>
       <div className="heading-with-info"><span>{voiceScope ? "登録した声の音声区間" : intervalScope ? "議事録の区間" : meetingScope ? meetingPlaybackLabel((info?.trackKind ?? options.idleMeetingMode) as MeetingPlaybackMode) : info?.trackKind === "mic" ? "マイク音声" : info?.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={playbackLabel}>{voiceScope ? "声の特徴量を抽出した登録元トラックの区間だけを再生します。" : intervalScope ? "Markdownに記述された開始・終了時刻の会議音声を再生します。" : meetingScope ? "保存した会議音声を再生します。取得できなかった区間も時間を維持し、両入力が欠損した部分は無音になります。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}</InfoPopover>

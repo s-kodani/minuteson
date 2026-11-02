@@ -26,7 +26,8 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, ch
   const [mode, setMode] = useState<MeetingPlaybackMode>("mixed");
   const [summary, setSummary] = useState<(MeetingAudioSummary & { meetingId: string; sourceType: typeof sourceType }) | null>(null);
   const available = active && !!meetingId && summary?.meetingId === meetingId && summary.sourceType === sourceType && modes.includes(mode);
-  const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, active });
+  const durationUs = available ? summary!.durationUs : null;
+  const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, idleMeetingDurationUs:durationUs, active });
   // A source change must not inherit a mode or native token from a different
   // source. Mounting creates no playback token;
   // the native summary may warm a disposable mix in the background.
@@ -51,7 +52,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, ch
   };
   const playReference = (reference: MeetingPlaybackStartReference) => available && summary
     ? audio.startMeetingAt(mode, reference, summary.durationUs) : Promise.resolve();
-  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, locked, summaryError, durationUs:available?summary!.durationUs:null, changeMode, playReference }}>
+  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, locked, summaryError, durationUs, changeMode, playReference }}>
     {children}{active && <><IssueNotice scope={meetingId ?? "meeting"} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{audio.controls}</>}
   </MeetingAudioContext.Provider>;
 }
