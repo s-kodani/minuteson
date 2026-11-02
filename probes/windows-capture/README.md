@@ -1,10 +1,8 @@
 # Windows 二系統録音プローブ
 
-M1-02向けのWASAPI検証用CLI。マイクは録音エンドポイント、PC音声は通常の出力エンドポイントのループバック、または指定PIDの子プロセスを含むApplication Loopbackで取得する。録音中は別々のWAVを512MiB以下のセグメントへ分割し、パケット数、無音フレーム数、時刻異常、データ不連続を`manifest.json`へ記録する。
+WASAPI録音ヘルパーの時間指定による検証用CLI。マイクは録音エンドポイント、PC音声は通常の出力エンドポイントのループバック、または指定PIDの子プロセスを含むApplication Loopbackで取得する。録音中は別々のWAVを512MiB以下のセグメントへ分割し、パケット数、無音フレーム数、時刻異常、データ不連続を`manifest.json`へ記録する。
 
-このソースはWindows実機でのビルドと動作確認がまだできていない。GitHub ActionsのWindowsビルドジョブも、変更をpushするまで実行されない。対象OSはWindows 11 24H2以降、x64。Application LoopbackにはWindows 10 build 20348以降のAPIを使う。
-
-2026年10月21日からWindows対応を再開し、デスクトップCIと `app/prepare-windows.ps1` からもこのCLIを構築・同梱する。現時点では診断用CLIで、製品の録音プロトコルと現行FLAC保存への接続は未実装。CIとWindows実機での実行結果はまだ取得していない。
+Windows 11 24H2以降・x64を対象とし、デスクトップの録音ヘルパーとして構築・同梱します。製品側の録音・5秒テスト・入力列挙・取り込み・保存との接続は[録音仕様](../../docs/spec/recording.md)、アプリ全体の準備は[Windowsビルド](../../docs/guides/build-windows.md)を参照してください。
 
 ## ビルド
 
@@ -17,7 +15,7 @@ cmake --build probes\windows-capture\build --config Release
 
 ## 実行
 
-以下の30秒コマンドは動作確認用。必須32条件の証拠を作る際は、評価設定に合わせて`--duration 900`を指定し、会議アプリ・出力機器・シナリオIDを実際の条件に合わせる。
+以下は30秒の動作確認例です。評価時間・会議アプリ・出力機器・シナリオIDは[評価キット](../../evaluation/README.md)の実際の条件に合わせます。
 
 全体録音:
 

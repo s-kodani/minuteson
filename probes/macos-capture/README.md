@@ -1,6 +1,6 @@
 # macOS 二系統録音プローブ
 
-M1-03向けに、マイクをAVAudioEngine、PCの再生音をScreenCaptureKitまたはCore Audio Tapsで別々のCAF（非圧縮PCM）へ保存する。ScreenCaptureKitは全体・単一アプリ、Core Audio Tapsは指定した複数のAudio Processを対象にする。会議サービス固有APIには依存しない。両方式を同じ条件で比べ、権限・同期・欠損と対象外音声の混入を確認する。
+MinutesOnの録音ヘルパーとして、マイクをAVAudioEngine、PCの再生音をScreenCaptureKitまたはCore Audio Tapsで別々のCAF（非圧縮PCM）へ保存する。ScreenCaptureKitは全体・単一アプリ、Core Audio Tapsは指定した複数のAudio Processを対象にする。会議サービス固有APIには依存しない。両方式を同じ条件で比べ、権限・同期・欠損と対象外音声の混入を確認する。
 
 ## ビルド
 
@@ -15,7 +15,7 @@ Core Audio Tapsの権限説明には`NSAudioCaptureUsageDescription`が必要な
 ## 実行
 
 録音は周囲の音声とPCで再生中の音声をファイルへ保存する。評価参加者の同意を得て、機密情報や通知音が入らないことを確認してから実行する。
-以下の30秒コマンドは動作確認用。必須32条件の証拠を作る際は、評価設定に合わせて`--duration 900`を指定する。
+以下は30秒の動作確認例です。評価用の時間・シナリオは[評価キット](../../evaluation/README.md)の設定に合わせて指定します。
 
 ```sh
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture \
@@ -45,9 +45,7 @@ Tauriからの会議録音は`--until-stopped --stop-on-file --parent-pid <親PI
 
 既存の署名済みヘルパーを使う開発環境では、アプリとヘルパーを同じソースへ再ビルドする。古いヘルパーは新しい引数を拒否するため、以前のバイナリで制限撤廃を検証したことにはならない。
 
-時間上限なしの会議録音は形式版2のmanifestを出力する。マイク・Core Audioのホスト取得時刻とScreenCaptureKitの同期時計から、共通原点・UTC原点・保存した全フレームの補正区間を生成する。失敗した書込み、取得時刻の欠落・逆行、時計対応の変化、補正容量の超過では保存完了を報告せず、元音声を残す。明示スリープ後や機器再接続後の復帰はまだ未対応で、同期精度と実録音の長時間安定性は実機確認が必要である。時間指定の正式評価プローブは形式版1を維持し、同期確認済みにはしない。
-
-ScreenCaptureKitの保存用時刻は、受信したPCMを連続する物理フレームとして保存するよう置き換える。取得時刻の空白は補正区間に残し、ファイルへ正常な無音を追加しない。ヘルパーバンドルには取得時刻を扱う利用理由の `PrivacyInfo.xcprivacy` を同梱する。実装と検査の範囲は[取得時刻と保存フレームの接続](../../docs/verification/capture-clock-producer-2026-10-08.md)を参照。
+会議録音の時刻・欠損・保存確定と入力再取得の動作は[録音仕様](../../docs/spec/recording.md)を参照してください。manifestの形式と製品側の受入れを揃え、合成プローブの成功と実機の同期精度は分けて確認します。
 
 ```sh
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture --list-audio-processes
