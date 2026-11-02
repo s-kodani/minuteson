@@ -11,9 +11,9 @@ async (page,capturePath) => {
   results.push('sidebar opens the voice library with an empty state and no automatic playback');
 
   await page.evaluate(()=>{
-    const sample=(id,startUs,endUs,patch={})=>({id,modelHash:'a'.repeat(64),extractorVersion:'test',sourceMeetingId:'meeting-0',sourceAvailable:true,startUs,endUs,createdAt:0,...patch});
+    const sample=(id,startUs,endUs,patch={})=>({id,modelHash:'a'.repeat(64),extractorVersion:'test',sourceMeetingId:'meeting-0',sourceAvailable:true,audioAvailable:true,audioStorageState:"ready",audioStorageError:null,startUs,endUs,createdAt:0,...patch});
     window.monVoiceFixture.people=[
-      {id:'person-a',name:'田中',version:1,samples:[sample('voice-a',1_500_000,4_500_000),sample('voice-missing',0,2_000_000,{sourceAvailable:false,sourceMeetingId:null})]},
+      {id:'person-a',name:'田中',version:1,samples:[sample('voice-a',1_500_000,4_500_000,{sourceAvailable:false,sourceMeetingId:null}),sample('voice-missing',0,2_000_000,{sourceAvailable:false,audioAvailable:false,audioStorageState:"unavailable",sourceMeetingId:null})]},
       {id:'person-b',name:'佐藤',version:1,samples:[sample('voice-imported',7_000_000,11_000_000,{sourceMeetingId:'meeting-1',trackKind:'imported'})]}
     ];
     window.monBrowserFixture.preparation.strict=true;
@@ -110,5 +110,19 @@ async (page,capturePath) => {
   await nav.getByRole('button',{name:'ボイス一覧',exact:true}).click();
   await renamed.waitFor();
   results.push('voice navigation waits for draft saving and preserves failed edits for retry');
+  await page.evaluate(()=>{
+    const s=window.monVoiceFixture.people[0].samples[0];
+    Object.assign(s,{audioStorageState:"failed",audioAvailable:false,audioStorageError:"合成の音声保存失敗"});
+    window.monVoiceFixture.failAudioStorage=true;
+  });
+  await library.getByRole('button',{name:'ボイス一覧を再読込',exact:true}).click();
+  await renamed.getByText('登録音声の保存に失敗しました。合成の音声保存失敗',{exact:true}).waitFor();
+  await library.getByRole('button',{name:'音声保存・削除を再試行',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'合成の音声保存失敗'}).waitFor();
+  await page.evaluate(()=>{window.monVoiceFixture.failAudioStorage=false;});
+  await library.getByRole('button',{name:'音声保存・削除を再試行',exact:true}).click();
+  await renamed.getByText('登録音声は保存済みです。元の会議を削除しても再生できます。',{exact:true}).waitFor();
+  check(await renamed.getByRole('button',{name:'登録者の田中の登録区間1を再生',exact:true}).isEnabled(),'saved audio remains disabled after retry');
+  results.push('saved clips play without their source meeting and failed preservation can be retried from the library');
   return {passed:results.length,results};
 }

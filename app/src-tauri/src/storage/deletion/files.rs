@@ -974,6 +974,7 @@ impl Census {
         inspect_flac: bool,
         capture_scope: &impl Fn() -> Result<Scope, String>,
     ) -> Result<Self, String> {
+        storage.require_preserved_voice_audio(db, meeting)?;
         if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
             return Err("予約パスが安全上限を超えています".into());
         }

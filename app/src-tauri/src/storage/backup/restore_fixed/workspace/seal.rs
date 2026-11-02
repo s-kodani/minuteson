@@ -123,6 +123,15 @@ fn verify_assets(db: &Connection, root: &Path, check: &impl Fn() -> bool) -> Res
             return Err("復元管理ファイルに未完了・破損・削除待ちの状態があります".into());
         }
     }
+    for asset in crate::storage::voice::audio::assets(db)? {
+        check_cancelled(check)?;
+        let person:String=db.query_row("SELECT person_id FROM voice_samples WHERE id=?1",[&asset.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if crate::storage::voice::audio::relative(&person,&asset.id)? != asset.relative_path {return Err("復元登録音声の所属が不正です".into());}
+        let (dir,leaf)=crate::storage::voice::audio::file(root,&asset.relative_path,false)?;
+        regular(&dir.path.join(&leaf))?;
+        if digest_file(&dir.path.join(&leaf),check)? != (asset.size_bytes as u64,asset.content_hash) {return Err("復元登録音声のSHA・容量が一致しません".into());}
+        total=total.checked_add(asset.size_bytes as u64).ok_or("登録音声容量が範囲外です")?;
+    }
     Ok(total)
 }
 
@@ -146,28 +155,30 @@ fn inventory(
             .replace('\\', "/");
         if kind.is_file() {
             if relative != "fixed.sqlite3" {
-                let known:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM file_assets WHERE relative_path=?1 AND state='ready')",params![relative],|r|r.get(0)).map_err(|e|e.to_string())?;
+                let known:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM file_assets WHERE relative_path=?1 AND state='ready') OR EXISTS(SELECT 1 FROM voice_sample_audio WHERE relative_path=?1 AND state='ready')",params![relative],|r|r.get(0)).map_err(|e|e.to_string())?;
                 if !known {
                     return Err("復元専用領域に未登録ファイルがあります".into());
                 }
             }
         } else if kind.is_dir() {
             let allowed = match depth {
-                0 => relative == "meetings",
+                0 => relative == "meetings" || relative == "voices",
                 1 => {
                     let meeting = item
                         .file_name()
                         .to_str()
                         .map(str::to_owned)
                         .ok_or("復元会議フォルダー名が不正です")?;
-                    uuid(&meeting)
+                    if relative.starts_with("voices/") {
+                        uuid(&meeting) && db.query_row("SELECT EXISTS(SELECT 1 FROM voice_samples s JOIN voice_sample_audio a ON a.id=s.id WHERE s.person_id=?1 AND a.state='ready')",[&meeting],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())?
+                    } else { uuid(&meeting)
                         && db
                             .query_row(
                                 "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1)",
                                 params![meeting],
                                 |r| r.get::<_, bool>(0),
                             )
-                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string())? }
                 }
                 2 => item.file_name() == "restored",
                 _ => false,

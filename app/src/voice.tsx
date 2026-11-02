@@ -109,6 +109,7 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
       {pending.current&&<button className="small-secondary" disabled={disabled} onClick={()=>void run(()=>start(pending.current!.speakerId))}>同じ操作を再送して確認</button>}
       <CommonModal className="voice-dialog" nested open={!!enrolling} blocked={disabled} onDismiss={()=>setEnrolling(null)} restoreTarget={()=>opener.current} aria-label="声を人物として登録">
         <div className="heading-with-info"><h2>声を人物として登録</h2><InfoPopover label="声を人物として登録"><p>現在の話者に割り当てた発言から、登録する音声を1〜2区間選んでください。</p><p>1秒以上の単独音声を候補にしています。30秒を超える区間は中央の30秒を使います。</p></InfoPopover></div>
+        <p>選択した区間の音声はボイス登録用に保存します。元の会議を削除しても残ります。</p>
         <label>登録先<select value={person} disabled={disabled||!!pending.current} onChange={e=>setPerson(e.target.value)}><option value="">新しい人物</option>{context?.people.map(p=><option value={p.id} key={p.id}>{p.name}（{p.id.slice(0,6)}）</option>)}</select></label>
         {!person&&<label>人物名<input maxLength={200} value={name} disabled={disabled||!!pending.current} onChange={e=>setName(e.target.value)} /></label>}
         <p>選んだ区間を使い、この会議の話者にも人物名を適用します。元の会議・音声を削除しても、登録した声は残ります。</p>
@@ -134,33 +135,36 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
 
 export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boolean;standalone?:boolean}){
   const [open,setOpen]=useState(standalone),[people,setPeople]=useState<VoicePerson[]>([]),[error,setError]=useState(""),[busy,setBusy]=useState(false),[loaded,setLoaded]=useState(false),[editing,setEditing]=useState<VoicePerson|null>(null),[name,setName]=useState(""),[deleting,setDeleting]=useState<VoicePerson|null>(null);
-  const opener=useRef<HTMLElement|null>(null),inFlight=useRef(false),active=useRef(true);
+  const opener=useRef<HTMLElement|null>(null),inFlight=useRef(false),active=useRef(true),savingAudio=useRef(false);
+  savingAudio.current=people.some(p=>p.samples.some(s=>s.audioStorageState==="pending"));
   const audio=useTranscriptAudio("voice-library",locked,{inline:true,scope:"voice"});
   useEffect(()=>{active.current=true;return()=>{active.current=false;};},[]);
-  const load=async()=>{const next=await invoke<VoicePerson[]>("get_voice_people");if(active.current){if(audio.selected&&!next.some(p=>p.samples.some(s=>s.id===audio.selected&&s.sourceAvailable)))audio.clear();setPeople(next);setLoaded(true);}};
-  const run=async(action:()=>Promise<void>)=>{if(locked||inFlight.current)return;inFlight.current=true;setBusy(true);setError("");try{await flushPendingEdits();await action();await load();}catch(c){if(active.current)setError(String(c));}finally{inFlight.current=false;if(active.current)setBusy(false);}};
+  const load=async()=>{const next=await invoke<VoicePerson[]>("get_voice_people");if(active.current){if(audio.selected&&!next.some(p=>p.samples.some(s=>s.id===audio.selected&&s.audioAvailable)))audio.clear();setPeople(next);setLoaded(true);}};
+  const run=async(action:()=>Promise<void>)=>{if(locked||inFlight.current)return;inFlight.current=true;setBusy(true);setError("");try{await flushPendingEdits();try{await action();}finally{await load();}}catch(c){if(active.current)setError(String(c));}finally{inFlight.current=false;if(active.current)setBusy(false);}};
   const refresh=useRef(()=>run(async()=>{}));refresh.current=()=>run(async()=>{});
   useEffect(()=>{
     if(!open||locked)return;
     if(!isTauri()){setError("登録した声はデスクトップアプリで確認できます。");return;}
     void refresh.current();
     const subscription=listen("voice-identity-changed",()=>void refresh.current());
-    return()=>{void subscription.then(unlisten=>unlisten());};
+    const poll=setInterval(()=>{if(savingAudio.current)void refresh.current();},1500);
+    return()=>{clearInterval(poll);void subscription.then(unlisten=>unlisten());};
   },[open,locked]);
   const manage=async(p:VoicePerson,name:string|null,sampleId:string|null)=>{
     if(name===null){audio.clear();await stopAllPlayback();}
-    await invoke<void>("manage_voice_person",{personId:p.id,expectedVersion:p.version,name,sampleId});
+    const receipt=await invoke<{audioCleanupPending:boolean;audioCleanupError:string|null}>("manage_voice_person",{personId:p.id,expectedVersion:p.version,name,sampleId});
+    if(receipt?.audioCleanupPending)throw Error(`登録は削除しましたが音声ファイルの削除が保留されています。音声保存・削除を再試行してください。${receipt.audioCleanupError??""}`);
   };
-  const help=<InfoPopover label={standalone?"ボイス一覧":"登録した話者"}><p>声を登録した人物と、登録に使った音声を確認できます。</p><p>声の特徴量はこの端末内に保存し、バックアップにも含めます。削除しても過去の会議に付けた名前は残ります。異なるモデルで登録した声は照合に使いません。モデル変更後は、会議から声を追加登録してください。</p></InfoPopover>;
+  const help=<InfoPopover label={standalone?"ボイス一覧":"登録した話者"}><p>声を登録した人物と、登録に使った音声を確認できます。</p><p>登録区間の音声と声の特徴量はこの端末内に保存し、バックアップにも含めます。元の会議や会議音声を削除しても登録音声は残ります。削除しても過去の会議に付けた名前は残ります。異なるモデルで登録した声は照合に使いません。モデル変更後は、会議から声を追加登録してください。</p></InfoPopover>;
   const content=<>
-    <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
+    <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><button className="small-secondary" disabled={locked||busy} onClick={()=>void run(()=>invoke<void>("retry_voice_audio_storage"))}>音声保存・削除を再試行</button><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
     {loaded&&!people.length&&!error&&<p>登録した話者はいません。</p>}
     {people.map(p=><section className="voice-person" key={p.id} aria-label={p.name}><strong>{p.name}</strong><small>識別子 {p.id.slice(0,8)} · {p.samples.length}区間</small>
       <button className="small-secondary" disabled={locked||busy} onClick={e=>{opener.current=e.currentTarget;setEditing(p);setName(p.name);}}>名前を変更</button>
       <button className="small-secondary" disabled={locked||busy} onClick={e=>{opener.current=e.currentTarget;setDeleting(p);}}>人物と声を削除</button>
       {p.samples.map((s,index)=><div className="voice-sample" key={s.id}>
-        <span>登録区間 {index+1} · {s.startUs/1e6}秒〜{s.endUs/1e6}秒 · モデル {s.modelHash.slice(0,8)}<small>{s.sourceAvailable?"特徴量を抽出した元の音声を再生できます。":"登録元の音声がないため再生できません。"}</small></span>
-        <button className="small-secondary" disabled={locked||busy||!s.sourceAvailable} aria-label={`${p.name}の登録区間${index+1}を再生`} onClick={()=>void audio.start("",s.id,{voiceSampleId:s.id,expectedStartUs:s.startUs,expectedEndUs:s.endUs})}>登録音声を再生</button>
+        <span>登録区間 {index+1} · {s.startUs/1e6}秒〜{s.endUs/1e6}秒 · モデル {s.modelHash.slice(0,8)}<small>{s.audioStorageState==="ready"?"登録音声は保存済みです。元の会議を削除しても再生できます。":s.audioStorageState==="failed"?`登録音声の保存に失敗しました。${s.audioStorageError??""}`:s.audioStorageState==="pending"?"登録音声を保存待ちです。":"登録元の音声がないため再生できません。"}</small></span>
+        <button className="small-secondary" disabled={locked||busy||!s.audioAvailable} aria-label={`${p.name}の登録区間${index+1}を再生`} onClick={()=>void audio.start("",s.id,{voiceSampleId:s.id,expectedStartUs:s.startUs,expectedEndUs:s.endUs})}>登録音声を再生</button>
         <button className="small-secondary" disabled={locked||busy} onClick={()=>void run(()=>manage(p,null,s.id))}>この声を削除</button>
         {audio.selected===s.id&&<div className="voice-sample-player">{audio.controls}</div>}
       </div>)}

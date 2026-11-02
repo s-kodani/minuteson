@@ -22,7 +22,7 @@ bridge.invoke=async(command,args={})=>{
     if(state.holdSample)await new Promise((resolve,reject)=>{state.pendingSamples.push({release:resolve});if(entry)entry.reject=reject;});
     if(state.failSample)throw Error("合成の登録音声再生失敗");
     const sample=state.people.flatMap(p=>p.samples).find(s=>s.id===args.sampleId);
-    if(!sample||!sample.sourceAvailable)throw Error("登録元の音声がありません");
+    if(!sample||!sample.audioAvailable)throw Error("登録元の音声がありません");
     if(entry?.cancelled)throw Error("取消済みの音声準備");
     const info={token:crypto.randomUUID(),sampleRate:16000,channels:1,totalFrames:Math.ceil(sample.endUs*16000/1e6)-Math.floor(sample.startUs*16000/1e6),startUs:sample.startUs,endUs:sample.endUs,trackKind:"processed",alignment:"unverified",...state.corruptSample};
     data.meetingAudio.sessions[info.token]=info;if(entry)entry.token=info.token;return info;
@@ -36,6 +36,12 @@ bridge.invoke=async(command,args={})=>{
     let job=data.jobs.find(j=>j.operationId===args.request.operationId);
     if(!job){state.requests.push(copy(args.request));job={id:crypto.randomUUID(),meetingId:"meeting-0",meetingTitle:"会議A",kind:args.request.speakerId?"voice_registration":"voice_matching",state:"queued",operationId:args.request.operationId,inputHash:"a".repeat(64),specHash:"b".repeat(64),completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,retryOfJobId:null,attempt:1,createdAt:Date.now()};data.jobs.push(job);}
     if(state.loseResponse){state.loseResponse=false;throw Error("合成の受付応答欠落");}return {state:"accepted",job:copy(job)};
+  }
+  if(command==="retry_voice_audio_storage") {
+    data.calls.push({command,args:copy(args)});
+    if(state.failAudioStorage)throw Error("合成の音声保存失敗");
+    for(const p of state.people)for(const s of p.samples)if(["pending","failed"].includes(s.audioStorageState))Object.assign(s,{audioStorageState:"ready",audioAvailable:true,audioStorageError:null});
+    return;
   }
   if(command==="manage_voice_person"){
     const p=state.people.find(p=>p.id===args.personId);if(!p||p.version!==args.expectedVersion)throw Error("人物登録が変更されています");
@@ -55,7 +61,7 @@ bridge.invoke=async(command,args={})=>{
 state.complete=()=>{
   const job=data.jobs.find(j=>j.state==="queued"&&(j.kind==="voice_registration"||j.kind==="voice_matching"));
   if(!job)throw Error("no voice job");
-  if(job.kind==="voice_registration")state.people.push({id:"person-a",name:state.requests.at(-1).personName??"登録者",version:1,samples:[{id:"sample-a",modelHash:"a".repeat(64),extractorVersion:"test",sourceMeetingId:"meeting-0",sourceAvailable:true,startUs:0,endUs:15e6,createdAt:0}]});
+  if(job.kind==="voice_registration")state.people.push({id:"person-a",name:state.requests.at(-1).personName??"登録者",version:1,samples:[{id:"sample-a",modelHash:"a".repeat(64),extractorVersion:"test",sourceMeetingId:"meeting-0",sourceAvailable:true,audioAvailable:true,audioStorageState:"ready",audioStorageError:null,startUs:0,endUs:15e6,createdAt:0}]});
   else state.matches=[{id:"match-a",speakerId:"speaker-a",personId:"person-a",nameSnapshot:state.people[0].name,state:"candidate",similarity:0.98,modelHash:"a".repeat(64)}];
   job.state="succeeded";job.completedUnits=1;
 };

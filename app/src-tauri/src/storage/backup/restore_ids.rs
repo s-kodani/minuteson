@@ -69,6 +69,7 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
     let mut result = BTreeMap::new();
     for c in &table.columns {
         let rule = match (table.name.as_str(), c.name.as_str()) {
+            ("voice_sample_audio", "id") => Some(Rule::Entity("voice_samples")),
             ("voice_samples", "source_meeting_id") => Some(Rule::VoiceSource("meetings")),
             ("voice_samples", "source_analysis_id") => {
                 Some(Rule::VoiceSource("analysis_revisions"))
@@ -128,7 +129,7 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
 
 pub(super) fn owners_sql(table: &str) -> Result<String, String> {
     let sql = match table {
-        "voice_people" | "voice_samples" | "voice_policies" => format!("SELECT rowid,NULL AS meeting_id FROM {table}"),
+        "voice_people" | "voice_samples" | "voice_sample_audio" | "voice_policies" => format!("SELECT rowid,NULL AS meeting_id FROM {table}"),
         "meetings" => "SELECT rowid,id FROM meetings".into(),
         "speakers" | "utterance_speakers" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
         "minutes_items" | "evidence_links" => format!("SELECT c.rowid,m.meeting_id FROM {table} c JOIN minutes_revisions m ON m.id=c.minutes_revision_id"),

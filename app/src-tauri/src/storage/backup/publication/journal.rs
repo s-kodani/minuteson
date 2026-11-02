@@ -144,6 +144,13 @@ fn targets(sealed: &SealedWorkspace) -> Result<Vec<Target>, String> {
             hash: Some(row.get(2).map_err(|e| e.to_string())?),
         });
     }
+    let clips=crate::storage::voice::audio::assets(sealed.connection())?;
+    if !clips.is_empty() {
+        targets.push(Target{path:"voices".into(),kind:"shared_directory".into(),size:None,hash:None});
+        let people:std::collections::BTreeSet<_>=clips.iter().map(|a|a.relative_path.split('/').nth(1).unwrap().to_owned()).collect();
+        for p in people {targets.push(Target{path:format!("voices/{p}"),kind:"directory".into(),size:None,hash:None});}
+        for a in clips {targets.push(Target{path:a.relative_path,kind:"file".into(),size:Some(a.size_bytes),hash:Some(a.content_hash)});}
+    }
     if targets.len() > MAX_PATHS {
         return Err("復元回収対象が安全上限を超えています".into());
     }
@@ -153,11 +160,22 @@ fn targets(sealed: &SealedWorkspace) -> Result<Vec<Target>, String> {
 fn check_target(db: &Connection, batch: &str, target: &Target) -> Result<(), String> {
     let parts: Vec<_> = target.path.split('/').collect();
     if target.kind == "shared_directory"
-        && parts == ["meetings"]
+        && (parts == ["meetings"] || parts == ["voices"])
         && target.size.is_none()
         && target.hash.is_none()
     {
         return Ok(());
+    }
+    if parts.first()==Some(&"voices") && parts.len()>=2 && uuid(parts[1]) {
+        let mapped:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM restore_identity_maps WHERE batch_id=?1 AND domain='voice_people' AND source_scope='' AND target_key=?2)",params![batch,parts[1]],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !mapped {return Err("復元登録音声の人物がバッチに属していません".into());}
+        if parts.len()==2 && target.kind=="directory" && target.size.is_none() && target.hash.is_none() {return Ok(());}
+        if parts.len()==3 && target.kind=="file" && target.size.is_some_and(|n|n>=44) && target.hash.as_deref().is_some_and(portable::valid_hash) {
+            let id=parts[2].strip_suffix(".wav").ok_or("復元登録音声の拡張子が不正です")?;
+            let mapped:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM restore_identity_maps WHERE batch_id=?1 AND domain='voice_samples' AND source_scope='' AND target_key=?2)",params![batch,id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if uuid(id) && mapped {return Ok(());}
+        }
+        return Err("復元登録音声の回収パスが不正です".into());
     }
     if parts.first() != Some(&"meetings") || parts.len() < 2 || !uuid(parts[1]) {
         return Err("復元回収対象パスが不正です".into());
@@ -337,7 +355,7 @@ impl<'a> Journal<'a> {
             .to_str()
             .ok_or("復元実体パスが不正です")?
             .replace('\\', "/");
-        if relative == "meetings" {
+        if relative == "meetings" || relative == "voices" {
             return Ok(());
         } // Shared parent is never removed.
         let json = serde_json::to_string(&Identity::read(metadata)?).map_err(|e| e.to_string())?;
@@ -376,7 +394,7 @@ fn parents(root: &Path, target: &str, saved: &Saved) -> Result<(), String> {
                     .to_str()
                     .ok_or("復元回収パスが不正です")?
                     .replace('\\', "/");
-                if relative != "meetings"
+                if relative != "meetings" && relative != "voices"
                     && !saved
                         .targets
                         .get(&relative)
@@ -603,7 +621,7 @@ pub(in crate::storage::backup) fn recovery_evidence(
         let parts: Vec<_> = entry.0.split('/').collect();
         // Never offer the shared meetings directory or an invalid path for a
         // recursive inventory. Keeping an invalid manifest still deletes none.
-        if entry.1 == "directory" && parts.len() == 2 && parts[0] == "meetings" && uuid(parts[1]) {
+        if entry.1 == "directory" && parts.len() == 2 && matches!(parts[0], "meetings" | "voices") && uuid(parts[1]) {
             paths.insert(entry.0.clone());
         }
         intent.update(serde_json::to_vec(&entry).map_err(|e| e.to_string())?);

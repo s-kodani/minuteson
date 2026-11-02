@@ -195,7 +195,7 @@ fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static Kno
             std::sync::OnceLock::new();
         let previous=PREVIOUS.get_or_init(|| {
             let mut known=Vec::new();
-            for version in [34,35] {
+            for version in [34,35,36,37] {
                 let db=Connection::open_in_memory().map_err(|e|e.to_string())?;
                 db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
                 for (_,sql) in crate::storage::MIGRATIONS.iter().take(version) {db.execute_batch(sql).map_err(|e|e.to_string())?;}

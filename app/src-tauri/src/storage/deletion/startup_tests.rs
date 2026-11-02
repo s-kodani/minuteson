@@ -208,6 +208,8 @@ fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_
         // This fixture must have a contiguous v27 history, rather than a
         // current voice-registry entry above the removed historical suffix.
         for table in [
+            "voice_audio_operations",
+            "voice_sample_audio",
             "voice_matches",
             "voice_samples",
             "voice_people",

@@ -143,6 +143,7 @@ const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery
 const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
 const MIGRATION_35: &str = include_str!("migrations/0035_single_meeting_audio.sql");
 const MIGRATION_36: &str = include_str!("migrations/0036_post_analysis_intents.sql");
+const MIGRATION_38: &str = include_str!("migrations/0038_voice_audio.sql");
 const MIGRATION_37: &str = include_str!("migrations/0037_pcm_audio_import.sql");
 const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
 const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
@@ -180,6 +181,7 @@ pub struct Storage {
     pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     post_analysis_drain: Mutex<()>,
+    voice_audio_lock: Mutex<()>,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
@@ -567,6 +569,7 @@ impl Storage {
             feature_vectors: Mutex::default(),
             execution_progress: Mutex::default(),
             post_analysis_drain: Mutex::default(),
+            voice_audio_lock: Mutex::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
@@ -949,6 +952,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (35, MIGRATION_35),
     (36, MIGRATION_36),
     (37, MIGRATION_37),
+    (38, MIGRATION_38),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

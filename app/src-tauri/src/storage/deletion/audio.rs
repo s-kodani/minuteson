@@ -454,6 +454,7 @@ impl Census {
         omitted_operation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        storage.require_preserved_voice_audio(db, meeting)?;
         cancel(check)?;
         // Do not rely only on the cached fence flag: a newly persisted intent
         // or a different kind of maintenance also invalidates a fresh review.

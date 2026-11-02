@@ -1,4 +1,4 @@
-export interface VoiceSample { id:string;modelHash:string;extractorVersion:string;sourceMeetingId:string|null;sourceAvailable:boolean;startUs:number;endUs:number;createdAt:number }
+export interface VoiceSample { id:string;modelHash:string;extractorVersion:string;sourceMeetingId:string|null;sourceAvailable:boolean;audioAvailable:boolean;audioStorageState:"pending"|"ready"|"unavailable"|"failed";audioStorageError:string|null;startUs:number;endUs:number;createdAt:number }
 export interface VoicePerson {id:string;name:string;version:number;samples:VoiceSample[]}
 export interface VoiceMatch {id:string;speakerId:string;personId:string|null;nameSnapshot:string;state:"candidate"|"automatic"|"confirmed"|"dismissed";similarity:number|null;modelHash:string}
 export interface VoiceWindow {speakerId:string;trackId:string;startUs:number;endUs:number}

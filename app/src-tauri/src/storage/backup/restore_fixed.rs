@@ -146,6 +146,13 @@ impl<'p, 's> FixedData<'p, 's> {
                 .ok_or_else(|| format!("復元列がありません: {name}"))
         };
         match table.name.as_str() {
+            "voice_sample_audio" => {
+                if row_text(&row, column("state")?)? == "ready" {
+                    let id=row_text(&row,column("id")?)?;
+                    let person:String=self.ids.source().database.query_row("SELECT person_id FROM voice_samples WHERE id=(SELECT id FROM voice_sample_audio WHERE rowid=?1)",[rowid],|r|r.get(0)).map_err(|e|e.to_string())?;
+                    row[column("relative_path")?]=SqlValue::Text(crate::storage::voice::audio::relative(&self.ids.get("voice_people","",&person)?,id)?);
+                }
+            }
             "post_analysis_intents" => {
                 // Restored intent is history, never new consent to run under
                 // today's models/registry. Explicit regeneration creates a new one.

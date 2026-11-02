@@ -286,6 +286,7 @@ fn meeting_name(n: &str) -> bool {
         "meetings.sqlite3-shm",
         "meetings.sqlite3-journal",
         "meetings",
+        "voices",
         "temp",
         "journal",
         ".mon-scratch.sqlite3",

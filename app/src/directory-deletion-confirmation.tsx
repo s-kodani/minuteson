@@ -21,6 +21,7 @@ export function DirectoryDeletionConfirmation({ kind, name, directory, titleId, 
   return <>
     <h2 id={titleId} ref={heading} tabIndex={-1}>{kind === "meeting" ? "会議を削除" : "モデルを削除"}</h2>
     <p>{kind === "meeting" ? `「${name}」の音声・文字起こし・議事録などを完全に削除しますか？` : `「${name}」のローカルコピーを完全に削除しますか？`}</p>
+    {kind === "meeting" && <p>ボイス登録用に保存した音声と声の特徴量は残ります。</p>}
     <div><span>削除対象フォルダー</span><p className="data-path" style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{deletionDirectoryLabel(directory)}</p></div>
     <div className="analysis-actions">
       <button type="button" className="secondary" data-dialog-cancel disabled={blocked} onClick={onCancel}>キャンセル</button>

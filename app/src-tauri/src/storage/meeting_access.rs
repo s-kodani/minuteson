@@ -200,6 +200,8 @@ impl Storage {
             .collect()
     }
     pub(crate) fn reserve_meeting_deletion(&self, meeting: &str) -> Result<(), String> {
+        self.preserve_voice_audio(Some(meeting), &||false)?;
+        let _voice = self.lock_voice_audio()?;
         self.require_data_writable()?;
         let db = self
             .connection
@@ -224,6 +226,7 @@ impl Storage {
         if !uuid::Uuid::parse_str(meeting).is_ok_and(|v| v.to_string() == meeting) {
             return Err("会議IDが不正です".into());
         }
+        self.require_preserved_voice_audio(&db, meeting)?;
         super::deletion::database::trusted_schema(&db)?;
         if let Err(error) = install(&db) {
             self.deletion_fence.fail_closed(&db);

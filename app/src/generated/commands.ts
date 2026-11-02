@@ -133,6 +133,7 @@ export interface CommandArguments {
   "get_voice_context": { "meetingId": string };
   "start_voice_job": { "request": unknown };
   "manage_voice_person": { "personId": string; "expectedVersion": number; "name"?: (string) | null; "sampleId"?: (string) | null };
+  "retry_voice_audio_storage": Record<string, never>;
   "decide_voice_match": { "meetingId": string; "analysisId": string; "speakerId": string; "personId"?: (string) | null; "expectedWorkingHash": string };
   "retry_voice_job": { "jobId": string; "operationId": string };
   "get_analysis_jobs": { "meetingId": string };
@@ -2469,6 +2470,15 @@ export const commandContracts = {
         "optional": true
       }
     ],
+    "response": {
+      "type": "Result<storage::voice::PersonMutation,mon_contracts::AppError>",
+      "ok": "storage::voice::PersonMutation",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "retry_voice_audio_storage": {
+    "async": true,
+    "arguments": [],
     "response": {
       "type": "Result<(),mon_contracts::AppError>",
       "ok": "()",

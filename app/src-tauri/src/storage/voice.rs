@@ -4,7 +4,11 @@ use crate::voice::{self, Plan, Window};
 use rusqlite::{Transaction, TransactionBehavior};
 use std::collections::{BTreeMap, BTreeSet};
 mod enrollment;
+pub(crate) mod audio;
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all="camelCase")]
+pub(crate) struct PersonMutation { pub audio_cleanup_pending: bool, pub audio_cleanup_error: Option<String> }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SampleView {
@@ -13,6 +17,9 @@ pub(crate) struct SampleView {
     pub extractor_version: String,
     pub source_meeting_id: Option<String>,
     pub source_available: bool,
+    pub audio_available: bool,
+    pub audio_storage_state: String,
+    pub audio_storage_error: Option<String>,
     pub start_us: i64,
     pub end_us: i64,
     pub created_at: i64,
@@ -84,18 +91,24 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
         return Err("登録した人物が上限を超えています".into());
     }
     for person in &mut people {
-        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at FROM voice_samples s WHERE person_id=?1 ORDER BY created_at,id").map_err(|e|e.to_string())?;
+        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at,coalesce(a.state,'pending'),a.error_message FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE person_id=?1 ORDER BY s.created_at,s.id").map_err(|e|e.to_string())?;
         person.samples = q
             .query_map([&person.id], |r| {
+                let state:String=r.get(8)?;
+                let source_available:bool=r.get(4)?;
+                let audio_available=state=="ready" || (state!="unavailable" && source_available);
                 Ok(SampleView {
                     id: r.get(0)?,
                     model_hash: r.get(1)?,
                     extractor_version: r.get(2)?,
                     source_meeting_id: r.get(3)?,
-                    source_available: r.get(4)?,
+                    source_available,
                     start_us: r.get(5)?,
                     end_us: r.get(6)?,
                     created_at: r.get(7)?,
+                    audio_available,
+                    audio_storage_state: state,
+                    audio_storage_error: r.get(9)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -343,6 +356,7 @@ impl Storage {
         sample_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<crate::playback::PreparedAudio, String> {
+        if let Some(audio) = self.saved_voice_playback(sample_id, cancelled)? { return Ok(audio); }
         let resolve = || -> Result<(String, String, i64, i64), String> {
             if cancelled() {
                 return Err("音声の再生準備を取り消しました".into());
@@ -407,8 +421,10 @@ impl Storage {
         expected_version: i64,
         name: Option<String>,
         sample_id: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<PersonMutation, String> {
         self.require_data_writable()?;
+        let _voice_lock = self.lock_voice_audio()?;
+        self.recover_voice_audio()?;
         let mut db = self
             .connection
             .lock()
@@ -426,6 +442,7 @@ impl Storage {
         {
             return Err("人物登録が変更されています。再読込してください".into());
         }
+        if sample_id.is_some() || name.is_none() { self.journal_voice_deletion(&tx, id, sample_id.as_deref())?; }
         if let Some(sample) = sample_id {
             if tx
                 .execute(
@@ -453,7 +470,10 @@ impl Storage {
             tx.execute("DELETE FROM voice_people WHERE id=?1", [id])
                 .map_err(|e| e.to_string())?;
         }
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        drop(db);
+        let error=self.recover_voice_audio().err();
+        Ok(PersonMutation{audio_cleanup_pending:error.is_some(),audio_cleanup_error:error})
     }
     pub(crate) fn start_voice(&self, request: Start) -> Result<JobSnapshot, String> {
         self.start_voice_observed(request, false, None)
@@ -655,6 +675,20 @@ impl Storage {
         job_id: &str,
     ) -> Result<JobSnapshot, String> {
         self.require_data_writable()?;
+        let _voice_lock = self.lock_voice_audio()?;
+        self.recover_voice_audio()?;
+        let _clip_cleanup = audio::Cleanup(self);
+        let registration_person = plan.person_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let mut clips = Vec::new();
+        if spec.kind == JobKind::VoiceRegistration {
+            self.check_voice_plan(spec, plan)?;
+            for (window, vector) in &features {
+                voice::normalize(vector)?;
+                if !plan.windows.contains(window) { return Err("登録音声の区間が一致しません".into()); }
+                let id = Uuid::new_v4().to_string();
+                clips.push(self.stage_voice_clip(&registration_person, &id, &spec.meeting_id, &window.track_id, window.start_us, window.end_us, &|| self.get_job(job_id).map_or(true, |j| j.state != "running"))?);
+            }
+        }
         let mut db = self
             .connection
             .lock()
@@ -691,10 +725,7 @@ impl Storage {
             if features.is_empty() {
                 return Err("この音声から声の特徴を取得できませんでした".into());
             }
-            let person = plan
-                .person_id
-                .clone()
-                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let person = registration_person;
             if plan.person_id.is_none() {
                 if people(&tx)?.len() >= 1000 {
                     return Err("登録した人物は1000人までです".into());
@@ -719,9 +750,10 @@ impl Storage {
             if count + features.len() as i64 > 64 {
                 return Err("一人につき登録した声は64区間までです".into());
             }
-            for (window, vector) in features {
-                tx.execute("INSERT INTO voice_samples(id,person_id,model_hash,extractor_version,dimension,vector,source_meeting_id,source_analysis_id,source_track_id,start_us,end_us,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),person,plan.engine.embedding_model.sha256,voice::EXTRACTOR,vector.len() as i64,voice::encode(&vector)?,spec.meeting_id,spec.input_analysis_id,window.track_id,window.start_us,window.end_us,now_ms()?]).map_err(|e|e.to_string())?;
+            for ((window, vector), clip) in features.into_iter().zip(&clips) {
+                tx.execute("INSERT INTO voice_samples(id,person_id,model_hash,extractor_version,dimension,vector,source_meeting_id,source_analysis_id,source_track_id,start_us,end_us,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![clip.id,person,plan.engine.embedding_model.sha256,voice::EXTRACTOR,vector.len() as i64,voice::encode(&vector)?,spec.meeting_id,spec.input_analysis_id,window.track_id,window.start_us,window.end_us,now_ms()?]).map_err(|e|e.to_string())?;
             }
+            for clip in &clips { clip.insert(&tx)?; }
             tx.execute(
                 "UPDATE voice_people SET version=version+1 WHERE id=?1",
                 [&person],
@@ -775,6 +807,7 @@ impl Storage {
                 }
             })?;
         }
+        for clip in &clips { tx.execute("DELETE FROM voice_audio_operations WHERE sample_key=?1 AND kind='install'", [&clip.id]).map_err(|e|e.to_string())?; }
         let checkpoint = "{\"voiceResult\":true}";
         let sequence: i64 = tx
             .query_row(
@@ -1111,9 +1144,9 @@ fn publish_matches_observed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::storage) mod tests {
     use super::*;
-    pub(super) fn fixture() -> (tempfile::TempDir, Storage, String, String) {
+    pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, String) {
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
         let (m, _, _) = super::super::playback::tests::fixture(&s);
@@ -1243,7 +1276,7 @@ mod tests {
         assert_eq!(s.acquire_local_inference_job().unwrap().unwrap().id, job.id);
         (job, spec, plan)
     }
-    fn register(s: &Storage, m: &str, speaker: &str) -> String {
+    pub(in crate::storage) fn register(s: &Storage, m: &str, speaker: &str) -> String {
         let (job, spec, plan) = enqueue(s, m, speaker, true);
         s.publish_voice_result(
             &spec,
@@ -1255,7 +1288,7 @@ mod tests {
         s.fixed_job_input(&job.id).unwrap();
         s.voice_people().unwrap()[0].id.clone()
     }
-    fn seed_person(s: &Storage, m: &str) -> String {
+    pub(in crate::storage) fn seed_person(s: &Storage, m: &str) -> String {
         let person = Uuid::new_v4().to_string();
         let db = s.connection.lock().unwrap();
         db.execute("INSERT INTO voice_people VALUES(?1,'田中',1,0)", [&person])

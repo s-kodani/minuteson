@@ -135,6 +135,7 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_voice_context" => matches!(role, "main"),
         "start_voice_job" => matches!(role, "main"),
         "manage_voice_person" => matches!(role, "main"),
+        "retry_voice_audio_storage" => matches!(role, "main"),
         "decide_voice_match" => matches!(role, "main"),
         "retry_voice_job" => matches!(role, "main"),
         "get_analysis_jobs" => matches!(role, "main"),

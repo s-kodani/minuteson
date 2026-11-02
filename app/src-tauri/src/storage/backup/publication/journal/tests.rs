@@ -417,7 +417,7 @@ fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backu
     )
     .unwrap();
     assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
-    assert_eq!(source.manifest.tables.len(), 39);
+    assert_eq!(source.manifest.tables.len(), 40);
     assert!(source
         .manifest
         .tables
@@ -427,7 +427,7 @@ fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backu
         .manifest
         .tables
         .iter()
-        .all(|t| !t.name.starts_with("maintenance")));
+        .all(|t| !t.name.starts_with("maintenance") && t.name != "voice_audio_operations"));
 }
 
 #[test]
@@ -795,7 +795,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    for table in ["maintenance_operations", "maintenance_paths"] {
+    for table in ["maintenance_operations", "maintenance_paths", "voice_audio_operations"] {
         assert_eq!(
             source
                 .database
@@ -805,7 +805,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             0
         );
     }
-    assert_eq!(source.manifest.tables.len(), 39);
+    assert_eq!(source.manifest.tables.len(), 40);
 }
 
 #[test]

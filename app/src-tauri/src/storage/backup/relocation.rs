@@ -266,7 +266,7 @@ fn inspect_file(
 fn inventory(root: &Path, cancelled: &impl Fn() -> bool) -> Result<Vec<Observed>, String> {
     directory(root)?;
     let mut queue = Vec::new();
-    for base in ["meetings", "temp"] {
+    for base in ["meetings", "temp", "voices"] {
         match crate::native_fs::symlink_metadata(root.join(base)) {
             Ok(_) => queue.push(base.to_owned()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -363,6 +363,12 @@ fn assets(db: &Connection, tree: &[Observed]) -> Result<Vec<Asset>, String> {
         }
         all.push(asset);
     }
+    for asset in super::super::voice::audio::assets(db)? {
+        let e=files.get(asset.relative_path.as_str()).ok_or("移動対象の登録音声がありません")?;
+        if e.directory || e.size!=asset.size_bytes as u64 || e.hash.as_deref()!=Some(&asset.content_hash) {return Err("移動対象の登録音声が一致しません".into());}
+        all.push(Asset{id:asset.id,meeting_id:String::new(),relative_path:asset.relative_path,size:e.size,hash:asset.content_hash,state:asset.state});
+    }
+    all.sort_by(|a,b|a.id.cmp(&b.id));
     Ok(all)
 }
 
@@ -643,7 +649,7 @@ impl NativeSnapshot<'_> {
         // files. Only the sealed single DB image and managed trees belong here.
         for name in std::fs::read_dir(&self.image).map_err(|e| e.to_string())? {
             let name = name.map_err(|e| e.to_string())?.file_name();
-            if name != "meetings.sqlite3" && name != "meetings" && name != "temp" {
+            if name != "meetings.sqlite3" && name != "meetings" && name != "temp" && name != "voices" {
                 return Err("移動用領域に未確認のファイルがあります".into());
             }
         }
@@ -725,6 +731,7 @@ pub(crate) fn verify_placed_image_with_controls(
         if name != "meetings.sqlite3"
             && name != "meetings"
             && name != "temp"
+            && name != "voices"
             && !controls.iter().any(|s| name == *s)
         {
             return Err("配置先に未確認のファイルがあります".into());

@@ -161,6 +161,7 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         feature_vectors: Mutex::default(),
         execution_progress: Mutex::default(),
         post_analysis_drain: Mutex::default(),
+        voice_audio_lock: Mutex::default(),
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
     };

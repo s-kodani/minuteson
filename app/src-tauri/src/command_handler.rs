@@ -133,6 +133,7 @@ tauri::generate_handler![
     get_voice_context,
     start_voice_job,
     manage_voice_person,
+    retry_voice_audio_storage,
     decide_voice_match,
     retry_voice_job,
     get_analysis_jobs,

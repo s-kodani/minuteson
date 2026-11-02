@@ -3269,6 +3269,22 @@
           }
         ],
         "response": {
+          "type": "Result<storage::voice::PersonMutation,mon_contracts::AppError>",
+          "ok": "storage::voice::PersonMutation",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "retry_voice_audio_storage",
+      "handler": "retry_voice_audio_storage",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
           "type": "Result<(),mon_contracts::AppError>",
           "ok": "()",
           "error": "mon_contracts::AppError"

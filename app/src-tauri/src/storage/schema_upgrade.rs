@@ -6,7 +6,7 @@ pub(super) fn save_snapshot(db: &Connection, name: &str) -> Result<(), String> {
 }
 
 pub(super) fn admits(version: usize) -> bool {
-    matches!(version, 34 | 35 | 36)
+    matches!(version, 34 | 35 | 36 | 37)
 }
 pub(super) fn upgrade(db: &mut Connection) -> Result<(), Box<dyn Error>> {
     let mut version = verify_migration_history(db)?;
@@ -31,20 +31,22 @@ pub(super) fn upgrade(db: &mut Connection) -> Result<(), Box<dyn Error>> {
         tx.commit()?;
         version = 36;
     }
-    if version != 36 {
-        return Err("非対応の移行元DBです".into());
+    for (from, to, sql, snapshot_name) in [
+        (36, 37, MIGRATION_37, "before-pcm-import.sqlite3"),
+        (37, 38, MIGRATION_38, "before-voice-audio.sqlite3"),
+    ] {
+        if version == from {
+            snapshot::save(db, snapshot_name)?;
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(sql)?;
+            tx.execute("INSERT INTO schema_migrations VALUES(?1,?2,?3)",
+                params![to as i64, format!("{:x}", Sha256::digest(sql.as_bytes())), now_ms()?])?;
+            tx.commit()?;
+            version = to;
+        }
     }
-    snapshot::save(db, "before-pcm-import.sqlite3")?;
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute_batch(MIGRATION_37)?;
-    tx.execute(
-        "INSERT INTO schema_migrations VALUES(37,?1,?2)",
-        params![
-            format!("{:x}", Sha256::digest(MIGRATION_37.as_bytes())),
-            now_ms()?
-        ],
-    )?;
-    tx.commit()?;
+    if version != MIGRATIONS.len() { return Err("非対応の移行元DBです".into()); }
+
     Ok(())
 }
 
@@ -69,7 +71,7 @@ mod tests {
             .unwrap();
         upgrade(&mut db).unwrap();
         upgrade(&mut db).unwrap();
-        assert_eq!(verify_migration_history(&db).unwrap(), 37);
+        assert_eq!(verify_migration_history(&db).unwrap(), 38);
         let after = db
             .prepare("SELECT checksum FROM schema_migrations WHERE version<=36 ORDER BY version")
             .unwrap()
@@ -93,6 +95,22 @@ mod tests {
             .unwrap(),
             "既存会議"
         );
+    }
+    #[test]
+    fn schema37_voice_audio_upgrade_keeps_features_and_queues_existing_samples() {
+        let mut db=schema35();
+        for (version,sql) in [(36,MIGRATION_36),(37,MIGRATION_37)] {
+            db.execute_batch(sql).unwrap();
+            db.execute("INSERT INTO schema_migrations VALUES(?1,?2,0)",params![version,format!("{:x}",Sha256::digest(sql.as_bytes()))]).unwrap();
+        }
+        let vector=crate::voice::encode(&[1.,0.]).unwrap();
+        db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)",[]).unwrap();
+        db.execute("INSERT INTO voice_samples VALUES('sample','person',?1,?2,2,?3,NULL,NULL,NULL,0,1000000,0)",params!["a".repeat(64),crate::voice::EXTRACTOR,vector]).unwrap();
+        upgrade(&mut db).unwrap();upgrade(&mut db).unwrap();
+        assert_eq!(verify_migration_history(&db).unwrap(),38);
+        assert_eq!(db.query_row("SELECT vector FROM voice_samples WHERE id='sample'",[],|r|r.get::<_,Vec<u8>>(0)).unwrap(),vector);
+        assert_eq!(db.query_row("SELECT state FROM voice_sample_audio WHERE id='sample'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");
+        assert_eq!(db.query_row("SELECT count(*) FROM voice_sample_audio",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
     fn schema35() -> Connection {
         schema35_at(Connection::open_in_memory().unwrap())
@@ -182,7 +200,7 @@ mod tests {
                 .exists([])
                 .unwrap());
         };
-        retained(&storage.connection.lock().unwrap(), 37);
+        retained(&storage.connection.lock().unwrap(), 38);
         let preferences = storage.ui_preferences().unwrap();
         assert_eq!(preferences.lock_version, 3);
         assert_eq!(
@@ -219,7 +237,7 @@ mod tests {
 
         let reopened = Storage::open(root.path().to_owned()).unwrap();
         assert_eq!(reopened.list_meetings().unwrap(), meetings);
-        retained(&reopened.connection.lock().unwrap(), 37);
+        retained(&reopened.connection.lock().unwrap(), 38);
         reopened.managed_anchor.verify().unwrap();
         assert_eq!(hash_file(&snapshot).unwrap(), saved_hash);
         assert_eq!(
@@ -246,7 +264,7 @@ mod tests {
             .unwrap();
         upgrade(&mut db).unwrap();
         upgrade(&mut db).unwrap();
-        assert_eq!(verify_migration_history(&db).unwrap(), 37);
+        assert_eq!(verify_migration_history(&db).unwrap(), 38);
         assert_eq!(
             db.query_row("SELECT title FROM meetings WHERE id='retained'", [], |r| {
                 r.get::<_, String>(0)

@@ -133,11 +133,32 @@ impl FixedWorkspace {
         };
         work.load_rows(fixed, cancelled)?;
         work.foundation_assets(fixed, cancelled)?;
+        work.voice_assets(fixed, cancelled)?;
         work.rebuild_dependencies(fixed, cancelled)?;
         check_cancelled(cancelled)?;
         Ok(work)
     }
 
+    fn voice_assets(&self, fixed: &FixedData<'_, '_>, cancelled: &impl Fn()->bool) -> Result<(),String> {
+        if fixed.ids.source().manifest.schema_version < 38 { return Ok(()); }
+        for old in crate::storage::voice::audio::assets(&fixed.ids.source().database)? {
+            check_cancelled(cancelled)?;
+            let id=fixed.ids.get("voice_samples","",&old.id)?;
+            let path:String=self.database.query_row("SELECT relative_path FROM voice_sample_audio WHERE id=?1",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            let (dir,leaf)=crate::storage::voice::audio::file(self.stage.path(),&path,true)?;
+            let mut output=dir.create(&leaf)?;
+            let source=fixed.ids.source().owned_asset_path(&old.id)?;
+            let (mut input,before)=open_source(&source)?;
+            let proof=stream(&mut input,Some(&mut output),old.size_bytes as u64,cancelled)?;
+            if proof!=(old.size_bytes as u64,old.content_hash) || !same_file(&before,&crate::native_fs::metadata(&input).map_err(|e|e.to_string())?) { return Err("復元中に登録音声が変更されています".into()); }
+            output.sync_all().map_err(|e|e.to_string())?;
+            let hash:String=self.database.query_row("SELECT content_hash FROM voice_sample_audio WHERE id=?1",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            let audio=crate::audio::VerifiedAudio::open_cancellable(dir.required(&leaf,false)?,old.size_bytes as u64,&hash,cancelled)?;
+            let frames:i64=self.database.query_row("SELECT frame_count FROM voice_sample_audio WHERE id=?1",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if !audio.format.is_voice_clip() || audio.format.frames!=frames as u64 {return Err("復元する登録音声の形式が不正です".into());}
+        }
+        Ok(())
+    }
     fn completion_checkpoints(
         &mut self,
         fixed: &FixedData<'_, '_>,

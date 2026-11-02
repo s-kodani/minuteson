@@ -136,8 +136,7 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
     let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
     let mut versions = (0..MIGRATIONS.len())
         .chain([MIGRATIONS.len() + 1])
-        .filter(|&schema| schema != 36)
-        .map(|schema| (crate::current_formats::BACKUP, schema))
+                .map(|schema| (crate::current_formats::BACKUP, schema))
         .collect::<Vec<_>>();
     versions.extend([
         (1, MIGRATIONS.len()),
@@ -191,7 +190,7 @@ fn schema35_format5_backup_is_verified_before_additive_restore_to_current_schema
     assert_eq!(intent.row_count, 0);
     manifest
         .tables
-        .retain(|t| t.name != "post_analysis_intents");
+        .retain(|t| t.name != "post_analysis_intents" && t.name != "voice_sample_audio");
     manifest.format_version = 5;
     manifest.schema_version = 35;
     let old = output.path().join("schema35.monbackup");
@@ -220,6 +219,8 @@ fn schema35_format5_backup_is_verified_before_additive_restore_to_current_schema
     // are unchanged by the PCM-import trigger migration and remain restorable.
     let mut previous = source.manifest.clone();
     previous.schema_version = 36;
+    previous.format_version = 6;
+    previous.tables.retain(|t|t.name != "voice_sample_audio");
     let previous_path = output.path().join("schema36.monbackup");
     pack(&previous_path, &previous, &payloads(&source));
     let checked = verified(&previous_path, output.path());

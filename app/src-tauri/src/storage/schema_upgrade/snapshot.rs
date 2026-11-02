@@ -202,6 +202,7 @@ fn save_with(
         "before-single-wav.sqlite3"
             | "before-followup-intents.sqlite3"
             | "before-pcm-import.sqlite3"
+            | "before-voice-audio.sqlite3"
     ) {
         return Err("未知の移行前DBコピー名です".into());
     }

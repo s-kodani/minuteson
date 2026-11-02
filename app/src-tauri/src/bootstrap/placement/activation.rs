@@ -153,7 +153,7 @@ pub(super) fn validate_manifest(m: &Manifest) -> Result<(), String> {
             || e.relative_path
                 .split('/')
                 .any(|p| p.is_empty() || p == "." || p == "..")
-            || !matches!(e.relative_path.split('/').next(), Some("meetings" | "temp"))
+            || !matches!(e.relative_path.split('/').next(), Some("meetings" | "temp" | "voices"))
             || e.size > i64::MAX as u64
             || (e.directory && (e.size != 0 || e.hash.is_some()))
             || (!e.directory && !e.hash.as_ref().is_some_and(|h| sha(h)))
@@ -179,11 +179,11 @@ pub(super) fn validate_manifest(m: &Manifest) -> Result<(), String> {
         let parts: Vec<_> = a.relative_path.split('/').collect();
         if a.id.is_empty()
             || a.id.len() > 1024
-            || a.meeting_id.is_empty()
             || a.meeting_id.len() > 1024
             || parts.len() < 3
-            || parts[0] != "meetings"
-            || parts[1] != a.meeting_id
+            || if a.meeting_id.is_empty() {
+                crate::storage::voice::audio::relative(parts[1], &a.id).as_deref() != Ok(a.relative_path.as_str()) || a.state != "ready"
+            } else { parts[0] != "meetings" || parts[1] != a.meeting_id }
             || a.relative_path.len() > 1024
             || a.relative_path.contains(['\\', '\0'])
             || parts

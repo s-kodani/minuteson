@@ -51,9 +51,9 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
         assert_eq!(trusted_schema(&db).is_ok(), current);
         assert_eq!(
             initialize_database(&mut db).is_ok(),
-            current || matches!(version, 34 | 35 | 36)
+            current || matches!(version, 34 | 35 | 36 | 37)
         );
-        if matches!(version, 34 | 35 | 36) {
+        if matches!(version, 34 | 35 | 36 | 37) {
             assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
         } else {
             assert_eq!(schema(&db).unwrap(), before);
@@ -76,7 +76,7 @@ fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initial
 }
 
 #[test]
-fn pre_followup_migration_receipts_are_readable_but_never_current_deletion_consent() {
+fn previous_schema_receipts_are_readable_but_never_current_deletion_consent() {
     for (version, expected_missing) in [
         (
             34,
@@ -87,6 +87,8 @@ fn pre_followup_migration_receipts_are_readable_but_never_current_deletion_conse
             ],
         ),
         (35, vec!["post_analysis_intents"]),
+        (36, vec![]),
+        (37, vec![]),
     ] {
         let previous = database(version);
         let objects = schema(&previous).unwrap();

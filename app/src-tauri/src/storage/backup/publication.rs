@@ -141,7 +141,9 @@ impl Storage {
         ids: &RestoreIds<'_>,
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
-        self.publish_restore_inner(sealed, ids, None, check)
+        let result=self.publish_restore_inner(sealed, ids, None, check)?;
+        if let Err(error)=self.preserve_voice_audio(None, check) {crate::internal_logs::report_error("voice_audio",&error);}
+        Ok(result)
     }
 
     pub(super) fn publish_restore_confirmed(
@@ -151,7 +153,9 @@ impl Storage {
         confirmation: (&str, u64),
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
-        self.publish_restore_inner(sealed, ids, Some(confirmation), check)
+        let result=self.publish_restore_inner(sealed, ids, Some(confirmation), check)?;
+        if let Err(error)=self.preserve_voice_audio(None, check) {crate::internal_logs::report_error("voice_audio",&error);}
+        Ok(result)
     }
 
     fn publish_restore_inner(

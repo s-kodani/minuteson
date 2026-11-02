@@ -149,6 +149,7 @@ pub(in crate::storage) fn recover_restore_operations(
 struct Maintenance<'a> {
     storage: &'a Storage,
     unresolved: std::cell::Cell<bool>,
+    _voice: std::sync::MutexGuard<'a, ()>,
 }
 
 impl Maintenance<'_> {
@@ -211,6 +212,9 @@ pub(super) struct StagedAsset {
 
 impl Storage {
     fn backup_maintenance(&self) -> Result<Maintenance<'_>, String> {
+        let voice = self.lock_voice_audio()?;
+        self.require_data_writable()?;
+        self.recover_voice_audio()?;
         let db = self
             .connection
             .lock()
@@ -294,6 +298,7 @@ impl Storage {
         Ok(Maintenance {
             storage: self,
             unresolved: std::cell::Cell::new(false),
+            _voice: voice,
         })
     }
 
@@ -310,6 +315,7 @@ impl Storage {
         cancelled: &impl Fn() -> bool,
     ) -> Result<Snapshot<'_>, String> {
         check_cancelled(cancelled)?;
+        self.preserve_voice_audio(None, cancelled)?;
         let maintenance = self.backup_maintenance()?;
         let stage = match parent {
             Some(parent) => scratch::Stage::create(parent)?,
@@ -322,7 +328,8 @@ impl Storage {
         let meetings = read_meetings(&db)?;
         let deleted_audio = deleted_audio::Native::capture(self, &db, cancelled)?;
         let input_snapshots = input_snapshots::Native::capture(self, &db, cancelled)?;
-        let assets = read_assets_with_deleted(&db, &deleted_audio)?;
+        let mut assets = read_assets_with_deleted(&db, &deleted_audio)?;
+        assets.extend(super::voice::audio::assets(&db)?);
         let required = assets.iter().try_fold(0_u64, |sum, a| {
             if a.state == "missing" {
                 return Ok(sum);
@@ -687,6 +694,13 @@ fn read_assets_with_deleted(
 }
 
 fn source_path(storage: &Storage, asset: &FileAsset) -> Result<PathBuf, String> {
+    if asset.meeting_id.is_empty() {
+        let person:String=storage.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT person_id FROM voice_samples WHERE id=?1",[&asset.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if super::voice::audio::relative(&person,&asset.id)? != asset.relative_path {return Err("登録音声の所属が一致しません".into());}
+        let (dir, leaf) = super::voice::audio::file(storage.root(), &asset.relative_path, false)?;
+        dir.required(&leaf, false)?;
+        return Ok(dir.path.join(leaf));
+    }
     if asset.relative_path.contains('\\') {
         return Err("管理パスが不正です".into());
     }
