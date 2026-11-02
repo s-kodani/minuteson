@@ -129,7 +129,7 @@ impl Storage {
         tx.execute("INSERT INTO meetings(id,title,source_type,lifecycle,created_at,updated_at) VALUES(?1,?2,'audio_import','draft',?3,?3)",params![meeting,title,now]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,created_at,updated_at) VALUES(?1,?2,'copying',?3,?4,?5,?6,?6)",params![id,meeting,file_name,info.detected_format,info.duration_us,now]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_import_commits(import_id,meeting_id,operation_id,source_size,source_hash,info_json) VALUES(?1,?2,?3,?4,?5,?6)",params![id,meeting,operation,source.size as i64,source.sha256,text]).map_err(|e|e.to_string())?;
-        super::vocabulary::save_initial_import_vocabulary(
+        super::vocabulary::save_initial_vocabulary(
             &tx,
             &meeting,
             &options.meeting_vocabulary,

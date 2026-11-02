@@ -1816,6 +1816,12 @@
             "wireName": "numSpeakers",
             "type": "Option<u32>",
             "optional": true
+          },
+          {
+            "name": "meeting_vocabulary",
+            "wireName": "meetingVocabulary",
+            "type": "Option<Vec<storage::VocabularyEntry>>",
+            "optional": true
           }
         ],
         "response": {

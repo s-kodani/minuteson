@@ -5,6 +5,7 @@ window.emitResidencyFixture = (event,payload) => emit(event,payload);
 import { registerPendingEdits } from "../src/draft-save.ts";
 import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";
 import {archivedFixture,archivedPage,archivedRows,archivedAction,newArchivedRow,reopenArchived} from "./archived-input-browser-fixture.js";
+import { validVocabulary } from "../src/vocabulary-state.ts";
 import { toasts } from "../src/toast";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
@@ -17,7 +18,7 @@ const queueSeed=sessionStorage.getItem("MON_INPUT_QUEUE_FIXTURE");sessionStorage
 const archivedSeed=sessionStorage.getItem("MON_ARCHIVED_INPUT_FIXTURE");sessionStorage.removeItem("MON_ARCHIVED_INPUT_FIXTURE");
 const f = window.closeFixture = {
   notificationHistory:()=>toasts.getHistorySnapshot(),
-  recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
+  recording, importing, vocabulary: {}, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
   failFlush: false, flushDelay: 0, flushes: 0, mutateDuringFlush: null,
   startLost: false, startBeforeCommitFailure:false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
@@ -218,8 +219,11 @@ mockIPC(async (command, args) => {
     if(f.mutateApplicationAtStart){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationAtStart=false;}
     const scope=args.captureScope;
     if(!scope||!(scope.mode==="system"&&scope.application===null||scope.mode==="application"&&scope.application&&f.captureApplications.applications.some(a=>a.pid===scope.application.pid&&a.bundleIdentifier===scope.application.bundleIdentifier&&a.launchTimeUs===scope.application.launchTimeUs)))throw Error("模擬アプリ対象変更・全体へ切り替えていません");
+    if(args.newTitle==null&&args.meetingVocabulary!=null)throw Error("模擬の既存会議用語指定拒否");
     if(args.newTitle!=null){
+      if(!validVocabulary(args.meetingVocabulary??[])||f.failVocabulary)throw Error("模擬用語保存失敗");
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(args.meetingId)||typeof args.newTitle!=="string"||!args.newTitle.trim()||Array.from(args.newTitle.trim()).length>200||data.meetings.some(m=>m.id===args.meetingId))throw Error("模擬新規会議受付拒否");
+      f.vocabulary[args.meetingId]={id:`meeting:${args.meetingId}`,payload:clone(args.meetingVocabulary??[]),lockVersion:args.meetingVocabulary?.length?1:0};
       const now=Date.now();data.meetings.push({id:args.meetingId,title:args.newTitle.trim(),lifecycle:"draft",sourceType:null,createdAt:now,updatedAt:now,lockVersion:0});
     }
     const meeting=data.meetings.find(m=>m.id===args.meetingId);
@@ -258,7 +262,12 @@ mockIPC(async (command, args) => {
   if (["get_analysis_jobs", "get_ready_analysis_flows", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_publication_status") return null;
   if (["get_analysis_versions", "get_minutes_versions"].includes(command)) return { meetingLockVersion: data.meetings[0].lockVersion, currentId: null, previousId: null, draft: null, versions: [] };
-  if (command === "get_meeting_vocabulary") return { global: clone(data.book), meeting: { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 } };
+  if(command==="save_vocabulary_book"&&args.meetingId!=null){
+    const book=f.vocabulary[args.meetingId]??{id:`meeting:${args.meetingId}`,payload:[],lockVersion:0};
+    if(f.failVocabulary||book.lockVersion!==args.expectedLockVersion||!validVocabulary(args.payload))throw Error("模擬用語保存失敗");
+    f.vocabulary[args.meetingId]={...book,payload:clone(args.payload),lockVersion:book.lockVersion+1};return clone(f.vocabulary[args.meetingId]);
+  }
+  if (command === "get_meeting_vocabulary") return { global: clone(data.book), meeting: clone(f.vocabulary[args.meetingId]??{ id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 }) };
   if (command === "get_diarization_preferences") {
     const engine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
     return { id: "sherpa_profiles", lockVersion: 0, payload: { standard: clone(engine), highAccuracy: clone(engine) } };

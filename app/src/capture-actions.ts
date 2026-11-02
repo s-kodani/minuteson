@@ -12,7 +12,7 @@ import type { useSavedNavigation } from "./saved-navigation";
 import type { ImportSnapshot } from "./import-state";
 import { withConfirmedEdits } from "./confirmed-action";
 import { stopAllPlayback } from "./playback-barrier";
-import { newRecordingPreparation, sameRecordingPreparation, validRecordingTitle, type RecordingPreparation } from "./recording-preparation-state";
+import { newRecordingPreparation, sameRecordingPreparation, validRecordingPreparation, type RecordingPreparation } from "./recording-preparation-state";
 import { checkedCaptureInputs, usableAutomaticMicrophone, usableMicrophone } from "./capture-input-state";
 import { captureApplicationScope, checkedCaptureApplications, checkedCaptureScope } from "./capture-scope-state";
 import { assertCloseImport, assertCloseRecording, importNeedsConsent, recordingActive } from "./application-close";
@@ -88,7 +88,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
   },[activeMicrophoneInput,microphoneSelection?.revision,captureInputs.inputs,captureInputs.mode,captureInputs.uid,microphoneRequest,microphoneSession]);
   const startRecording = async () => {
     const local=screen==="recording"?preparation:null;
-    if ((!selectedMeeting&&!local) || local&&(local.submitted||!validRecordingTitle(local.title)) || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked) return;
+    if ((!selectedMeeting&&!local) || local&&!validRecordingPreparation(local) || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked) return;
     const owner=local?.id??selectedMeeting!.id;
     const microphoneMode=captureInputs.mode;
     const microphoneUID=microphoneMode==="fixed"?captureInputs.uid:null;
@@ -126,7 +126,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         if((currentTest?.runId??null)!==(expectedTest?.runId??null)||currentTest?.busy)throw Error("録音前テストの対象・状態が変更されました。録音は開始していません。");
         await captureTest.finish();
         if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true,numSpeakers}:current);
-        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers });
+        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null, numSpeakers, meetingVocabulary:local?local.meetingVocabulary:null });
         const accepted=await invoke<CaptureMeeting | null>("get_meeting", { id: expected.id });
         if(!accepted||accepted.id!==expected.id)throw Error("録音の会議保存結果を確認できません。開始は再送していません。");
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");

@@ -74,7 +74,7 @@ export interface CommandArguments {
   "capture_available": Record<string, never>;
   "get_capture_inputs": Record<string, never>;
   "get_capture_applications": Record<string, never>;
-  "start_recording": { "meetingId": string; "microphoneUid"?: (string) | null; "captureScope": unknown; "newTitle"?: (string) | null; "numSpeakers"?: (number) | null };
+  "start_recording": { "meetingId": string; "microphoneUid"?: (string) | null; "captureScope": unknown; "newTitle"?: (string) | null; "numSpeakers"?: (number) | null; "meetingVocabulary"?: (Array<unknown>) | null };
   "select_recording_microphone": { "sessionId": string; "microphoneUid"?: (string) | null };
   "get_recording_microphone_selection": { "sessionId": string };
   "get_recording_confirmation": Record<string, never>;
@@ -1433,6 +1433,12 @@ export const commandContracts = {
         "name": "num_speakers",
         "wireName": "numSpeakers",
         "type": "Option<u32>",
+        "optional": true
+      },
+      {
+        "name": "meeting_vocabulary",
+        "wireName": "meetingVocabulary",
+        "type": "Option<Vec<storage::VocabularyEntry>>",
         "optional": true
       }
     ],

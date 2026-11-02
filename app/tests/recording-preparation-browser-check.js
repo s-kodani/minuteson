@@ -34,11 +34,37 @@ async (page,capturePath,detailUI)=>{
   check(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}の会議$/u.test(await name().inputValue())&&await start().isEnabled(),"local default title missing or required typing");
   check(await count("create_meeting")===0&&await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"opening preparation persisted a draft or began capture");
   results.push("new recording opens a dedicated preparation with local-time title and no DB/capture write");
+  const vocabulary=()=>page.getByRole("dialog",{name:"会議の用語（任意）",exact:true});
+  const openVocabulary=()=>workspace().getByRole("button",{name:"会議の用語（任意）",exact:true}).click();
+  await openVocabulary();await vocabulary().getByRole("button",{name:"用語を追加",exact:true}).click();
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
+  check(await start().isDisabled(),"incomplete vocabulary allowed recording start");
+  await openVocabulary();
+  await vocabulary().getByRole("textbox",{name:"用語（必須）",exact:true}).fill("点検日");
+  await vocabulary().getByRole("textbox",{name:"読み（任意）",exact:true}).fill("てんけんび");
+  await vocabulary().getByRole("textbox",{name:"補足（任意・保存表示用）",exact:true}).fill("録音前の補足");
+  await vocabulary().getByRole("button",{name:"用語を追加",exact:true}).click();
+  const spare=vocabulary().getByRole("article",{name:"用語 2",exact:true});
+  await spare.getByRole("textbox",{name:"用語（必須）",exact:true}).fill("削除する用語");
+  await spare.getByRole("checkbox",{name:"有効",exact:true}).uncheck();
+  await spare.getByRole("button",{name:"用語を削除",exact:true}).click();
+  await page.getByRole("button",{name:"確認をキャンセル",exact:true}).click();
+  check(await spare.count()===1&&!await spare.getByRole("checkbox",{name:"有効",exact:true}).isChecked(),"cancelled delete changed recording vocabulary");
+  await spare.getByRole("button",{name:"用語を削除",exact:true}).click();
+  await page.getByRole("button",{name:"用語を削除する",exact:true}).click();
+  await spare.waitFor({state:"detached"});
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
+  check(await count("save_vocabulary_book")===0&&await count("create_meeting")===0&&await count("start_recording")===0,"local vocabulary was persisted before recording consent");
+  check(await workspace().getByRole("button",{name:"会議の用語（任意）",exact:true}).evaluate(e=>e===document.activeElement),"vocabulary close did not restore trigger focus");
+  results.push("recording vocabulary is local, incomplete input blocks start, and closing restores focus without writes");
   await name().fill("変更した点検会議");await start().click();await modal().waitFor();
   check((await modal().innerText()).includes("変更した点検会議")&&await name().isDisabled()&&await count("start_recording")===0,"confirmation target changed or began before consent");
   await page.keyboard.press("Escape");await modal().waitFor({state:"hidden"});
   check(await name().inputValue()==="変更した点検会議"&&await count("create_meeting")===0&&await count("start_recording")===0,"decline wrote or lost local title");
   results.push("confirmation locks the exact local title; declining keeps preparation without saving a meeting");
+  await openVocabulary();
+  check(await vocabulary().getByRole("textbox",{name:"用語（必須）",exact:true}).inputValue()==="点検日","cancelled recording confirmation lost vocabulary");
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
   for(const title of ["  ","a".repeat(201)]){await name().fill(title);check(await start().isDisabled(),"invalid title allowed start");}
   await name().fill("😀".repeat(200));check(await start().isEnabled(),"Unicode scalar title was counted as UTF-16 units");
   results.push("blank and over-200 titles cannot start; 200 non-BMP characters match native title admission");
@@ -46,8 +72,29 @@ async (page,capturePath,detailUI)=>{
   const args=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_recording").args);
   check(args.newTitle==="二重送信しない会議"&&/^[0-9a-f-]{36}$/u.test(args.meetingId)&&args.microphoneUid===null&&args.captureScope.mode==="system"&&await count("start_recording")===1&&await count("create_meeting")===0,"new consent did not send one native start with fixed ID/title and automatic microphone");
   check(await page.evaluate(id=>window.dataFixture.meetings.filter(m=>m.id===id).length===1,args.meetingId),"new accepted recording lacks exactly one meeting");
+  check(args.meetingVocabulary.length===1&&args.meetingVocabulary[0].term==="点検日"&&args.meetingVocabulary[0].reading==="てんけんび"&&args.meetingVocabulary[0].note==="録音前の補足","recording start omitted vocabulary fields");
+  check(await page.evaluate(id=>window.closeFixture.vocabulary[id]?.payload[0].term==="点検日",args.meetingId),"accepted meeting did not retain its vocabulary");
   check((await workspace().innerText()).includes("録音を準備しています")&&!await name().count()&&await start().count()===0,"canonical accepted phase was replaced with idle preparation");
   results.push("double consent sends one start request; native fixture creates the confirmed ID and the same central panel reports canonical preparation");
+
+  await page.evaluate(async()=>{
+    const f=window.closeFixture,m=window.dataFixture.meetings.find(m=>m.id===f.recording.meetingId);m.lifecycle="recorded";m.sourceType="recording";
+    await f.recordChanged({phase:"idle",meetingId:null,sessionId:null});
+  });
+  await page.getByRole("button",{name:"会議の用語",exact:true}).click();
+  check(await vocabulary().getByRole("textbox",{name:"用語（必須）",exact:true}).inputValue()==="点検日","recording vocabulary missing from transcript detail");
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
+  results.push("recording completion opens the same saved vocabulary in transcript detail");
+
+  await boot();await openVocabulary();await vocabulary().getByRole("button",{name:"用語を追加",exact:true}).click();
+  await vocabulary().getByRole("textbox",{name:"用語（必須）",exact:true}).fill("保存失敗の用語");
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
+  await page.evaluate(()=>{window.closeFixture.failVocabulary=true;});
+  await start().click();await accept().click();await dismissFailure();
+  check(await count("start_recording")===1&&await page.evaluate(()=>window.dataFixture.meetings.length===1&&window.closeFixture.recording.phase==="idle"),"vocabulary failure left a meeting or started capture");
+  await openVocabulary();check(await vocabulary().getByRole("textbox",{name:"用語（必須）",exact:true}).inputValue()==="保存失敗の用語","failed vocabulary write lost local input");
+  await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
+  results.push("vocabulary write failure retains preparation without creating a meeting or starting capture");
 
   await boot();await page.evaluate(()=>{window.closeFixture.failFlush=true;});await start().click();await accept().click();await dismissFailure();
   check(await name().count()===1&&await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"failed edit save persisted the new draft");
@@ -85,6 +132,10 @@ async (page,capturePath,detailUI)=>{
     await page.screenshot({path:`recording-preparation-${theme}-${width}.png`});
     await workspace().getByRole("heading",{name:"新しい録音",exact:true}).scrollIntoViewIfNeeded();
     await page.screenshot({path:`recording-preparation-${theme}-${width}-top.png`});
+    await openVocabulary();await vocabulary().waitFor();
+    check(await vocabulary().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"recording vocabulary dialog overflows");
+    await page.screenshot({path:`recording-vocabulary-${theme}-${width}.png`});
+    await page.keyboard.press("Escape");await vocabulary().waitFor({state:"hidden"});
   }
   results.push("preparation fills shared content width and primary start fits both themes at 1280/960/360px without nested tools clipping");
   await page.locator(".screen-navigation").getByRole("button",{name:"会議一覧",exact:true}).click();

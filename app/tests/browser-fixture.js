@@ -186,6 +186,7 @@ mockIPC(async (command, args) => {
       if(fixture.analysisFlow?.id===request.operationId)return structuredClone(fixture.analysisFlow);
       if(fixture.regenerationMissingModels)throw Error("設定のローカルAIでモデルを導入してください");
       if(JSON.stringify(request.expected)!==JSON.stringify(await fixture.regenerationTarget()))throw Error("確認後に文字起こしが変わりました");
+      fixture.regenerationVocabulary=structuredClone(fixture.vocabulary[request.meetingId]?.payload??[]);
       fixture.regenerationRequest=structuredClone(request);fixture.regenerationGlobalThreads=fixture.preferences.payload.standard.threads;
       fixture.analysisFlow={id:request.operationId,meetingId:request.meetingId,stage:"transcription",lockVersion:0,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:request.expected.target!==null,readyToPublish:false};
       if(fixture.regenerationLostResponse){fixture.regenerationLostResponse=false;fixture.regenerationReadFail=!!fixture.regenerationUnreadable;throw Error("模擬再生成受付応答喪失");}

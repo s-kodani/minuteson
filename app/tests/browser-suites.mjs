@@ -20,6 +20,7 @@ export const browserSuites = [
   ["transcript-consolidation", "browser-fixture.js", "transcript-groups-browser-check.js"],
   ["speaker-assignment", "browser-fixture.js", "speaker-assignment-browser-check.js"],
   ["speaker-structure", "browser-fixture.js", "speaker-structure-browser-check.js"],
+  ["meeting-vocabulary", "browser-fixture.js", "meeting-vocabulary-browser-check.js"],
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
   ["model-management", "model-management-browser-fixture.tsx", "model-management-browser-check.js"],

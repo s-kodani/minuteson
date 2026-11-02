@@ -9,10 +9,10 @@ import {RecordingWriteStatus,RecordingWriteValue,useRecordingWrites} from "./rec
 import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,vocabulary,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onSettings:()=>void;onConfirmResult:()=>void;
-  inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;notices:ReactNode;
+  inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;vocabulary?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
   const titleFocusOwner=useRef<string|null>(null);
@@ -55,6 +55,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       {inputs}
       <div className="recording-preparation-options">
       {test}
+      {vocabulary}
       </div>
       <button type="button" className="recording-settings-link" disabled={locked} onClick={onSettings}>AIモデルの設定<ActionIcon name="next"/></button>
     </>}
