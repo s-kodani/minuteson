@@ -1,0 +1,38 @@
+Generator: built-in image_gen (edit / precise-object-edit)
+Purpose: Add and horizontally center the MinutesOn app icon above the title in the user's selected flat banner
+
+Inputs:
+1. User-supplied flat banner with the existing title, tagline, transcription
+   screen and minutes inset. An exact working copy is kept under the ignored
+   output/readme-banner/flat-icon-base.png.
+2. Actual icon: assets/app-icon/monochrome-v1/256x256.png
+
+The screen content uses public sample meeting data.
+The final banner is an image-generated edit of the supplied base.
+The added icon is horizontally centered above the existing MinutesOn title.
+
+Base icon-overlay prompt:
+Use case: precise-object-edit
+Asset type: MinutesOn GitHub README hero banner.
+Primary request: Use Image 1 exactly as the base and add the real app icon from Image 2 above the existing large MinutesOn title on the left. This is a small icon-overlay edit, not a redesign.
+
+Input images:
+- Image 1 is the user's supplied flat white banner, the edit target. It has the MinutesOn title and Japanese tagline on the left, the large transcription application screenshot on the right, and the minutes preview inset at the lower right.
+- Image 2 is the actual app icon to insert: a charcoal #27272a rounded square containing the original white lowercase m glyph. Use this exact existing mark, preserving its silhouette, corner radius, proportions and colors.
+
+Placement: Add one icon about 100 to 115 pixels square in the empty space directly above the large MinutesOn title, aligned with the title's left edge. Leave about 30 pixels between the icon and the top of the title. The icon should be visible at README size but comfortably smaller than the title's width. Keep the existing title, tagline and Windows / macOS line at their present positions and sizes.
+
+Strict invariants: Preserve everything else from Image 1: the flat white background, exact layout, overall dimensions and aspect ratio (1717 by 916), all existing text, Japanese lettering, the actual application UI, its existing tiny sidebar logo, the complete transcription screenshot, minutes inset, speaker colors, borders and controls. Do not retype, paraphrase or regenerate screen content. Do not add or remove any text. Make the added icon flat, without a shadow, glow, texture, bevel or gradient.
+Avoid: physical laptop or monitor, microphone, desk, background waves, decorative effects, a new logo or different m glyph, colored icon, extra panels, watermark. Opaque background.
+
+Latest edit input: the finished icon-overlay banner. A local working copy is
+kept under the ignored output/readme-banner/hero-before-icon-centering.png.
+Latest edit prompt (built-in image_gen):
+Use case: precise-object-edit
+Asset type: MinutesOn README banner.
+Primary request: Move ONLY the large app icon horizontally so it is centered above the large "MinutesOn" title in the left column.
+
+Input: Image 1 is the current 1717 by 916 banner, the edit target.
+Exact placement: The title occupies approximately x=43 to x=373, with horizontal center x=208. The icon currently occupies approximately x=43 to x=153. Translate that existing icon about 110 pixels to the right, to approximately x=153..263, so its horizontal center is also x=208. Keep the icon at exactly the same vertical position (approximately y=173..284) and exactly the same size. Remove the old icon at its former position and fill that vacated region with the original plain white background. There must be exactly ONE large icon above the title.
+
+Strict invariants: Keep the title, subtitle, Windows / macOS label, screenshot, minutes inset, all Japanese UI text, all sidebar icons, colors, borders, whitespace, and every other element at their exact original positions and sizes. The icon's charcoal square, white m glyph, geometry and colors must remain unchanged. Preserve the whole canvas and its aspect ratio. Copy the screenshot content unchanged rather than retyping it. No redesign, no new text, no shadows, no extra logo, no watermark. Opaque background.
