@@ -5,7 +5,10 @@ description: "ブランチ・PR・文書更新・必須検査と、Releases画�
 tags: ["development", "github", "release"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/c085f83b10641caa4d61ffb8e95fbdee35925d64/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/release-controller.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_release.py"
 ---
 
 # GitHubでの開発とリリース

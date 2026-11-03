@@ -5,7 +5,9 @@ description: "重大な指摘を停止条件とし、タグをReleases画面で�
 tags: ["security", "release", "github"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/c085f83b10641caa4d61ffb8e95fbdee35925d64/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/release-controller.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/release-build.yml"
 ---
 
 # ADR 0009 PR検査と下書きからの自動公開

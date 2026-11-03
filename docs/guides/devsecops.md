@@ -5,7 +5,10 @@ description: "セキュリティ検査、例外、GitHub保護設定、署名と
 tags: ["security", "ci", "maintenance"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/c085f83b10641caa4d61ffb8e95fbdee35925d64/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_security.py"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_macos_ci_sign.py"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_store_submission.py"
 ---
 
 # DevSecOpsの検査と運用
