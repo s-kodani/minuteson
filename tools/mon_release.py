@@ -164,6 +164,21 @@ def preflight(api, release_id, commit):
     return release
 
 
+def checkout_source(commit):
+    """Run from trusted main before loading any code from the admitted source."""
+    if os.environ.get("GITHUB_REF") != "refs/heads/main" or not re.fullmatch(r"[0-9a-f]{40}", commit or ""):
+        raise ValueError("main workflow and full source SHA required")
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
+                            capture_output=True, text=True, check=True)
+    if status.stdout.strip():
+        raise ValueError("source checkout requires a clean working tree")
+    contained = subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"],
+                               cwd=ROOT, capture_output=True, check=False)
+    if contained.returncode:
+        raise ValueError("release source is not contained in fetched main")
+    subprocess.run(["git", "checkout", "--detach", commit], cwd=ROOT, check=True)
+
+
 def publish(api, release_id, commit, directory):
     release = preflight(api, release_id, commit)
     manifest = json.loads((directory / "release-manifest.json").read_text())
@@ -214,12 +229,15 @@ def failure(api, release_id):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("discover", "preflight", "publish", "failure"))
+    parser.add_argument("mode", choices=("discover", "preflight", "publish", "failure", "checkout"))
     parser.add_argument("--release-id", type=int)
     parser.add_argument("--source-sha")
     parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
     try:
+        if args.mode == "checkout":
+            checkout_source(args.source_sha)
+            return 0
         api = GitHub()
         if args.mode == "discover":
             discover(api)

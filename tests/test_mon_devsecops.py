@@ -88,6 +88,60 @@ class Provider:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_checkout_source_selects_the_admitted_older_main_commit_in_a_real_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', *args], cwd=root, check=True, capture_output=True,
+                                      text=True, encoding='utf8').stdout.strip()
+            git('init', '-q', '-b', 'main')
+            source = root / 'source.txt'
+            source.write_text('admitted version', encoding='utf8')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'admitted')
+            admitted = git('rev-parse', 'HEAD')
+            source.write_text('new main version', encoding='utf8')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'main advanced')
+            git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'))
+            with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), patch.object(release, 'ROOT', root):
+                release.checkout_source(admitted)
+            self.assertEqual(git('rev-parse', 'HEAD'), admitted)
+            self.assertEqual(source.read_text(encoding='utf8'), 'admitted version')
+
+    def test_release_builds_bootstrap_source_admission_from_main(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text(encoding='utf8'))
+        for name in ('macos-prepare', 'macos-sign', 'windows', 'store', 'publish'):
+            steps = workflow['jobs'][name]['steps']
+            with self.subTest(job=name):
+                self.assertEqual(steps[0]['with']['ref'], 'main')
+                self.assertEqual(steps[0]['with']['fetch-depth'], 0)
+                admission = next(s for s in steps if s.get('name') == 'Check out admitted source with trusted main code')
+                self.assertEqual(admission['env']['MON_SOURCE_SHA'], '${{ needs.guard.outputs.source_sha }}')
+                self.assertIn('mon_release.py checkout', admission['run'])
+                self.assertLess(next(i for i,s in enumerate(steps) if s.get('name') == admission['name']),
+                                next(i for i,s in enumerate(steps) if 'run' in s and 'mon_release.py checkout' not in s['run']))
+
+    def test_checkout_source_rejects_untrusted_refs_dirty_trees_and_non_main_commits(self):
+        for values in ({'GITHUB_REF': 'refs/heads/other'}, {'GITHUB_REF': 'refs/heads/main'}):
+            with patch.dict(os.environ, values), patch.object(release.subprocess, 'run') as run:
+                with self.assertRaises(ValueError):
+                    release.checkout_source(SHA if values['GITHUB_REF'] != 'refs/heads/main' else '--option')
+                run.assert_not_called()
+        for dirty, contained in ((True, True), (False, False), (False, True)):
+            calls = []
+            def run(args, **kwargs):
+                calls.append(args)
+                return subprocess.CompletedProcess(args, 0 if args[1] != 'merge-base' or contained else 1,
+                                                   ' M unreviewed.py' if args[1] == 'status' and dirty else '')
+            with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), patch.object(release.subprocess, 'run', side_effect=run):
+                if dirty or not contained:
+                    with self.assertRaises(ValueError): release.checkout_source(SHA)
+                    self.assertFalse(any(args[1] == 'checkout' for args in calls))
+                else:
+                    release.checkout_source(SHA)
+                    self.assertEqual(calls[-1], ['git', 'checkout', '--detach', SHA])
+
     def test_guard_can_read_drafts_without_giving_build_jobs_write_access(self):
         workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
         guard = workflow["jobs"]["guard"]

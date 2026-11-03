@@ -21,9 +21,9 @@ test("verified bytes are staged exclusively and source replacement cannot change
   writeFileSync(source, "replacement must never execute");
   const staged = stageVerifiedExecutable(verified, root);
   assert.deepEqual(readFileSync(staged), bytes);
-  assert.equal(statSync(staged).mode & 0o777, 0o700);
   assert.throws(() => stageVerifiedExecutable(Buffer.from("overwrite"), root));
   assert.deepEqual(readFileSync(staged), bytes);
+  assert.equal(statSync(staged).mode & 0o777, 0o700);
 });
 test("wrong hashes, missing headless entry, symlinks and oversized files are rejected before staging", unix, t => {
   const { root, source } = fixture(t);
