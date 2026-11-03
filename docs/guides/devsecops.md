@@ -58,11 +58,11 @@ make check-security
 
 1. 公開前に全履歴の秘密情報検査と依存検査を実施し、指摘を修正または個別判断します。公開への切替は所有者が実施します。
 2. GitHub Actionsの課金・利用上限エラーを解消し、公開後の標準ランナーでCIが実行できることを確認します。main上のワークフローを有効にします。
-3. CodeQLはこのリポジトリのadvanced setupを使い、default setupとの重複実行を避けます。Dependency graph・Dependabot alerts/security updatesとSecret scanning・Push protectionを有効化します。Private vulnerability reportingを有効化します。
+3. CodeQLはこのリポジトリのadvanced setupを使い、default setupとの重複実行を避けます。Dependency graph・Dependabot alerts/security updatesとSecret scanning・Push protectionを有効化します。Private vulnerability reportingを有効化します。移行中は[Dependabot定義](../../.github/dependabot.yml)の全4対象を`open-pull-requests-limit: 0`で停止しているため、公開後の確認時に`5`へ戻して更新PRを有効化します。
 4. mainのrulesetでPR、`CI gate`と`Security gate`の成功、force push・削除の禁止を設定します。チェック名は初回実行結果から選択します。承認数は0とし、本人が自分のPRを確認してマージできるようにします。通常のバイパスは設けません。
 5. `v*`タグの更新・削除を禁止します。新規作成はReleasesと公開用ワークフローに許可します。Actionsの既定権限はread-only、forkワークフローの実行承認を有効化します。各ジョブで必要な権限だけを宣言します。
 
-設定前の非公開・実行枠不足を導入済みの保護と扱いません。Dependabotはnpm/Cargo/Actionsと検査用Python依存の更新PRを作ります。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
+設定前の非公開・実行枠不足を導入済みの保護と扱いません。Dependabotはnpm/Cargo/Actionsと検査用Python依存の更新PRを作ります。バージョン更新はActions停止と別に動作するため、非公開の移行中は設定の上限`0`でも停止します。[GitHubの停止手順](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates#disabling-dependabot-version-updates)に従い、上限`0`は通常のバージョン更新を止めるもので、セキュリティ更新は別のリポジトリ設定で管理します。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
 
 ## 自動配布の初期設定
 
