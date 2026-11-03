@@ -25,6 +25,10 @@ concurrency:
 
 jobs:
   guard:
+    # GitHub hides draft releases from tokens without push-level access.
+    # Keep this permission on the main-branch admission job, not build jobs.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -103,7 +107,7 @@ jobs:
             fi
           done
       - run: npm ci --prefix app
-      - name: Compile without signing credentials
+      - name: Fetch locked dependencies and compile without signing credentials
         run: |
           mkdir -p output
           python tools/mon_macos_release.py --prepare --output-dir "$GITHUB_WORKSPACE/output/macos-prepare"

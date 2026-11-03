@@ -19,6 +19,8 @@ from unittest.mock import patch
 import zipfile
 from urllib.parse import parse_qs, urlsplit
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import mon_ci_scope as scope
 import mon_docs as docs
@@ -81,6 +83,36 @@ class Provider:
             self.value["assets"].append({"name": name, "size": len(binary), "digest": "sha256:" + hashlib.sha256(binary).hexdigest()})
             return {"id": len(self.uploads)}
         raise AssertionError(endpoint)
+
+
+class ReleaseWorkflowTests(unittest.TestCase):
+    def test_guard_can_read_drafts_without_giving_build_jobs_write_access(self):
+        workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
+        guard = workflow["jobs"]["guard"]
+        permissions = guard.get("permissions", workflow["permissions"])
+        api = Provider()
+        read_release = api.release
+
+        def read_draft(release_id):
+            if permissions.get("contents") != "write":
+                raise ValueError("GitHub request failed (404): draft requires push access")
+            return read_release(release_id)
+
+        step = next(step for step in guard["steps"] if step.get("id") == "guard")
+        script = "\n".join(step["run"].splitlines()[1:-1])
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+            "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ID": "42", "GITHUB_OUTPUT": str(Path(temporary) / "output"),
+            "MON_RELEASE_ID": "123", "MON_SOURCE_SHA": SHA, "MON_PRIVATE": "false", "MON_ENABLED": "true",
+            "MON_PUBLISH_ENABLED": "false", "MON_DRY_RUN": "true",
+        }):
+            release.discover(api)
+            with patch.object(api, "release", side_effect=read_draft), patch.object(release, "GitHub", return_value=api):
+                exec(compile(script, "release-guard", "exec"), {})
+            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\n")
+        for name in ("ci", "security", "macos-prepare", "macos-sign", "windows", "store"):
+            with self.subTest(job=name):
+                effective = workflow["jobs"][name].get("permissions", workflow["permissions"])
+                self.assertEqual(effective.get("contents"), "read")
 
 
 class SecurityPolicyTests(unittest.TestCase):
@@ -292,6 +324,40 @@ class ReleaseTests(unittest.TestCase):
 
 
 class HandoffTests(unittest.TestCase):
+    def test_prepare_fetches_locked_dependencies_before_offline_build_hook(self):
+        registry_ready = False
+
+        def command(argv, **kwargs):
+            nonlocal registry_ready
+            if Path(argv[0]).name == "cargo":
+                self.assertEqual(argv, ["cargo", "fetch", "--locked"])
+                self.assertEqual(kwargs["cwd"], mac.REPOSITORY / "app/src-tauri")
+                self.assertNotIn("APPLE_SIGNING_IDENTITY", kwargs["env"])
+                registry_ready = True
+            elif Path(argv[0]).name == "tauri":
+                # This models the real beforeBuildCommand's offline metadata
+                # lookup on a fresh runner, rather than assuming a warm cache.
+                if not registry_ready:
+                    raise ValueError("offline notice collection: no matching package named base64")
+                built = Path(kwargs["env"]["CARGO_TARGET_DIR"]) / "release/bundle/macos/MinutesOn.app"
+                built.mkdir(parents=True)
+                (built / "source").write_bytes(b"synthetic application")
+            elif Path(argv[0]).name == "ditto":
+                with zipfile.ZipFile(argv[-1], "w") as output:
+                    output.write(Path(argv[-2]) / "source", "MinutesOn.app/source")
+            else:
+                self.fail(f"unexpected preparation command: {argv[0]}")
+            return b"", b""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary).resolve() / "prepared"
+            with patch.object(mac.sys, "platform", "darwin"), patch.object(mac, "command", side_effect=command), \
+                    patch.object(mac, "layout"), patch.object(mac, "verify_notices", return_value={"state": "collected_not_reviewed"}), \
+                    patch.object(mac, "verify_asr_runtime"), patch.object(mac, "verify_inference_runtime"):
+                result = mac.prepare(output, {"APPLE_SIGNING_IDENTITY": "must not reach dependency fetch"})
+            self.assertEqual(result["archiveSha256"], artifacts.digest(output / "prepared-app.zip"))
+            self.assertFalse((output / "build-cache").exists())
+
     def test_prepared_archive_rejects_traversal_and_escaping_links(self):
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=mac.REPOSITORY).decode().strip()
         config = mac.release_configuration()
@@ -322,6 +388,26 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(changed["applicationPackages"][0]["fileStatus"], "PendingDelete")
         self.assertEqual(changed["applicationPackages"][1]["fileStatus"], "PendingUpload")
         self.assertEqual(submission, original)
+
+    def test_package_update_is_idempotent_and_preserves_target_metadata(self):
+        for status in ("PendingUpload", "Uploaded"):
+            with self.subTest(status=status):
+                submission = {"id": "S1", "applicationPackages": [
+                    {"fileName": "old.msix", "fileStatus": "PendingDelete", "id": "old-package"},
+                    {"fileName": "new.msix", "fileStatus": status, "id": "new-package", "version": "1.2.3.0"},
+                ]}
+                original = deepcopy(submission)
+                first = store.update_submission(submission, "new.msix")
+                self.assertEqual(store.update_submission(first, "new.msix"), first)
+                self.assertEqual(first["applicationPackages"][1], original["applicationPackages"][1])
+                self.assertEqual(len(first["applicationPackages"]), 2)
+                self.assertEqual(submission, original)
+
+    def test_ambiguous_or_deleted_target_package_is_not_rewritten(self):
+        package = {"fileName": "new.msix", "fileStatus": "PendingUpload"}
+        for packages in ([package, deepcopy(package)], [{**package, "fileStatus": "PendingDelete"}]):
+            with self.assertRaises(ValueError):
+                store.update_submission({"applicationPackages": packages}, "new.msix")
 
     def test_existing_submission_is_polled_without_creating_another_or_downloading(self):
         api = Provider()
@@ -354,13 +440,27 @@ class StoreTests(unittest.TestCase):
                 (directory / 'release-manifest.json').write_text(json.dumps(manifest))
             else:
                 (directory / 'test.msix').write_bytes(package_bytes)
-        submission = {'id': 'S1', 'applicationPackages': [], 'fileUploadUrl': 'https://example.blob.core.windows.net/upload'}
+        submission = {'id': 'S1', 'applicationPackages': [{'id': 'old-package', 'fileName': 'old.msix', 'fileStatus': 'Uploaded'}],
+                      'fileUploadUrl': 'https://example.blob.core.windows.net/upload'}
         provider = unittest.mock.Mock()
         calls = []
+        updates = []
         def call(suffix='', data=None, method=None):
+            nonlocal submission
             calls.append((suffix, method))
             if suffix == '':
                 return {'lastPublishedApplicationSubmission': {'id': 'old'}}
+            if suffix == '/submissions/S1' and method == 'PUT':
+                names = [item['fileName'] for item in data['applicationPackages']]
+                self.assertEqual(len(names), len(set(names)))
+                submission = deepcopy(data)
+                # Persist the PUT as the real API does, including a package ID
+                # that must survive the GET and subsequent retry.
+                for item in submission['applicationPackages']:
+                    if item['fileName'] == 'test.msix':
+                        item.setdefault('id', 'new-package')
+                updates.append(deepcopy(submission))
+                return None
             if suffix == '/submissions' or suffix == '/submissions/S1':
                 return deepcopy(submission)
             if suffix.endswith('/status'):
@@ -378,6 +478,10 @@ class StoreTests(unittest.TestCase):
                 store.resume(api, provider, api.release(123), Path(temporary))
         self.assertEqual(calls.count(('/submissions', 'POST')), 1)
         self.assertEqual(calls.count(('/submissions/S1/commit', 'POST')), 1)
+        self.assertEqual(updates[0], updates[1])
+        target = next(item for item in updates[1]['applicationPackages'] if item['fileName'] == 'test.msix')
+        self.assertEqual(target['id'], 'new-package')
+        self.assertEqual(target['fileStatus'], 'PendingUpload')
 
 
 if __name__ == "__main__":

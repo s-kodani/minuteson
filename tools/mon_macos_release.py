@@ -450,6 +450,10 @@ def prepare(output, environment):
     config = release_configuration()
     output.mkdir(mode=0o700)
     cache = output / "build-cache"
+    # The beforeBuildCommand collects notices with offline Cargo metadata.
+    # Preparation runs on a fresh runner, independently of the validation jobs.
+    command(["cargo", "fetch", "--locked"], cwd=REPOSITORY / "app/src-tauri",
+            env=build_environment(environment, cache))
     stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build",
                              "--config", "src-tauri/tauri.release.conf.json", "--", "--locked"],
                             cwd=REPOSITORY / "app", env=build_environment(environment, cache))

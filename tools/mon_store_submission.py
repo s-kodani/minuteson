@@ -61,8 +61,19 @@ class Store:
 def update_submission(submission, package_name):
     result = dict(submission)
     # Keep the copied listing/age rating/pricing data; replace only app packages.
-    result["applicationPackages"] = [dict(item, fileStatus="PendingDelete") for item in result.get("applicationPackages", [])]
-    result["applicationPackages"].append({"fileName": package_name, "fileStatus": "PendingUpload", "minimumDirectXVersion": "None", "minimumSystemRam": "None"})
+    packages, replacement = [], None
+    for item in result.get("applicationPackages", []):
+        if item["fileName"] == package_name:
+            # After PUT succeeds, a failed upload/commit leaves this package in
+            # the stored submission. Reuse its ID, metadata and upload status.
+            if replacement is not None or item.get("fileStatus") not in ("PendingUpload", "Uploaded"):
+                raise ValueError("Store target package is duplicated or marked for deletion")
+            replacement = dict(item)
+        else:
+            packages.append(dict(item, fileStatus="PendingDelete"))
+    if replacement is None:
+        replacement = {"fileName": package_name, "fileStatus": "PendingUpload", "minimumDirectXVersion": "None", "minimumSystemRam": "None"}
+    result["applicationPackages"] = [*packages, replacement]
     result["targetPublishMode"] = "Immediate"
     return result
 
