@@ -289,6 +289,27 @@ fn resources() -> Result<PathBuf, String> {
         .map_err(|_| "常駐推論ランタイムをビルドしてください".to_string())?)
 }
 pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, String> {
+    // Unit fixtures use frozen synthetic engines on every OS. Real bundled
+    // runtime tests opt into prepare_installed rather than ambient resources.
+    #[cfg(test)]
+    {
+        if let Some(snapshot) = super::ADMISSION.with(|v| v.borrow().clone()) {
+            snapshot.accepts(engine)?;
+            snapshot.resolve(root)?;
+            return Ok(Some(snapshot));
+        }
+        if super::INSTALLED_ADMISSION.with(|cell| cell.get()) {
+            return prepare_installed(root, engine);
+        }
+        synthetic(root, engine).map(Some)
+    }
+    #[cfg(not(test))]
+    {
+        prepare_installed(root, engine)
+    }
+}
+
+pub(crate) fn prepare_installed(root: &Path, engine: &str) -> Result<Option<Snapshot>, String> {
     #[cfg(windows)]
     {
         let path = crate::windows_runtime::resources()?
@@ -306,23 +327,13 @@ pub(crate) fn prepare(root: &Path, engine: &str) -> Result<Option<Snapshot>, Str
         snapshot.resolve(root)?;
         return Ok(Some(snapshot));
     }
-    // Existing fixtures deliberately exercise their frozen single-shot engines.
-    // Resident lifecycle tests construct and bind an explicit snapshot instead.
-    #[cfg(test)]
-    if let Some(snapshot) = super::ADMISSION.with(|v| v.borrow().clone()) {
-        snapshot.accepts(engine)?;
-        snapshot.resolve(root)?;
-        return Ok(Some(snapshot));
-    }
-    #[cfg(test)]
+    #[cfg(not(windows))]
     {
-        return synthetic(root, engine).map(Some);
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Err("この環境の常駐推論ワーカーは未対応です".into());
+        }
+        prepare_bundled(root, engine, &resources()?).map(Some)
     }
-    #[cfg(not(test))]
-    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        return Err("この環境の常駐推論ワーカーは未対応です".into());
-    }
-    prepare_bundled(root, engine, &resources()?).map(Some)
 }
 
 fn prepare_bundled(root: &Path, engine: &str, bundle: &Path) -> Result<Snapshot, String> {
@@ -414,6 +425,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
         sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
         gpu: None,
     };
+    snapshot.validate()?;
     let cache = root.join("inference-runtimes");
     ensure_directory(&cache)?;
     let directory = cache.join(&snapshot.sha256);
@@ -425,6 +437,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    snapshot.resolve(root)?;
     Ok(snapshot)
 }
 
@@ -432,6 +445,75 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
 mod bundled_runtime_tests {
     use super::*;
     use sha2::Digest;
+
+    #[test]
+    fn unit_preparation_uses_owned_synthetic_workers_without_installed_resources() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        assert!(prepare(&root, "unregistered-unit-test-engine").is_err());
+        assert!(!root.join("inference-runtimes").exists());
+        for engine in ["whisper", "llama", "sherpa", "asr-transducer"] {
+            let snapshot = prepare(&root, engine).unwrap().unwrap();
+            assert!(is_synthetic(&snapshot));
+            assert_eq!(snapshot.engine, engine);
+            let fingerprint = snapshot.resolve(&root).unwrap();
+            assert!(fingerprint
+                .path
+                .starts_with(root.join("inference-runtimes")));
+            assert_eq!(std::fs::read(fingerprint.path).unwrap(), SYNTHETIC);
+        }
+        let worker = prepare(&root, "whisper").unwrap().unwrap();
+        std::fs::write(worker.resolve(&root).unwrap().path, b"changed").unwrap();
+        assert!(prepare(&root, "whisper").is_err());
+    }
+
+    #[test]
+    fn installed_admission_is_explicit_nested_and_restores_after_unwind() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        assert!(!super::super::INSTALLED_ADMISSION.with(|cell| cell.get()));
+        let unwind = std::panic::catch_unwind(|| {
+            let _outer = super::super::InstalledAdmission::enter();
+            {
+                let _inner = super::super::InstalledAdmission::enter();
+                assert!(super::super::INSTALLED_ADMISSION.with(|cell| cell.get()));
+            }
+            assert!(super::super::INSTALLED_ADMISSION.with(|cell| cell.get()));
+            // Installed admission always rejects an unregistered engine,
+            // regardless of whether real application resources are present.
+            assert!(prepare(&root, "unregistered-unit-test-engine").is_err());
+            panic!("exercise installed-admission unwind");
+        });
+        assert!(unwind.is_err());
+        assert!(!super::super::INSTALLED_ADMISSION.with(|cell| cell.get()));
+        assert!(is_synthetic(&prepare(&root, "llama").unwrap().unwrap()));
+    }
+
+    #[test]
+    fn unit_preparation_retains_explicit_admission_and_verifies_engine_and_bytes() {
+        struct RestoreAdmission(Option<Snapshot>);
+        impl Drop for RestoreAdmission {
+            fn drop(&mut self) {
+                super::super::ADMISSION.with(|cell| cell.replace(self.0.take()));
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let (bundle, _) = bundle_fixture(&root);
+        let expected = prepare_bundled(&root, "llama", &bundle).unwrap();
+        let _restore = RestoreAdmission(
+            super::super::ADMISSION.with(|cell| cell.replace(Some(expected.clone()))),
+        );
+        // A frozen admission must keep precedence over ambient app resources,
+        // including when a real-runtime integration scope is active.
+        let _installed = super::super::InstalledAdmission::enter();
+        let actual = prepare(&root, "llama").unwrap().unwrap();
+        assert!(!is_synthetic(&actual));
+        assert_eq!(actual.sha256, expected.sha256);
+        assert!(prepare(&root, "whisper").is_err());
+        std::fs::write(actual.resolve(&root).unwrap().path, b"changed").unwrap();
+        assert!(prepare(&root, "llama").is_err());
+    }
 
     fn bundle_fixture(root: &Path) -> (PathBuf, Vec<Snapshot>) {
         let bundle = root.join("bundle");

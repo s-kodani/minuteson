@@ -194,6 +194,8 @@ fn recovery_never_turns_engine_errors_into_review_markers() {
 #[test]
 #[ignore = "requires an explicitly selected private meeting WAV and local model; writes only to MON_RECOVERY_OUTPUT"]
 fn private_meeting_transcription_reaches_the_last_unit() {
+    #[cfg(windows)]
+    let _installed = crate::local_engine::resident::InstalledAdmission::enter();
     use crate::local_engine::Fingerprint;
     let input = PathBuf::from(std::env::var_os("MON_RECOVERY_WAV").unwrap())
         .canonicalize()
@@ -310,6 +312,8 @@ fn private_meeting_transcription_reaches_the_last_unit() {
 #[test]
 #[ignore = "writes ONLY an explicitly authorized MON_RECOVERY_MEETING_ID in MON_RECOVERY_LIVE_ROOT; app must be closed"]
 fn private_authorized_meeting_regeneration_commits_the_completed_transcript() {
+    #[cfg(windows)]
+    let _installed = crate::local_engine::resident::InstalledAdmission::enter();
     let root = PathBuf::from(
         std::env::var_os("MON_RECOVERY_LIVE_ROOT").expect("explicit live root required"),
     )

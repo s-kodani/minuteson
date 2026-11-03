@@ -37,16 +37,30 @@ cargo fmt --all --check
 
 契約やモデルカタログを変更した場合は対応する生成コマンドを実行し、生成済みファイルの差分もレビューします。`--check`は生成物を更新しません。OS別の構築条件と検査範囲は[CI定義](../../.github/workflows/desktop-platform-build.yml)にあります。
 
+## 通常・重い検証・全件の使い分け
+
+Rustランナーの`--suite quick|heavy|full`で実行範囲を選びます。省略時は従来どおり全件です。日常の変更後確認には`quick`を使い、配布物の作成や大容量・多数の中断地点・履歴世代上限を調べる検証は`heavy`で実行します。`full`は両方を実行します。通常側の成功を全件成功とは扱いません。
+
+分類の正本は[スイート定義](../../tools/rust-test-suites.json)です。通常の保存・削除・同意と一覧の検査、音声削除の基本完了、現行バックアップ形式の往復、登録音声の保持、完了音声クリーンアップの基本検証は通常側に残します。ネイティブ保存先の切替やWALコピー、FLAC作業領域の移動後再開、複数世代の再確認、各SQL段階での破損・取消・SIGKILLの組合せは重い側で確認します。文字列だけを扱う履歴上限の検査は通常側です。定義に一致しない新しい通常テストは`quick`に入ります。重いモジュールへの追加はそのモジュールと同じ分類になります。分類はMacとWindowsで共通ですが、OS条件により存在するテストは異なります。
+
+PRとmain更新は通常スイートを使い、QAインストーラー・MSIX・ネイティブ資材の準備を待ちません。日次04:17（日本時間）と全検証の手動実行、リリース前は全件と既存のSwift／Windows連携・配布物検証を実行します。日次の開始時刻はGitHub側で遅れる場合があります。セキュリティ検証の実行条件は変更しません。構成は[開発フロー](development-workflow.md)を参照してください。
+
+実モデル・実機・専用連携を必要とする既存のignoredテストは、各テストの条件を満たした専用コマンドで呼び出します。`full`でも全ignoredテストを一括実行しません。
+
 ## macOSのRust本体とキャッシュ
 
 ```sh
-python3 tools/mon_rust_tests.py
+make test-rust-quick
+make test-rust-heavy
+python3 tools/mon_rust_tests.py --suite full
 python3 tools/mon_rust_tests.py recording_segments::tests
 make build-rust-tests
 make rust-test-cache
 ```
 
-このランナーはmacOS／Unix専用です。全件は一度ビルドして通常のテストとdoc testを実行し、重点検査は指定フィルターのライブラリ検査に限定します。全件成功と重点検査成功は区別します。
+このランナーはmacOS／Unix専用です。`make test-rust-quick`は共有クレートも含めて確認します。直接ランナーを呼ぶ場合は`--workspace`で共有クレートも対象にし、省略時は従来どおりデスクトップパッケージが対象です。通常・全件は一度ビルドして対象テストとdoc testを実行し、重いスイートではdoc testを繰り返しません。重点検査は指定フィルターのライブラリ検査に限定します。通常側と重い側の間でCargoのビルドプロファイルは変えず、同じキャッシュを使います。
+
+日常用のMakeターゲットは4プロセス×4スレッドで実行します。対象名を列挙して重複なく分け、モジュールを交互に割り当てます。直接呼び出すCLIの既定は従来の1プロセスです。CIの通常側は2プロセス×4スレッドに抑えます。並列数の変更は`--processes`と`--threads`で指定し、失敗の自動再試行は行いません。
 
 `.cache/rust-tests`を所有付き共有キャッシュとして再利用します。標準ビルド並列数は最大4、終了後のソフト予算は10,240 MiB、開始前は2,048 MiB以上の空きを要求します。実行中の厳密な上限ではありません。`--jobs`で1〜16を指定できます。状態確認では回収せず、明示的な整理は`python3 tools/mon_rust_tests.py --clean`です。子プロセスが終了していない、所有不明、リンクがある領域を回収しません。
 
@@ -54,14 +68,38 @@ make rust-test-cache
 
 ## Windowsのネイティブ検査
 
-[QAビルド](build-windows.md)で録音ヘルパーと推論ランタイムを準備してから実行します。
+通常側はQAビルドなしで実行できます。`TAURI_CONFIG`で配布用リソースの準備を無効化し、デスクトップパッケージのbin・統合検査・doc testも含める場合は`--all-targets`を指定します。共有クレートは別のCargoコマンドで確認します。
+
+Windowsでも通常・重いスイートには`--processes`と`--threads`を指定できます。既定は1プロセスで、CIと同じ並列設定は`--processes 2 --threads 4`です。全件スイートは従来の1プロセスを維持します。
+
+```powershell
+$env:TAURI_CONFIG = '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
+cargo test --workspace --exclude mon-desktop --locked --lib
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+python tools/mon_ci_native_tests.py --suite quick --all-targets
+```
+
+この例で設定した`TAURI_CONFIG`は通常検証用です。QAビルドへ進む前に`Remove-Item Env:TAURI_CONFIG`で解除します。もともと設定があった場合はその値へ戻してください。
+
+重い側・全件では[QAビルド](build-windows.md)で録音ヘルパーと推論ランタイムを準備してから実行します。引数なしの既存コマンドはライブラリ全件、`--all-targets`付きはデスクトップパッケージのその他のテスト対象も含みます。
 
 ```powershell
 ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
-python tools/mon_ci_native_tests.py
+python tools/mon_ci_native_tests.py --suite heavy
+python tools/mon_ci_native_tests.py --suite full --all-targets
 ```
 
 Windows専用のリンク・実行結果はWindows上で取得します。Macでのクロスターゲット型検査をWASAPI・実画面・インストーラーの合格にしません。
+
+## 所要時間の確認
+
+通常スイートの目標は、依存キャッシュがある端末でコード変更後のビルドから完了まで約5分です。初回コンパイル、配布物の作成、CIの起動待ち、画面・セキュリティ検証を含む全体の5分保証ではありません。テストを分けてもコンパイル対象のソース自体は減らないため、無変更時だけ速い結果を変更後の結果と扱いません。
+
+```sh
+python3 tools/mon_rust_tests.py --workspace --suite quick --processes 4 --threads 4 --timings-json /private/tmp/mon-rust-quick.json
+```
+
+Windowsは`python tools/mon_ci_native_tests.py --suite quick --all-targets --timings-json "$env:TEMP/mon-rust-quick.json"`でデスクトップ側を計測し、上記の共有クレート検査の時間も合算します。端末のOS・CPU・メモリ・Rust版と、テスト件数、ビルド・実行・合計時間を併せて確認してください。他のビルドを重ねず、代表的な実装変更とテスト変更の後で連続3回300秒以内となった環境だけを達成済みとします。Macの計測をWindowsの達成結果へ転用しません。分類定義に過去の遅い実行の根拠があっても、最新ソースの5分達成を示すものではありません。
 
 ## ブラウザーとASR
 

@@ -17,7 +17,7 @@ fn windows_real_llama_vulkan_trial_and_cpu_fallback() {
         .unwrap();
     let root = tempfile::tempdir().unwrap();
     let path = root.path().canonicalize().unwrap();
-    let snapshot = crate::local_engine::resident::prepare(&path, "llama")
+    let snapshot = crate::local_engine::resident::prepare_installed(&path, "llama")
         .unwrap()
         .unwrap();
     let config = LlamaConfig {

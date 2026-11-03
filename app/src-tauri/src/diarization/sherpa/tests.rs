@@ -658,6 +658,76 @@ fn nonzero_exit_and_excessive_logs_are_rejected() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn final_log_growth_after_last_poll_is_rejected_before_accepting_exit() {
+    use std::cell::Cell;
+    for (limit, redirect) in [(MAX_OUTPUT_BYTES, ""), (MAX_LOG_BYTES, ">&2")] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = config(directory.path());
+        let bytes = output(&config, None, "0.000 -- 0.500 speaker_00\n");
+        executable(
+            &mut config,
+            &format!(
+                "printf '%s' \"$PPID\" > guardian.pid\nprintf '%s' {}\nprintf 'progress 25.00%%\\n' >&2\nwhile [ ! -e release ]; do /bin/sleep 0.01; done\nexec /usr/bin/head -c {} /dev/zero {redirect}",
+                shell_quote(std::str::from_utf8(&bytes).unwrap()),
+                limit + 1,
+            ),
+        );
+        let unit = directory.path().join("unit");
+        std::fs::create_dir(&unit).unwrap();
+        wav(&unit);
+        let released = Cell::new(false);
+        let result = run_track_observed(
+            &config,
+            None,
+            &unit,
+            1_000_000,
+            Duration::from_secs(15),
+            &crate::test_support::never_cancelled,
+            &|value| {
+                if value != 2500 || released.replace(true) {
+                    return;
+                }
+                // This callback runs after the monitor's size check. Let the
+                // engine grow its log, then wait without reaping its guardian
+                // so the very next try_wait must observe a completed child.
+                let guardian: u32 = std::fs::read_to_string(unit.join("guardian.pid"))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                std::fs::write(unit.join("release"), b"release owned fixture").unwrap();
+                let started = Instant::now();
+                loop {
+                    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                    let status = unsafe {
+                        libc::waitid(
+                            libc::P_PID,
+                            guardian,
+                            &mut info,
+                            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                        )
+                    };
+                    if status != 0 {
+                        let error = std::io::Error::last_os_error();
+                        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
+                    }
+                    if unsafe { info.si_pid() } == guardian as i32 {
+                        break;
+                    }
+                    assert!(started.elapsed() < Duration::from_secs(10));
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            },
+        );
+        assert!(released.get(), "the engine never reached its final write");
+        assert!(
+            result.as_ref().is_err_and(|error| error.contains("上限")),
+            "final {redirect:?} log overflow was not rejected: {result:?}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn pause_and_timeout_reap_native_process_and_emit_no_result() {

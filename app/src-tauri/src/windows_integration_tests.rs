@@ -443,7 +443,7 @@ fn windows_real_speaker_embedding_cpu_and_resident_reuse() {
     let mut vectors = Vec::new();
     for resident in [false, true] {
         let snapshot = resident.then(|| {
-            crate::local_engine::resident::prepare(&root, "sherpa")
+            crate::local_engine::resident::prepare_installed(&root, "sherpa")
                 .unwrap()
                 .unwrap()
         });
@@ -658,7 +658,7 @@ fn windows_real_worker_reuses_cpu_model_and_runs_available_vulkan() {
     let root = temp.path().join("常駐ワーカー 日本語");
     fs::create_dir(&root).unwrap();
     let root = root.canonicalize().unwrap();
-    let snapshot = crate::local_engine::resident::prepare(&root, "whisper")
+    let snapshot = crate::local_engine::resident::prepare_installed(&root, "whisper")
         .unwrap()
         .unwrap();
     let config = crate::transcription::asr::AsrConfig {
@@ -1102,6 +1102,7 @@ fn windows_bundled_model_catalog_is_complete_and_target_bound() {
 #[test]
 #[ignore = "downloads fixed real model weights into an explicitly provided isolated QA directory"]
 fn windows_real_models_download_place_check_and_apply() {
+    let _installed = crate::local_engine::resident::InstalledAdmission::enter();
     #[derive(serde::Deserialize)]
     struct Choice {
         id: String,
@@ -1253,6 +1254,7 @@ fn windows_real_models_download_place_check_and_apply() {
 #[test]
 #[ignore = "requires isolated real-model QA and Japanese synthetic speech, never a microphone"]
 fn windows_saved_speech_runs_transcription_diarization_and_minutes() {
+    let _installed = crate::local_engine::resident::InstalledAdmission::enter();
     let root = PathBuf::from(
         std::env::var_os("MON_WINDOWS_INTEGRATION_ROOT").expect("isolated QA directory required"),
     )

@@ -1,12 +1,18 @@
 .DEFAULT_GOAL := check
 
-.PHONY: check test lint build-macos-probe check-app check-browser prepare-capture-core check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-speaker-embedding build-rust-tests test-rust test-rust-focused rust-test-cache
+.PHONY: check test lint build-macos-probe check-app check-browser prepare-capture-core check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-speaker-embedding build-rust-tests test-rust test-rust-quick test-rust-heavy test-rust-focused rust-test-cache
 
 build-rust-tests:
 	python3 tools/mon_rust_tests.py --build-only
 
 test-rust:
 	python3 tools/mon_rust_tests.py
+
+test-rust-quick:
+	python3 tools/mon_rust_tests.py --workspace --suite quick --processes 4 --threads 4 --timings-json output/rust-tests/quick.json
+
+test-rust-heavy:
+	python3 tools/mon_rust_tests.py --suite heavy --timings-json output/rust-tests/heavy.json
 
 test-rust-focused:
 	python3 tools/mon_rust_tests.py "$(RUST_TEST_FILTER)"
