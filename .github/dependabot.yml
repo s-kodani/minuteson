@@ -1,5 +1,5 @@
 version: 2
-# Pause version updates during private source migration; restore 5 after publication review.
+# Version updates are paused; restore 5 after CI and repository protection checks.
 updates:
   - package-ecosystem: npm
     directory: /app

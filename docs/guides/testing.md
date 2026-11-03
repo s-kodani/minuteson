@@ -5,10 +5,11 @@ description: "共通・OS別の検査コマンド、Rustキャッシュと品質
 tags: ["testing", "evaluation", "maintenance"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/Makefile"
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_rust_tests.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_ci_native_tests.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/Makefile"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_rust_tests.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_ci_native_tests.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/rust-test-suites.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/evaluation/README.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_docs.py"
@@ -44,6 +45,8 @@ Rustランナーの`--suite quick|heavy|full`で実行範囲を選びます。�
 分類の正本は[スイート定義](../../tools/rust-test-suites.json)です。通常の保存・削除・同意と一覧の検査、音声削除の基本完了、現行バックアップ形式の往復、登録音声の保持、完了音声クリーンアップの基本検証は通常側に残します。ネイティブ保存先の切替やWALコピー、FLAC作業領域の移動後再開、複数世代の再確認、各SQL段階での破損・取消・SIGKILLの組合せは重い側で確認します。文字列だけを扱う履歴上限の検査は通常側です。定義に一致しない新しい通常テストは`quick`に入ります。重いモジュールへの追加はそのモジュールと同じ分類になります。分類はMacとWindowsで共通ですが、OS条件により存在するテストは異なります。
 
 PRとmain更新は通常スイートを使い、QAインストーラー・MSIX・ネイティブ資材の準備を待ちません。日次04:17（日本時間）と全検証の手動実行、リリース前は全件と既存のSwift／Windows連携・配布物検証を実行します。日次の開始時刻はGitHub側で遅れる場合があります。セキュリティ検証の実行条件は変更しません。構成は[開発フロー](development-workflow.md)を参照してください。
+
+全件CIで作るQAインストーラーとMSIXは、ビルド・内容照合の検証用です。バイナリはActions成果物へアップロードせず、ビルド証跡JSONとテスト時間・診断資料を保持します。パッケージ生成の成功を、実機確認や配布条件の承認とは扱いません。
 
 実モデル・実機・専用連携を必要とする既存のignoredテストは、各テストの条件を満たした専用コマンドで呼び出します。`full`でも全ignoredテストを一括実行しません。
 

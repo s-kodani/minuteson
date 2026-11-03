@@ -13,6 +13,8 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/tools/mon_macos_release.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/.github/security-exceptions.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/94b513548614f37cb070273abe492975d062b29d/.github/dependabot.yml"
 ---
 
 # DevSecOpsの検査と運用
@@ -28,7 +30,7 @@ sources:
 | CodeQL | Actions、JS/TS、Python、Rust、C/C++、Swift。SARIF内のHigh以上のセキュリティ指摘と重大度不明を停止します。Swiftは実ビルドで解析します |
 | 文書検査 | OKFメタデータ、内部リンク・アンカー、コード参照、目次到達性 |
 
-低・中程度の指摘と保守終了の通知は診断成果物で確認します。別名IDは同一の指摘としてまとめ、既知の重大度を共有します。検査サービスへの通信失敗、壊れた出力、必要なジョブの取消・未実施は成功にしません。非公開期間はCodeQLを実行せず、その未実施を明示します。公開とCodeQL有効化前の状態をSAST合格と扱いません。
+低・中程度の指摘と保守終了の通知は診断成果物で確認します。別名IDは同一の指摘としてまとめ、既知の重大度を共有します。検査サービスへの通信失敗、壊れた出力、必要なジョブの取消・未実施は成功にしません。CodeQLが非公開設定により省略された場合は、その未実施を明示します。解析未実施の状態をSAST合格と扱いません。
 
 OSVのネイティブ依存の収録範囲は完全ではありません。SDK、CRT、OSライブラリ、モデルの重みはこの脆弱性検査の対象外です。取得時の既存ハッシュ照合は維持し、毎週の保守時に固定資材と上流の更新・通知も確認します。SBOMにはCargoの通常・ビルド依存、npmの製品依存、ネイティブ取得定義を記録し、任意ダウンロード資材が含まれる範囲も明示します。
 
@@ -48,7 +50,7 @@ make check-security
 
 ## 検出時の対応と例外
 
-秘密情報を見つけた場合は、まず該当サービスで失効・再発行し、公開前に履歴の扱いを確認します。検出値をIssueやPR、ログへ転載しません。脆弱性は影響と修正版を確認して更新PRを作成し、再検査します。一般からの報告先は[セキュリティ方針](../../SECURITY.md)です。
+秘密情報を見つけた場合は、まず該当サービスで失効・再発行し、影響範囲と履歴の扱いを確認します。検出値をIssueやPR、ログへ転載しません。脆弱性は影響と修正版を確認して更新PRを作成し、再検査します。一般からの報告先は[セキュリティ方針](../../SECURITY.md)です。
 
 例外は[例外定義](../../.github/security-exceptions.json)の`exceptions`へ追加します。`tool`は`osv`または`codeql`、`id`は指摘ID、`target`はレポートの完全一致対象、`reason`は影響しない根拠、`owner`は担当者です。`created`と`expires`はUTCの日付を`YYYY-MM-DD`で記載し、作成日から最長30日、期限日は無効とします。理由と担当者を含む全項目を必須にし、包括的な除外は認めません。重大度不明を無条件に低と見なさず、確認結果を残します。Gitleaksの一括除外は行いません。既知の非秘密値は、ファイルと検出値を完全に限定した設定で扱います。現在の除外は履歴内のSQLite設定キー`meeting_mix_v1_initialized`だけです。
 
@@ -56,15 +58,17 @@ make check-security
 
 ## GitHubの初期設定
 
-1. 公開前に全履歴の秘密情報検査と依存検査を実施し、指摘を修正または個別判断します。公開への切替は所有者が実施します。
-2. GitHub Actionsの課金・利用上限エラーを解消し、公開後の標準ランナーでCIが実行できることを確認します。main上のワークフローを有効にします。
-3. CodeQLはこのリポジトリのadvanced setupを使い、default setupとの重複実行を避けます。Dependency graph・Dependabot alerts/security updatesとSecret scanning・Push protectionを有効化します。Private vulnerability reportingを有効化します。移行中は[Dependabot定義](../../.github/dependabot.yml)の全4対象を`open-pull-requests-limit: 0`で停止しているため、公開後の確認時に`5`へ戻して更新PRを有効化します。
+1. 全履歴の秘密情報検査と依存検査を実施し、指摘を修正または個別判断します。Actions履歴・ログと保存済み成果物の公開範囲も確認します。
+2. main上のワークフローを有効にし、標準ランナーの利用上限・権限・資材取得を確認します。Desktop platform validationの`full`とSecurity validationをmainで実行し、`CI gate`・`Security gate`とCodeQL各言語の結果を確認します。
+3. CodeQLはこのリポジトリのadvanced setupを使い、default setupとの重複実行を避けます。Dependency graph・Dependabot alerts/security updatesとSecret scanning・Push protectionを有効化します。Private vulnerability reportingを有効化し、[非公開報告のリンク](../../SECURITY.md#非公開の報告)が利用できることを確認します。
 4. mainのrulesetでPR、`CI gate`と`Security gate`の成功、force push・削除の禁止を設定します。チェック名は初回実行結果から選択します。承認数は0とし、本人が自分のPRを確認してマージできるようにします。通常のバイパスは設けません。
 5. `v*`タグの更新・削除を禁止します。新規作成はReleasesと公開用ワークフローに許可します。Actionsの既定権限はread-only、forkワークフローの実行承認を有効化します。各ジョブで必要な権限だけを宣言します。
 
-設定前の非公開・実行枠不足を導入済みの保護と扱いません。Dependabotはnpm/Cargo/Actionsと検査用Python依存の更新PRを作ります。バージョン更新はActions停止と別に動作するため、非公開の移行中は設定の上限`0`でも停止します。[GitHubの停止手順](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates#disabling-dependabot-version-updates)に従い、上限`0`は通常のバージョン更新を止めるもので、セキュリティ更新は別のリポジトリ設定で管理します。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
+設定や検査が未完了の状態を導入済みの保護と扱いません。Dependabotの通常更新はnpm/Cargo/Actionsと検査用Python依存が対象です。現在は[Dependabot定義](../../.github/dependabot.yml)の全4対象を`open-pull-requests-limit: 0`で停止しています。CI・セキュリティ検査と保護設定を確認してから、上限を`5`へ戻すPRを検査・マージして再開します。バージョン更新はActions停止と別に動作します。[GitHubの停止手順](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates#disabling-dependabot-version-updates)に従い、上限`0`は通常のバージョン更新を止めるもので、セキュリティ更新は別のリポジトリ設定で管理します。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
 
 ## 自動配布の初期設定
+
+配布条件と動作確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)で確認します。第三者通知・SDK・CRT等の条件と、対象経路の実機・署名・Store確認が完了するまで、`RELEASE_AUTOMATION_ENABLED`・`RELEASE_PUBLISH_ENABLED`・`STORE_PUBLISH_ENABLED`は未設定または`false`を維持します。通常CIのQAインストーラー・MSIX生成は検証用で、バイナリをActions成果物へアップロードしません。
 
 環境`release-macos`、`release-publish`、`release-store`を作成し、deployment branchesを**mainのみ**に限定します。ワークフロー定義はmainで実行し、検査対象コードは固定SHAで取得します。自動公開のためrequired reviewersや待機時間は設定しません。
 
@@ -107,9 +111,3 @@ MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソ�
 証明書・APIキー・クライアントシークレットの期限を所有者が保守時に確認し、期限前に更新して試行します。疑わしい資格情報はサービス側で失効し、Secretsを更新します。
 
 公開処理を止める場合は`RELEASE_AUTOMATION_ENABLED=false`と`RELEASE_PUBLISH_ENABLED=false`、Store提出は`STORE_PUBLISH_ENABLED=false`に設定します。既に実行中の公開処理はActionsでも取消します。検査の停止や例外の無期限化で回避せず、原因を修正して再実行します。既に公開したバイナリは上書きせず、新しい版で修正します。
-
-## ソース公開用リポジトリ
-
-`minuteson`へは匿名化したmainの履歴と現行ソースだけを移します。旧リポジトリのPR、内部refs、Release、実行成果物、環境資格情報、公開有効化変数は移植しません。元のリポジトリは非公開で保管します。MITの適用範囲はルートREADMEとLICENSEに従います。非公開の移行中はリポジトリのActionsを停止し、公開後に有効化して検査します。
-
-公開への切替は、検証済みコミットと結果をレビューした所有者の指示で行います。公開後にCodeQL全言語と通常CIを実行し、Private vulnerability reporting、Secret scanning、Push protection、Dependabotとmain保護を設定します。第三者通知・SDK等の配布審査が未完了の間は、バイナリ配布とStore自動提出を有効化しません。

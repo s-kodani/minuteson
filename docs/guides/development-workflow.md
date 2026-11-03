@@ -5,9 +5,10 @@ description: "ブランチ・PR・文書更新・必須検査と、Releases画�
 tags: ["development", "github", "release"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-daily.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/release-controller.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_release.py"
 ---
 
@@ -23,7 +24,7 @@ sources:
 4. `CI gate`と`Security gate`が成功したことを確認します。検査失敗・取消・必要な検査の未実施を成功扱いにしません。低・中程度の報告も確認します。
 5. 差分を確認してマージします。保守担当者1名の運用では承認数を0にし、本人が自分のPRを確認してマージします。mainへのマージだけでは公開しません。
 
-Dependabotは月曜10:00（日本時間）に更新PRを作成します。自動マージはせず、通常のPRと同じ検査・確認を通します。定期検査で見つかった問題も作業ブランチとPRで修正します。
+Dependabotの通常更新を有効にすると、月曜10:00（日本時間）に更新PRを作成します。現在の停止状態と再開手順は[DevSecOps運用](devsecops.md#githubの初期設定)を参照してください。自動マージはせず、通常のPRと同じ検査・確認を通します。定期検査で見つかった問題も作業ブランチとPRで修正します。
 
 ```mermaid
 flowchart TD
@@ -48,6 +49,8 @@ PRとmain更新では、変更範囲に応じて通常のRustテスト、共通�
 
 Actionsの**Desktop platform validation → Run workflow**では`quick`または`full`を選びます。既定は`full`です。`full`は重い検証とQA/MSIXの作成を含み、通常側の成功を全件成功と読み替えません。`CI gate`は実行モードで必要な検証の成功を要求し、失敗・取消・意図しない省略を拒否します。
 
+この検証で作ったQAインストーラーとMSIXは、Actions成果物へアップロードしません。保持する成果物はビルド証跡JSON、Rustの実行時間、ブラウザー等の診断資料です。バイナリ配布は、配布条件の確認と別途の変更レビューを経て有効化します。
+
 リリース前は、日次の成功結果を流用せず、公開対象の固定SHAに対して`full: true`で全検証を行います。PRの軽量化によってリリース前の条件を緩めません。セキュリティ検査と`Security gate`は別経路のままです。ローカルのコマンドとテスト分類は[テストガイド](testing.md)を参照してください。
 
 ## 文書を同じPRで更新する
@@ -71,7 +74,7 @@ Actionsの**Desktop platform validation → Run workflow**では`quick`または
 
 **Publish releaseボタンを先に押さないでください。** 下書きの本文・タグ・対象を途中で変更した場合は公開直前の照合で中止します。本文末尾の`mon-release`コメントは処理状態です。通常は編集しません。公開済みタグ・バイナリは置き換えず、修正は新しい版で公開します。
 
-Windows EXEは未署名であり、配布名と説明にも明記します。Store用の未署名MSIXはActionsの成果物として保持し、直接インストール用としてReleasesへ公開しません。実機確認・ライセンス審査等の未確認項目は、配布成功後も未確認として残します。
+Windows EXEは未署名であり、配布名と説明にも明記します。自動配布を有効化したRelease buildでは、Store用の未署名MSIXをActionsの成果物として保持し、直接インストール用としてReleasesへ公開しません。実機確認・ライセンス審査等の未確認項目は、配布成功後も未確認として残します。
 
 ## 失敗・試行・再実行
 

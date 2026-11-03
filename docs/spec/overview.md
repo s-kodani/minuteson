@@ -37,7 +37,7 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 ## 配布と評価の確認状況
 
-完成版という位置付けと、配布経路ごとの公開実績・品質評価は区別して管理します。整理時点のリポジトリ記録は次のとおりです。
+このリポジトリでは現在、インストーラーを配布していません。完成版という位置付けと、配布経路ごとの公開実績・品質評価は区別して管理します。確認記録は次のとおりです。
 
 | 項目 | 確認状況 |
 | --- | --- |
@@ -46,4 +46,4 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 | 品質・性能 | 短い実モデル統合や合成入力の検査記録あり。16GB端末・10話者、60分処理、4時間録音、各機器・会議アプリでの網羅的な評価は未確認 |
 | ライセンス | 自作コード・文書・自作画像はMIT。依存通知本文・SDK由来条件等の配布審査は未完了。依存ライブラリ・モデルの条件は個別に適用される |
 
-配布先は[macOS](../guides/distribution-macos.md)、[Windows EXE](../guides/distribution-windows.md)、[Microsoft Store](../guides/distribution-store.md)の手順で扱います。性能や文字起こしの精度は端末・モデル・音声に依存し、上表の未測定条件について保証値を設けません。
+ソースからのビルドは[macOS](../guides/build-macos.md)／[Windows](../guides/build-windows.md)、配布物の構築・検証は[macOS配布](../guides/distribution-macos.md)、[Windows EXE](../guides/distribution-windows.md)、[Microsoft Store](../guides/distribution-store.md)の手順を参照してください。性能や文字起こしの精度は端末・モデル・音声に依存し、上表の未測定条件について保証値を設けません。

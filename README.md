@@ -32,6 +32,10 @@ MinutesOn（略称 **mon**）は、会議の録音・文字起こし・話者分
 
 初回のモデル取得にはネットワーク接続と空き容量が必要です。処理時間・メモリ使用量・精度は端末、モデル、音声に依存します。モデルの選択肢と実行方式は[モデル仕様](docs/spec/models.md)を参照してください。
 
+## 配布状況
+
+このリポジトリでは現在、インストーラーを配布していません。ソースからビルドする場合は、[macOS](docs/guides/build-macos.md)／[Windows](docs/guides/build-windows.md)の手順を参照してください。対応環境と動作確認状況は[製品概要](docs/spec/overview.md#配布と評価の確認状況)に記載しています。
+
 ## 使い始める
 
 1. [macOS](docs/guides/build-macos.md)／[Windows](docs/guides/build-windows.md)の手順でアプリを準備します。配布経路は[ドキュメント目次](docs/index.md)から確認できます。
@@ -48,8 +52,8 @@ MinutesOn（略称 **mon**）は、会議の録音・文字起こし・話者分
 Node.js 24、Rust stable、Python 3.12とOS別の開発環境が必要です。
 
 ```sh
-git clone https://github.com/s-kodani/minuteson.git mon
-cd mon
+git clone https://github.com/s-kodani/minuteson.git minuteson
+cd minuteson
 npm ci --prefix app
 npm --prefix app run tauri -- dev
 ```
@@ -70,9 +74,3 @@ npm --prefix app run tauri -- dev
 このリポジトリの自作コード・文書・自作画像は、[MIT License](LICENSE)で提供します。著作権表示は`Copyright (c) 2026 s-kodani`です。
 
 第三者のコード・資料・語彙データ、依存ライブラリ、外部から取得するAIモデルと実行エンジンには、それぞれの利用条件が適用されます。個別のLICENSE・NOTICE・著作権表示を優先してください。[第三者ライセンス資料](third-party/notices/README.md)、[モデル利用条件の原文](third-party/model-licenses/README.md)、[モデル定義](app/model-catalog/)を参照してください。LFM3など、商用利用に年商等の条件があるモデルも含まれます。導入画面の利用条件と全文を確認してください。
-
-## ソース公開と配布状況
-
-公開用の開発先は[minuteson](https://github.com/s-kodani/minuteson)です。mainの開発履歴を保持し、自分の作者・コミッター名義を`s-kodani`とGitHubのnoreplyメールへ統一しています。履歴書き換えにより旧コミットSHA・署名は引き継ぎません。
-
-ソース公開とバイナリ配布の準備状況は別に扱います。依存通知本文の不足、Apple SDK由来等の配布条件、実機・署名・Storeの未確認事項は未解決のまま保持しています。通知収集の成功をライセンス審査の承認にせず、自動配布・Store提出は有効化していません。[製品概要](docs/spec/overview.md#配布と評価の確認状況)と[DevSecOps運用](docs/guides/devsecops.md)を確認してください。
