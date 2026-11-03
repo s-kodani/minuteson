@@ -1,8 +1,10 @@
 //! Complete reconstruction, verify it, then close and reopen read-only.
 //! The resulting capability is not live publication or scheduler permission.
-use super::*;
+use super::super::super::restore_ids::RestoreIds;
+use super::super::super::*;
+#[cfg(test)]
+use super::super::FixedData;
 use crate::storage::vocabulary::GlobalMerge;
-use std::collections::BTreeSet;
 
 pub(in crate::storage::backup) struct SealedWorkspace {
     database: Connection,
@@ -210,127 +212,102 @@ fn inventory(
     Ok(())
 }
 
-impl FixedWorkspace {
-    fn seal(
-        mut self,
-        fixed: &FixedData<'_, '_>,
+impl SealedWorkspace {
+    pub(in crate::storage::backup) fn prepare_current(
+        ids: &RestoreIds<'_>,
+        parent: &Path,
         check: &impl Fn() -> bool,
-    ) -> Result<SealedWorkspace, String> {
-        check_cancelled(check)?;
-        if self.completed != [true; 4] {
-            return Err("復元の全構築段階が完了していません".into());
-        }
-        let owned = root(&self.stage)?;
-        let image = owned.join("fixed.sqlite3");
-        regular(&image)?;
-        if self.final_database_proof.as_ref() != Some(&digest_file(&image, check)?) {
-            return Err("構築完了後の復元DBが変更されています".into());
-        }
-        if !self.database.is_autocommit() {
-            return Err("復元DBに未完了のトランザクションがあります".into());
-        }
-        portable::validate_scopes(&self.database)?;
-        validate_database(&mut self.database, check)?;
-        for source in &fixed.ids.source().manifest.tables {
-            if source.name == "restore_provenance" {
-                continue;
-            }
-            let count: i64 = self
-                .database
-                .query_row(
-                    &format!("SELECT count(*) FROM \"{}\"", source.name),
-                    [],
-                    |r| r.get(0),
+    ) -> Result<Self, String> {
+        ids.source().verify_validation_database(check)?;
+        let stage = archive::private_stage(parent)?;
+        let image = stage.path().join("fixed.sqlite3");
+        let map = |domain: &str, meeting: &str, key: &str| ids.get(domain, meeting, key);
+        let paths = |meeting: &str, asset: &str| -> Result<String, String> {
+            if meeting.is_empty() {
+                let person: String = ids
+                    .source()
+                    .database
+                    .query_row(
+                        "SELECT person_id FROM voice_samples WHERE id=?1",
+                        [asset],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                crate::storage::voice::audio::relative(
+                    &ids.get("voice_people", "", &person)?,
+                    &ids.get("voice_samples", "", asset)?,
                 )
-                .map_err(|e| e.to_string())?;
-            if u64::try_from(count).ok() != Some(source.row_count) {
-                return Err("復元DBの構築件数が元アーカイブと一致しません".into());
+            } else {
+                Ok(format!(
+                    "meetings/{}/restored/{}",
+                    ids.get("meetings", "", meeting)?,
+                    ids.get("file_assets", meeting, asset)?
+                ))
             }
-        }
-        for table in [
-            "app_settings",
-            "restore_batches",
-            "restore_identity_maps",
-            "model_packages",
-            "restore_omitted_assets",
-            "model_files",
-            "model_profiles",
-            "profile_components",
-            "model_catalog_history",
-            "maintenance_operations",
-            "maintenance_paths",
-        ] {
-            if self
-                .database
-                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
-                    r.get::<_, i64>(0)
-                })
-                .map_err(|e| e.to_string())?
-                != 0
-            {
-                return Err("復元専用DBに端末設定または端末内バッチがあります".into());
-            }
-        }
-        let active:bool=self.database.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('queued','running','pausing','paused')) OR EXISTS(SELECT 1 FROM analysis_flows WHERE stage IN ('pending','transcription','diarization')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if active {
-            return Err("復元データに自動開始可能・書込み中の処理があります".into());
-        }
-        let expected: BTreeSet<_> = fixed
-            .ids
+        };
+        let database = ids
+            .source()
+            .contents
+            .write_database(&image, &map, &paths, check)?;
+        ids.visit_mappings(check, |m| {
+            if !super::super::super::ledger::valid_domain(&m.domain) {return Ok(());}
+            let meeting=if m.domain=="meetings" {Some(m.target.clone())} else if m.scope.is_empty() {None} else {Some(ids.get("meetings","",&m.scope)?)};
+            database.execute("INSERT INTO restore_provenance(id,meeting_id,domain,entity_key,source_archive,source_scope,source_key,restore_batch,restored_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![Uuid::new_v4().to_string(),meeting,m.domain,m.target,ids.archive_id,m.scope,m.source,ids.batch_id,now_ms()?]).map_err(|e|e.to_string())?;
+            Ok(())
+        })?;
+        let total = ids
             .source()
             .manifest
-            .omitted_assets
+            .entries
             .iter()
-            .map(|asset| {
-                fixed
-                    .ids
-                    .get("file_assets", &asset.meeting_id, &asset.asset_id)
-            })
-            .collect::<Result<_, _>>()?;
-        let actual: BTreeSet<String> = self
-            .database
-            .prepare("SELECT id FROM file_assets WHERE state='missing'")
-            .map_err(|e| e.to_string())?
-            .query_map([], |r| r.get(0))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<_, _>>()
-            .map_err(|e| e.to_string())?;
-        if actual != expected || self.missing_assets != expected {
-            return Err("復元データの欠損成果物が除外記録と一致しません".into());
-        }
-        let bytes = verify_assets(&self.database, &owned, check)
-            .map_err(|e| format!("復元音声確認: {e}"))?;
-        inventory(&self.database, &owned, &owned, 0, check)
-            .map_err(|e| format!("復元領域確認: {e}"))?;
-        if self
-            .database
-            .query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE type='trigger'",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
-            .map_err(|e| e.to_string())?
-            != 0
+            .filter(|e| e.asset_id.is_some())
+            .try_fold(0u64, |n, e| {
+                n.checked_add(e.size).ok_or("復元音声容量が範囲外です")
+            })?;
+        crate::operation_observation::stage("copying_restore", Some(total), "bytes");
+        for entry in ids
+            .source()
+            .manifest
+            .entries
+            .iter()
+            .filter(|e| e.asset_id.is_some())
         {
-            return Err("未検証の復元DBに追加トリガーがあります".into());
-        }
-        let tx = self.database.transaction().map_err(|e| e.to_string())?;
-        for trigger in &self.triggers {
             check_cancelled(check)?;
-            tx.execute_batch(trigger).map_err(|e| e.to_string())?;
+            let old = entry
+                .asset_id
+                .as_deref()
+                .ok_or("管理ファイルのIDがありません")?;
+            let meeting = entry.meeting_id.as_deref().unwrap_or("");
+            let path = paths(meeting, old)?;
+            let target = crate::native_fs::join(stage.path(), &path);
+            scratch::directories(target.parent().ok_or("復元先がありません")?)?;
+            copy_asset_observed(
+                &ids.source().owned_asset_path(old)?,
+                &target,
+                &FileAsset {
+                    id: old.into(),
+                    meeting_id: meeting.into(),
+                    relative_path: path,
+                    media_type: String::new(),
+                    size_bytes: i64::try_from(entry.size).map_err(|_| "音声容量が範囲外です")?,
+                    content_hash: entry.sha256.clone(),
+                    state: "ready".into(),
+                },
+                check,
+            )?;
         }
-        tx.commit().map_err(|e| e.to_string())?;
-        let trusted = portable::schema(MIGRATIONS.len())?;
-        if schema(&self.database)? != schema(&trusted)? {
-            return Err("復元DBの表・索引・トリガーが信頼済み定義と一致しません".into());
+        crate::operation_observation::report("copying_restore", total, total, "bytes");
+        crate::operation_observation::stage("checking_restore", None, "bytes");
+        for entry in &ids.source().manifest.omitted_assets {
+            let target =
+                crate::native_fs::join(stage.path(), &paths(&entry.meeting_id, &entry.asset_id)?);
+            scratch::directories(target.parent().ok_or("復元先がありません")?)?;
         }
-        check_capacity(&owned, 0)?;
-        let batch_id = fixed.ids.batch_id.clone();
-        let archive_id = fixed.ids.archive_id.clone();
-        let identity_proof = super::super::super::ledger::BatchPlan::new(fixed.ids, check)?.proof();
-        let FixedWorkspace {
-            database, stage, ..
-        } = self;
+        portable::validate_scopes(&database)?;
+        super::super::super::ledger::validate_provenance(&database, check)?;
+        let owned = stage.path().canonicalize().map_err(|e| e.to_string())?;
+        let bytes = verify_assets(&database, &owned, check)?;
+        inventory(&database, &owned, &owned, 0, check)?;
         database.close().map_err(|(_, e)| e.to_string())?;
         let proof = digest_file(&image, check)?;
         let database = read_only(&image)?;
@@ -339,21 +316,19 @@ impl FixedWorkspace {
             .checked_mul(2)
             .and_then(|n| n.checked_add(bytes))
             .ok_or("復元容量が範囲外です")?;
-        let sealed = SealedWorkspace {
+        let result = Self {
             database,
             stage,
             database_proof: proof,
-            identity_proof,
-            batch_id,
-            archive_id,
+            identity_proof: super::super::super::ledger::BatchPlan::new(ids, check)?.proof(),
+            batch_id: ids.batch_id.clone(),
+            archive_id: ids.archive_id.clone(),
             required_bytes,
         };
-        sealed.verify(check)?;
-        Ok(sealed)
+        result.verify(check)?;
+        Ok(result)
     }
-}
 
-impl SealedWorkspace {
     pub(in crate::storage::backup) fn matches_ids(
         &self,
         ids: &RestoreIds<'_>,
@@ -369,23 +344,13 @@ impl SealedWorkspace {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::storage::backup) fn prepare(
         fixed: &FixedData<'_, '_>,
         parent: &Path,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        FixedWorkspace::prepare(fixed, parent, check)
-            .map_err(|e| format!("復元DB構築: {e}"))?
-            .with_speech_artifacts(fixed, check)
-            .map_err(|e| format!("復元音声成果物構築: {e}"))?
-            .with_generation_artifacts(fixed, check)
-            .map_err(|e| format!("復元生成成果物構築: {e}"))?
-            .with_processing_history(fixed, check)
-            .map_err(|e| format!("復元処理履歴構築: {e}"))?
-            .with_provenance(fixed, check)
-            .map_err(|e| format!("復元由来構築: {e}"))?
-            .seal(fixed, check)
-            .map_err(|e| format!("復元最終検査: {e}"))
+        Self::prepare_current(fixed.ids, parent, check)
     }
 
     pub(in crate::storage::backup) fn verify(
@@ -430,7 +395,3 @@ impl SealedWorkspace {
         root(&self.stage)
     }
 }
-
-#[cfg(test)]
-#[path = "seal_tests.rs"]
-mod tests;

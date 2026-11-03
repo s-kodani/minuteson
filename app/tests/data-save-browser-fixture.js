@@ -5,13 +5,20 @@ import { dataIdleRead } from "./data-idle-browser-fixture.js";
 const idle = dataIdleRead("get_data_operation");
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const f = window.dataFixture = {
-  snapshot: idle, calls: [], mode: "success", replacesExisting: false, blocker: null,
+  snapshot: idle, jobs: [], calls: [], mode: "success", replacesExisting: false, blocker: null,
   readyBlocker: null, holdAvailability: false, availabilityComplete: null,
   failRead: false, operationReadFailure: false, failSave: false, failCancel: false, cancelLost: false, failClose: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
   restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0,
-  changed: async patch => { f.snapshot = { ...f.snapshot, ...patch, revision: f.snapshot.revision + 1 }; if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
+  changed: async patch => { f.snapshot = { ...f.snapshot, ...patch, revision: f.snapshot.revision + 1 };
+    const s=f.snapshot;
+    if (["backup","restore"].includes(s.kind) && s.token && !["idle","choosing"].includes(s.phase)) {
+      const prior=f.jobs.find(j=>j.snapshot.token===s.token);
+      const job={snapshot:structuredClone(s),startedAtMs:prior?.startedAtMs ?? Date.now(),finishedAtMs:["completed","failed","cancelled"].includes(s.phase)?Date.now():null};
+      f.jobs=f.jobs.filter(j=>j.snapshot.token!==s.token);f.jobs.push(job);
+    }
+    if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
 };
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
 const operationEntries = ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
@@ -45,6 +52,8 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_speaker_completion_preferences") return { id: "speaker_completion", lockVersion: 0, payload: { similarityThresholdMilli: 800, marginThresholdMilli: 100 } };
   if (command === "get_ready_analysis_flows") return dataIdleRead(command);
   if (command === "get_application_close_activity") return dataIdleRead(command);
+  if (command === "list_data_jobs") return structuredClone(f.jobs);
+  if (command === "dismiss_data_job") { f.jobs=f.jobs.filter(j=>j.snapshot.token!==args.token); return null; }
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") {
     const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker === "録音通知履歴の確認・更新中" ? null : f.blocker;
@@ -79,7 +88,7 @@ export const dataSaveIPC = async (command, args) => {
       if (f.readyBlocker) f.blocker = f.readyBlocker;
       await f.changed({ phase: "ready", busy: false, retryAllowed: true,
         backupPreview: args.kind === "backup" ? { confirmationId, destination: "/safe/会議.monbackup", replacesExisting: f.replacesExisting } : null,
-        restorePreview: args.kind === "restore" ? { confirmationId, batchId: crypto.randomUUID(), archiveId: f.archiveId, meetingTitles: ["点検会議", "計画会議"], deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, requiredBytes: 32 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, vocabularyAdded: 1, vocabularyDeduplicated: 1, vocabularyConflicts: ["点検日"] } : null,
+        restorePreview: args.kind === "restore" ? { confirmationId, batchId: crypto.randomUUID(), archiveId: f.archiveId, meetingTitles: ["点検会議", "計画会議"], registry:{people:1,samples:2,audio:2,links:2}, deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, requiredBytes: 32 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, vocabularyAdded: 1, vocabularyDeduplicated: 1, vocabularyConflicts: ["点検日"] } : null,
         relocationPreview: args.kind === "relocation" ? { confirmationId, operationId: crypto.randomUUID(), source: "/safe/root", destination: "/safe/chosen/MON-meetings-new", meetingCount: 3, fileCount: 8, requiredBytes: 64 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, pending: false, resumeAllowed: true, resumeReason: null, copiedPaths: null, expectedPaths: null } : null });
     };
     if (f.previewMode === "delay") f.complete = ready;
@@ -132,7 +141,7 @@ export const dataSaveIPC = async (command, args) => {
       else {
         const ids = p.meetingTitles.map(title => { const id = crypto.randomUUID(); f.meetings.push({ id, title, lifecycle: "imported", sourceType: "audio_import", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 1 }); return id; });
         f.restored.push(...ids);
-        await f.changed({ phase: "completed", busy: false, restoreReceipt: { batchId: p.batchId, archiveId: p.archiveId, meetingIds: ids, deletedAudioMeetingCount: p.deletedAudioMeetingCount, deletedAudioAssetCount: p.deletedAudioAssetCount, alreadyPublished: f.mode === "unknownStats", vocabularyAdded: f.mode === "unknownStats" ? null : 1, vocabularyDeduplicated: f.mode === "unknownStats" ? null : 1, vocabularyConflicts: f.mode === "unknownStats" ? null : ["点検日"] } });
+        await f.changed({ phase: "completed", busy: false, restoreReceipt: { batchId: p.batchId, archiveId: p.archiveId, meetingIds: ids, registry:p.registry, deletedAudioMeetingCount: p.deletedAudioMeetingCount, deletedAudioAssetCount: p.deletedAudioAssetCount, alreadyPublished: f.mode === "unknownStats", vocabularyAdded: f.mode === "unknownStats" ? null : 1, vocabularyDeduplicated: f.mode === "unknownStats" ? null : 1, vocabularyConflicts: f.mode === "unknownStats" ? null : ["点検日"] } });
       }
     };
     if (["delay", "cancelRace"].includes(f.mode)) f.complete = finish;

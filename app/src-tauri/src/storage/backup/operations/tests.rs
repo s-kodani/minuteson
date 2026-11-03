@@ -597,3 +597,35 @@ fn restore_operation_rejects_links_wrong_extension_and_cross_destination_capabil
         .prepare_additive_restore(&f.path, &crate::test_support::never_cancelled, &|_| {})
         .is_err());
 }
+
+#[test]
+fn changed_voice_registry_requires_reconfirmation_before_any_restored_rows_are_published() {
+    let f = fixture();
+    let mut prepared = f
+        .target
+        .prepare_additive_restore(&f.path, &|| false, &|_| {})
+        .unwrap();
+    let p = prepared.preview();
+    f.target
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO voice_people VALUES(?1,'追加された人物',1,0)",
+            [Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    let before = rows(&f.target);
+    assert!(prepared
+        .publish(&f.target, &p.confirmation_id, &|| false, &|_| {})
+        .unwrap_err()
+        .contains("人物"));
+    assert_eq!(rows(&f.target), before);
+    let next = prepared.refresh(&f.target, &|| false, &|_| {}).unwrap();
+    assert_eq!(next.batch_id, p.batch_id);
+    assert_ne!(next.confirmation_id, p.confirmation_id);
+    prepared
+        .publish(&f.target, &next.confirmation_id, &|| false, &|_| {})
+        .unwrap();
+    assert_eq!(f.target.list_meetings().unwrap().len(), 3);
+}

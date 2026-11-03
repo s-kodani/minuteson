@@ -1,7 +1,7 @@
 import type { AnalysisJob } from "./analysis-state.ts";
 import type { RecordingSnapshot } from "./session.ts";
 import { stageLabel, stageDetail } from "./stage-progress.ts";
-import type { DataSnapshot } from "./data-operation-state.ts";
+import type { DataSnapshot, DataJob } from "./data-operation-state.ts";
 import { bytesLabel, importLabel, type ImportSnapshot } from "./import-state.ts";
 
 export interface OperationProgress {
@@ -12,13 +12,28 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "deletion" | "audio_deletion" | "model_deletion" | "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
+  kind: "backup" | "restore" | "deletion" | "audio_deletion" | "model_deletion" | "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
+  finishedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ deletion:"会議の削除", audio_deletion:"音声の削除", model_deletion:"モデルの削除", recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ backup:"バックアップ", restore:"バックアップから復元", deletion:"会議の削除", audio_deletion:"音声の削除", model_deletion:"モデルの削除", recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+
+export function dataJobProgress(job: DataJob): OperationProgress {
+  const s = job.snapshot, completed = s.phase === "completed";
+  const waiting = s.phase === "ready";
+  const state = waiting ? "queued" : s.phase === "cancelling" ? "pausing" : ["failed", "cancelled", "attention"].includes(s.phase) ? "interrupted" : "running";
+  const name = s.kind === "backup" ? "バックアップ" : "バックアップから復元";
+  const label = completed ? "完了" : waiting ? "確認待ち" : s.phase === "cancelling" ? "安全な停止を待機中" : s.phase === "failed" ? "失敗" : s.phase === "cancelled" ? "取消済み" : s.phase === "attention" ? "結果の確認が必要" : stageLabel(s.progress) ?? ({ reading:"読み込み中", verifying:"検証中", reconstructing:"会議を準備中", publishing:"保存結果を確定中" } as Record<string,string>)[s.phase] ?? "準備中";
+  return { id:`data:${s.token}`, kind:s.kind as "backup" | "restore", state,
+    target:s.backupPreview?.destination ?? (s.restorePreview ? `会議 ${s.restorePreview.meetingTitles.length} 件・用語・声` : name),
+    label, startedAtMs:job.startedAtMs, finishedAtMs:job.finishedAtMs ?? undefined,
+    completed:completed ? 1 : s.progress?.completed ?? null, total:completed ? 1 : s.progress?.total ?? null,
+    detail:s.errorMessage ?? stageDetail(s.progress),
+  };
+}
 
 export function deletionProgress(s: DataSnapshot | null): OperationProgress | null {
   if (!s?.busy || !s.token || !["deletion", "audio_deletion", "model_deletion"].includes(s.kind ?? "")) return null;
@@ -47,7 +62,7 @@ export function progressPercent(completed: number | null, total: number | null):
 export function operationElapsed(progress: OperationProgress, nowMs: number): string | undefined {
   const start = progress.startedAtMs;
   if (start === undefined || !Number.isSafeInteger(start) || start < 0 || !Number.isFinite(nowMs)) return undefined;
-  const seconds = Math.floor(Math.max(0, nowMs - start) / 1000);
+  const seconds = Math.floor(Math.max(0, (progress.finishedAtMs ?? nowMs) - start) / 1000);
   return `全体の経過時間 ${Math.floor(seconds / 60)}分${seconds % 60}秒`;
 }
 

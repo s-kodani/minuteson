@@ -196,6 +196,17 @@ struct State {
     request: Option<Request>,
     cancel: Arc<AtomicBool>,
     closing: bool,
+    started_at_ms: i64,
+    jobs: std::collections::BTreeMap<String, DataJob>,
+}
+
+/// Session-local job results. Durable publication/recovery remains in Storage.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataJob {
+    snapshot: Snapshot,
+    started_at_ms: i64,
+    finished_at_ms: Option<i64>,
 }
 
 #[derive(Default)]
@@ -205,6 +216,49 @@ pub(crate) struct DataController {
 }
 
 impl DataController {
+    pub(crate) fn list_jobs(&self) -> Result<Vec<DataJob>, String> {
+        let s = self
+            .state
+            .lock()
+            .map_err(|_| "データ操作の状態を取得できません")?;
+        let mut jobs = s.jobs.clone();
+        if matches!(s.snapshot.kind, Some(Kind::Backup | Kind::Restore))
+            && !matches!(
+                s.snapshot.phase.as_str(),
+                "idle" | "choosing" | "discarding"
+            )
+            && (s.snapshot.busy || s.snapshot.phase == "ready")
+        {
+            if let Some(token) = &s.snapshot.token {
+                jobs.insert(
+                    token.clone(),
+                    DataJob {
+                        snapshot: s.snapshot.clone(),
+                        started_at_ms: s.started_at_ms,
+                        finished_at_ms: None,
+                    },
+                );
+            }
+        }
+        let mut jobs: Vec<_> = jobs.into_values().collect();
+        jobs.sort_by_key(|j| j.started_at_ms);
+        Ok(jobs)
+    }
+
+    pub(crate) fn dismiss_job(&self, token: &str) -> Result<(), String> {
+        let mut s = self
+            .state
+            .lock()
+            .map_err(|_| "データ操作の状態を取得できません")?;
+        if s.snapshot.token.as_deref() == Some(token)
+            && (s.snapshot.busy || matches!(s.snapshot.phase.as_str(), "ready" | "attention"))
+        {
+            return Err("進行中・確認待ちのジョブは閉じられません".into());
+        }
+        s.jobs.remove(token);
+        Ok(())
+    }
+
     pub(crate) fn snapshot(&self) -> Result<Snapshot, String> {
         Ok(self
             .state
@@ -225,7 +279,24 @@ impl DataController {
         {
             return Err("バックアップ・復元・終了処理が進行中です".into());
         }
+        if matches!(s.snapshot.kind, Some(Kind::Backup | Kind::Restore))
+            && s.snapshot.phase == "ready"
+        {
+            if let Some(token) = s.snapshot.token.clone() {
+                let mut snapshot = s.snapshot.clone();
+                snapshot.phase = "cancelled".into();
+                snapshot.retry_allowed = false;
+                snapshot.progress = None;
+                let job = DataJob {
+                    snapshot,
+                    started_at_ms: s.started_at_ms,
+                    finished_at_ms: Some(chrono::Utc::now().timestamp_millis()),
+                };
+                s.jobs.insert(token, job);
+            }
+        }
         let previous = s.selection.take();
+        s.started_at_ms = chrono::Utc::now().timestamp_millis();
         s.snapshot = Snapshot {
             revision: s.snapshot.revision + 1,
             token: Some(Uuid::new_v4().to_string()),
@@ -554,8 +625,22 @@ impl DataController {
         }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
-        s.snapshot.progress = None;
         s.snapshot.revision += 1;
+        if matches!(s.snapshot.kind, Some(Kind::Backup | Kind::Restore))
+            && s.snapshot.phase != "idle"
+        {
+            if let Some(token) = s.snapshot.token.clone() {
+                let finished_at_ms = (!matches!(s.snapshot.phase.as_str(), "ready" | "attention"))
+                    .then(|| chrono::Utc::now().timestamp_millis());
+                let job = DataJob {
+                    snapshot: s.snapshot.clone(),
+                    started_at_ms: s.started_at_ms,
+                    finished_at_ms,
+                };
+                s.jobs.insert(token, job);
+            }
+        }
+        s.snapshot.progress = None;
         self.idle.notify_all();
         Some(s.snapshot.clone())
     }

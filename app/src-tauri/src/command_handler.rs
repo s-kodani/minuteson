@@ -31,6 +31,8 @@ tauri::generate_handler![
     start_audio_import,
     cancel_audio_import,
     get_data_operation,
+    list_data_jobs,
+    dismiss_data_job,
     get_deletion_items,
     review_meeting_deletion,
     review_pending_deletion,

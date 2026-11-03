@@ -12,6 +12,16 @@ fn asset(storage: &Storage, meeting: &str, bytes: &[u8]) -> FileAsset {
         .unwrap()
 }
 
+fn canonical_asset(storage: &Storage, title: &str) -> (Meeting, FileAsset) {
+    let id = archive::tests::meeting(storage, title);
+    let meeting = storage.get_meeting(&id).unwrap().unwrap();
+    let plan = storage.canonical_audio_plan(&id).unwrap();
+    let aid = &plan.tracks[0].chunks[0].asset_id;
+    let db = storage.connection.lock().unwrap();
+    let asset=db.query_row("SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1",[aid],|r|Ok(FileAsset{id:r.get(0)?,meeting_id:r.get(1)?,relative_path:r.get(2)?,media_type:r.get(3)?,size_bytes:r.get(4)?,content_hash:r.get(5)?,state:r.get(6)?})).unwrap();
+    (meeting, asset)
+}
+
 fn rows(db: &Connection, table: &str) -> Vec<Vec<Value>> {
     let mut statement = db
         .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
@@ -78,7 +88,7 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .unwrap();
     let stage = snapshot.stage.path().to_path_buf();
-    assert_eq!(snapshot.assets.len(), 3);
+    assert_eq!(snapshot.assets.len(), 2);
     assert_eq!(snapshot.meetings[0].id, meeting);
     let saved = read_only(&snapshot.database).unwrap();
     let original = storage.connection.lock().unwrap();
@@ -173,8 +183,11 @@ fn snapshot_only_stages_registered_files_and_does_not_publish_raw_database() {
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .unwrap();
     assert_eq!(snapshot.assets.len(), 1);
-    assert_eq!(snapshot.assets[0].asset.id, managed.id);
-    assert_eq!(std::fs::read(&snapshot.assets[0].path).unwrap(), b"audio");
+    assert_ne!(snapshot.assets[0].asset.id, managed.id);
+    assert_eq!(
+        std::fs::read(&snapshot.assets[0].path).unwrap(),
+        contents::manifest_bytes()
+    );
     assert_eq!(std::fs::read_dir(snapshot.stage.path()).unwrap().count(), 2);
     assert!(!snapshot.database.with_extension("sqlite3-wal").exists());
     #[cfg(unix)]
@@ -340,8 +353,7 @@ fn changed_missing_unsafe_and_nonready_assets_are_rejected_without_mutating_sour
     for kind in ["changed", "missing", "escape", "wrong_meeting", "state"] {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
-        let meeting = storage.create_meeting(kind).unwrap();
-        let managed = asset(&storage, &meeting.id, b"audio");
+        let (meeting, managed) = canonical_asset(&storage, kind);
         let path = storage
             .managed_path(Path::new(&managed.relative_path))
             .unwrap();
@@ -396,18 +408,18 @@ fn symlinked_parent_and_file_are_rejected_even_if_bytes_and_hash_match() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
-        let meeting = storage.create_meeting("alias").unwrap();
-        let managed = asset(&storage, &meeting.id, b"audio");
+        let (meeting, managed) = canonical_asset(&storage, "alias");
         let path = storage
             .managed_path(Path::new(&managed.relative_path))
             .unwrap();
-        std::fs::write(outside.path().join("source.flac"), b"audio").unwrap();
+        let external = outside.path().join(path.file_name().unwrap());
+        std::fs::copy(&path, &external).unwrap();
         std::fs::remove_file(&path).unwrap();
         if parent {
-            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+            std::fs::rename(path.parent().unwrap(), root.path().join("original-audio")).unwrap();
             symlink(outside.path(), path.parent().unwrap()).unwrap();
         } else {
-            symlink(outside.path().join("source.flac"), &path).unwrap();
+            symlink(&external, &path).unwrap();
         }
         assert!(storage
             .prepare_backup_snapshot(&crate::test_support::never_cancelled)
@@ -515,7 +527,7 @@ fn queued_job_cannot_start_while_snapshot_exists_and_fixed_conditions_are_preser
 }
 
 #[test]
-fn every_checkpoint_is_validated_not_only_the_most_recent_one() {
+fn historical_checkpoints_are_not_backup_dependencies() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = storage.create_meeting("過去のチェックポイント").unwrap();
@@ -541,13 +553,11 @@ fn every_checkpoint_is_validated_not_only_the_most_recent_one() {
             params![job.id],
         )
         .unwrap();
-    // Normal job resume checks the latest checkpoint; backup must inspect all.
+    // Backup excludes job history and does not validate or repair old checkpoints.
     assert!(storage.fixed_job_input(&job.id).is_ok());
     assert!(storage
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
-        .err()
-        .unwrap()
-        .contains("チェックポイント"));
+        .is_ok());
     assert!(storage.create_meeting("再開").is_ok());
 }
 

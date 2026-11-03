@@ -4,7 +4,6 @@
 use super::*;
 use crate::input_status::queue::PortableInputSnapshot;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 pub(in crate::storage) const MAX_BYTES: usize = 513 * 1024;
 const MAX_RECORDINGS: usize = 10_000;
@@ -63,14 +62,6 @@ impl Bound {
         }
         Ok(text)
     }
-    pub(super) fn rebind(self, meeting: &str, session: &str) -> Result<String, String> {
-        Self {
-            meeting_id: meeting.into(),
-            session_id: session.into(),
-            ..self
-        }
-        .encode()
-    }
 }
 
 fn has_column(db: &Connection) -> Result<bool, String> {
@@ -128,138 +119,3 @@ pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
         db.execute_batch("DROP TRIGGER recording_input_snapshot_owner; DROP TRIGGER recording_input_snapshot_binding; DROP TRIGGER recording_input_snapshot_fixed; ALTER TABLE recording_sessions DROP COLUMN input_history_snapshot_json; DELETE FROM schema_migrations WHERE version=29;").unwrap();
     }
 }
-
-pub(super) struct Native {
-    payloads: BTreeMap<(String, String), String>,
-    transfers: BTreeMap<(String, String), String>,
-    #[cfg(any(unix, windows))]
-    root: File,
-    #[cfg(any(unix, windows))]
-    witnesses: Vec<source::Witness>,
-}
-impl Native {
-    pub(super) fn capture(
-        storage: &Storage,
-        db: &Connection,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<Self, String> {
-        validate_database(db, cancelled)?;
-        let mut result = Self {
-            payloads: BTreeMap::new(),
-            transfers: BTreeMap::new(),
-            #[cfg(any(unix, windows))]
-            root: storage.managed_anchor.backup_input_root()?,
-            #[cfg(any(unix, windows))]
-            witnesses: Vec::new(),
-        };
-        let mut query = db.prepare("SELECT meeting_id,id,input_history_snapshot_json FROM recording_sessions WHERE state IN ('saved','interrupted','failed') ORDER BY id LIMIT 10001").map_err(|e|e.to_string())?;
-        let mut rows = query.query([]).map_err(|e| e.to_string())?;
-        let mut count = 0;
-        let mut total = 0_usize;
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            check_cancelled(cancelled)?;
-            count += 1;
-            if count > MAX_RECORDINGS {
-                return Err("バックアップする録音履歴の件数が安全上限を超えました".into());
-            }
-            let (meeting, session, old): (String, String, Option<String>) = (
-                row.get(0).map_err(|e| e.to_string())?,
-                row.get(1).map_err(|e| e.to_string())?,
-                row.get(2).map_err(|e| e.to_string())?,
-            );
-            let payload = if let Some(text) = old {
-                // A restored immutable snapshot is not permission to inspect
-                // guessed native audio paths or to create a capture owner.
-                let bound = Bound::decode(&text, &meeting, &session)?;
-                if let Some(transfer) = super::super::restored_input::capture_transfer(
-                    db,
-                    &meeting,
-                    &session,
-                    &bound.snapshot,
-                )? {
-                    total = total
-                        .checked_add(transfer.len())
-                        .filter(|n| *n <= MAX_TOTAL_BYTES)
-                        .ok_or("録音入力の移送記録の総容量が安全上限を超えました")?;
-                    result
-                        .transfers
-                        .insert((meeting.clone(), session.clone()), transfer);
-                }
-                Some(bound.encode()?)
-            } else {
-                #[cfg(any(unix, windows))]
-                {
-                    // Old logical fixtures/legacy IDs have no native owner
-                    // capability. Never turn them into path components.
-                    if crate::input_levels::valid_owner(&meeting)
-                        && crate::input_levels::valid_owner(&session)
-                    {
-                        let (witness, snapshot) =
-                            source::capture(&result.root, &meeting, &session, cancelled)?;
-                        result.witnesses.push(witness);
-                        snapshot
-                            .map(|snapshot| {
-                                Bound {
-                                    schema_version: 1,
-                                    meeting_id: meeting.clone(),
-                                    session_id: session.clone(),
-                                    snapshot,
-                                }
-                                .encode()
-                            })
-                            .transpose()?
-                    } else {
-                        None
-                    }
-                }
-                #[cfg(not(any(unix, windows)))]
-                {
-                    let _ = storage;
-                    None
-                }
-            };
-            if let Some(text) = payload {
-                total = total
-                    .checked_add(text.len())
-                    .filter(|n| *n <= MAX_TOTAL_BYTES)
-                    .ok_or("入力履歴スナップショットの総容量が安全上限を超えました")?;
-                result.payloads.insert((meeting, session), text);
-            }
-        }
-        result.verify(storage, cancelled)?;
-        Ok(result)
-    }
-    pub(super) fn payload(&self, meeting: &str, session: &str) -> Option<&str> {
-        self.payloads
-            .get(&(meeting.into(), session.into()))
-            .map(String::as_str)
-    }
-    pub(super) fn transfer(&self, meeting: &str, session: &str) -> Option<&str> {
-        self.transfers
-            .get(&(meeting.into(), session.into()))
-            .map(String::as_str)
-    }
-    pub(super) fn verify(
-        &self,
-        storage: &Storage,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<(), String> {
-        check_cancelled(cancelled)?;
-        #[cfg(any(unix, windows))]
-        {
-            storage.managed_anchor.verify()?;
-            for witness in &self.witnesses {
-                witness.verify(&self.root, cancelled)?;
-            }
-            storage.managed_anchor.verify()?;
-        }
-        #[cfg(not(any(unix, windows)))]
-        let _ = storage;
-        Ok(())
-    }
-}
-
-#[cfg(any(unix, windows))]
-mod source;
-#[cfg(all(test, unix))]
-mod tests;

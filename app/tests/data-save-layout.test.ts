@@ -13,7 +13,7 @@ test("data settings place the storage action immediately after restore in the sh
   assert.doesNotMatch(panel, />状態を再確認<\/button>/);
 });
 test("backup and restore notices describe current saved documents without removed draft or evidence UI", () => {
-  assert.match(panel, /保存済み議事録・用語を保存します/);
+  assert.match(panel, /共通と会議ごとの用語一覧、登録人物・声を保存します/);
   assert.match(panel, /保存済み文書と音声の欠落情報/);
   assert.doesNotMatch(panel, /本文・根拠|根拠・下書き|議事録・下書き/);
 });

@@ -595,3 +595,59 @@ fn controller_restore_recovers_a_committed_batch_even_without_an_in_memory_recei
     assert!(replay.vocabulary_added.is_none());
     assert_eq!(target.list_meetings().unwrap().len(), 1);
 }
+
+#[test]
+fn data_jobs_keep_terminal_results_until_dismissed_and_do_not_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let controller = DataController::default();
+    let ready = select(
+        &controller,
+        Kind::Backup,
+        out.path().join("current.monbackup"),
+        &storage,
+    );
+    let token = ready.token.as_deref().unwrap();
+    assert_eq!(controller.list_jobs().unwrap().len(), 1);
+    assert!(controller.dismiss_job(token).is_err());
+    let (work, _, snapshot) = controller
+        .begin_request(request(&ready, Action::Publish))
+        .unwrap()
+        .unwrap();
+    assert!(controller.begin(Kind::Restore).is_err());
+    let done = finish_work(&controller, &snapshot, &storage, work);
+    assert_eq!(done.phase, "completed");
+    let jobs = controller.list_jobs().unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert!(jobs[0].snapshot.backup_receipt.is_some());
+    assert!(jobs[0].finished_at_ms.is_some());
+    let next = select(
+        &controller,
+        Kind::Backup,
+        out.path().join("next.monbackup"),
+        &storage,
+    );
+    assert_eq!(controller.list_jobs().unwrap().len(), 2);
+    controller.dismiss_job(token).unwrap();
+    assert_eq!(controller.list_jobs().unwrap().len(), 1);
+    assert_eq!(controller.snapshot().unwrap().token, next.token);
+    select(
+        &controller,
+        Kind::Backup,
+        out.path().join("replacement.monbackup"),
+        &storage,
+    );
+    let previous = controller
+        .list_jobs()
+        .unwrap()
+        .into_iter()
+        .find(|j| j.snapshot.token == next.token)
+        .unwrap();
+    assert_eq!(previous.snapshot.phase, "cancelled");
+    assert!(previous.finished_at_ms.is_some());
+    controller
+        .dismiss_job(next.token.as_deref().unwrap())
+        .unwrap();
+    assert!(DataController::default().list_jobs().unwrap().is_empty());
+}

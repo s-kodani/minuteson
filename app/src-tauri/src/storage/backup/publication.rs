@@ -152,7 +152,7 @@ impl Storage {
         &self,
         sealed: &SealedWorkspace,
         ids: &RestoreIds<'_>,
-        confirmation: (&str, u64),
+        confirmation: (&str, u64, &str),
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         let result = self.publish_restore_inner(sealed, ids, Some(confirmation), check)?;
@@ -166,7 +166,7 @@ impl Storage {
         &self,
         sealed: &SealedWorkspace,
         ids: &RestoreIds<'_>,
-        confirmation: Option<(&str, u64)>,
+        confirmation: Option<(&str, u64, &str)>,
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         check_cancelled(check)?;
@@ -225,17 +225,19 @@ impl Storage {
             Some(super::restored_audio::Seed::prepare(sealed, ids, check)?)
         };
         ids.check_publication_destination(&tx, sealed.connection(), check)?;
+        operations::validate_registry_addition(&tx, sealed.connection())?;
         let merge = sealed.global_merge(&tx, check)?;
         let required = required_bytes(&tx, sealed, ids)?;
-        if let Some((vocabulary, maximum_bytes)) = confirmation {
-            if merge.confirmation_fingerprint() != vocabulary
+        if let Some((vocabulary, maximum_bytes, registry)) = confirmation {
+            if super::super::voice::book_hash(&tx)? != registry
+                || merge.confirmation_fingerprint() != vocabulary
                 || required
                     .checked_add(CAPACITY_RESERVE)
                     .ok_or("追加復元容量が範囲外です")?
                     > maximum_bytes
             {
                 return Err(
-                    "確認後に共通用語または必要容量が変更されています。再確認してください".into(),
+                    "確認後に共通用語・人物の登録または必要容量が変更されています。再確認してください".into(),
                 );
             }
         }
@@ -298,22 +300,6 @@ impl Storage {
                 )?;
             }
             super::exclusions::retain(&tx, ids, check)?;
-            crate::storage::model_metadata::retain(
-                &tx,
-                &ids.source().manifest.file_references,
-                check,
-                &|id| ids.unused_identity(id),
-            )?;
-            ids.source()
-                .manifest
-                .model_catalog
-                .retain(&tx, check, &|id| ids.unused_identity(id))?;
-            if let Some(p) = ids.source().manifest.speaker_completion_preferences {
-                crate::storage::completion_preferences::restore(&tx, p)?;
-            }
-            if let Some(p) = ids.source().manifest.voice_matching_preferences {
-                crate::storage::voice_preferences::restore(&tx, p)?;
-            }
             #[cfg(any(unix, windows))]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::verify_retained(
@@ -396,16 +382,10 @@ pub(super) fn required_bytes(
 }
 
 // Include JSON overflow pages, indexes and commit/WAL copies conservatively.
-// Model metadata capacity is not included in the meeting-only sealed image.
+// Budget the meeting list and native unavailable-audio receipts outside the seal.
 fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
     let manifest = &ids.source().manifest;
-    let json = serde_json::to_vec(&(
-        &manifest.model_catalog,
-        &manifest.file_references,
-        &manifest.voice_matching_preferences,
-        &manifest.speaker_completion_preferences,
-    ))
-    .map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec(&manifest.meetings).map_err(|e| e.to_string())?;
     (json.len() as u64)
         .checked_mul(8)
         .and_then(|n| {
@@ -413,17 +393,8 @@ fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
                 (ids.source().deleted_audio.meetings().count() as u64).checked_mul(65_536 * 8)?,
             )
         })
-        .and_then(|n| {
-            n.checked_add((manifest.file_references.len() as u64).checked_mul(16 * 1024)?)
-        })
-        .ok_or("追加モデル履歴の容量が範囲外です".into())
+        .ok_or("追加復元の付随情報の容量が範囲外です".into())
 }
 
 #[cfg(test)]
 pub(super) mod tests;
-
-#[cfg(all(test, unix))]
-mod model_tests;
-
-#[cfg(all(test, unix))]
-mod catalog_tests;

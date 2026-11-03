@@ -177,7 +177,10 @@ pub(super) fn stored_book_hash(connection: &Connection, id: &str) -> Result<Stri
     hash(&(stored_entries(connection, id)?, version))
 }
 
-fn load(connection: &Connection, id: &str) -> Result<(VocabularyBook, Vec<StoredEntry>), String> {
+pub(in crate::storage) fn load(
+    connection: &Connection,
+    id: &str,
+) -> Result<(VocabularyBook, Vec<StoredEntry>), String> {
     let rows = stored_entries(connection, id)?;
     let payload: Vec<_> = rows.iter().map(|r| r.0.clone()).collect();
     let stored: Option<(String, i64)> = connection

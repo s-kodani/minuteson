@@ -392,7 +392,7 @@ mod tests {
         );
     }
     #[test]
-    fn followup_backup_is_history_after_id_remapping_and_never_creates_new_consent() {
+    fn followup_backup_keeps_current_transcript_without_job_or_intent_history() {
         let root = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
         let (storage, meeting) = saved(root.path());
@@ -414,16 +414,25 @@ mod tests {
             .unwrap();
         let db = restored.connection.lock().unwrap();
         validate(&db).unwrap();
-        let id: String = db
-            .query_row("SELECT id FROM post_analysis_intents", [], |r| r.get(0))
-            .unwrap();
-        let intent = read(&db, &id).unwrap();
-        assert_ne!(intent.meeting_id, meeting);
-        assert_ne!(intent.analysis_id, source_analysis);
-        assert_eq!(intent.phase, "restored");
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM post_analysis_intents", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         drop(db);
+        let restored_meeting = restored.list_meetings().unwrap().remove(0).id;
+        assert_ne!(restored_meeting, meeting);
+        assert_ne!(
+            restored
+                .load_current_analysis(&restored_meeting)
+                .unwrap()
+                .unwrap()
+                .id,
+            source_analysis
+        );
         restored.drain_post_analysis(&|| false).unwrap();
-        assert_eq!(restored.list_jobs(&intent.meeting_id).unwrap().len(), 2);
+        assert!(restored.list_jobs(&restored_meeting).unwrap().is_empty());
     }
     #[test]
     fn drain_is_idempotent_after_restart_and_cancellation_preserves_pending_work() {
@@ -662,7 +671,7 @@ mod tests {
         );
     }
     #[test]
-    fn unmanaged_execution_is_portable_and_restores_only_as_inert_history() {
+    fn unmanaged_execution_conditions_are_excluded_from_current_backup() {
         let (_root, storage, meeting, spec, plan) =
             crate::storage::speaker_completion::tests::fixture();
         {
@@ -701,16 +710,18 @@ mod tests {
             .unwrap();
         let db = restored.connection.lock().unwrap();
         validate(&db).unwrap();
-        let (phase, text): (String, String) = db
-            .query_row(
-                "SELECT phase,spec_json FROM post_analysis_intents",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(phase, "restored");
-        assert!(text.contains("mon-unavailable:"));
-        assert!(!text.contains("/test-only"));
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM post_analysis_intents", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM processing_jobs", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
     #[test]
     fn concurrently_deleted_intent_is_skipped_without_poisoning_the_drain() {
