@@ -11,6 +11,6 @@
 - [ADR 0007 限定的な前進更新と追加復元](0007-forward-updates-backup.md) — 実装が明示的に対応する旧形式だけ更新・復元し、既存データを保持する。
 - [ADR 0008 完成版の位置付けとOKF文書管理](0008-release-documentation.md) — 1.0.1を完成版として扱い、現行仕様・手順・判断理由をOKFへ集約する。
 
-- [ADR 0009 PR検査と下書きからの自動公開](0009-devsecops-release.md) — 公開前の検査、Releases画面でのタグ管理、署名処理の分離。
+- [ADR 0010 PR検査と下書きからの自動公開](0010-devsecops-release.md) — 公開前の検査、Releases画面でのタグ管理、署名処理の分離。
 
 [ドキュメント目次へ戻る](../index.md)

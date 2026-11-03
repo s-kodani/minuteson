@@ -1,6 +1,6 @@
 ---
 type: "ADR"
-title: "ADR 0009 PR検査と下書きからの自動公開"
+title: "ADR 0010 PR検査と下書きからの自動公開"
 description: "重大な指摘を停止条件とし、タグをReleases画面で管理して検証後に公開する。"
 tags: ["security", "release", "github"]
 status: "stable"
@@ -10,7 +10,7 @@ sources:
   - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/release-build.yml"
 ---
 
-# ADR 0009 PR検査と下書きからの自動公開
+# ADR 0010 PR検査と下書きからの自動公開
 
 ## 背景
 
