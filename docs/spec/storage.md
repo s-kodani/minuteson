@@ -5,7 +5,8 @@ description: "会議・音声・モデル・ログの保存、追加復元と対
 tags: ["storage", "backup", "recovery", "privacy"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/current_formats.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/storage/schema_upgrade.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/storage/backup/archive.rs"
@@ -27,6 +28,8 @@ sources:
 WAVの同期保存・形式・ハッシュ検証とDB確定後に、元の連続CAF・分割CAF、中間FLAC、取り込み元の管理コピーと復号CAFを整理します。録音中の二重保存と取り込み時の中間CAFは維持します。外部の取り込み元オリジナルは変更・削除しません。
 
 正常完了した録音・取り込みの専用作業領域と、そのWAVの出力作業領域では、空・破損した途中ファイルなど、管理記録と対応付けられない残骸も対象です。会議全体や外部フォルダーを拡張子だけで一括削除せず、リンク先も走査しません。最終WAV、登録文書、JSON・ロック等の管理記録、通知・時刻情報は保持します。未完了録音・部分救出の作業領域はこの一括整理に含めず、未救出の音声を保持します。解析用一時音声は従来のライフサイクルで管理します。
+
+旧FLAC変換の出力先も、入力トラックや実体を確認できる変換計画から特定して整理します。設定から保存先を移動した場合は、アプリが検証したコピー前後の実体対応を使って削除を再開します。同じ内容の別ファイルへの差し替えは削除対象として引き継ぎません。
 
 削除前に対象・実体・容量・ハッシュを整理台帳へ固定し、削除直前に再確認します。使用中の音声は処理終了後に整理します。失敗時も完成WAVを保持し、次回起動で残りから再開します。更新後の初回起動では従来の整理済み会議も再確認しますが、正常なWAVは再生成しません。初回整理の入口と処理は通常経路から独立しています。判断の理由は[ADR 0009](../adr/0009-completed-wav-cleanup.md)を参照してください。
 

@@ -5,7 +5,8 @@ description: "WAV確定後の専用作業領域を整理し、外部原本・文
 tags: [storage, audio, cleanup]
 status: stable
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
   - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_cleanup_upgrade.rs"
 ---
 
@@ -18,6 +19,8 @@ sources:
 ## 決定
 
 Windows・macOSとも、正式WAVの保存・検証・DB確定後に不要な管理音声を削除します。正常完了した録音・取り込みとWAV出力の専用作業領域では、空・破損した途中ファイル等、管理記録と対応付けられない残骸も整理します。対象を台帳に固定し、実体・ハッシュを再確認してから削除し、中断後は残りから再開します。
+
+旧FLAC変換の出力領域は、入力トラックまたは実体を検証した変換計画から特定します。保存先移動後の再開では、既存の移動履歴に検証済みコピーの実体対応を保存し、整理台帳の対象と照合します。内容が同じという理由だけで別実体を削除しません。
 
 外部オリジナル、最終WAV、登録文書、通知・時刻・管理記録は保持します。未完了録音・部分救出の作業領域は不明ファイルの一括整理に含めません。解析用一時音声は既存のライフサイクルに従います。録音形式・二重保存・取り込みの中間CAFは維持します。
 
