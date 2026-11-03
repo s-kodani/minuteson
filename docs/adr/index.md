@@ -12,5 +12,6 @@
 - [ADR 0008 完成版の位置付けとOKF文書管理](0008-release-documentation.md) — 1.0.1を完成版として扱い、現行仕様・手順・判断理由をOKFへ集約する。
 
 - [ADR 0009 完成WAVを残して作業音声を整理する](0009-completed-wav-cleanup.md) — Windows・macOSでWAV確定後の作業音声を整理し、外部原本と未救出音声を保持する。
+- [ADR 0010 PR検査と下書きからの自動公開](0010-devsecops-release.md) — 公開前の検査、Releases画面でのタグ管理、署名処理の分離。
 
 [ドキュメント目次へ戻る](../index.md)

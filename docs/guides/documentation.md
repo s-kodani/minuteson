@@ -8,6 +8,7 @@ sources:
   - resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/development-plan.md"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/implementation-status.md"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_docs.py"
 ---
 
 # OKFドキュメントの管理
@@ -53,3 +54,5 @@ sources:
 構成や処理の流れはMermaidのコードブロックで記述し、アーキテクチャの説明と一緒に更新します。実行時のデータ受渡し、ライブラリ依存、コード生成の矢印は、各図で意味を明示します。
 
 開発計画・進捗日誌・工程ごとのテスト件数や一時パスは通常の文書へ戻しません。過去の経緯は`git log -- docs`やコミット固定の出典を参照します。配布の確認状況と性能保証は[製品概要](../spec/overview.md#配布と評価の確認状況)に集約し、確認が進んだ時点で更新します。
+
+文書も実装と同じPRで更新し、更新先または不要の理由をPRへ記載します。`make check-docs`が上記の形式・参照・到達性を検査します。本文と実装の意味の一致は実装担当者が確認します。[開発フロー](development-workflow.md)と[DevSecOps運用](devsecops.md)に従ってください。

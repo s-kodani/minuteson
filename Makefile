@@ -116,3 +116,14 @@ build-macos-probe: prepare-capture-core
 	cd probes/macos-capture && env SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift build --disable-sandbox
 	cd probes/macos-capture && env SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --disable-sandbox
 	cd probes/macos-capture && env SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift Tests/CafWriterSmoke.swift
+
+.PHONY: check-docs check-security
+
+check-docs:
+	python3 tools/mon_docs.py
+
+check-security:
+	python3 tools/mon_ci_tools.py
+	.cache/security-tools/actionlint -shellcheck=''
+	.cache/security-tools/gitleaks git --redact=100 --config .gitleaks.toml
+	python3 tools/mon_security.py scan

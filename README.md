@@ -56,6 +56,8 @@ npm --prefix app run tauri -- dev
 
 このコマンドは画面とRust本体の開発起動です。録音ヘルパー・推論ランタイムの準備はOS別ビルド手順に従います。通常の開発起動は通常版と同じ保存設定を使うため、既存データを分けて検証するときはQA版を使用してください。
 
+- [開発フロー](docs/guides/development-workflow.md)：ブランチ・PR・文書更新・Releases画面からの公開
+- [セキュリティ方針](SECURITY.md)：脆弱性の非公開報告
 - [ドキュメント目次](docs/index.md)：利用・保守の入口
 - [現行仕様](docs/spec/index.md)：現在の動作とアーキテクチャ
 - [利用と保守](docs/guides/index.md)：ビルド・配布・更新・障害対応・テスト

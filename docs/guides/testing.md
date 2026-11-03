@@ -11,9 +11,14 @@ sources:
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/evaluation/README.md"
+  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_docs.py"
 ---
 
 # テストと任意の品質評価
+
+## セキュリティと文書の検査
+
+`make check-docs`と`make check-security`を実行します。準備、検査範囲、例外とCI判定は[DevSecOps運用](devsecops.md)、PRからの流れは[開発フロー](development-workflow.md)を参照してください。
 
 ## 通常の検査
 

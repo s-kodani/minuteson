@@ -1,0 +1,13 @@
+title = "MinutesOn secrets policy"
+
+[extend]
+useDefault = true
+
+# Historical SQL settings identifier, not a credential. This does not exempt
+# any other value in the file or any other path.
+[[allowlists]]
+description = "SQLite migration setting key in historical SELECT/DELETE statements"
+condition = "AND"
+paths = ['^app/src-tauri/src/storage/meeting_mix_reset\.rs$']
+regexTarget = "secret"
+regexes = ['^meeting_mix_v1_initialized$']

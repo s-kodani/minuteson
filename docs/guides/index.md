@@ -2,6 +2,9 @@
 
 操作・構築・配布・更新・障害対応の手順。
 
+- [GitHubでの開発とリリース](development-workflow.md) — ブランチ・PR・文書更新・必須検査とReleases画面からの公開。
+- [DevSecOpsの検査と運用](devsecops.md) — セキュリティ検査、例外、GitHub保護設定、配布認証の初期設定。
+
 - [MinutesOnの使い方](usage.md) — モデルの準備から録音・取り込み・修正・議事録出力までの操作。
 - [macOSの開発とQAビルド](build-macos.md) — Apple Siliconでの前提環境、開発起動と通常版・QAアプリの構築。
 - [Windowsの開発とQAビルド](build-windows.md) — Windows x64の開発ツール、依存準備とQAインストーラーの構築。

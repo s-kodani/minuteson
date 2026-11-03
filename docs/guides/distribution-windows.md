@@ -13,6 +13,8 @@ sources:
 
 # WindowsのEXE配布
 
+公開の開始とバージョンタグ管理は[GitHubでの開発とリリース](development-workflow.md)に従います。以下はOS固有の処理・手元での確認方法です。CIの認証と再実行は[DevSecOps運用](devsecops.md)を参照してください。
+
 ## ビルドの選択
 
 [Windows開発環境](build-windows.md)を準備し、リポジトリルートで実行します。

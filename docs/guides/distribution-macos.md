@@ -12,6 +12,8 @@ sources:
 
 # macOSの署名と公証とDMG
 
+公開の開始とバージョンタグ管理は[GitHubでの開発とリリース](development-workflow.md)に従います。以下はOS固有の処理・手元での確認方法です。CIの認証と再実行は[DevSecOps運用](devsecops.md)を参照してください。
+
 ## 準備
 
 [macOSビルド環境](build-macos.md)と、有効なDeveloper ID Application証明書・対応する秘密鍵、公証用のキーチェーンプロファイルを用意します。コマンド例の氏名・Team ID・メールアドレスは自分の値へ置き換えます。
