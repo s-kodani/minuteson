@@ -6,7 +6,7 @@
 
 ## 非公開の報告
 
-脆弱性の疑いは[GitHubの非公開報告](https://github.com/s-kodani/mon/security/advisories/new)から報告してください。通常の公開Issueへ攻撃手順、秘密情報、会議データ、個人情報を記載しないでください。所有者は公開前にPrivate vulnerability reportingを有効化します。
+脆弱性の疑いは[GitHubの非公開報告](https://github.com/s-kodani/minuteson/security/advisories/new)から報告してください。通常の公開Issueへ攻撃手順、秘密情報、会議データ、個人情報を記載しないでください。所有者は公開前にPrivate vulnerability reportingを有効化します。
 
 対象版、OS、再現条件、影響、最小限の再現手順を含め、実データの代わりに合成データを使ってください。報告内容を確認し、修正と公開時期を調整します。
 

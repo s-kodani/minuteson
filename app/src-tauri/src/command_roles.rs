@@ -16,6 +16,7 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_residency_state" => matches!(role, "main"),
         "hide_main_to_background" => matches!(role, "main"),
         "get_official_model_options" => matches!(role, "main"),
+        "get_model_license_review" => matches!(role, "main"),
         "start_model_download" => matches!(role, "main"),
         "get_model_download_lifetime" => matches!(role, "main"),
         "get_model_download_catalog" => matches!(role, "main"),

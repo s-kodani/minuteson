@@ -1,5 +1,5 @@
 // Production model settings, synthetic metadata only. No model downloads or processes.
-async page=>{
+async (page, capturePath, { approveModelLicense }) =>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   const field=label=>page.getByRole('combobox',{name:label+'のモデル',exact:true});
   const row=label=>page.locator('.model-selection-row').filter({has:field(label)});
@@ -11,6 +11,7 @@ async page=>{
   for(const [label,option] of selections){
     await field(label).selectOption('official:'+option.id);
     await row(label).getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
+  await approveModelLicense();
     await row(label).getByRole('button',{name:'使用中',exact:true}).waitFor();
     check(await row(label).getByRole('button',{name:'使用中',exact:true}).isDisabled(),label+': current package is not shown as applied');
   }
@@ -70,6 +71,7 @@ async page=>{
   await row('文字起こし').getByRole('button',{name:'使用',exact:true}).waitFor();
   const appliedBefore=await calls('apply_model_profile_application');
   await row('文字起こし').getByRole('button',{name:'使用',exact:true}).click();
+  await approveModelLicense();
   await row('文字起こし').getByRole('button',{name:'使用中',exact:true}).waitFor();
   check(await calls('start_model_download')===before&&await calls('apply_model_profile_application')===appliedBefore+1,'explicit reuse did not reapply its checked package');
   results.push('stale profile compatibility is not marked in-use; explicit reuse reapplies the existing checked package');

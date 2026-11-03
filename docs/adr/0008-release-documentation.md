@@ -5,7 +5,7 @@ description: "1.0.1を完成版として扱い、現行仕様・手順・判断�
 tags: ["release", "documentation", "okf"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/README.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/README.md"
   - resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
 ---
 

@@ -11,7 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 LINK = re.compile(r"!?\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)")
-SOURCE = re.compile(r"https://github\.com/s-kodani/mon/(?:blob|tree)/([0-9a-f]{40})/(.+)")
+SOURCE = re.compile(r"https://github\.com/s-kodani/minuteson/(?:blob|tree)/([0-9a-f]{40})/(.+)")
 
 
 def prose(text):
@@ -66,7 +66,7 @@ def validate(root=ROOT):
                     for source in metadata.get("sources", []):
                         url = source["resource"]
                         match = SOURCE.fullmatch(url)
-                        if url.startswith("https://github.com/s-kodani/mon/") and not match:
+                        if url.startswith("https://github.com/s-kodani/minuteson/") and not match:
                             raise ValueError("repository sources must use a full commit SHA")
                         if match:
                             commit, name = match.groups()

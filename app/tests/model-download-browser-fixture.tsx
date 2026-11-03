@@ -13,6 +13,7 @@ import whisperNetwork from "../model-catalog/whisper-small-network.json";
 import vadNetwork from "../model-catalog/whisper-vad-network.json";
 import { defaultVadOptions } from "../src/vad-state";
 import whisperVariants from "../model-catalog/whisper-variants.json";
+import { modelLicenseFixture } from "./model-license-fixture";
 // Build-specific bundle hashes cannot be a static catalog. Browser-only fake
 // runtime metadata exercises the same review shape; never actual IO/CPU proof.
 const fakeRuntimeFiles = [
@@ -58,15 +59,32 @@ async function receipt(operationId: string, review: DownloadReview) {
 f.verify = async () => { const call = f.calls.findLast(call => call.command === "place_downloaded_model"); await emit("model-placement-progress", { operationId: call.args.token, recipeHash: call.args.expectedRecipeHash, phase: "verifying" }); };
 f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: downloadTransferBytes(review) }); };
 f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review = await reviewed(f.definition); f.operations.set(id, { review, state: "complete", receipt: await receipt(id, review) }); return id; };
-export const modelDownloadIPC = async (command: string, args: any) => {
-  f.calls.push({ command, args: structuredClone(args) });
-  if (command === "get_official_model_options") {
-    if ((window as any).windowsNativeModelOptions) return structuredClone((window as any).windowsNativeModelOptions);
+async function officialOptions() {
+    if ((window as any).windowsNativeModelOptions) return Promise.all((window as any).windowsNativeModelOptions.map(async (option: any) => {
+      const { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(option.label, { recipeHash: option.review.recipeHash }, false, f.policyRevision);
+      return { ...option, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
+    }));
     if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
-      return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition), tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null };
+      const review = await reviewed(definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(choice.label, { recipeHash: review.recipeHash }, choice.id.includes("lfm3"), f.policyRevision);
+      return { id: choice.id, label: choice.label, description: choice.description, definition, review, tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
     }));
-    return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review: await reviewed(f.definition) }];
+    const review = await reviewed(f.definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture("文字起こし（合成）", { recipeHash: review.recipeHash }, f.licenseRestricted, f.policyRevision);
+    return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } }];
+}
+export const modelDownloadIPC = async (command: string, args: any) => {
+  f.calls.push({ command, args: structuredClone(args) });
+  if (command === "get_official_model_options") return officialOptions();
+  if (command === "get_model_license_review") {
+    if (f.licenseFailure) throw Error("模擬の利用条件読込失敗");
+    const options = await officialOptions();
+    const option = "recipeHash" in args.target ? options.find((o: any) => o.review.recipeHash === args.target.recipeHash) : null;
+    const entry = "packageId" in args.target ? f.entries.find((e: any) => e.packageId === args.target.packageId && e.reviewHash === args.target.expectedReviewHash) : null;
+    if (!option && !entry) throw Error("模擬の利用条件対象不一致");
+    const result = await modelLicenseFixture(option?.label ?? entry.modelName, args.target, option?.id.includes("lfm3") || f.licenseRestricted, f.policyRevision);
+    if (f.changedPolicy) result.summary = "変更された合成条件";
+    if (f.licenseDelay) return new Promise(resolve => { f.finishLicense = () => resolve(result); });
+    return result;
   }
   if (["get_voice_matching_preferences", "get_speaker_completion_preferences"].includes(command)) {
     const id = command === "get_voice_matching_preferences" ? "voice_matching" : "speaker_completion";

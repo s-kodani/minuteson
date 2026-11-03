@@ -1,6 +1,7 @@
 import type { ArchiveMember, BackendManifest, DownloadSource, PackageFile, PackageManifest, Recipe } from "./generated/contracts";
 import { validateRecipe } from "./generated/validators.js";
 import type { ModelInspectionReport, ModelPlacementReceipt } from "./model-inspection-state";
+import { assertModelLicenseSummary, type ModelLicenseSummary } from "./model-license-state.ts";
 
 export const downloadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const hash = /^[0-9a-f]{64}$/u, maximum = 32 * 1024 ** 3;
@@ -18,7 +19,7 @@ export type DownloadReadback = { state: "incomplete" | "complete"; review: Downl
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded"; placement?: { packageId: string; state: "pending" | "committed" } }[] };
 export type DownloadProgress = { operationId: string; recipeHash: string; receivedBytes: number; totalBytes: number };
 export type ModelTokenLimits = { maxInputTokens: number; maxOutputTokens: number; maxContextTokens: number; tokenizer: "utf8_byte_bpe" | "gguf" };
-export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview; tokenLimits: ModelTokenLimits | null };
+export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview; tokenLimits: ModelTokenLimits | null; licenseSummary: ModelLicenseSummary };
 function fail(): never { throw Error("取得の定義・操作・応答が一致しません。同じ操作の結果を確認してください。"); }
 function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) fail(); return value as Record<string, unknown>; }
 function keys(value: Record<string, unknown>, allowed: string[]) { if (Object.keys(value).some(key => !allowed.includes(key))) fail(); }
@@ -149,7 +150,7 @@ export async function assertOfficialModelOptions(value: unknown): Promise<Offici
   const seen = new Set<string>();
   const result: OfficialModelOption[] = [];
   for (const entry of value) {
-    const option = object(entry); keys(option, ["id", "label", "description", "definition", "review", "tokenLimits"]);
+    const option = object(entry); keys(option, ["id", "label", "description", "definition", "review", "tokenLimits", "licenseSummary"]);
     const id = text(option.id, 128);
     if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/u.test(id) || seen.has(id)) fail(); seen.add(id);
     const definition = text(option.definition, 65_536), recipe = parseDownloadDefinition(definition);
@@ -163,7 +164,7 @@ export async function assertOfficialModelOptions(value: unknown): Promise<Offici
         maxContextTokens: limits.maxContextTokens as number, tokenizer: limits.tokenizer as ModelTokenLimits["tokenizer"] };
     } else if (option.tokenLimits != null) fail();
     result.push({ id, label: text(option.label, 128), description: text(option.description, 1024), definition,
-      review: await assertDownloadReview(option.review, await downloadDigest(recipe)), tokenLimits });
+      review: await assertDownloadReview(option.review, await downloadDigest(recipe)), tokenLimits, licenseSummary: assertModelLicenseSummary(option.licenseSummary) });
   }
   return result;
 }

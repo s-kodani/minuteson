@@ -1,4 +1,4 @@
-async function (page) {
+async function (page, capturePath, { approveModelLicense }) {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const choices = [
     ["文字起こし", "whisper.cpp", ["whisper-synthetic-tiny", "whisper-synthetic-base", "whisper-synthetic-small", "whisper-synthetic-medium", "whisper-synthetic-large-v3", "whisper-synthetic-large-v3-turbo"]],
@@ -24,6 +24,7 @@ async function (page) {
     const labelText = await field.locator(`option[value="official:${id}"]`).textContent();
     const previous = await page.evaluate(() => window.modelDownloadFixture.profiles[0].profileVersion);
     await row.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
     await page.waitForFunction(({ previous, engine }) => {
       const p = window.modelDownloadFixture.profiles[0];
       return p.profileVersion === previous + 1 && p.components.some(c => c.engine === engine);
@@ -113,6 +114,7 @@ async function (page) {
   check(await llmField.inputValue() === "official:llama-b11533-qwen3-8b-q4km", "duplicate package displaced the active model");
   await llmField.selectOption("official:llama-b11533-qwen25-15b-q4km");
   await page.locator('.model-selection-row').filter({has:llmField}).getByRole('button', {name:"使用",exact:true}).click();
+  await approveModelLicense();
   await page.waitForFunction(() => {
     const f = window.modelDownloadFixture, id = f.profiles[0].components.find(c => c.engine === "llama.cpp").packageId;
     return f.entries.find(e => e.packageId === id)?.modelName === "Qwen2.5-1.5B-Instruct";

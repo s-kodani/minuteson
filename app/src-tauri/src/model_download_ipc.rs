@@ -80,6 +80,7 @@ pub(crate) async fn start_model_download(
         if recipe.review()?.recipe_hash != expected_recipe_hash {
             return Err("確認した取得定義と一致しません".into());
         }
+        crate::model_license::validate_download_policy(&recipe.manifest)?;
         let operation = token.clone();
         prepare(window, token, move |app, cancelled| {
             use tauri::Emitter;

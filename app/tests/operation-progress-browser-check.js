@@ -1,5 +1,5 @@
 // Run through playwright-cli run-code. All long work is synthetic IPC.
-async page => {
+async (page, capturePath, { approveModelLicense }) => {
   const check = (value, message) => { if (!value) throw Error(message); };
   const common = () => page.getByRole("region", { name: "進行中の処理", exact: true });
   const expand = async () => {
@@ -15,6 +15,7 @@ async page => {
   await models.getByRole("combobox", { name: "文字起こしのモデル", exact: true }).selectOption("official:synthetic-catalog");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "delay"; });
   await models.getByRole("button", { name: "ダウンロードして使用", exact: true }).first().click();
+  await approveModelLicense();
   await page.waitForFunction(() => window.modelDownloadFixture.operations.size === 1);
   await page.clock.setFixedTime(new Date("2026-10-17T00:05:20Z"));
   await page.evaluate(() => window.operationProgressFixture.emitTransfer(58));
@@ -56,6 +57,7 @@ async page => {
   await models.getByRole("combobox", { name: "文字起こしのモデル", exact: true }).selectOption("official:synthetic-catalog");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "delay"; });
   await models.getByRole("button", { name: "ダウンロードして使用", exact: true }).first().click();
+  await approveModelLicense();
   await page.waitForFunction(() => window.modelDownloadFixture.active.size === 1);
   await page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "copying", busy: true }));
   await page.waitForFunction(() => window.modelDownloadFixture.calls.some(call => call.command === "cancel_model_inspection"));

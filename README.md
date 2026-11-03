@@ -35,7 +35,7 @@ MinutesOn（略称 **mon**）は、会議の録音・文字起こし・話者分
 ## 使い始める
 
 1. [macOS](docs/guides/build-macos.md)／[Windows](docs/guides/build-windows.md)の手順でアプリを準備します。配布経路は[ドキュメント目次](docs/index.md)から確認できます。
-2. 「設定 → ローカルAI」で各モデルを選び、「ダウンロードして使用」で導入します。
+2. 「設定 → ローカルAI」で各モデルを選び、「ダウンロードして使用」を押し、モデルと実行エンジンの利用条件を確認して導入します。
 3. 「新しい録音」の5秒テストで入力を確認してから録音するか、保存済み音声を取り込みます。
 4. 発言の本文と話者を修正し、議事録を生成・編集・出力します。
 
@@ -48,7 +48,7 @@ MinutesOn（略称 **mon**）は、会議の録音・文字起こし・話者分
 Node.js 24、Rust stable、Python 3.12とOS別の開発環境が必要です。
 
 ```sh
-git clone https://github.com/s-kodani/mon.git
+git clone https://github.com/s-kodani/minuteson.git mon
 cd mon
 npm ci --prefix app
 npm --prefix app run tauri -- dev
@@ -63,8 +63,16 @@ npm --prefix app run tauri -- dev
 - [利用と保守](docs/guides/index.md)：ビルド・配布・更新・障害対応・テスト
 - [ADR](docs/adr/index.md)：設計判断と理由
 
-不具合報告や改善提案は[Issues](https://github.com/s-kodani/mon/issues)、修正はPull Requestで受け付けます。OS・モデル・再現手順・期待した動作と実際の動作、実行した検査を記載してください。大きな変更は先にIssueで目的と範囲を共有し、変更に合わせて仕様・手順・ADRを更新します。ログ・画像・音声の共有前に会議本文や個人情報等を確認してください。
+不具合報告や改善提案は[Issues](https://github.com/s-kodani/minuteson/issues)、修正はPull Requestで受け付けます。OS・モデル・再現手順・期待した動作と実際の動作、実行した検査を記載してください。大きな変更は先にIssueで目的と範囲を共有し、変更に合わせて仕様・手順・ADRを更新します。ログ・画像・音声の共有前に会議本文や個人情報等を確認してください。
 
 ## ライセンス
 
-本体のライセンスは未設定です。リポジトリルートに`LICENSE`はありません。依存ライブラリとAIモデルにはそれぞれの利用条件が適用されます。[第三者ライセンス資料](third-party/notices/README.md)と[モデル定義](app/model-catalog/)を参照してください。
+このリポジトリの自作コード・文書・自作画像は、[MIT License](LICENSE)で提供します。著作権表示は`Copyright (c) 2026 s-kodani`です。
+
+第三者のコード・資料・語彙データ、依存ライブラリ、外部から取得するAIモデルと実行エンジンには、それぞれの利用条件が適用されます。個別のLICENSE・NOTICE・著作権表示を優先してください。[第三者ライセンス資料](third-party/notices/README.md)、[モデル利用条件の原文](third-party/model-licenses/README.md)、[モデル定義](app/model-catalog/)を参照してください。LFM3など、商用利用に年商等の条件があるモデルも含まれます。導入画面の利用条件と全文を確認してください。
+
+## ソース公開と配布状況
+
+公開用の開発先は[minuteson](https://github.com/s-kodani/minuteson)です。mainの開発履歴を保持し、自分の作者・コミッター名義を`s-kodani`とGitHubのnoreplyメールへ統一しています。履歴書き換えにより旧コミットSHA・署名は引き継ぎません。
+
+ソース公開とバイナリ配布の準備状況は別に扱います。依存通知本文の不足、Apple SDK由来等の配布条件、実機・署名・Storeの未確認事項は未解決のまま保持しています。通知収集の成功をライセンス審査の承認にせず、自動配布・Store提出は有効化していません。[製品概要](docs/spec/overview.md#配布と評価の確認状況)と[DevSecOps運用](docs/guides/devsecops.md)を確認してください。

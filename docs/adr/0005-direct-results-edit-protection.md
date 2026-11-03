@@ -5,9 +5,9 @@ description: "結果を発言一覧へ直接保存し、明示再生成時の競
 tags: ["analysis", "editing"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/simple-models-and-transcription-2026-10-12.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/cross-platform-refactor-implementation-2026-10-29.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/analysis_flow.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/simple-models-and-transcription-2026-10-12.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/cross-platform-refactor-implementation-2026-10-29.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/analysis_flow.rs"
 ---
 
 # ADR 0005 解析結果の直接保存と編集保護

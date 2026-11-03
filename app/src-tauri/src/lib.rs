@@ -38,6 +38,7 @@ mod model_download;
 mod model_download_ipc;
 mod model_download_recipe;
 mod model_inspection;
+mod model_license;
 mod model_official_catalog;
 mod model_placement;
 mod native_fs;

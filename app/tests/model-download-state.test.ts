@@ -1,3 +1,4 @@
+import { modelLicenseSummaryFixture } from "./model-license-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult, bundledWhisperSource, bundledAsrSource, bundledWindowsSource } from "../src/model-download-state.ts";
@@ -209,7 +210,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const choices = JSON.parse(readFileSync(new URL("../model-catalog/macos.json", import.meta.url), "utf8"));
   const native = await Promise.all(choices.map(async (choice: any) => {
     const recipe = canonicalRecipe(choice.recipe);
-    return { id: choice.id, label: choice.label, description: choice.description, tokenLimits: choice.tokenLimits ?? null, definition: JSON.stringify(recipe), review: {
+    return { licenseSummary: modelLicenseSummaryFixture, id: choice.id, label: choice.label, description: choice.description, tokenLimits: choice.tokenLimits ?? null, definition: JSON.stringify(recipe), review: {
       manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 4, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe),
       totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0), publisherAuthenticity: "not_verified", installed: false, ready: false,
     } };

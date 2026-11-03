@@ -5,12 +5,12 @@ description: "モデルの準備から録音・取り込み・修正・議事録
 tags: ["usage", "getting-started"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/audio-import.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/recorder-inputs.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/transcript.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/voice-matching-settings.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/README.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/409e99b3b0f2b02a80d838debf6813fc3cc3ae91/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/audio-import.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/recorder-inputs.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/transcript.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/voice-matching-settings.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/README.md"
 ---
 
 # MinutesOnの使い方
@@ -22,8 +22,8 @@ sources:
 対象OSに合ったアプリを準備します。配布状況は[製品概要](../spec/overview.md#配布と評価の確認状況)、自分で構築する場合は[macOS](build-macos.md)／[Windows](build-windows.md)の手順を参照してください。
 
 1. 「設定 → ローカルAI」で文字起こし・話者分離・議事録用のモデルを選びます。
-2. 未導入なら「ダウンロードして使用」を押します。空き容量を確保し、照合・動作確認・設定適用の終了を待ちます。
-3. 導入済みなら「使用」で切り替えます。モデルの変更は次に開始する処理へ反映されます。
+2. 未導入なら「ダウンロードして使用」を押します。条件の概要と全文を読み、「モデルと実行エンジンの利用条件を確認しました」をチェックして続行します。空き容量を確保し、照合・動作確認・設定適用の終了を待ちます。
+3. 導入済みなら「使用」を押し、同様に条件を確認して切り替えます。モデルの変更は次に開始する処理へ反映されます。確認を閉じたり取り消したりした場合は準備を開始しません。
 4. 固有名詞がある場合は共通用語へ表記・読みを登録します。モデルごとの「用語辞書の対応」を確認できます。
 
 ## 録音する

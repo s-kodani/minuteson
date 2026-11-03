@@ -1,6 +1,6 @@
 // The directory-only deletion UI replaced paged manifest consent and busy modals.
 // Exercise the current target review, explicit delete and uncertain-response paths.
-async (page, capturePath) => {
+async (page, capturePath, { approveModelLicense }) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const inventory = page.getByRole('region', { name: '導入済みモデル管理', exact: true });
   const rows = inventory.locator('ul>li');
@@ -70,6 +70,7 @@ async (page, capturePath) => {
   const selector = page.getByRole('combobox', { name: '文字起こしのモデル', exact: true });
   await selector.selectOption('official:synthetic-catalog');
   await page.locator('.model-selection-row').filter({ has: selector }).getByRole('button', { name: /^(?:ダウンロードして使用|実行環境を更新して使用)$/ }).click();
+  await approveModelLicense();
   await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
   await expand();
   check(await rows.count() === 1 && await copies.count() === 2, 'newly applied copy escaped model grouping');

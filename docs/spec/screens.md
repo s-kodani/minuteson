@@ -5,14 +5,14 @@ description: "起動、メイン画面、録音・取り込みと補助ウィン
 tags: ["ui", "navigation", "screens"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/bootstrap.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/main.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/capture-actions.ts"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/startup-attention.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/startup-reset.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/recorder-panel.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/recording-confirmation.tsx"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/saved-navigation.ts"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/bootstrap.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/main.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/capture-actions.ts"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/startup-attention.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/startup-reset.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/recorder-panel.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/recording-confirmation.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/saved-navigation.ts"
 ---
 
 # 画面構成と遷移
@@ -122,6 +122,7 @@ flowchart LR
 | 文字起こし | 話者名・割当て・区間の修正、声の登録、会議の用語 | 同じ会議詳細へ戻る |
 | 議事録 | 再生成の置換確認、未保存内容の保存・破棄確認 | 確定後に処理／元の遷移を継続。取消時は編集を保持 |
 | ボイス一覧 | 人物名変更、声・人物の削除 | ボイス一覧へ戻る |
+| 設定 → ローカルAI | 選択モデルの利用条件全文・出典、導入・切替前の条件確認 | 閲覧・取消・閉じる・Escでは準備せず呼出し元へ戻る。未選択の確認欄にチェック後、選択と条件を再照合して準備する |
 | 設定 | モデルのコピー管理・削除、バックアップ・追加復元・保存先変更 | バックアップ・復元の進捗と結果はジョブ一覧でも確認。実行中もジョブ一覧へ移動でき、復元会議の一覧は明示操作で開く |
 
 一般のダイアログは閉じた後に呼出し元へフォーカスを戻します。実処理中・保存結果不明の操作は、閉じる・取消・画面移動が制限される場合があります。表示だけで処理が成功したとは判断しません。

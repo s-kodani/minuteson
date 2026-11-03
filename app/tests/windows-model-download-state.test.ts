@@ -1,3 +1,4 @@
+import { modelLicenseSummaryFixture } from "./model-license-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -32,7 +33,7 @@ test("Windows bundle definitions retain native recipe digests and count the arch
     const review = { ...recipe, recipeSchemaVersion: 4, ...downloadByteTotals(recipe),
       recipeHash: await downloadDigest(recipe), totalBytes: 60, publisherAuthenticity: "not_verified", installed: false, ready: false };
     delete (review as Record<string, unknown>).schemaVersion;
-    const option = { id: "windows-fixture", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe), review,
+    const option = { licenseSummary: modelLicenseSummaryFixture, id: "windows-fixture", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe), review,
       tokenLimits: engine === "llama.cpp" ? { maxInputTokens: 2048, maxOutputTokens: 512, maxContextTokens: 4096, tokenizer: "utf8_byte_bpe" } : null };
     for (const id of ["windows-fixture", "windows-version-v1.0"]) {
       assert.equal((await assertOfficialModelOptions([{ ...option, id }]))[0].id, id);
@@ -45,7 +46,7 @@ test("Windows bundle definitions retain native recipe digests and count the arch
 
 test("versioned official IDs cannot be paths or ambiguous dot components", async () => {
   const recipe = canonicalRecipe(windowsRecipe());
-  const option = { id: "windows-version-v1.0", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe),
+  const option = { licenseSummary: modelLicenseSummaryFixture, id: "windows-version-v1.0", label: "Windows CPU", description: "fixture", definition: JSON.stringify(recipe),
     review: { ...recipe, recipeSchemaVersion: 4, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe), totalBytes: 60,
       publisherAuthenticity: "not_verified", installed: false, ready: false }, tokenLimits: null };
   for (const id of [".", "..", "../escape", "windows/model", "windows\\model", ".windows", "windows.", "windows..v1"]) {

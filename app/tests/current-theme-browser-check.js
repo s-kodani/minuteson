@@ -1,5 +1,5 @@
 // Production UI with simulated IPC only. No microphone, files or model execution.
-async (page, capturePath = name => `/Users/skodani/Codebase/mon/output/playwright/current-registry-theme/${name}`) => {
+async (page, capturePath = name => `output/playwright/current-registry-theme/${name}`) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const nav = page.getByRole("navigation", { name:"メインナビゲーション", exact:true });
   const settings = page.getByRole("region", { name:"表示設定", exact:true });

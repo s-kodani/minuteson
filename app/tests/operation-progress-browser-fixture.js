@@ -5,7 +5,7 @@ window.skipDataFixtureMain = true;
 window.skipModelDownloadFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const { modelDownloadIPC } = await import("./model-download-browser-fixture.tsx");
-const modelCommands = new Set(["get_official_model_options", "get_model_placements", "get_model_profiles", "get_model_download_catalog", "start_model_download", "place_downloaded_model", "check_model_compatibility", "preview_model_profile_application", "apply_model_profile_application", "cancel_model_inspection", "get_model_download_lifetime", "read_model_download", "get_downloaded_model_placement_result"]);
+const modelCommands = new Set(["get_model_license_review", "get_official_model_options", "get_model_placements", "get_model_profiles", "get_model_download_catalog", "start_model_download", "place_downloaded_model", "check_model_compatibility", "preview_model_profile_application", "apply_model_profile_application", "cancel_model_inspection", "get_model_download_lifetime", "read_model_download", "get_downloaded_model_placement_result"]);
 const f = window.operationProgressFixture = {
   emitModelWait: (operationId, waiting) => emit("model-preparation-wait", { operationId, waiting }),
   emitTransfer: async (receivedBytes, patch = {}) => {

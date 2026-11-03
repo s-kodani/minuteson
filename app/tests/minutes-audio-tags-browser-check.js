@@ -1,5 +1,5 @@
 // Actual production components, synthetic storage and silent PCM only.
-async page => {
+async (page, capturePath = name => `output/playwright/${name}`) => {
   const check=(ok,message)=>{if(!ok)throw Error(message);}, results=[];
   await page.setViewportSize({width:1280,height:820});
   await page.goto('http://127.0.0.1:1420/tests/plain-minutes-interval-browser.html');
@@ -21,7 +21,7 @@ async page => {
   for (const theme of ['light','dark']) {
     await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
     check(await links.evaluateAll(nodes=>nodes.every(node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.height<=24&&r.height>=20&&parseFloat(s.borderRadius)>=10&&parseFloat(s.fontSize)<=12;})),`tags too tall in ${theme}`);
-    await page.screenshot({path:`/Users/skodani/Codebase/mon/output/playwright/minutes-audio-tags-${theme}.png`});
+    await page.screenshot({path:capturePath(`minutes-audio-tags-${theme}.png`)});
   }
   results.push('compact pill tags are 22px high in light and dark themes');
   await links.nth(0).click();await ready();

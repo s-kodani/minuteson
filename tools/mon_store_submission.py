@@ -13,6 +13,7 @@ import zipfile
 
 from mon_release import GitHub, TAG, state
 from mon_release_artifacts import digest
+from mon_store_provenance import verify_manifest
 
 TERMINAL = {"Published", "Canceled", "CommitFailed", "PublishFailed", "PreProcessingFailed", "CertificationFailed", "ReleaseFailed", "error"}
 
@@ -88,23 +89,24 @@ def resume(github, store, release, directory):
             github.save_state(release, record)
             print(f"Store release {release['id']}: {result['status']}")
             return
-    if not TAG.fullmatch(release["tag_name"]) or release.get("draft"):
+    if not isinstance(release.get("tag_name"), str) or not TAG.fullmatch(release["tag_name"]) or release.get("draft") or release.get("prerelease"):
         raise ValueError("Store updates require a published stable release")
     # Only download inert build outputs. Never execute release/PR artifacts.
     subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", github.repository,
                     "--pattern", "release-manifest.json", "--dir", str(directory)], check=True)
-    manifest = json.loads((directory / "release-manifest.json").read_text())
-    receipt = next(item for item in manifest["artifacts"] if item["flavor"] == "store")
-    if manifest["sourceSha"] != record["sourceSha"] or manifest["tag"] != release["tag_name"]:
-        raise ValueError("Store release source/tag differs")
-    subprocess.run(["gh", "run", "download", str(int(record["buildRunId"])), "--repo", github.repository,
-                    "--name", "release-store", "--dir", str(directory)], check=True)
+    proof = verify_manifest(github, release, directory / "release-manifest.json")
+    if proof is None:
+        print(f"Store release {release['id']}: release publication pending")
+        return
+    receipt, build_run_id = proof
+    package_directory = directory / "package"
+    package_directory.mkdir()
+    subprocess.run(["gh", "run", "download", str(build_run_id), "--repo", github.repository,
+                    "--name", "release-store", "--dir", str(package_directory)], check=True)
     name = receipt["binary"]
-    if Path(name).name != name or not name.endswith(".msix"):
-        raise ValueError("invalid Store package path")
-    package = directory / name
-    if package.is_symlink() or digest(package) != receipt["sha256"]:
-        raise ValueError("Store package hash differs")
+    package = package_directory / name
+    if not package.is_file() or package.is_symlink() or package.stat().st_size != receipt["bytes"] or digest(package) != receipt["sha256"]:
+        raise ValueError("Store package size/hash differs")
     if not record.get("storeSubmissionId"):
         application = store.call()
         if application.get("pendingApplicationSubmission"):

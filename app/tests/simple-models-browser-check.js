@@ -1,4 +1,4 @@
-async function (page) {
+async function (page, capturePath, { approveModelLicense }) {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   await page.evaluate(() => window.modelDownloadFixture.setParent(true));
   const select = page.getByRole("combobox", { name: "文字起こしのモデル", exact: true });
@@ -33,6 +33,7 @@ async function (page) {
   check(await page.getByRole("button", { name: /取得定義|取得記録|配置・構成記録/ }).count() === 0, "obsolete setup actions remain");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "lost"; });
   await asrRow.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   const count = command => page.evaluate(command => window.modelDownloadFixture.calls.filter(call => call.command === command).length, command);
   const readyToRetry = () => page.waitForFunction(() => window.modelDownloadFixture.calls.some(call => call.command === "get_model_download_lifetime") && !document.querySelector('.model-inspection>p[role="status"]') && !document.querySelector('[aria-label="文字起こしのモデル"]')?.disabled);
   const recovering = page.locator('.model-inspection>p[role="status"]');
@@ -42,6 +43,7 @@ async function (page) {
   check(await count("start_model_download") === 1 && await count("place_downloaded_model") === 0, "uncertain download continued writing");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; });
   await asrRow.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
   await select.waitFor({state:"visible"});
   await page.waitForFunction(() => document.querySelector('.model-selection-row button')?.disabled);
@@ -62,7 +64,7 @@ async function (page) {
   results.push("local import is removed; existing unverified runtimes cannot be executed silently");
   // Each page load resets only this synthetic application's in-memory state.
   // No network/model/OS permission work is performed by the fixture.
-  const start = () => asrRow.getByRole("button", { name: /^(ダウンロードして使用|使用)$/ }).click();
+  const start = async () => { await asrRow.getByRole("button", { name: /^(ダウンロードして使用|使用)$/ }).click(); await approveModelLicense(); };
   for (const mode of ["modelFileFailure", "downloadFailure", "beforeIntentFailure", "placeFailure", "checkFailure", "previewFailure", "applyFailure"]) {
     await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
     await page.evaluate(mode => { window.modelDownloadFixture.mode = mode; }, mode);

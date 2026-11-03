@@ -1,10 +1,11 @@
-async function(page) {
+async function (page, capturePath, { approveModelLicense }) {
   const check=(v,m)=>{if(!v)throw Error(m);}, results=[];
   const model=page.getByRole('combobox',{name:'文字起こしのモデル',exact:true});
   const row=page.locator('.model-selection-row').filter({has:model});
   await model.waitFor();
   await model.selectOption('official:whisper-synthetic-tiny');
   await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
+  await approveModelLicense();
   const panel=page.getByRole('region',{name:'発話区間検知（VAD）',exact:true});
   await panel.waitFor();
   const toggle=panel.getByRole('checkbox',{name:'発話区間検知（VAD）',exact:true});
@@ -52,6 +53,7 @@ async function(page) {
   results.push('off keeps values, on restores them, reset waits for apply, tuning reuses the model');
   await model.selectOption('official:whisper-synthetic-base');
   await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
+  await approveModelLicense();
   await page.waitForFunction(()=>window.modelDownloadFixture.profiles[0].components[0].modelName==='Whisper base（多言語）');
   await panel.waitFor();
   await page.evaluate(()=>window.modelDownloadFixture.setVisible(false)); await panel.waitFor({state:'hidden'});

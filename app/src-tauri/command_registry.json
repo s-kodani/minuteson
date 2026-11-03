@@ -256,6 +256,29 @@
       }
     },
     {
+      "name": "get_model_license_review",
+      "handler": "model_license::get_model_license_review",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "target",
+            "wireName": "target",
+            "type": "LicenseTarget",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "start_model_download",
       "handler": "model_download_ipc::start_model_download",
       "roles": [

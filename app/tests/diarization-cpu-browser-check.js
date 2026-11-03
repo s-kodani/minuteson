@@ -1,5 +1,5 @@
 // Synthetic model lifecycle and IPC; no real model files or user database writes.
-async page => {
+async (page, capturePath, { approveModelLicense }) => {
   page.setDefaultTimeout(10_000);
   const check = (ok, message) => { if (!ok) throw Error(message); }, results = [];
   await page.goto("http://127.0.0.1:1420/tests/model-download-browser.html?official=1");
@@ -7,6 +7,7 @@ async page => {
   const model = page.getByRole("combobox", { name: "話者分離のモデル", exact: true });
   await model.selectOption("official:sherpa-1138-pyannote3-eres2net-base");
   await page.locator(".model-selection-row").filter({ has: model }).getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   const cpu = page.getByRole("combobox", { name: "話者分離のCPU使用量", exact: true });
   const apply = page.getByRole("button", { name: "CPU使用量を適用", exact: true });
   await cpu.waitFor(); await page.waitForFunction(() => document.querySelector('select[aria-label="話者分離のCPU使用量"]')?.disabled === false);

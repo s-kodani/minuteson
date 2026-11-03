@@ -231,6 +231,9 @@ fn load(paths: Paths, target: Target) -> Result<Credits, String> {
             &mut notices,
         )?;
     }
+    for (title, text) in crate::model_license::credit_notices()? {
+        notices.push(Notice { title, text });
+    }
     let mut seen = BTreeSet::new();
     notices.retain(|notice| seen.insert(format!("{:x}", Sha256::digest(notice.text.as_bytes()))));
     if notices

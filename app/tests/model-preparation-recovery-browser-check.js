@@ -1,5 +1,5 @@
 // Synthetic model metadata and IPC only. No downloads, native AI or user data.
-async page => {
+async (page, capturePath, { approveModelLicense }) => {
   const check = (value, message) => { if (!value) throw Error(message); };
   const results = [];
   const models = () => page.getByRole("region", { name: "AIモデル", exact: true });
@@ -13,6 +13,7 @@ async page => {
     await models().getByRole("combobox", { name: "議事録生成のモデル", exact: true }).selectOption("official:llama-b11533-qwen3-8b-q4km");
     await page.evaluate(mode => { window.modelDownloadFixture.mode = mode; window.modelDownloadFixture.failCancel = mode === "placeFailure"; }, mode);
     await row().getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   };
 
   await boot("placeFailure");
@@ -28,6 +29,7 @@ async page => {
   await common().waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "設定", exact: true }).click();
   await row().getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   await row().getByRole("button", { name: "使用中", exact: true }).waitFor();
   await common().waitFor({ state: "hidden" });
   check(await count("start_model_download") === 1 && await count("place_downloaded_model") === 2 && await count("apply_model_profile_application") === 1, "recovery redownloaded or skipped the explicit retry");
@@ -38,6 +40,7 @@ async page => {
   await common().waitFor({ state: "hidden" });
   await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; });
   await row().getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
   await row().getByRole("button", { name: "使用中", exact: true }).waitFor();
   const retries = await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === "place_downloaded_model").map(call => call.args));
   check(await count("start_model_download") === 1 && retries.length === 2, "moved payload was downloaded again");

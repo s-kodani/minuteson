@@ -5,10 +5,10 @@ description: "完成版の機能範囲、対応環境と配布・評価の確認
 tags: ["product", "release"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/tauri.conf.json"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/macos-distribution.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/windows-store-dpi-process-audit-2026-11-01.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/m4-01-macos-native-qa-preparation-2026-10-07.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/tauri.conf.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/macos-distribution.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/windows-store-dpi-process-audit-2026-11-01.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/m4-01-macos-native-qa-preparation-2026-10-07.md"
 ---
 
 # MinutesOnの製品概要
@@ -43,6 +43,6 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 | macOS | QAアプリの構築・アドホック署名を確認。2026-11-01にDeveloper ID証明書と公証認証を準備。Developer ID署名・公証済みDMGの成功、Gatekeeper、通常版の実機更新は未確認 |
 | Windows | MSIXの生成・内容照合と検証用コピーによるWACK実行を確認。Store提出・認定・一般公開の完了記録はない。WACKの総合結果はWARNINGで、DPIのInfrastructureエラーと任意検査の指摘が残る |
 | 品質・性能 | 短い実モデル統合や合成入力の検査記録あり。16GB端末・10話者、60分処理、4時間録音、各機器・会議アプリでの網羅的な評価は未確認 |
-| ライセンス | 本体のLICENSEは未設定。依存ライブラリ・モデルの条件は個別に適用される |
+| ライセンス | 自作コード・文書・自作画像はMIT。依存通知本文・SDK由来条件等の配布審査は未完了。依存ライブラリ・モデルの条件は個別に適用される |
 
 配布先は[macOS](../guides/distribution-macos.md)、[Windows EXE](../guides/distribution-windows.md)、[Microsoft Store](../guides/distribution-store.md)の手順で扱います。性能や文字起こしの精度は端末・モデル・音声に依存し、上表の未測定条件について保証値を設けません。

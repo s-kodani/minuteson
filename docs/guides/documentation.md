@@ -6,9 +6,9 @@ tags: ["documentation", "okf", "maintenance"]
 status: "stable"
 sources:
   - resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/development-plan.md"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/implementation-status.md"
-  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_docs.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/development-plan.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/implementation-status.md"
+  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_docs.py"
 ---
 
 # OKFドキュメントの管理
@@ -33,7 +33,7 @@ description: 内容を説明する一文。
 tags: [storage, backup]
 status: stable
 sources:
-  - resource: https://github.com/s-kodani/mon/blob/<commit>/app/src-tauri/src/storage.rs
+  - resource: https://github.com/s-kodani/minuteson/blob/<commit>/app/src-tauri/src/storage.rs
 ---
 ```
 

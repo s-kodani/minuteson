@@ -20,9 +20,16 @@ import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult
 import type { DiarizationPreferences } from "./diarization-state";
 import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 import { modelVocabularySupport } from "./model-vocabulary-support";
+import { ModelLicenseDialog } from "./model-license";
+import { assertModelLicenseReview, sameModelLicenseTarget, type ModelLicenseReview, type ModelLicenseSummary, type ModelLicenseTarget } from "./model-license-state";
+import type { ModelChoice } from "./model-selection-state";
 
 type PlacementInput = { packageId: string; downloadId: string; recipeHash: string; reviewHash: string; totalBytes: number };
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; placement?: PlacementInput; verifying?: boolean; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
+type LicenseRequest = { id: number; engine: string; value: string; target: ModelLicenseTarget; summary?: ModelLicenseSummary; actionLabel: string; confirmation: boolean; review: ModelLicenseReview | null; loading: boolean; error: string; acknowledged: boolean; confirming: boolean; opener: HTMLElement | null };
+function licenseTarget(choice: ModelChoice): ModelLicenseTarget | null {
+  return choice.option ? { recipeHash: choice.option.review.recipeHash } : choice.entry ? { packageId: choice.entry.packageId, expectedReviewHash: choice.entry.reviewHash } : null;
+}
 class ModelPreparationWaiting extends Error {}
 let unresolved: Pending | null = null;
 // A confirmed download is reusable after navigation. No automatic retry or
@@ -43,6 +50,15 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const [clusterThreshold, setClusterThreshold] = useState<number | null>(null), [thresholdChoice, setThresholdChoice] = useState("");
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState<Pending | null>(unresolved);
   const [recovering, setRecovering] = useState(false);
+  const [license, setLicense] = useState<LicenseRequest | null>(null);
+  const licenseRequest = useRef<LicenseRequest | null>(null), licenseSequence = useRef(0);
+  const latest = useRef({ visible, locked, recordingActive, options, entries, profiles, selection });
+  latest.current = { visible, locked, recordingActive, options, entries, profiles, selection };
+  const updateLicense = (id: number, patch: Partial<LicenseRequest>) => {
+    if (!mounted.current || licenseRequest.current?.id !== id) return;
+    licenseRequest.current = { ...licenseRequest.current, ...patch }; setLicense(licenseRequest.current);
+  };
+  const closeLicense = () => { licenseRequest.current = null; setLicense(null); };
   const failure = useRef<unknown>(null);
   const [target, setTarget] = useState(unresolved?.option?.label ?? unresolved?.entry?.modelName ?? "ローカルAI"), [transfer, setTransfer] = useState<TransferProgress | null>(null);
   const [waitingToken, setWaitingToken] = useState<string | null>(null);
@@ -61,7 +77,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   };
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; if (unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); };
+    return () => { mounted.current = false; licenseRequest.current = null; if (unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); };
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
@@ -106,6 +122,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     return () => { active = false; };
   }, [visible, profileId, selectedWhisper?.packageId]);
   useEffect(() => { if (mustStop && unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); }, [mustStop]);
+  useEffect(() => { if (!visible || locked || recordingActive || mustStop) closeLicense(); }, [visible, locked, recordingActive, mustStop]);
   const run = async (label: string, action: () => Promise<void>) => {
     if (running.current || locked || blocked.current || !isTauri()) return;
     startedAt.current = unresolved?.startedAtMs ?? Date.now();
@@ -162,15 +179,14 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       assertPlacementReceipt(result, placement.packageId, placement.reviewHash); return result;
     } finally { active = false; unlisten(); }
   }, { option, placement });
-  const useModel = (engine: string, value: string) => {
+  const executeModelUse = (engine: string, choice: ModelChoice, candidateEntries: ModelPlacementEntry[]) => {
     return run("モデルを準備しています", async () => {
     if (pending || unresolved) throw Error("モデルの準備が終わるまでお待ちください。");
-    const choice = modelChoices(engine, entries, options, profiles).find(item => item.value === value || item.packageIds.includes(value));
-    let entry = choice?.entry;
-    const option = choice?.option;
-    setTarget(choice?.label ?? "ローカルAI");
+    let entry = choice.entry;
+    const option = choice.option;
+    setTarget(choice.label);
     if (!entry && option) {
-      entry = entries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
+      entry = candidateEntries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
       if (!entry) {
         let receipt = downloads.get(option.review.recipeHash);
         {
@@ -230,6 +246,52 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     await apply(entry);
     if (mounted.current) setSelection(current => ({ ...current, [engine]: entry!.packageId }));
     });
+  };
+  const currentLicenseChoice = (request: Pick<LicenseRequest, "engine" | "value" | "target">, current = latest.current) => {
+    const used = current.profiles.find(profile => profile.name === "standard")?.components.find(item => request.engine === "asr" ? isAsrEngine(item.engine) : item.engine === request.engine);
+    const selected = current.selection[request.engine] ?? used?.packageId ?? "";
+    const choice = modelChoices(request.engine, current.entries, current.options, current.profiles).find(item => item.value === selected || item.packageIds.includes(selected));
+    const target = choice && licenseTarget(choice);
+    if (!choice || choice.value !== request.value || !target || !sameModelLicenseTarget(target, request.target)) throw Error("モデルの選択内容が変わりました。利用条件を開き直してください。");
+    return { choice, used };
+  };
+  const canConfirmLicense = () => mounted.current && latest.current.visible && !latest.current.locked && !latest.current.recordingActive && !blocked.current && !running.current && !unresolved && isTauri();
+  const useModel = async (engine: string, value: string, confirmation = true, actionLabel = "使用", opener?: HTMLElement) => {
+    if (!canConfirmLicense() || licenseRequest.current) return;
+    const choice = modelChoices(engine, entries, options, profiles).find(item => item.value === value || item.packageIds.includes(value));
+    const target = choice && licenseTarget(choice);
+    if (!choice || !target) return;
+    const request: LicenseRequest = { id: ++licenseSequence.current, engine, value: choice.value, target, summary: choice.option?.licenseSummary, actionLabel, confirmation,
+      review: null, loading: true, error: "", acknowledged: false, confirming: false, opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) };
+    licenseRequest.current = request; setLicense(request);
+    try {
+      const review = await assertModelLicenseReview(await invoke("get_model_license_review", { target }), target, request.summary);
+      if (!canConfirmLicense() || licenseRequest.current?.id !== request.id) return;
+      currentLicenseChoice(request);
+      updateLicense(request.id, { review, loading: false });
+    } catch (cause) { updateLicense(request.id, { loading: false, error: modelPreparationError(cause) }); }
+  };
+  const confirmLicense = async () => {
+    const request = licenseRequest.current;
+    if (!request?.confirmation || !request.acknowledged || !request.review || request.loading || request.error || request.confirming || !canConfirmLicense()) return;
+    updateLicense(request.id, { confirming: true });
+    try {
+      currentLicenseChoice(request);
+      // Review is read-only. Re-read selection, package and policy before any
+      // operation token, compatibility process, download or profile mutation.
+      const [current, official] = await Promise.all([load(false), invoke("get_official_model_options").then(assertOfficialModelOptions)]);
+      if (!canConfirmLicense() || licenseRequest.current?.id !== request.id) return;
+      const { choice, used } = currentLicenseChoice(request, { ...latest.current, options: official, entries: current.placed, profiles: current.catalog });
+      if (modelChoiceAction(choice, current.placed, used) === "in_use") throw Error("このモデルはすでに使用中です。現在の設定を確認してください。");
+      if (choice.entry && choice.entry.sourceType !== "download" && !canReviewApplication(choice.entry)) throw Error("このモデルは使用できません。配布モデルを選択してください。");
+      const review = await assertModelLicenseReview(await invoke("get_model_license_review", { target: request.target }), request.target, choice.option?.licenseSummary);
+      if (!canConfirmLicense() || licenseRequest.current?.id !== request.id) return;
+      currentLicenseChoice(request);
+      if (review.disclosureHash !== request.review.disclosureHash) throw Error("モデルの利用条件が変わりました。利用条件を開き直してください。");
+      setOptions(official); setEntries(current.placed); setProfiles(current.catalog);
+      closeLicense();
+      await executeModelUse(request.engine, choice, current.placed);
+    } catch (cause) { updateLicense(request.id, { confirming: false, acknowledged: false, error: modelPreparationError(cause) }); }
   };
   const recheck = async (): Promise<"waiting" | "resolved" | "applied"> => {
     const value = unresolved; if (!value) return "resolved";
@@ -316,10 +378,16 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const entry = choice?.entry;
       const action = modelChoiceAction(choice, entries, used);
       const actionLabel = { in_use: "使用中", add_vad: "VADを追加して使用", use: "使用", update_runtime: "実行環境を更新して使用", download: "ダウンロードして使用" }[action];
-      return <div className="model-selection-row" key={engine}><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
+      return <div className="model-selection-item" key={engine}><div className="model-selection-row"><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
-      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={() => void useModel(engine, value)}>{actionLabel}</button></div>;
+      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={event => void useModel(engine, value, true, actionLabel, event.currentTarget)}>{actionLabel}</button></div>
+        {choice && <div className="model-license-summary"><div><span>モデル・実行エンジン：{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
+          <p>{choice.option?.licenseSummary.summary ?? "このモデルと実行エンジンの利用条件は確認できていません。配布元の利用条件を確認してください。"}</p>
+          {choice.option?.licenseSummary.restrictions.map((restriction, index) => <p className="model-license-restriction" key={index}>{restriction}</p>)}
+        </div>}
+        {used && !choice?.packageIds.includes(used.packageId) && <p className="model-current-selection">現在使用中：{entries.find(item => item.packageId === used.packageId) ? modelDisplayName(entries.find(item => item.packageId === used.packageId)!, options) : "導入済みモデル"}</p>}
+      </div>;
     })}</div>
     <ModelIssue label="モデルの準備" message={error} />
     {pending && (!busy || recovering) && <p role="status">再試行の準備をしています…</p>}
@@ -386,7 +454,10 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       {item.reviewAllowed && <button type="button" className="small-secondary" disabled={!deletion.canReviewPending} onClick={() => void deletion.reviewPending(item.operationId)}>残りの削除を確認</button>}</div>)}
     {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}
     {deletion?.unknown && <button type="button" disabled={deletion.rpcBusy} onClick={() => void deletion.retryUnknown()}>同じ削除操作の結果を確認</button>}
-  </section></>;
+  </section>
+  {license && <ModelLicenseDialog key={license.id} open={visible} review={license.review} loading={license.loading} error={license.error} confirmation={license.confirmation} actionLabel={license.actionLabel}
+    acknowledged={license.acknowledged} confirming={license.confirming} onAcknowledge={acknowledged => updateLicense(license.id, { acknowledged })} onConfirm={() => void confirmLicense()} onDismiss={closeLicense} restoreTarget={() => license.opener} />}
+  </>;
 }
 
 function InstalledModelCopy({ item, name, status, purpose, vocabularySupport, grouped, disabled, deletion }: {

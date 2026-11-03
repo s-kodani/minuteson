@@ -210,7 +210,7 @@ class DocumentationTests(unittest.TestCase):
         subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], cwd=self.root, check=True)
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root).decode().strip()
         old.unlink()
-        self.guide.write_text(self.guide.read_text().replace("https://example.com/spec", f"https://github.com/s-kodani/mon/blob/{commit}/historical.rs"))
+        self.guide.write_text(self.guide.read_text().replace("https://example.com/spec", f"https://github.com/s-kodani/minuteson/blob/{commit}/historical.rs"))
         self.assertEqual(docs.validate(self.root), [])
         self.guide.write_text(self.guide.read_text().replace("historical.rs", "missing.rs"))
         self.assertTrue(any("source does not exist" in error for error in docs.validate(self.root)))
@@ -432,7 +432,7 @@ class StoreTests(unittest.TestCase):
         api.value['draft'] = False
         api.save_state(api.value, {'status': 'published', 'store': 'pending', 'sourceSha': SHA, 'buildRunId': '42'})
         package_bytes = b'synthetic inert MSIX'
-        receipt = {'flavor': 'store', 'binary': 'test.msix', 'sha256': hashlib.sha256(package_bytes).hexdigest()}
+        receipt = {'flavor': 'store', 'binary': 'test.msix', 'sha256': hashlib.sha256(package_bytes).hexdigest(), 'bytes': len(package_bytes)}
         manifest = {'sourceSha': SHA, 'tag': 'v1.2.3', 'artifacts': [receipt]}
         def download(argv, **kwargs):
             directory = Path(argv[argv.index('--dir') + 1])
@@ -468,7 +468,7 @@ class StoreTests(unittest.TestCase):
             return None
         provider.call.side_effect = call
         provider.upload.side_effect = OSError('interrupted')
-        with patch.object(store.subprocess, 'run', side_effect=download):
+        with patch.object(store.subprocess, 'run', side_effect=download), patch.object(store, 'verify_manifest', return_value=(receipt, 42)):
             with tempfile.TemporaryDirectory() as temporary:
                 with self.assertRaises(OSError):
                     store.resume(api, provider, api.release(123), Path(temporary))

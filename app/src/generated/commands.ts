@@ -14,6 +14,7 @@ export interface CommandArguments {
   "get_residency_state": Record<string, never>;
   "hide_main_to_background": Record<string, never>;
   "get_official_model_options": Record<string, never>;
+  "get_model_license_review": { "target": unknown };
   "start_model_download": { "token": string; "definition": string; "expectedRecipeHash": string };
   "get_model_download_lifetime": { "token": string };
   "get_model_download_catalog": { "token": string };
@@ -305,6 +306,22 @@ export const commandContracts = {
   "get_official_model_options": {
     "async": false,
     "arguments": [],
+    "response": {
+      "type": "Result<serde_json::Value,mon_contracts::AppError>",
+      "ok": "serde_json::Value",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_model_license_review": {
+    "async": false,
+    "arguments": [
+      {
+        "name": "target",
+        "wireName": "target",
+        "type": "LicenseTarget",
+        "optional": false
+      }
+    ],
     "response": {
       "type": "Result<serde_json::Value,mon_contracts::AppError>",
       "ok": "serde_json::Value",

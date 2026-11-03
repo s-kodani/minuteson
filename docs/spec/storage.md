@@ -5,14 +5,14 @@ description: "会議・音声・モデル・ログの保存、追加復元と対
 tags: ["storage", "backup", "recovery", "privacy"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/current_formats.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/storage/schema_upgrade.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/storage/backup/archive.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/internal_logs.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/bootstrap"
-  - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/startup-reset-form.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc79a115cdc87804568486b0c137d6788b5d147c/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc79a115cdc87804568486b0c137d6788b5d147c/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/current_formats.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/storage/schema_upgrade.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/storage/backup/archive.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/internal_logs.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/bootstrap"
+  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src/startup-reset-form.tsx"
 ---
 
 # 保存とバックアップと復旧

@@ -5,12 +5,12 @@ description: "セキュリティ検査、例外、GitHub保護設定、署名と
 tags: ["security", "ci", "maintenance"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/security.yml"
-  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_security.py"
-  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_macos_ci_sign.py"
-  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/tools/mon_store_submission.py"
-  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/.github/workflows/release-build.yml"
-  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/tools/mon_macos_release.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_security.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_macos_ci_sign.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/tools/mon_store_submission.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/tools/mon_macos_release.py"
 ---
 
 # DevSecOpsの検査と運用
@@ -49,6 +49,8 @@ make check-security
 秘密情報を見つけた場合は、まず該当サービスで失効・再発行し、公開前に履歴の扱いを確認します。検出値をIssueやPR、ログへ転載しません。脆弱性は影響と修正版を確認して更新PRを作成し、再検査します。一般からの報告先は[セキュリティ方針](../../SECURITY.md)です。
 
 例外は[例外定義](../../.github/security-exceptions.json)の`exceptions`へ追加します。`tool`は`osv`または`codeql`、`id`は指摘ID、`target`はレポートの完全一致対象、`reason`は影響しない根拠、`owner`は担当者です。`created`と`expires`はUTCの日付を`YYYY-MM-DD`で記載し、作成日から最長30日、期限日は無効とします。理由と担当者を含む全項目を必須にし、包括的な除外は認めません。重大度不明を無条件に低と見なさず、確認結果を残します。Gitleaksの一括除外は行いません。既知の非秘密値は、ファイルと検出値を完全に限定した設定で扱います。現在の除外は履歴内のSQLite設定キー`meeting_mix_v1_initialized`だけです。
+
+2026-11-03の依存検査では、旧任意ランタイム`llama.cpp b11533`のRPCサーバーに対する[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)と[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)を個別判断しています。議事録処理は固定引数の`llama-completion`を起動し、`LLAMA_ARG_RPC`を含む継承環境を消去します。RPCサーバーを起動する呼出しはありません。macOSの旧任意パッケージにはRPCライブラリが含まれますが、Windows配布対象にはRPC実行物・DLLを含めません。この到達性の判断に限定し、2026-11-17 UTCまでの例外とします。上流バイナリ全体の安全性確認や修正完了を意味しません。RPCを導入する前、または期限までに再評価し、旧ランタイムを修正済み版へ更新する際はレシピ・ハッシュ・既存モデルの互換性を検証します。
 
 ## GitHubの初期設定
 
@@ -92,6 +94,10 @@ make check-security
 
 失敗時はPartner Centerと状態を確認し、main上の**Microsoft Store submission → Run workflow**に対象の`release_id`を指定して同じ提出を再開します。PUT後にアップロード等が中断した場合も、追加済みのMSIXのIDとアップロード状態を保って再利用し、同名の削除・追加レコードを重複作成しません。別のpending submissionがある場合は自動で流用・削除せず停止します。作成直後に状態保存が失敗した場合も重複提出を避けるため停止し、既存提出を手動で照合します。API作成した提出をPartner Centerから同時編集しません。
 
+Store提出前に、Release assetのmanifestの実バイトへ付いたGitHub attestationを検証します。現在の数値リポジトリID、main上の正式なRelease build、GitHubの署名発行元、証明書が示すrun・attemptを照合し、実際の公開ステップが成功していることを要求します。dry runの証明だけでは提出しません。ワークフロー版のSHAとビルド対象のSHAは区別し、タグの解決先・main包含・署名済みStore receipt・取得MSIXの容量とSHAを確認します。Release本文の状態・sourceSha・buildRunIdは出自の証明ではありません。
+
+証明不足・不一致・期限切れではStoreを変更せず停止します。公開処理が実行中なら次の定期確認を待ち、別runへの切替や再ビルドで補いません。提出済みでPendingCommitを超えた処理は成果物を再取得せず状態確認を継続します。PendingCommitからの再開では再度出自を確認します。
+
 MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソースで勝手に再構築せず、原本の保管状況と提出を確認します。失敗状態は自動で繰り返し提出せず、修正後に明示再開します。
 
 ## 資格情報の更新と停止
@@ -99,3 +105,9 @@ MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソ�
 証明書・APIキー・クライアントシークレットの期限を所有者が保守時に確認し、期限前に更新して試行します。疑わしい資格情報はサービス側で失効し、Secretsを更新します。
 
 公開処理を止める場合は`RELEASE_AUTOMATION_ENABLED=false`と`RELEASE_PUBLISH_ENABLED=false`、Store提出は`STORE_PUBLISH_ENABLED=false`に設定します。既に実行中の公開処理はActionsでも取消します。検査の停止や例外の無期限化で回避せず、原因を修正して再実行します。既に公開したバイナリは上書きせず、新しい版で修正します。
+
+## ソース公開用リポジトリ
+
+`minuteson`へは匿名化したmainの履歴と現行ソースだけを移します。旧リポジトリのPR、内部refs、Release、実行成果物、環境資格情報、公開有効化変数は移植しません。元のリポジトリは非公開で保管します。MITの適用範囲はルートREADMEとLICENSEに従います。非公開の移行中はリポジトリのActionsを停止し、公開後に有効化して検査します。
+
+公開への切替は、検証済みコミットと結果をレビューした所有者の指示で行います。公開後にCodeQL全言語と通常CIを実行し、Private vulnerability reporting、Secret scanning、Push protection、Dependabotとmain保護を設定します。第三者通知・SDK等の配布審査が未完了の間は、バイナリ配布とStore自動提出を有効化しません。

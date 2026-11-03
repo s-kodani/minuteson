@@ -21,9 +21,10 @@ pub(crate) struct OptionView {
     id: String,
     label: String,
     description: String,
-    definition: String,
-    review: crate::model_download_recipe::Review,
+    pub(crate) definition: String,
+    pub(crate) review: crate::model_download_recipe::Review,
     token_limits: Option<crate::generation::model_budget::TokenLimits>,
+    license_summary: crate::model_license::LicenseSummary,
 }
 fn options() -> Result<Vec<OptionView>, String> {
     let choices: Vec<Choice> = serde_json::from_str(include_str!("../../model-catalog/macos.json"))
@@ -41,6 +42,7 @@ fn option_view(choice: Choice) -> Result<OptionView, String> {
         return Err("トークン上限は議事録モデルにだけ指定してください".into());
     }
     Ok(OptionView {
+        license_summary: crate::model_license::official_summary(&choice.recipe.manifest)?,
         id: choice.id,
         label: choice.label,
         description: choice.description,
@@ -58,30 +60,23 @@ pub(crate) fn get_official_model_options(
         if window.label() != "main" {
             return Err("モデル選択はメイン画面で行ってください".into());
         }
-        #[cfg(target_os = "macos")]
-        {
-            let root = window
-                .app_handle()
-                .path()
-                .resource_dir()
-                .map_err(|e| e.to_string())?
-                .join("asr-runtime");
-            serde_json::to_value(options_with_bundle(&root)?).map_err(|e| e.to_string())
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let root = window
-                .app_handle()
-                .path()
-                .resource_dir()
-                .map_err(|e| e.to_string())?
-                .join("windows-runtime");
-            serde_json::to_value(options_windows(&root)?).map_err(|e| e.to_string())
-        }
+        serde_json::to_value(native_options(window.app_handle())?).map_err(|e| e.to_string())
     })();
     result.map_err(|message| {
         mon_contracts::AppError::from_command("get_official_model_options", message)
     })
+}
+
+pub(crate) fn native_options(app: &tauri::AppHandle) -> Result<Vec<OptionView>, String> {
+    let resources = app.path().resource_dir().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        options_with_bundle(&resources.join("asr-runtime"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        options_windows(&resources.join("windows-runtime"))
+    }
 }
 
 #[cfg(windows)]
@@ -97,6 +92,7 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
     let mut whisper = Vec::new();
     for (name, recipe) in crate::model_bundled_runtime::Bundle::open(root)?.recipes()? {
         whisper.push(OptionView {
+            license_summary: crate::model_license::official_summary(&recipe.manifest)?,
             id: format!("whisper-194-{name}-multilingual-vad620"),
             label: format!("Whisper {name}（多言語）"),
             description: format!("アプリ同梱のCPU・Metal対応エンジンと、固定版Whisper {name}（多言語）と発話区間検知用のSilero VADを準備します。文字起こしでは利用可能なGPUを使います。品質・速度は正式評価前です。"),
@@ -112,6 +108,7 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
             .join("inference-runtime"),
     )? {
         whisper.push(OptionView {
+            license_summary: crate::model_license::official_summary(&choice.recipe.manifest)?,
             id: choice.id,
             label: choice.label,
             description: choice.description,

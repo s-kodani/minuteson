@@ -1,4 +1,4 @@
-async function (page) {
+async function (page, capturePath, { approveModelLicense }) {
   const check = (value, message) => { if (!value) throw Error(message); }, results = [];
   const field = page.getByRole("combobox", { name: "文字起こしのモデル", exact: true });
   await field.waitFor();
@@ -16,6 +16,7 @@ async function (page) {
   for (const name of ["tiny", "base", "large-v3", "large-v3-turbo"]) {
     await field.selectOption(`official:whisper-synthetic-${name}`);
     await row.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
     await page.waitForFunction(name => window.modelDownloadFixture.profiles[0].components[0]?.modelName === `Whisper ${name}（多言語）`, name);
     await row.getByRole("button", { name: "使用", exact: true }).waitFor();
     check(await row.getByRole("button", { name: "使用", exact: true }).isDisabled(), "applied model can be applied twice");

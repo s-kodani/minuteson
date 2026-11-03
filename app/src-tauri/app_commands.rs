@@ -15,6 +15,7 @@ pub const COMMANDS: &[&str] = &[
     "get_residency_state",
     "hide_main_to_background",
     "get_official_model_options",
+    "get_model_license_review",
     "start_model_download",
     "get_model_download_lifetime",
     "get_model_download_catalog",

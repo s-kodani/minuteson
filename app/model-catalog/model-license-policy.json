@@ -1,0 +1,1069 @@
+{
+  "schemaVersion": 1,
+  "notices": [
+    {
+      "name": "onnxruntime-ThirdPartyNotices.txt",
+      "file": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2.txt",
+      "bytes": 325054,
+      "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+    },
+    {
+      "name": "segmentation-MIT.txt",
+      "file": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba.txt",
+      "bytes": 1061,
+      "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba",
+      "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+    },
+    {
+      "name": "whisper-model-card.md",
+      "file": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758.txt",
+      "bytes": 3196,
+      "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+      "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+    },
+    {
+      "name": "haas-NOTICE.txt",
+      "file": "279784164ddd8a16f0b42aff954d34bc10485c0064a96c7a852419d95eca5cad.txt",
+      "bytes": 783,
+      "sha256": "279784164ddd8a16f0b42aff954d34bc10485c0064a96c7a852419d95eca5cad",
+      "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/NOTICE"
+    },
+    {
+      "name": "silero-MIT.txt",
+      "file": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b.txt",
+      "bytes": 1075,
+      "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+      "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+    },
+    {
+      "name": "silero-vad-MIT.txt",
+      "file": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b.txt",
+      "bytes": 1075,
+      "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+      "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+    },
+    {
+      "name": "onnxruntime-MIT.txt",
+      "file": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c.txt",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+    },
+    {
+      "name": "LFM-Open-License-1.0.txt",
+      "file": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c.txt",
+      "bytes": 10574,
+      "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+      "sourceUrl": "https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/LICENSE"
+    },
+    {
+      "name": "Qwen-Apache-2.0.txt",
+      "file": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd.txt",
+      "bytes": 11544,
+      "sha256": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd",
+      "sourceUrl": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE"
+    },
+    {
+      "name": "Qwen-Apache-2.0.txt",
+      "file": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd.txt",
+      "bytes": 11544,
+      "sha256": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd",
+      "sourceUrl": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/LICENSE"
+    },
+    {
+      "name": "silero-vad-model-card.md",
+      "file": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e.txt",
+      "bytes": 182,
+      "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+      "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+    },
+    {
+      "name": "nlohmann-MIT.txt",
+      "file": "7233e8200b31f6e3d28f5c2df0e00b3734ccef458ac167ca85140db26b352be8.txt",
+      "bytes": 2011,
+      "sha256": "7233e8200b31f6e3d28f5c2df0e00b3734ccef458ac167ca85140db26b352be8",
+      "sourceUrl": "https://raw.githubusercontent.com/ggml-org/llama.cpp/8642541b255bfb5dc39cd351a178be09013a55d6/vendor/nlohmann/json.hpp"
+    },
+    {
+      "name": "reazonspeech-model-card.md",
+      "file": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0.txt",
+      "bytes": 1188,
+      "sha256": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0",
+      "sourceUrl": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+    },
+    {
+      "name": "Qwen-Apache-2.0.txt",
+      "file": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e.txt",
+      "bytes": 11343,
+      "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+      "sourceUrl": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE"
+    },
+    {
+      "name": "llama-MIT.txt",
+      "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+    },
+    {
+      "name": "llama-MIT.txt",
+      "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+    },
+    {
+      "name": "whisper-MIT.txt",
+      "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "sourceUrl": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/927cfce34f31707e17f2bff35c349632fb9e2c3a/LICENSE"
+    },
+    {
+      "name": "openai-whisper-MIT.txt",
+      "file": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d.txt",
+      "bytes": 1063,
+      "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+      "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+    },
+    {
+      "name": "Qwen-Apache-2.0.txt",
+      "file": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a.txt",
+      "bytes": 11544,
+      "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+      "sourceUrl": "https://huggingface.co/Qwen/Qwen3.5-4B/resolve/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE"
+    },
+    {
+      "name": "Qwen-Apache-2.0.txt",
+      "file": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a.txt",
+      "bytes": 11544,
+      "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+      "sourceUrl": "https://huggingface.co/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE"
+    },
+    {
+      "name": "3DSpeaker-Apache-2.0.txt",
+      "file": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "sourceUrl": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+    },
+    {
+      "name": "Gemma-Apache-2.0.txt",
+      "file": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "sourceUrl": "https://raw.githubusercontent.com/google/gemma_pytorch/014acb7ac4563a5f77c76d7ff98f31b568c16508/LICENSE"
+    },
+    {
+      "name": "haas-Apache-2.0.txt",
+      "file": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/LICENSE"
+    },
+    {
+      "name": "sherpa-Apache-2.0.txt",
+      "file": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+    },
+    {
+      "name": "haas-model-card.md",
+      "file": "dcdb35b74d815307cdecfbf19231c0324d7054a3fa7f92b3020e773991e4ac4f.txt",
+      "bytes": 5769,
+      "sha256": "dcdb35b74d815307cdecfbf19231c0324d7054a3fa7f92b3020e773991e4ac4f",
+      "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/README.md"
+    },
+    {
+      "name": "Phi-MIT.txt",
+      "file": "fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d.txt",
+      "bytes": 1084,
+      "sha256": "fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+      "sourceUrl": "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/cfbefacb99257ffa30c83adab238a50856ac3083/LICENSE"
+    }
+  ],
+  "models": [
+    {
+      "id": "llama-b11533-qwen25-15b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 1117320736,
+          "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "sherpa-1138-pyannote3-eres2net-base",
+      "engine": "sherpa-onnx",
+      "modelFiles": [
+        {
+          "role": "segmentation",
+          "size": 5992913,
+          "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079"
+        },
+        {
+          "role": "speaker_embedding",
+          "size": 39593761,
+          "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+        }
+      ],
+      "licenseNames": [
+        "モデル: MIT / Apache-2.0",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
+      "restrictions": [
+        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "segmentation-MIT.txt",
+          "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba",
+          "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+        },
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "3DSpeaker-Apache-2.0.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "sourceUrl": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11533-qwen25-15b-q8",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 1894532128,
+          "sha256": "d7efb072e7724d25048a4fda0a3e10b04bdef5d06b1403a1c93bd9f1240a63c8"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "sherpa-1138-pyannote3-int8-eres2net-base",
+      "engine": "sherpa-onnx",
+      "modelFiles": [
+        {
+          "role": "segmentation",
+          "size": 1540506,
+          "sha256": "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d"
+        },
+        {
+          "role": "speaker_embedding",
+          "size": 39593761,
+          "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+        }
+      ],
+      "licenseNames": [
+        "モデル: MIT / Apache-2.0",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
+      "restrictions": [
+        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "segmentation-MIT.txt",
+          "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba",
+          "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+        },
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "3DSpeaker-Apache-2.0.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "sourceUrl": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11533-qwen3-8b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 5027783488,
+          "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11533-qwen3-4b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 2497280256,
+          "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11533-qwen35-4b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 2740937888,
+          "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3.5-4B/resolve/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11533-qwen35-9b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 5680522464,
+          "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Qwen-Apache-2.0.txt",
+          "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3.5-9B/resolve/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11960-gemma4-e4b-it-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 4977171584,
+          "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Gemma-Apache-2.0.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "sourceUrl": "https://raw.githubusercontent.com/google/gemma_pytorch/014acb7ac4563a5f77c76d7ff98f31b568c16508/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11960-phi4-mini-instruct-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 2491874688,
+          "sha256": "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2"
+        }
+      ],
+      "licenseNames": [
+        "モデル: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "モデルの重みにはMIT、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
+      "restrictions": [
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "Phi-MIT.txt",
+          "sha256": "fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+          "sourceUrl": "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/cfbefacb99257ffa30c83adab238a50856ac3083/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "llama-b11960-lfm3-17b-q4km",
+      "engine": "llama.cpp",
+      "modelFiles": [
+        {
+          "role": "llm",
+          "size": 1099627808,
+          "sha256": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4"
+        }
+      ],
+      "licenseNames": [
+        "モデル: LFM Open License v1.0",
+        "実行エンジン: MIT"
+      ],
+      "summary": "LFM3の重みはLFM Open License v1.0です。商用利用には年間売上高による条件があります。llama.cpp実行エンジンはMITです。",
+      "restrictions": [
+        "第1条・第5条: 年間売上高US$10,000,000以上をThresholdと定義し、これを超える法人の商用利用は本ライセンスでは許諾されません。支配・被支配・共通支配下の関連法人を含むLegal Entity単位の条件です。",
+        "第5条(c)の適格非営利組織による非商用・研究目的利用の例外を含め、適用可否を原文で確認してください。条件を満たさない商用利用はLiquid AIとの別途契約等が必要です。",
+        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "llama-MIT.txt",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+        },
+        {
+          "name": "LFM-Open-License-1.0.txt",
+          "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+          "sourceUrl": "https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "reazonspeech-k2-v2-int8-fp32",
+      "engine": "asr",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 154670139,
+          "sha256": "2c7bd08a8a99f9ddd0d9e458456577b1f6279214e51426f114f9eced44c54e1d"
+        },
+        {
+          "role": "asr_asset",
+          "size": 11767836,
+          "sha256": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+        },
+        {
+          "role": "asr_asset",
+          "size": 2696970,
+          "sha256": "49cc7ea1d3d35a40a27442db5e89996da64bf0e683a903dce76e99e57a12e4de"
+        },
+        {
+          "role": "asr_asset",
+          "size": 45754,
+          "sha256": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+        },
+        {
+          "role": "vad",
+          "size": 643854,
+          "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "VAD: MIT",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "ReazonSpeech-k2-v2のモデルカードはApache-2.0を宣言しています。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
+      "restrictions": [
+        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        },
+        {
+          "name": "reazonspeech-model-card.md",
+          "sha256": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0",
+          "sourceUrl": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+        },
+        {
+          "name": "silero-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "reazonspeech-k2-v2-fp32",
+      "engine": "asr",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 592347848,
+          "sha256": "ecdb0b771e16104aaf8e579cb3c1e32fbd589eb641c5946d82b615bd366c5f96"
+        },
+        {
+          "role": "asr_asset",
+          "size": 11767836,
+          "sha256": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124"
+        },
+        {
+          "role": "asr_asset",
+          "size": 10720115,
+          "sha256": "d38a81d1191c9ed6de6a1719503692e07e3e973e2364adde0abae5eaaded1174"
+        },
+        {
+          "role": "asr_asset",
+          "size": 45754,
+          "sha256": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def"
+        },
+        {
+          "role": "vad",
+          "size": 643854,
+          "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "VAD: MIT",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "ReazonSpeech-k2-v2のモデルカードはApache-2.0を宣言しています。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
+      "restrictions": [
+        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        },
+        {
+          "name": "reazonspeech-model-card.md",
+          "sha256": "7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0",
+          "sourceUrl": "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407/README.md"
+        },
+        {
+          "name": "silero-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "haas-ja-v1.0-onnx-quantized",
+      "engine": "asr",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 42261252,
+          "sha256": "aba291d61d3d594bc6fb8c7f90acbd980e7bc7bf6b7caaf3965ddc25e6f42fac"
+        },
+        {
+          "role": "asr_asset",
+          "size": 410744064,
+          "sha256": "30befbf6aeb75383e6551f5e58de53efdb76972ddc7d0f76070c517899873586"
+        },
+        {
+          "role": "asr_asset",
+          "size": 15661602,
+          "sha256": "2947cb5512699cbba753fe45fe221428aadaa9856597debbb7aabe19cc253622"
+        },
+        {
+          "role": "asr_asset",
+          "size": 12158641,
+          "sha256": "8a68320e750890ff9e944a794b41ae1c42c6f439ac4c273503458a6b42adc12d"
+        },
+        {
+          "role": "asr_asset",
+          "size": 28704,
+          "sha256": "ec78b13c5d9f156cf0d5fdbd6b5aec5785680f319c92630c11d5d11b14b83a84"
+        },
+        {
+          "role": "asr_asset",
+          "size": 29814,
+          "sha256": "a4ac26a977eff548b292397ddf8357279dbe60ac33ff0adb56ec28fe1c616e40"
+        },
+        {
+          "role": "vad",
+          "size": 643854,
+          "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+        }
+      ],
+      "licenseNames": [
+        "モデル: Apache-2.0",
+        "VAD: MIT",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "Haas-ja-v1.0とコミュニティONNX変換はApache-2.0です。非公式変換でありThird Intelligenceの承認を示しません。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
+      "restrictions": [
+        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        },
+        {
+          "name": "silero-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "haas-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/LICENSE"
+        },
+        {
+          "name": "haas-NOTICE.txt",
+          "sha256": "279784164ddd8a16f0b42aff954d34bc10485c0064a96c7a852419d95eca5cad",
+          "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/NOTICE"
+        },
+        {
+          "name": "haas-model-card.md",
+          "sha256": "dcdb35b74d815307cdecfbf19231c0324d7054a3fa7f92b3020e773991e4ac4f",
+          "sourceUrl": "https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx-quantized/resolve/7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-tiny",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 77691713,
+          "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-base",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 147951465,
+          "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-small",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 487601967,
+          "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-medium",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 1533763059,
+          "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-large-v3",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 3095033483,
+          "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "engine": "whisper.cpp",
+      "modelFiles": [
+        {
+          "role": "asr",
+          "size": 1624555275,
+          "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+        },
+        {
+          "role": "vad",
+          "size": 885098,
+          "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+        }
+      ],
+      "licenseNames": [
+        "モデル・VAD: MIT",
+        "実行エンジン: MIT"
+      ],
+      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
+      "restrictions": [
+        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
+      ],
+      "requiredNotices": [
+        {
+          "name": "whisper-model-card.md",
+          "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758",
+          "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"
+        },
+        {
+          "name": "openai-whisper-MIT.txt",
+          "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+          "sourceUrl": "https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"
+        },
+        {
+          "name": "silero-vad-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+          "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"
+        },
+        {
+          "name": "silero-vad-model-card.md",
+          "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e",
+          "sourceUrl": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"
+        }
+      ]
+    }
+  ]
+}

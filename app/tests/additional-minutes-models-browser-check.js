@@ -1,4 +1,4 @@
-async function (page) {
+async function (page, capturePath, { approveModelLicense }) {
   const check = (value, message) => { if (!value) throw Error(message); };
   const field = page.getByRole("combobox", { name: "議事録生成のモデル", exact: true });
   const row = page.locator(".model-selection-row").filter({ has: field });
@@ -19,6 +19,7 @@ async function (page) {
     await field.selectOption(`official:${id}`);
     const previous = await page.evaluate(() => window.modelDownloadFixture.profiles[0].profileVersion);
     await row.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
     await page.waitForFunction(previous => window.modelDownloadFixture.profiles[0].profileVersion === previous + 1, previous);
     await page.waitForFunction(() => document.querySelector('select[aria-label="議事録生成のモデル"]')?.closest(".model-selection-row")?.querySelector("button")?.disabled);
     check(await field.inputValue() === `official:${id}`, "application lost the selected model");
@@ -32,6 +33,7 @@ async function (page) {
   await page.waitForFunction(() => document.querySelector('select[aria-label="議事録生成のモデル"]')?.value === "official:llama-b11960-lfm3-17b-q4km");
   await field.selectOption(`official:${models[0][0]}`);
   await row.getByRole("button", { name: "使用", exact: true }).click();
+  await approveModelLicense();
   await page.waitForFunction(() => document.querySelector('select[aria-label="議事録生成のモデル"]')?.closest(".model-selection-row")?.querySelector("button")?.disabled);
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 3, "switching installed models downloaded again");
   for (const width of [1200, 390]) {

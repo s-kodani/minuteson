@@ -14,6 +14,7 @@ tauri::generate_handler![
     residency::get_residency_state,
     residency::hide_main_to_background,
     model_official_catalog::get_official_model_options,
+    model_license::get_model_license_review,
     model_download_ipc::start_model_download,
     model_download_ipc::get_model_download_lifetime,
     model_download_ipc::get_model_download_catalog,

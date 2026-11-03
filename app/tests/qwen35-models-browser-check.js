@@ -1,4 +1,4 @@
-async (page) => {
+async (page, capturePath, { approveModelLicense }) => {
   const check = (value, message) => { if (!value) throw Error(message); };
   const field = page.getByRole("combobox", { name: "議事録生成のモデル", exact: true });
   const row = page.locator(".model-selection-row").filter({ has: field });
@@ -21,6 +21,7 @@ async (page) => {
     await field.selectOption(id);
     const previous = await page.evaluate(() => window.modelDownloadFixture.profiles[0].profileVersion);
     await row.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+  await approveModelLicense();
     await page.waitForFunction(previous => window.modelDownloadFixture.profiles[0].profileVersion === previous + 1, previous);
     await page.waitForFunction(() => document.querySelector('select[aria-label="議事録生成のモデル"]')?.closest(".model-selection-row")?.querySelector("button")?.disabled);
     const recipe = await page.evaluate(() => JSON.parse(window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").at(-1).args.definition));

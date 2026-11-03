@@ -33,6 +33,14 @@ for (const [name, fixture, source] of suites) {
     const screenshot = page.screenshot.bind(page);
     page.screenshot = options => screenshot({ ...options, path: capturePath(options.path) });
     const detailUI = {
+      approveModelLicense: async () => {
+        const dialog = page.getByRole("dialog", { name: "利用条件を確認", exact: true });
+        const checkbox = dialog.getByRole("checkbox", { name: "モデルと実行エンジンの利用条件を確認しました。", exact: true });
+        await expect(checkbox).not.toBeChecked();
+        await checkbox.check();
+        await dialog.getByRole("button", { name: /^(ダウンロードして使用|実行環境を更新して使用|VADを追加して使用|使用)$/ }).click();
+        await dialog.waitFor({ state: "hidden" });
+      },
       internalLogsScenario: name.startsWith("internal-logs-") ? name.slice("internal-logs-".length) : undefined,
       prepareClipboard: async () => {
         if (info.project.name === "chromium") await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);

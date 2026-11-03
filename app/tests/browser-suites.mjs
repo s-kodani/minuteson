@@ -25,6 +25,7 @@ export const browserSuites = [
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
   ["model-management", "model-management-browser-fixture.tsx", "model-management-browser-check.js"],
   ["model-reuse", "model-reuse-browser-fixture.tsx", "model-reuse-browser-check.js"],
+  ["model-license", "model-license-browser-fixture.tsx", "model-license-browser-check.js"],
   ["applied-model-status", null, "applied-model-status-browser-check.js"],
   ["model-deletion-admission", null, "model-deletion-enabled-browser-check.js"],
   ["settings-layout", "browser-fixture.js", "settings-layout-browser-check.js"],

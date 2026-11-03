@@ -1,3 +1,4 @@
+import { modelLicenseSummaryFixture } from "./model-license-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import type { ModelProfileView } from "../src/model-profile-state.ts";
 const catalog = JSON.parse(readFileSync(new URL("../model-catalog/macos.json", import.meta.url), "utf8"));
 const options: OfficialModelOption[] = await Promise.all(catalog.map(async (choice: any) => {
   const recipe = canonicalRecipe(choice.recipe);
-  return { ...choice, definition: JSON.stringify(recipe), review: { ...recipe, recipeSchemaVersion: recipe.schemaVersion,
+  return { licenseSummary: modelLicenseSummaryFixture, ...choice, definition: JSON.stringify(recipe), review: { ...recipe, recipeSchemaVersion: recipe.schemaVersion,
     recipeHash: await downloadDigest(recipe), packageReviewHash: await packageReviewHash(recipe.manifest), ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0),
     installed: false, ready: false, publisherAuthenticity: "not_verified" } };
 }));

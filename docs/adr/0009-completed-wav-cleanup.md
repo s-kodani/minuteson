@@ -5,9 +5,9 @@ description: "WAV確定後の専用作業領域を整理し、外部原本・文
 tags: [storage, audio, cleanup]
 status: stable
 sources:
-  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/48fb086d5747961a17f1b4ec7a8c9d34b1ab2824/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
-  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_cleanup_upgrade.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc79a115cdc87804568486b0c137d6788b5d147c/app/src-tauri/src/storage/audio_publication/cleanup.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc79a115cdc87804568486b0c137d6788b5d147c/app/src-tauri/src/storage/audio_publication/cleanup/relocation.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/409e99b3b0f2b02a80d838debf6813fc3cc3ae91/app/src-tauri/src/storage/audio_cleanup_upgrade.rs"
 ---
 
 # ADR 0009 完成WAVを残して作業音声を整理する

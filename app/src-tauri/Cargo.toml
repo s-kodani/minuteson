@@ -1,4 +1,5 @@
 [package]
+license = "MIT"
 name = "mon-desktop"
 version = "1.0.1"
 description = "Local meeting recording and minutes"

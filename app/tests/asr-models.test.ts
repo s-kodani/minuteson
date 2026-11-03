@@ -1,3 +1,4 @@
+import { modelLicenseSummaryFixture } from "./model-license-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { assertProfileView } from "../src/model-profile-state.ts";
 const definitions = JSON.parse(readFileSync(new URL("../model-catalog/asr-transducer.json", import.meta.url), "utf8"));
 const options: OfficialModelOption[] = await Promise.all(definitions.map(async (definition: any) => {
   const recipe = canonicalRecipe(definition.recipe);
-  return { ...definition, definition: JSON.stringify(recipe), tokenLimits: null, review: {
+  return { licenseSummary: modelLicenseSummaryFixture, ...definition, definition: JSON.stringify(recipe), tokenLimits: null, review: {
     ...recipe, recipeSchemaVersion: 4, recipeHash: await downloadDigest(recipe), ...downloadByteTotals(recipe),
     totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0), publisherAuthenticity: "not_verified", installed: false, ready: false,
   } };
