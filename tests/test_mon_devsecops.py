@@ -9,6 +9,7 @@ from datetime import date
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -113,6 +114,107 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(job=name):
                 effective = workflow["jobs"][name].get("permissions", workflow["permissions"])
                 self.assertEqual(effective.get("contents"), "read")
+
+
+class DesktopWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = yaml.safe_load((release.ROOT / ".github/workflows/desktop-platform-build.yml").read_text())
+        self.events = self.workflow.get("on", self.workflow.get(True))
+
+    @staticmethod
+    def expression(value, context):
+        """Evaluate the small boolean subset used by the native step guards."""
+        value = value.removeprefix("${{ ").removesuffix(" }}")
+        value = re.sub(r"\b(?:inputs|github|runner|env)(?:\.[A-Za-z_][A-Za-z_0-9]*)+",
+                       lambda match: repr(context[match[0]]), value)
+        value = value.replace("&&", " and ").replace("||", " or ")
+        return eval(value, {"__builtins__": {}}, {"always": lambda: True})
+
+    def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
+        context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
+                   "runner.os": operating_system}
+        native = self.workflow["jobs"]["native"]
+        context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
+        return "\n".join(step.get("run", "") for step in native["steps"]
+                         if self.expression(step.get("if", "True"), context))
+
+    def test_pr_and_main_run_quick_without_native_resource_builds(self):
+        for event in ("pull_request", "push"):
+            for operating_system in ("Windows", "macOS"):
+                with self.subTest(event=event, os=operating_system):
+                    commands = self.native_commands(event=event, operating_system=operating_system)
+                    self.assertIn("--suite quick --all-targets --processes 2 --threads 4", commands)
+                    self.assertIn("--timings-json", commands)
+                    for excluded in ("tauri:windows:qa:build", "tauri:windows:store:build", "--swift-fixture",
+                                     "build-core.sh", "swift build", "ctest --test-dir", "--suite full"):
+                        self.assertNotIn(excluded, commands)
+
+    def test_reusable_full_and_manual_default_keep_packaging_and_native_checks(self):
+        dispatch = self.events["workflow_dispatch"]["inputs"]["suite"]
+        self.assertEqual(dispatch["default"], "full")
+        self.assertEqual(set(dispatch["options"]), {"quick", "full"})
+        for event, full, suite in (("workflow_call", True, ""), ("workflow_dispatch", False, "full")):
+            windows = self.native_commands(event, full, suite, "Windows")
+            self.assertIn("tauri:windows:qa:build", windows)
+            self.assertIn("tauri:windows:store:build", windows)
+            self.assertIn("ctest --test-dir", windows)
+            self.assertIn("test_mon_windows_dpi.py", windows)
+            self.assertIn("--suite full --all-targets", windows)
+            macos = self.native_commands(event, full, suite, "macOS")
+            self.assertIn("build-core.sh", macos)
+            self.assertIn("swift test", macos)
+            self.assertIn("--suite full --all-targets --swift-fixture", macos)
+            self.assertNotIn("--suite quick", windows + macos)
+            self.assertNotIn("--processes", windows + macos)
+            self.assertNotIn("--threads", windows + macos)
+        self.assertIn("--suite quick", self.native_commands("workflow_dispatch", False, "quick"))
+
+    def test_daily_and_release_call_full_at_the_selected_source(self):
+        daily = yaml.safe_load((release.ROOT / ".github/workflows/desktop-daily.yml").read_text())
+        events = daily.get("on", daily.get(True))
+        self.assertEqual(events["schedule"], [{"cron": "17 19 * * *"}])
+        self.assertEqual(set(events), {"schedule", "workflow_dispatch"})
+        job = daily["jobs"]["validate"]
+        self.assertEqual(job["uses"], "./.github/workflows/desktop-platform-build.yml")
+        self.assertEqual(job["with"], {"source_ref": "${{ github.sha }}", "full": True})
+        self.assertFalse(daily["concurrency"]["cancel-in-progress"])
+        self.assertEqual(daily["permissions"], {"contents": "read"})
+        release_workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
+        release_ci = release_workflow["jobs"]["ci"]
+        self.assertTrue(release_ci["with"]["full"])
+        self.assertEqual(release_ci["with"]["source_ref"], "${{ inputs.source_sha }}")
+        self.assertNotEqual(daily["concurrency"]["group"], self.workflow["concurrency"]["group"])
+
+    def test_gate_rejects_required_failure_cancellation_or_skip_but_allows_docs_only(self):
+        gate = self.workflow["jobs"]["gate"]
+        self.assertEqual(gate["if"], "always()")
+        self.assertEqual(set(gate["needs"]), {"changes", "python", "browser", "native"})
+        script = "\n".join(gate["steps"][0]["run"].splitlines()[1:-1])
+        successful = {"MON_CHANGES": "success", "MON_PYTHON": "success", "MON_BROWSER": "success",
+                      "MON_NATIVE": "success", "MON_REQUIRED": "true"}
+        with patch.dict(os.environ, successful):
+            exec(compile(script, "ci-gate", "exec"), {})
+        for name in ("MON_CHANGES", "MON_PYTHON", "MON_BROWSER", "MON_NATIVE"):
+            for result in ("failure", "cancelled", "skipped"):
+                with self.subTest(job=name, result=result), patch.dict(os.environ, {**successful, name: result}):
+                    with self.assertRaises(SystemExit):
+                        exec(compile(script, "ci-gate", "exec"), {})
+        with patch.dict(os.environ, {**successful, "MON_REQUIRED": "false", "MON_BROWSER": "skipped", "MON_NATIVE": "skipped"}):
+            exec(compile(script, "ci-gate", "exec"), {})
+
+    def test_docs_scope_and_full_scope_run_through_the_actual_scope_program(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            with patch.dict(os.environ, {"MON_BASE": SHA, "MON_FULL": "false", "GITHUB_OUTPUT": str(output)}), \
+                    patch.object(scope.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"docs/guides/testing.md\0README.md\0")):
+                scope.main()
+            self.assertEqual(output.read_text(), "native=false\n")
+            output.unlink()
+            with patch.dict(os.environ, {"MON_BASE": SHA, "MON_FULL": "true", "GITHUB_OUTPUT": str(output)}), \
+                    patch.object(scope.subprocess, "run") as diff:
+                scope.main()
+                diff.assert_not_called()
+            self.assertEqual(output.read_text(), "native=true\n")
 
 
 class SecurityPolicyTests(unittest.TestCase):

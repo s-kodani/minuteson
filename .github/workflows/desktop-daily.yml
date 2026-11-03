@@ -1,0 +1,21 @@
+name: Desktop daily validation
+
+on:
+  schedule:
+    # 04:17 JST; GitHub may start scheduled workflows later under load.
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-daily-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/desktop-platform-build.yml
+    with:
+      source_ref: ${{ github.sha }}
+      full: true
