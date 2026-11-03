@@ -882,7 +882,7 @@ fn windows_model_directory_keeps_existing_bytes_and_rejects_links_and_parent_rep
     );
 }
 #[test]
-fn windows_capture_stop_publishes_one_wav_and_restores_its_capture_history() {
+fn windows_capture_stop_restores_current_audio_without_capture_history() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let store = Storage::open_with_models(root.join("data"), root.join("models")).unwrap();
@@ -971,8 +971,8 @@ fn windows_capture_stop_publishes_one_wav_and_restores_its_capture_history() {
         std::thread::sleep(Duration::from_millis(25));
     }
     assert!(child.wait().unwrap().success());
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
+    let diagnostic_bytes = fs::read(output.join("capture-clock.json")).unwrap();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&diagnostic_bytes).unwrap();
     assert_eq!(diagnostic["state"], "saved");
     for lane in ["microphone", "system"] {
         assert_eq!(diagnostic[lane]["equalTimestampPackets"], 1);
@@ -1019,28 +1019,42 @@ fn windows_capture_stop_publishes_one_wav_and_restores_its_capture_history() {
         )
         .unwrap();
     assert_eq!(receipt.meeting_ids.len(), 1);
-    assert_eq!(
-        destination
-            .recorded_analysis_input(&receipt.meeting_ids[0])
-            .unwrap()
-            .0
-            .tracks
-            .len(),
-        1
-    );
+    let restored_meeting = &receipt.meeting_ids[0];
+    let (restored_plan, restored_known) = destination
+        .recorded_analysis_input(restored_meeting)
+        .unwrap();
+    assert_eq!(restored_plan.tracks.len(), 1);
+    destination
+        .verify_canonical_audio(restored_meeting, &|| false)
+        .unwrap();
+    let original_track = &plan.tracks[0];
+    let restored_track = &restored_plan.tracks[0];
+    assert_eq!(restored_track.chunks.len(), 1);
+    assert_eq!(restored_track.end_us, original_track.end_us);
+    let original_chunk = &original_track.chunks[0];
+    let restored_chunk = &restored_track.chunks[0];
+    assert_eq!(restored_chunk.frames, original_chunk.frames);
+    assert_eq!(restored_chunk.size, original_chunk.size);
+    assert_eq!(restored_chunk.hash, original_chunk.hash);
+    assert_eq!(restored_known.as_ref(), Some(&known));
     let sessions = destination.closed_input_recordings(None).unwrap().0;
     let restored_session = sessions
         .iter()
         .find(|row| row.meeting_id == receipt.meeting_ids[0])
         .unwrap();
-    let history = destination
-        .closed_input_snapshot(&restored_session.meeting_id, &restored_session.session_id)
-        .unwrap()
-        .unwrap();
+    assert_ne!(restored_session.session_id, session.id);
+    // Format 8 restores current audio and gaps, without producer input history.
+    assert!(
+        destination
+            .closed_input_snapshot(&restored_session.meeting_id, &restored_session.session_id)
+            .unwrap()
+            .is_none(),
+        "current-content restore must not import producer input history"
+    );
     assert_eq!(
-        history.source_owner_id(),
-        session.id,
-        "portable history preserves the original producer owner"
+        fs::read(output.join("capture-clock.json")).unwrap(),
+        diagnostic_bytes,
+        "backup and restore must preserve the original local capture diagnostics"
     );
     store
         .ensure_meeting_mix(&meeting.id, &|| false, &|_, _| {})
