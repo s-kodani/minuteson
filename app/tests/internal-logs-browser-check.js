@@ -275,6 +275,33 @@ async (page, _capturePath, detailUI) => {
     await page.evaluate(() => window.internalLogsFixture.release());
     await page.waitForFunction(() => document.querySelectorAll(".internal-logs tbody tr").length===400);
     results.push("history loading queues behind a live poll and discards its paused acknowledgement");
+    // Deliver a top scroll after a live reply is consumed but before React
+    // commits its following layout. The user's history request must win.
+    await reset(); await open(); await waitRows(200);
+    await page.evaluate(() => {
+      const invoke=window.__TAURI_INTERNALS__.invoke;
+      let injected=false;
+      window.__TAURI_INTERNALS__.invoke=async (command,args,options) => {
+        const reply=await invoke(command,args,options);
+        if(command!=="get_internal_logs" || args.query.after===undefined || injected) return reply;
+        const entries=reply.entries;
+        Object.defineProperty(reply,"entries",{get() {
+          if(!injected) {
+            injected=true;
+            queueMicrotask(() => {
+              const element=document.querySelector(".internal-logs-scroll");
+              element.scrollTop=Math.max(9,element.scrollTop); element.dispatchEvent(new Event("scroll"));
+              element.scrollTop=0; element.dispatchEvent(new Event("scroll"));
+            });
+          }
+          return entries;
+        }});
+        return reply;
+      };
+    });
+    await waitRows(400);
+    check((await rowState()).first === "701" && await toolbar.getByRole("button",{name:"自動更新を再開",exact:true}).count()===1, "a completed live reply swallowed the history request");
+    results.push("a completed live reply cannot overwrite a top scroll before its layout commits");
     await popup();
   };
 

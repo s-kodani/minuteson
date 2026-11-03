@@ -14,7 +14,7 @@ test("full offline disclosure binds the exact recipe, metadata and every notice 
   const review = await modelLicenseFixture("合成モデル", target, true);
   const summary = assertModelLicenseSummary({ licenseNames: review.licenseNames, summary: review.summary, restrictions: review.restrictions, disclosureHash: review.disclosureHash });
   assert.deepEqual(await assertModelLicenseReview(review, target, summary), review);
-  assert.match(review.notices[0].text, /<script>/);
+  assert.ok(review.notices[0].text.includes("<script>"));
   for (const field of ["modelLabel", "summary", "licenseNames", "restrictions", "official", "disclosureHash", "targetBinding", "notices"]) {
     const changed = structuredClone(review);
     if (field === "licenseNames" || field === "restrictions") changed[field].push("changed");

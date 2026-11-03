@@ -173,10 +173,15 @@ export function InternalLogs() {
     <div className="internal-logs-scroll" ref={scroll} tabIndex={0} aria-label="ログ一覧" onScroll={() => {
       const element = scroll.current;
       if (element) {
+        const pendingPosition = scrollUpdate.current;
         const follow = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         followingRef.current = follow; setFollowing(follow);
         if (element.scrollTop > 8) topArmed.current = true;
-        else if (topArmed.current && !scrollUpdate.current && !unavailable && hasOlder && failedMode.current !== "older") {
+        else if (topArmed.current && (!pendingPosition || "bottom" in pendingPosition) && !unavailable && hasOlder && failedMode.current !== "older") {
+          // A live reply can be waiting to follow the newest row. The user's
+          // history scroll takes priority; older-page anchor restoration is
+          // still protected by the pendingPosition check above.
+          scrollUpdate.current = null;
           topArmed.current = false;
           void request.current("older");
         }

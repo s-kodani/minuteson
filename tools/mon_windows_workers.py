@@ -19,6 +19,11 @@ OPTIONS=['-DBUILD_SHARED_LIBS=OFF','-DGGML_NATIVE=OFF','-DGGML_OPENMP=OFF','-DGG
     '-DGGML_AVX=OFF','-DGGML_AVX2=OFF','-DGGML_FMA=OFF','-DGGML_F16C=OFF',
     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DCMAKE_CXX_FLAGS=/utf-8 /EHsc']
 
+def write_nlohmann_notice(package, header):
+    license_text=(ROOT/'third-party/notices/spdx-MIT-template.txt').read_text(encoding='utf8').replace('<year> <copyright holders>','2013 - 2025 Niels Lohmann')
+    # This is a cross-platform, SHA-bound disclosure, including its LF bytes.
+    (package/'nlohmann-MIT.txt').write_text(header+'\n'+license_text,encoding='utf8',newline='\n')
+
 def extract(archive,target):
     if not (target/'.complete').exists():
         with tarfile.open(archive) as source:
@@ -101,8 +106,7 @@ def prepare(vulkan=False, jobs=4):
     (package/('build-info-vulkan.json' if vulkan else 'build-info.json')).write_text(json.dumps(dict(recipeSha256=stamp,whisperSource=definition['sourceSha256'],llamaCommit=shared.LLAMA_COMMIT,sherpaCommit=shared.SHERPA_COMMIT,vulkan=vulkan,protocol=1),indent=2)+'\n',encoding='utf8')
     for engine,source in roots.items():shutil.copyfile(source/'LICENSE',package/(engine+'-MIT.txt'))
     header=(roots['llama']/'vendor/nlohmann/json.hpp').read_text(encoding='utf8').split('#ifndef')[0]
-    license_text=(ROOT/'third-party/notices/spdx-MIT-template.txt').read_text(encoding='utf8').replace('<year> <copyright holders>','2013 - 2025 Niels Lohmann')
-    (package/'nlohmann-MIT.txt').write_text(header+'\n'+license_text,encoding='utf8')
+    write_nlohmann_notice(package,header)
     print('Windows resident workers ready',package,flush=True)
 
 if __name__=='__main__':

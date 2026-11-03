@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,11 @@ pub(crate) async fn inspect(
 
 
 class CommandContractTests(unittest.TestCase):
+    def test_repository_check_does_not_depend_on_windows_default_encoding(self):
+        result = subprocess.run([sys.executable, '-X', 'utf8=0', str(ROOT / 'tools/mon_contracts.py'), '--check'],
+                                cwd=ROOT, capture_output=True, text=True, encoding='utf8', errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def fixture(self, source=SOURCE):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

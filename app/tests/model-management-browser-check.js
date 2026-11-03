@@ -66,6 +66,13 @@ async (page, capturePath, { approveModelLicense }) => {
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === 'review_model_body_deletion').length) === 3, 'review was automatically resent');
   results.push('write locks protect deletion; lost review and delete replies reconcile the original copy without replay');
 
+  // A prior operation's success may remain visible while hovered or queued.
+  // Acknowledge it before asserting that the next operation has not completed.
+  const previousSuccess = page.locator('.toast-card').filter({ hasText: 'モデルをローカルから削除しました。' });
+  await previousSuccess.waitFor();
+  await previousSuccess.getByRole('button', { name: '成功通知を閉じる', exact: true }).click();
+  await previousSuccess.waitFor({ state: 'hidden' });
+
   await page.setViewportSize({ width: 1200, height: 900 });
   const selector = page.getByRole('combobox', { name: '文字起こしのモデル', exact: true });
   await selector.selectOption('official:synthetic-catalog');
@@ -79,10 +86,11 @@ async (page, capturePath, { approveModelLicense }) => {
   await start(selected); await remove().click();
   await page.waitForFunction(() => window.modelDownloadFixture.managementSnapshot().busy);
   check(await selector.isDisabled(), 'model selection changed during deletion');
-  check(await page.getByText('モデルをローカルから削除しました。', { exact: true }).count() === 0, 'success preceded completion');
+  check(await previousSuccess.count() === 0, 'success preceded completion');
   await page.evaluate(() => window.modelDownloadFixture.finishDeletion());
   await page.waitForFunction(() => document.querySelectorAll('.model-inventory [data-model-copy]').length === 1);
   await page.waitForFunction(() => !document.querySelector('.model-selection-row select')?.disabled);
+  await previousSuccess.waitFor();
   check(await page.getByRole('alert').filter({ hasText: '状態が不正' }).count() === 0, 'native-shaped receipt was rejected');
   results.push('selected-model deletion waits for durable completion, refreshes inventory and unlocks model selection');
 

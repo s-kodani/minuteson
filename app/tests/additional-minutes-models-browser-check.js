@@ -1,4 +1,4 @@
-async function (page, capturePath, { approveModelLicense }) {
+(async function (page, capturePath, { approveModelLicense }) {
   const check = (value, message) => { if (!value) throw Error(message); };
   const field = page.getByRole("combobox", { name: "議事録生成のモデル", exact: true });
   const row = page.locator(".model-selection-row").filter({ has: field });
@@ -42,4 +42,4 @@ async function (page, capturePath, { approveModelLicense }) {
   }
   await page.screenshot({ path: "output/playwright/additional-minutes-models.png" });
   return ["all nine minutes models load and new choices select without IO", "each new model downloads and applies with one stable label", "selection restores after remount and installed switching reuses bytes", "desktop and mobile model controls fit"];
-}
+})

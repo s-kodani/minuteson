@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import stat
 import subprocess
@@ -87,6 +88,60 @@ class Provider:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_checkout_source_selects_the_admitted_older_main_commit_in_a_real_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                return subprocess.run(['git', *args], cwd=root, check=True, capture_output=True,
+                                      text=True, encoding='utf8').stdout.strip()
+            git('init', '-q', '-b', 'main')
+            source = root / 'source.txt'
+            source.write_text('admitted version', encoding='utf8')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'admitted')
+            admitted = git('rev-parse', 'HEAD')
+            source.write_text('new main version', encoding='utf8')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'main advanced')
+            git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'))
+            with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), patch.object(release, 'ROOT', root):
+                release.checkout_source(admitted)
+            self.assertEqual(git('rev-parse', 'HEAD'), admitted)
+            self.assertEqual(source.read_text(encoding='utf8'), 'admitted version')
+
+    def test_release_builds_bootstrap_source_admission_from_main(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text(encoding='utf8'))
+        for name in ('macos-prepare', 'macos-sign', 'windows', 'store', 'publish'):
+            steps = workflow['jobs'][name]['steps']
+            with self.subTest(job=name):
+                self.assertEqual(steps[0]['with']['ref'], 'main')
+                self.assertEqual(steps[0]['with']['fetch-depth'], 0)
+                admission = next(s for s in steps if s.get('name') == 'Check out admitted source with trusted main code')
+                self.assertEqual(admission['env']['MON_SOURCE_SHA'], '${{ needs.guard.outputs.source_sha }}')
+                self.assertIn('mon_release.py checkout', admission['run'])
+                self.assertLess(next(i for i,s in enumerate(steps) if s.get('name') == admission['name']),
+                                next(i for i,s in enumerate(steps) if 'run' in s and 'mon_release.py checkout' not in s['run']))
+
+    def test_checkout_source_rejects_untrusted_refs_dirty_trees_and_non_main_commits(self):
+        for values in ({'GITHUB_REF': 'refs/heads/other'}, {'GITHUB_REF': 'refs/heads/main'}):
+            with patch.dict(os.environ, values), patch.object(release.subprocess, 'run') as run:
+                with self.assertRaises(ValueError):
+                    release.checkout_source(SHA if values['GITHUB_REF'] != 'refs/heads/main' else '--option')
+                run.assert_not_called()
+        for dirty, contained in ((True, True), (False, False), (False, True)):
+            calls = []
+            def run(args, **kwargs):
+                calls.append(args)
+                return subprocess.CompletedProcess(args, 0 if args[1] != 'merge-base' or contained else 1,
+                                                   ' M unreviewed.py' if args[1] == 'status' and dirty else '')
+            with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), patch.object(release.subprocess, 'run', side_effect=run):
+                if dirty or not contained:
+                    with self.assertRaises(ValueError): release.checkout_source(SHA)
+                    self.assertFalse(any(args[1] == 'checkout' for args in calls))
+                else:
+                    release.checkout_source(SHA)
+                    self.assertEqual(calls[-1], ['git', 'checkout', '--detach', SHA])
+
     def test_guard_can_read_drafts_without_giving_build_jobs_write_access(self):
         workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
         guard = workflow["jobs"]["guard"]
@@ -109,7 +164,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             release.discover(api)
             with patch.object(api, "release", side_effect=read_draft), patch.object(release, "GitHub", return_value=api):
                 exec(compile(script, "release-guard", "exec"), {})
-            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\n")
+            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\nsource_sha=" + SHA + "\n")
         for name in ("ci", "security", "macos-prepare", "macos-sign", "windows", "store"):
             with self.subTest(job=name):
                 effective = workflow["jobs"][name].get("permissions", workflow["permissions"])
@@ -125,20 +180,90 @@ class DesktopWorkflowTests(unittest.TestCase):
     def expression(value, context):
         """Evaluate the small boolean subset used by the native step guards."""
         value = value.removeprefix("${{ ").removesuffix(" }}")
-        value = re.sub(r"\b(?:inputs|github|runner|env)(?:\.[A-Za-z_][A-Za-z_0-9]*)+",
+        value = re.sub(r"\b(?:inputs|github|runner|env|steps|matrix)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
                        lambda match: repr(context[match[0]]), value)
         value = value.replace("&&", " and ").replace("||", " or ")
-        return eval(value, {"__builtins__": {}}, {"always": lambda: True})
+        return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
 
-    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows"):
+    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
-                   "runner.os": operating_system}
+                   "runner.os": operating_system, "github.ref": "refs/heads/main",
+                   "github.workflow": "Desktop platform validation", "inputs.source_ref": "", "github.sha": SHA,
+                   "steps.native_cache.outputs.cache-hit": "false", "steps.native_downloads.outputs.cache-hit": "false",
+                   "steps.rust_cache.outputs.cache-hit": str(rust_cache_hit).lower()}
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
+        context["env.MON_SAVE_CI_CACHE"] = str(self.expression(native["env"]["MON_SAVE_CI_CACHE"], context)).lower()
         return [step for step in native["steps"] if self.expression(step.get("if", "True"), context)]
 
     def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
         return "\n".join(step.get("run", "") for step in self.native_steps(event, full, suite, operating_system))
+
+    def test_native_cache_is_exact_and_only_successful_trusted_main_jobs_save(self):
+        context = {"github.ref": "refs/heads/main", "github.workflow": "Desktop platform validation",
+                   "github.event_name": "push", "inputs.source_ref": "", "github.sha": SHA}
+        expression = self.workflow['jobs']['native']['env']['MON_SAVE_CI_CACHE']
+        self.assertTrue(self.expression(expression, context))
+        for change in ({'github.ref': 'refs/pull/1/merge'}, {'github.event_name': 'pull_request'},
+                       {'inputs.source_ref': '2' * 40}, {'github.workflow': 'Release build'}):
+            self.assertFalse(self.expression(expression, {**context, **change}), change)
+        self.assertTrue(self.expression(expression, {**context, 'github.event_name': 'schedule', 'inputs.source_ref': SHA}))
+        for job in ('native', 'browser'):
+            for step in self.workflow['jobs'][job]['steps']:
+                action = step.get('uses', '')
+                if action.startswith('actions/cache/restore@'):
+                    self.assertNotIn('restore-keys', step['with'])
+                if action.startswith('actions/cache/save@'):
+                    self.assertIn('success()', step['if'])
+                    self.assertIn("env.MON_SAVE_CI_CACHE == 'true'", step['if'])
+
+    def test_full_rust_cache_preserves_legacy_fallback_without_duplicate_warm_restores(self):
+        for full, hit, count in ((False, False, 1), (False, True, 1), (True, False, 2), (True, True, 1)):
+            with self.subTest(full=full, hit=hit):
+                steps = self.native_steps(event='workflow_dispatch', suite='full' if full else 'quick', rust_cache_hit=hit)
+                caches = [s for s in steps if s.get('uses', '').startswith('Swatinem/rust-cache@')]
+                self.assertEqual(len(caches), count)
+                primary = next(s for s in caches if s.get('id') == 'rust_cache')
+                self.assertEqual(self.expression(primary['with']['key'], {'env.MON_CI_FULL': str(full).lower()}), 'full' if full else '')
+                self.assertEqual(primary['with']['workspaces'], '. -> app/src-tauri/target')
+                if count == 2:
+                    fallback = next(s for s in caches if s is not primary)
+                    self.assertNotIn('key', fallback['with'])
+                    self.assertEqual(fallback['with']['save-if'], 'false')
+
+    def test_swift_analysis_cache_preserves_extraction_and_trusted_main_writes(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
+        job = workflow['jobs']['codeql']
+        cache = next(step for step in job['steps'] if step.get('uses', '').startswith('Swatinem/rust-cache@'))
+        self.assertEqual(cache['if'], "matrix.language == 'swift'")
+        self.assertEqual(cache['with']['workspaces'], '. -> probes/macos-capture/.build/capture-core')
+        self.assertEqual(cache['with']['save-if'], "${{ env.MON_SAVE_CI_CACHE == 'true' }}")
+        context = {'github.ref': 'refs/heads/main', 'github.workflow': 'Security validation',
+                   'github.event_name': 'push', 'inputs.source_ref': '', 'github.sha': SHA}
+        expression = job['env']['MON_SAVE_CI_CACHE']
+        self.assertTrue(self.expression(expression, context))
+        for change in ({'github.event_name': 'pull_request'}, {'inputs.source_ref': '2' * 40},
+                       {'github.workflow': 'Release build'}, {'github.ref': 'refs/heads/topic'}):
+            self.assertFalse(self.expression(expression, {**context, **change}), change)
+        extraction = next(step for step in job['steps'] if step.get('name') == 'Swift extraction build')
+        self.assertEqual(extraction['if'], "matrix.language == 'swift'")
+        self.assertIn('swift build', extraction['run'])
+        self.assertNotIn('cache-hit', extraction['if'])
+
+    @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'Run the CI Bash control test on Unix, not the Windows WSL launcher')
+    def test_required_browser_check_failure_cannot_be_masked_by_a_later_success(self):
+        cases = (
+            ('Check generated command contracts', 'python tools/mon_contracts.py --check', 'python tools/mon_model_catalog.py --check'),
+            ('Frontend tests and build', 'npm test', 'npm run build'),
+        )
+        for name, check, later in cases:
+            with self.subTest(step=name):
+                step = next(s for s in self.workflow['jobs']['browser']['steps'] if s.get('name') == name)
+                self.assertEqual(step['shell'], 'bash')
+                script = step['run'].replace(check, 'false').replace(later, "printf 'incorrectly continued'")
+                result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('incorrectly continued', result.stdout)
 
     def test_pr_and_main_run_quick_without_native_resource_builds(self):
         for event in ("pull_request", "push"):
@@ -213,7 +338,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         release_workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
         release_ci = release_workflow["jobs"]["ci"]
         self.assertTrue(release_ci["with"]["full"])
-        self.assertEqual(release_ci["with"]["source_ref"], "${{ inputs.source_sha }}")
+        self.assertEqual(release_ci["with"]["source_ref"], "${{ needs.guard.outputs.source_sha }}")
         self.assertNotEqual(daily["concurrency"]["group"], self.workflow["concurrency"]["group"])
 
     def test_gate_rejects_required_failure_cancellation_or_skip_but_allows_docs_only(self):

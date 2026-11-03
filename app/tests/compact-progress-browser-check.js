@@ -106,6 +106,9 @@ async (page, capturePath, detailUI) => {
   await away();
   await trigger().click(); await state(false);
   check(await banner.evaluate(e => e.getBoundingClientRect().height) === compactHeight, 'widening the window did not restore the single-row layout');
+  // Test the identity reset from a pinned card without a stationary pointer
+  // opening the replacement card as it mounts under that pointer in WebKit.
+  await trigger().click(); await state(true); await away(); await state(true);
   await page.evaluate(async () => {
     const f = window.monBrowserFixture, first = f.notificationJobs[0];
     f.notificationJobs = [

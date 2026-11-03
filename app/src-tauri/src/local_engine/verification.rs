@@ -244,6 +244,10 @@ mod tests {
         assert_eq!(CACHE.with(|c| c.borrow().as_ref().unwrap().hits), 1);
         scope.finish(&|| false).unwrap();
         let old = crate::native_fs::metadata(&p).unwrap().modified().unwrap();
+        // Keep the mutation outside the original NTFS clock tick so this
+        // fixture has a distinct change time even after restoring its mtime.
+        #[cfg(windows)]
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(&p, b"tampered").unwrap();
         File::options()
             .write(true)

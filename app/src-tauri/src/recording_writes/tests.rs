@@ -83,9 +83,17 @@ fn touching_or_repolling_without_more_pcm_cannot_freshen_old_write_but_growth_ca
     let file = OpenOptions::new().write(true).open(&name).unwrap();
     file.set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(10)))
         .unwrap();
+    drop(file);
     let first = reader.read(&path, OWNER).unwrap();
     assert!(first.microphone.age_ms.unwrap() >= 10000);
-    file.set_times(FileTimes::new().set_modified(SystemTime::now()))
+    // Leave room for Windows' automatic write timestamp to advance past the
+    // explicit touch, even when both operations happen within one clock tick.
+    // Touching still must not freshen the unchanged PCM from ten seconds ago.
+    OpenOptions::new()
+        .write(true)
+        .open(&name)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(1)))
         .unwrap();
     let touched = reader.read(&path, OWNER).unwrap();
     assert!(touched.microphone.age_ms.unwrap() >= first.microphone.age_ms.unwrap());

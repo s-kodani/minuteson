@@ -5,11 +5,12 @@ description: "共通・OS別の検査コマンド、Rustキャッシュと品質
 tags: ["testing", "evaluation", "maintenance"]
 status: "stable"
 sources:
+  - resource: "https://github.com/s-kodani/minuteson/blob/15cf879bd48bf9e77eba3ee17a6aa8633a06da6e/tools/mon_ci_cache.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/Makefile"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_rust_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_ci_native_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/rust-test-suites.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/15cf879bd48bf9e77eba3ee17a6aa8633a06da6e/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/evaluation/README.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_docs.py"
@@ -49,6 +50,16 @@ PRとmain更新は通常スイートを使い、QAインストーラー・MSIX�
 全件CIで作るQAインストーラーとMSIXは、ビルド・内容照合の検証用です。バイナリはActions成果物へアップロードせず、ビルド証跡JSONとテスト時間・診断資料を保持します。パッケージ生成の成功を、実機確認や配布条件の承認とは扱いません。
 
 実モデル・実機・専用連携を必要とする既存のignoredテストは、各テストの条件を満たした専用コマンドで呼び出します。`full`でも全ignoredテストを一括実行しません。
+
+## CIのキャッシュ
+
+CIはnpm・検査用pip依存、Playwrightのブラウザー、Rustの依存を再利用します。チェックアウトごとの更新時刻で再ビルドされるワークスペース出力はRust依存キャッシュに追加しません。通常CIは既存のキーを維持し、全件用はリリース依存も保存できる別キーを使います。全件用に完全一致しない場合だけ既存の依存キャッシュも復元し、完全一致時の二重転送を避けます。全件検証ではWindowsのCMake／Vulkanビルド中間資材と固定ダウンロード、macOSのSwift／Rust FFIビルドもキャッシュします。SwiftのCodeQL検査ではRust FFIの依存だけを再利用し、解析対象のSwiftコードは毎回ビルドします。配布用パッケージ、署名状態、インストーラー、モデルの重み、会議データはキャッシュ対象に含めません。
+
+ネイティブ中間資材は[入力定義](../../tools/mon_ci_cache.py)のソース・設定・固定資材定義と、OS・アーキテクチャ・ランナーイメージ・Rust・CMakeまたはSwift／SDK・ビルドフラグを照合した完全一致キーで復元します。別の入力へ広く一致させる復元キーは使いません。復元後も通常のビルド・固定SHA照合・全件検査を実行します。
+
+共有するビルド・ブラウザーキャッシュは、任意のソース指定がないmainのpush・日次・手動実行が成功した場合だけ保存します。PRとリリース検証は復元のみです。初回とキャッシュ復元時の所要時間を区別し、Actionsのキャッシュ命中表示とRust時間診断で確認します。キャッシュ未作成時や入力変更後の短縮は保証しません。
+
+Windowsの全件ジョブは、初回のビルドと全件検査・QAインストーラー・MSIX作成に最大180分を確保します。通常ジョブとmacOSの上限は120分です。
 
 ## macOSのRust本体とキャッシュ
 

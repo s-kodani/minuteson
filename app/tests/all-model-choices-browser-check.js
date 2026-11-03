@@ -1,4 +1,4 @@
-async function (page, capturePath, { approveModelLicense }) {
+(async function (page, capturePath, { approveModelLicense }) {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const choices = [
     ["文字起こし", "whisper.cpp", ["whisper-synthetic-tiny", "whisper-synthetic-base", "whisper-synthetic-small", "whisper-synthetic-medium", "whisper-synthetic-large-v3", "whisper-synthetic-large-v3-turbo"]],
@@ -123,4 +123,4 @@ async function (page, capturePath, { approveModelLicense }) {
   results.push("duplicate packages and older recipe IDs reuse exact model bytes with one label and retain the active selection");
   await page.screenshot({ path: "output/playwright/model-choices-qwen3-20261016.png" });
   return { passed: results.length, results };
-}
+})

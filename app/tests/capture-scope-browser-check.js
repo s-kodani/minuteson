@@ -4,7 +4,7 @@ async page=>{
   const app=()=>page.getByRole("combobox",{name:"録音するアプリ",exact:true});
   const refresh=()=>page.getByRole("button",{name:"アプリ一覧を再確認",exact:true});
   const selected=async()=>JSON.parse(await page.locator('[aria-label="選択した取得条件"]').innerText());
-  const ready=()=>page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.hasAttribute("disabled"));
+  const ready=()=>page.waitForFunction(()=>{const input=document.querySelector('[aria-label="録音するアプリ"]');return input instanceof HTMLSelectElement&&!input.disabled;});
   const key=pid=>page.evaluate(pid=>JSON.stringify([pid,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).bundleIdentifier,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).launchTimeUs]),pid);
   check((await selected()).mode==="system"&&await page.evaluate(()=>window.scopeFixture.calls.length===0),"default global scope unexpectedly enumerated or captured");
   results.push("global default requires no application enumeration or capture");
@@ -36,6 +36,7 @@ async page=>{
   await scope().selectOption("application");await ready();check(await selected()===null&&await app().locator("option").count()===1,"late lookup chose vanished target or fell back to global scope");
   results.push("late application catalog after explicit global switch cannot restore a vanished target");
   await page.evaluate(()=>{window.scopeFixture.catalog.applications=[{pid:456,bundleIdentifier:"com.example.meeting",launchTimeUs:1_791_100_000_000_001,name:"会議アプリ"}];window.scopeFixture.catalog.systemPermission="permissionRequired";});await refresh().click();await ready();
+  await page.getByRole("alert").filter({hasText:/macOSのシステム設定/}).waitFor();
   check(await page.getByRole("alert").filter({hasText:/macOSのシステム設定/}).isVisible()&&await selected()===null,"permission required fabricated successful input or chose another app");
   results.push("permission-needed metadata gives manual guidance without fabricating input or choosing an alternate");
   await app().selectOption(await key(456));await page.evaluate(()=>{window.scopeFixture.hold=true;});await refresh().click();await page.waitForFunction(()=>window.scopeFixture.pending.length===1);
