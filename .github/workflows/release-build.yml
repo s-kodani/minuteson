@@ -232,7 +232,7 @@ jobs:
           MON_SOURCE_SHA: ${{ inputs.source_sha }}
           MON_TAG: ${{ needs.guard.outputs.tag }}
         run: python tools/mon_release_artifacts.py assemble --input output/release-input --output output/publish --source-sha "$MON_SOURCE_SHA" --tag "$MON_TAG"
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: attest
         with:
           subject-path: output/publish/*
