@@ -180,16 +180,17 @@ class DesktopWorkflowTests(unittest.TestCase):
     def expression(value, context):
         """Evaluate the small boolean subset used by the native step guards."""
         value = value.removeprefix("${{ ").removesuffix(" }}")
-        value = re.sub(r"\b(?:inputs|github|runner|env|steps)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
+        value = re.sub(r"\b(?:inputs|github|runner|env|steps|matrix)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
                        lambda match: repr(context[match[0]]), value)
         value = value.replace("&&", " and ").replace("||", " or ")
         return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
 
-    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows"):
+    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
                    "runner.os": operating_system, "github.ref": "refs/heads/main",
                    "github.workflow": "Desktop platform validation", "inputs.source_ref": "", "github.sha": SHA,
-                   "steps.native_cache.outputs.cache-hit": "false", "steps.native_downloads.outputs.cache-hit": "false"}
+                   "steps.native_cache.outputs.cache-hit": "false", "steps.native_downloads.outputs.cache-hit": "false",
+                   "steps.rust_cache.outputs.cache-hit": str(rust_cache_hit).lower()}
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
         context["env.MON_SAVE_CI_CACHE"] = str(self.expression(native["env"]["MON_SAVE_CI_CACHE"], context)).lower()
@@ -215,6 +216,20 @@ class DesktopWorkflowTests(unittest.TestCase):
                 if action.startswith('actions/cache/save@'):
                     self.assertIn('success()', step['if'])
                     self.assertIn("env.MON_SAVE_CI_CACHE == 'true'", step['if'])
+
+    def test_full_rust_cache_preserves_legacy_fallback_without_duplicate_warm_restores(self):
+        for full, hit, count in ((False, False, 1), (False, True, 1), (True, False, 2), (True, True, 1)):
+            with self.subTest(full=full, hit=hit):
+                steps = self.native_steps(event='workflow_dispatch', suite='full' if full else 'quick', rust_cache_hit=hit)
+                caches = [s for s in steps if s.get('uses', '').startswith('Swatinem/rust-cache@')]
+                self.assertEqual(len(caches), count)
+                primary = next(s for s in caches if s.get('id') == 'rust_cache')
+                self.assertEqual(self.expression(primary['with']['key'], {'env.MON_CI_FULL': str(full).lower()}), 'full' if full else '')
+                self.assertEqual(primary['with']['workspaces'], '. -> app/src-tauri/target')
+                if count == 2:
+                    fallback = next(s for s in caches if s is not primary)
+                    self.assertNotIn('key', fallback['with'])
+                    self.assertEqual(fallback['with']['save-if'], 'false')
 
     def test_swift_analysis_cache_preserves_extraction_and_trusted_main_writes(self):
         workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())

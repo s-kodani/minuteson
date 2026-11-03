@@ -169,7 +169,7 @@ jobs:
       matrix:
         os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ (inputs.full || inputs.suite == 'full') && matrix.os == 'windows-2022' && 180 || 120 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -187,9 +187,19 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        id: rust_cache
         with:
           workspaces: . -> app/src-tauri/target
+          # Full builds also compile release dependencies. Their immutable
+          # cache must not be preempted by a quick build's debug-only entry.
+          key: ${{ env.MON_CI_FULL == 'true' && 'full' || '' }}
           save-if: ${{ env.MON_SAVE_CI_CACHE == 'true' }}
+      - name: Restore existing Rust dependencies on a cold full build
+        if: env.MON_CI_FULL == 'true' && steps.rust_cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: . -> app/src-tauri/target
+          save-if: 'false'
       - name: Select Swift toolchain for native cache
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         shell: bash
