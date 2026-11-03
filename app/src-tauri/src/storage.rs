@@ -12,6 +12,7 @@ mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
 // Backup snapshot/archive core; additive restore and controller integration follow.
+mod audio_cleanup_upgrade;
 mod audio_publication;
 #[allow(dead_code)]
 pub(crate) mod backup;
