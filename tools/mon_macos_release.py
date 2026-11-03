@@ -19,6 +19,9 @@ import sys
 import tempfile
 import time
 import uuid
+import posixpath
+import stat
+import zipfile
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 TEAM = re.compile(r"[A-Z0-9]{10}\Z")
@@ -251,7 +254,7 @@ def expected_notices():
     return collector.collect(REPOSITORY, json.loads(stdout), lock)
 
 
-def verify_notices(app):
+def verify_notices(app, expected=None):
     """Verify collection/copy evidence, never elevate it to license approval."""
     inventory_path = private_path(app / "Contents/Resources/third-party-inventory.json")
     text_path = private_path(app / "Contents/Resources/THIRD_PARTY_NOTICES.txt")
@@ -271,14 +274,18 @@ def verify_notices(app):
             or inventory.get("noticesBytes") != text_path.stat().st_size
             or inventory.get("noticesSha256") != digest(text_path)):
         raise ValueError("dependency notices are missing, stale or changed; no license approval")
-    expected_text, expected_inventory = expected_notices()
-    if (text_path.read_bytes() != expected_text
-            or json.dumps(inventory, sort_keys=True) != json.dumps(expected_inventory, sort_keys=True)):
-        raise ValueError("dependency notices differ from current offline collection; no license approval")
-    return {"state": "collected_not_reviewed", "packages": len(inventory["packages"]),
-            "missingNoticeTexts": inventory["missingNoticeTexts"],
-            "supplementManifestSha256": inventory["supplementManifestSha256"],
-            "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
+    if expected is None:
+        expected_text, expected_inventory = expected_notices()
+        if (text_path.read_bytes() != expected_text
+                or json.dumps(inventory, sort_keys=True) != json.dumps(expected_inventory, sort_keys=True)):
+            raise ValueError("dependency notices differ from current offline collection; no license approval")
+    result = {"state": "collected_not_reviewed", "packages": len(inventory["packages"]),
+              "missingNoticeTexts": inventory["missingNoticeTexts"],
+              "supplementManifestSha256": inventory["supplementManifestSha256"],
+              "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
+    if expected is not None and result != expected:
+        raise ValueError("dependency notices differ from the prepared collection receipt")
+    return result
 
 
 def asr_module():
@@ -398,7 +405,71 @@ def verify_asr_runtime(app, team=None):
             "nativeOnboarding": "not_verified", "licenseReview": "not_verified"}
 
 
-def build(output, identity, team, profile, environment):
+def prepared_receipt(prepared):
+    """Check an inert handoff before loading credentials or invoking ditto."""
+    private_path(prepared, directory=True)
+    receipt_file = private_path(prepared / "prepared-app.json")
+    if receipt_file.stat().st_size > 65536:
+        raise ValueError("prepared receipt exceeds metadata limit")
+    receipt = json.loads(receipt_file.read_text())
+    config = release_configuration()
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY).decode().strip()
+    archive = private_path(prepared / "prepared-app.zip")
+    if (receipt.get("commit") != commit or receipt.get("version") != config["version"]
+            or receipt.get("productName") != config["productName"] or receipt.get("archiveSha256") != digest(archive)
+            or not isinstance(receipt.get("notices"), dict)):
+        raise ValueError("prepared app source/version/archive differs")
+    bundle_name = config["productName"] + ".app"
+    with zipfile.ZipFile(archive) as source:
+        members = source.infolist()
+        if len(members) > 100000 or sum(item.file_size for item in members) > 4 * 1024**3:
+            raise ValueError("prepared archive exceeds expansion limit")
+        for item in members:
+            name = item.filename
+            parts = name.rstrip("/").split("/")
+            if (name.startswith("/") or any(p in ("", ".", "..") for p in parts)
+                    or "\\" in name or parts[0] not in (bundle_name, "__MACOSX")):
+                raise ValueError("unsafe prepared archive member")
+            if stat.S_ISLNK(item.external_attr >> 16):
+                if item.file_size > 4096:
+                    raise ValueError("prepared link exceeds limit")
+                target = source.read(item).decode("utf8")
+                resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                if target.startswith("/") or "\\" in target or not resolved.startswith(bundle_name + "/"):
+                    raise ValueError("prepared archive link escapes app")
+    return receipt
+
+
+def prepare(output, environment):
+    """Compile without signing credentials; hand off a verified app to a later job."""
+    if sys.platform != "darwin":
+        raise ValueError("preparation requires macOS")
+    if not output.is_absolute() or output.exists() or output.is_symlink():
+        raise ValueError("preparation output must be a new absolute directory")
+    private_path(output.parent, directory=True)
+    config = release_configuration()
+    output.mkdir(mode=0o700)
+    cache = output / "build-cache"
+    stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build",
+                             "--config", "src-tauri/tauri.release.conf.json", "--", "--locked"],
+                            cwd=REPOSITORY / "app", env=build_environment(environment, cache))
+    (output / "preparation-build.log").write_bytes(stdout + stderr)
+    app = cache / "release/bundle/macos" / (config["productName"] + ".app")
+    layout(app, config["version"], config["productName"])
+    notices = verify_notices(app)
+    verify_asr_runtime(app)
+    verify_inference_runtime(app)
+    archive = output / "prepared-app.zip"
+    command(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], timeout=300)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY).decode().strip()
+    result = {"schemaVersion": 1, "commit": commit, "version": config["version"],
+              "archiveSha256": digest(archive), "productName": config["productName"], "notices": notices}
+    (output / "prepared-app.json").write_text(json.dumps(result, indent=2) + "\n")
+    shutil.rmtree(cache)
+    return result
+
+
+def build(output, identity, team, profile, environment, prepared=None):
     # All explicit prerequisites precede mkdir, compilation, signing or upload.
     credentials(identity, team, profile)
     if sys.platform != "darwin":
@@ -422,18 +493,26 @@ def build(output, identity, team, profile, environment):
     timings = {}
     try:
         started = time.monotonic()
-        stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build", "--config",
-                 "src-tauri/tauri.release.conf.json"], cwd=REPOSITORY / "app",
-                env=build_environment(environment, cache))
+        if prepared is None:
+            stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build", "--config",
+                     "src-tauri/tauri.release.conf.json", "--", "--locked"], cwd=REPOSITORY / "app",
+                    env=build_environment(environment, cache))
+            with (output / "preparation-build.log").open("xb") as stream:
+                stream.write(stdout + stderr)
+            built = cache / "release/bundle/macos" / bundle_name
+        else:
+            # No build commands run in the signing job. The same-run archive
+            # and its recorded source/hash are checked before extraction.
+            receipt = prepared_receipt(prepared)
+            archive = prepared / "prepared-app.zip"
+            command(["/usr/bin/ditto", "-x", "-k", str(archive), str(cache)], timeout=300)
+            built = cache / bundle_name
         timings["buildSeconds"] = round(time.monotonic() - started, 3)
-        with (output / "preparation-build.log").open("xb") as stream:
-            stream.write(stdout + stderr)
-        built = cache / "release/bundle/macos" / bundle_name
         capture, embedding = layout(built, version, product_name)
         app = output / bundle_name
         command(["/usr/bin/ditto", str(built), str(app)], timeout=120)
         capture, embedding = layout(app, version, product_name)
-        verify_notices(app)
+        verify_notices(app) if prepared is None else verify_notices(app, receipt["notices"])
         verify_asr_runtime(app)
         verify_inference_runtime(app)
         started = time.monotonic()
@@ -470,7 +549,7 @@ def build(output, identity, team, profile, environment):
         for path, policy_file in ((capture, "capture.plist"), (embedding, "embedding.plist"), (app, "main.plist")):
             verify_signature(path, team, runtime=True, entitlements=policy / policy_file)
         verify_signature(dmg, team, runtime=False)
-        dependency_notices = verify_notices(app)
+        dependency_notices = verify_notices(app) if prepared is None else verify_notices(app, receipt["notices"])
         asr_runtime = verify_asr_runtime(app, team)
         verify_inference_runtime(app, team)
         # Only this newly-created cache is reclaimed, after all owned commands
@@ -499,14 +578,27 @@ def build(output, identity, team, profile, environment):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--team-id", required=True)
+    parser.add_argument("--team-id")
+    parser.add_argument("--prepared-app", type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--prepare", action="store_true", help="compile an unsigned handoff, no credentials or uploads")
     mode.add_argument("--sign-only", action="store_true", help="no uploads; not notarized")
     mode.add_argument("--notary-profile", help="explicitly authorize two uploads using an existing notarytool keychain profile")
     args = parser.parse_args(argv)
     try:
-        result = build(args.output_dir, os.environ.get("APPLE_SIGNING_IDENTITY", ""),
-                       args.team_id, args.notary_profile, os.environ)
+        if args.prepare:
+            if args.prepared_app or args.team_id:
+                raise ValueError("prepare does not accept signing inputs")
+            result = prepare(args.output_dir, os.environ)
+        else:
+            if args.team_id is None:
+                raise ValueError("--team-id is required for signing")
+            if args.prepared_app is None:
+                result = build(args.output_dir, os.environ.get("APPLE_SIGNING_IDENTITY", ""),
+                               args.team_id, args.notary_profile, os.environ)
+            else:
+                result = build(args.output_dir, os.environ.get("APPLE_SIGNING_IDENTITY", ""),
+                               args.team_id, args.notary_profile, os.environ, args.prepared_app)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:

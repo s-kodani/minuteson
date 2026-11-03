@@ -15,6 +15,10 @@ sources:
 
 # テストと任意の品質評価
 
+## セキュリティと文書の検査
+
+`make check-docs`と`make check-security`を実行します。準備、検査範囲、例外とCI判定は[DevSecOps運用](devsecops.md)、PRからの流れは[開発フロー](development-workflow.md)を参照してください。
+
 ## 通常の検査
 
 リポジトリルートで実行します。画面の検査には`npm ci --prefix app`が必要です。

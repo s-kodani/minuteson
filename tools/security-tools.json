@@ -1,0 +1,44 @@
+{
+  "gitleaks": {
+    "repository": "gitleaks/gitleaks",
+    "version": "v8.30.1",
+    "platforms": {
+      "linux-x86_64": {
+        "asset": "gitleaks_8.30.1_linux_x64.tar.gz",
+        "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+      },
+      "darwin-arm64": {
+        "asset": "gitleaks_8.30.1_darwin_arm64.tar.gz",
+        "sha256": "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5"
+      }
+    }
+  },
+  "osv-scanner": {
+    "repository": "google/osv-scanner",
+    "version": "v2.7.0",
+    "platforms": {
+      "linux-x86_64": {
+        "asset": "osv-scanner_linux_amd64",
+        "sha256": "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b"
+      },
+      "darwin-arm64": {
+        "asset": "osv-scanner_darwin_arm64",
+        "sha256": "d4926ef8da134332543be276dff157e4c170f99ad91fc48e89448a8816bdf70b"
+      }
+    }
+  },
+  "actionlint": {
+    "repository": "rhysd/actionlint",
+    "version": "v1.7.12",
+    "platforms": {
+      "linux-x86_64": {
+        "asset": "actionlint_1.7.12_linux_amd64.tar.gz",
+        "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+      },
+      "darwin-arm64": {
+        "asset": "actionlint_1.7.12_darwin_arm64.tar.gz",
+        "sha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+      }
+    }
+  }
+}

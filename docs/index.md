@@ -14,6 +14,9 @@ MinutesOn 1.0.1の完成版を基準に、利用と保守に必要な情報を�
 
 ## 保守と開発
 
+- [GitHubでの開発とリリース](guides/development-workflow.md) — PR、文書更新、必須検査、Releases画面でのタグ管理と自動公開。
+- [DevSecOpsの検査と運用](guides/devsecops.md) — セキュリティ検査と初期設定・障害対応。
+
 - [現行仕様](spec/index.md) — 録音・解析・モデル・議事録・保存とアーキテクチャ。
 - [利用と保守の手順](guides/index.md) — OS別ビルド、配布、更新、テストと文書管理。
 - [ADR](adr/index.md) — 継続する設計判断、その理由と影響。

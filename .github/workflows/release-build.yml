@@ -1,0 +1,269 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: 'Claimed draft release ID (from its GitHub URL)'
+        type: string
+        required: true
+      source_sha:
+        description: 'Full source SHA pinned by the draft controller'
+        type: string
+        required: true
+      dry_run:
+        description: 'Build and verify without publishing to GitHub or Store'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_id }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.guard.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MON_RELEASE_ID: ${{ inputs.release_id }}
+          MON_SOURCE_SHA: ${{ inputs.source_sha }}
+          MON_PRIVATE: ${{ github.event.repository.private }}
+          MON_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
+          MON_PUBLISH_ENABLED: ${{ vars.RELEASE_PUBLISH_ENABLED }}
+          MON_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python - <<'PY'
+          import os, re, sys
+          sys.path.insert(0, 'tools')
+          from mon_release import GitHub, preflight
+          if os.environ['MON_PRIVATE'] != 'false' or os.environ['MON_ENABLED'] != 'true':
+              raise SystemExit('Public repository and release activation required')
+          if os.environ['MON_DRY_RUN'] != 'true' and os.environ['MON_PUBLISH_ENABLED'] != 'true':
+              raise SystemExit('Enable production publication only after verifying a dry run')
+          if not re.fullmatch(r'[0-9a-f]{40}', os.environ['MON_SOURCE_SHA']):
+              raise SystemExit('Full source SHA required')
+          release = preflight(GitHub(), int(os.environ['MON_RELEASE_ID']), os.environ['MON_SOURCE_SHA'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tag=' + release['tag_name'] + '\n')
+          PY
+  ci:
+    needs: guard
+    uses: ./.github/workflows/desktop-platform-build.yml
+    with:
+      source_ref: ${{ inputs.source_sha }}
+      full: true
+  security:
+    needs: guard
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/security.yml
+    with:
+      source_ref: ${{ inputs.source_sha }}
+  macos-prepare:
+    needs: [guard, ci, security]
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Select Swift 6.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          for developer in "$(xcode-select -p)" /Applications/Xcode*.app/Contents/Developer; do
+            if DEVELOPER_DIR="$developer" /usr/bin/swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else 1)'; then
+              echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+      - run: npm ci --prefix app
+      - name: Compile without signing credentials
+        run: |
+          mkdir -p output
+          python tools/mon_macos_release.py --prepare --output-dir "$GITHUB_WORKSPACE/output/macos-prepare"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prepared-macos
+          path: |
+            output/macos-prepare/prepared-app.zip
+            output/macos-prepare/prepared-app.json
+          if-no-files-found: error
+          retention-days: 7
+  macos-sign:
+    needs: macos-prepare
+    environment: release-macos
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: prepared-macos
+          path: output/prepared-macos
+      - name: Sign and notarize the same-run prepared app
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+        run: python tools/mon_macos_ci_sign.py
+      - run: python tools/mon_release_artifacts.py collect --flavor macos --output output/release-macos
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-macos
+          path: output/release-macos/
+          if-no-files-found: error
+          retention-days: 30
+  windows:
+    needs: [guard, ci, security]
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: npm ci --prefix app
+      - run: cargo fetch --locked
+      - run: npm --prefix app run tauri:windows:unsigned:build
+      - run: python tools/mon_release_artifacts.py collect --flavor windows --output output/release-windows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows
+          path: output/release-windows/
+          if-no-files-found: error
+          retention-days: 30
+  store:
+    needs: [guard, ci, security]
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: npm ci --prefix app
+      - run: cargo fetch --locked
+      - run: npm --prefix app run tauri:windows:store:build
+      - run: python tools/mon_release_artifacts.py collect --flavor store --output output/release-store
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-store
+          path: output/release-store/
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: [guard, macos-sign, windows, store]
+    environment: release-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: output/release-input
+      - name: Verify and assemble public artifacts
+        env:
+          MON_SOURCE_SHA: ${{ inputs.source_sha }}
+          MON_TAG: ${{ needs.guard.outputs.tag }}
+        run: python tools/mon_release_artifacts.py assemble --input output/release-input --output output/publish --source-sha "$MON_SOURCE_SHA" --tag "$MON_TAG"
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: attest
+        with:
+          subject-path: output/publish/*
+      - name: Add provenance bundle
+        env:
+          MON_PROVENANCE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$MON_PROVENANCE" output/publish/provenance.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-preview
+          path: output/publish/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate draft, attach assets, and publish
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MON_RELEASE_ID: ${{ inputs.release_id }}
+          MON_SOURCE_SHA: ${{ inputs.source_sha }}
+          STORE_PUBLISH_ENABLED: ${{ vars.STORE_PUBLISH_ENABLED }}
+        run: python tools/mon_release.py publish --release-id "$MON_RELEASE_ID" --source-sha "$MON_SOURCE_SHA" --directory output/publish
+  failure:
+    if: always() && inputs.dry_run == false && needs.guard.result == 'success' && (needs.ci.result != 'success' || needs.security.result != 'success' || needs.macos-sign.result != 'success' || needs.windows.result != 'success' || needs.store.result != 'success' || needs.publish.result != 'success')
+    needs: [guard, ci, security, macos-prepare, macos-sign, windows, store, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Retain draft and record a retry link
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MON_RELEASE_ID: ${{ inputs.release_id }}
+        run: python3 tools/mon_release.py failure --release-id "$MON_RELEASE_ID"
