@@ -5,6 +5,7 @@ description: "起動診断、録音・モデル・解析失敗と保存結果不
 tags: ["support", "diagnostics", "recovery"]
 status: "stable"
 sources:
+  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/startup-attention.tsx"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/bootstrap"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/docs/verification/storage-startup-attention-2026-10-10.md"
@@ -22,6 +23,12 @@ sources:
 DB・WAL・配置台帳・起動設定を削除したり、空の保存先に置き換えたりしません。アプリ内で確認できない調査は正常終了後に行います。起動中のDBを外部SQLiteで開かないでください。原因を確認した後、アプリを明示的に再起動します。
 
 「起動をやり直す」は再起動して保存先を再検査する操作です。診断画面の「データを初期化」は会議・音声・文書・モデル・設定を消す別の操作で、通常の診断再読込みでは実行しません。対象と退避先を確認して明示的に初期化する場合、モデル本体は退避対象外で、退避フォルダーを`.monbackup`として復元することもできません。[画面遷移と初期化の条件](../spec/screens.md#起動と診断)を参照してください。
+
+## WAVは保存できたが音声の整理に失敗する
+
+Windows・macOSとも、WAV完成後の整理に失敗しても完成WAVは保持します。診断に従い、使用中の処理の終了、保存機器の接続、権限とファイルの変更有無を確認してからアプリを再起動します。残りの削除は台帳から再開します。WAVを再生成するために原本を取り込み直したり、整理台帳・管理記録を手動削除したりする必要はありません。
+
+外部のオリジナルは削除対象ではありません。未完了録音・部分救出の未確定音声や、登録文書・管理記録が残ることは正常です。自動整理の対象は[保存仕様](../spec/storage.md#wav完成後の音声整理)を確認してください。
 
 ## 録音できない・片方が無音
 

@@ -5,6 +5,7 @@ description: "録音範囲、入力選択、5秒テストと保存音声の取�
 tags: ["capture", "audio"]
 status: "stable"
 sources:
+  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/crates/mon-core/src/capture/limits.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/recorder.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src-tauri/src/audio_import.rs"
@@ -32,7 +33,7 @@ macOSの取得はAVAudioEngine、ScreenCaptureKit／Core Audio Tapsを使い、W
 
 元の取得フレームと会議時刻の対応を保持し、欠損を正常な無音で埋めたり、時間を詰めたりしません。未確定の録音は保存完了と表示しません。保存待ちが1入力あたり20秒・16 MiB・4,096パケットのいずれかを超えると、音声を捨てて続けず停止して案内します。
 
-録音・取り込み後の解析では、16 kHz・モノラル・PCM16の会議全体の共通WAVを使います。元音声・時計・欠損・ミックス条件に対応する内容を照合して再利用します。永続保存と回復は[データ管理](storage.md)を参照してください。
+録音中は連続CAFと復旧用の分割CAFを並行保存し、取り込み中は管理コピーから中間CAFを作成します。録音・取り込み後は16 kHz・モノラル・PCM16の会議全体の共通WAVを正式音声として保存し、再生・解析に使います。元音声・時計・欠損・ミックス条件に対応する内容を照合して再利用します。WAV完成後は不要な音声と途中ファイルを整理します。取り込み元のオリジナルは保持します。Windows・macOS共通の削除範囲と回復は[データ管理](storage.md#wav完成後の音声整理)を参照してください。
 
 ## 音声ファイルの取り込み
 

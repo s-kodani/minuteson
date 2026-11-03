@@ -3274,6 +3274,11 @@ pub fn run() {
                             .state::<startup_attention::Startup>()
                             .migration_progress(done, total, meeting);
                     })?;
+                    storage.upgrade_completed_audio_cleanup(&|done, total, meeting| {
+                        let _ = handle
+                            .state::<startup_attention::Startup>()
+                            .migration_progress(done, total, meeting);
+                    })?;
                     handle.state::<startup_attention::Startup>().ready()?;
                     if let Err(error) = storage.preserve_voice_audio(None, &|| false) {
                         internal_logs::report_error("voice_audio", &error);
