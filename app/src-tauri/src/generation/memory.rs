@@ -536,7 +536,9 @@ mod tests {
         use crate::local_engine::Fingerprint;
         let root = tempfile::tempdir().unwrap();
         let path = root.path().canonicalize().unwrap();
-        let mut snapshot = resident::prepare(&path, "llama").unwrap().unwrap();
+        let mut snapshot = resident::prepare_installed(&path, "llama")
+            .unwrap()
+            .unwrap();
         // Force GPU unavailability in this isolated job, without changing any
         // installed runtime, saved meeting, global setting or environment.
         snapshot.gpu = None;

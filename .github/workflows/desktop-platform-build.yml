@@ -2,6 +2,12 @@ name: Desktop platform validation
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Validation scope (full includes installers and native resources)'
+        type: choice
+        options: [full, quick]
+        default: full
   workflow_call:
     inputs:
       source_ref:
@@ -135,6 +141,7 @@ jobs:
     if: needs.changes.outputs.native == 'true'
     env:
       PYTHONUTF8: '1'
+      MON_CI_FULL: ${{ inputs.full || inputs.suite == 'full' }}
     strategy:
       fail-fast: false
       matrix:
@@ -165,44 +172,45 @@ jobs:
         run: npm ci --prefix app
       - name: Rust formatting
         run: cargo fmt --all --check
-      - name: Check native application and test compilation
-        env:
-          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: cargo check --manifest-path app/src-tauri/Cargo.toml --locked --tests
       - name: Shared Rust core tests
         run: cargo test --workspace --exclude mon-desktop --locked --lib
+      - name: Quick native Rust tests without packaged resources
+        if: env.MON_CI_FULL != 'true'
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
+        run: python tools/mon_ci_native_tests.py --suite quick --all-targets --processes 2 --threads 4 --timings-json output/rust-tests/${{ runner.os }}.json
       - name: Windows public signing preflight fails without a certificate
         if: runner.os == 'Windows'
         run: python -m unittest discover -s tests -p test_windows_release_signing.py -v
       - name: Fetch notice source metadata
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: cargo fetch --manifest-path app/src-tauri/Cargo.toml --locked
       - name: Build Windows QA installer
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         working-directory: app
         run: npm run tauri:windows:qa:build
       - name: Validate Windows capture and model catalog
         # Runtime/helper resources now exist, so run the Windows synthetic
         # capture/storage tests without microphones or real model downloads.
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: |
           ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MON_WINDOWS_MODEL_OPTIONS = Join-Path $env:RUNNER_TEMP 'mon-windows-model-options.json'
-          python tools/mon_ci_native_tests.py
+          python tools/mon_ci_native_tests.py --suite full --all-targets --timings-json output/rust-tests/${{ runner.os }}.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
       - name: Build and verify Microsoft Store MSIX
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         working-directory: app
         run: npm run tauri:windows:store:build
       - name: Verify DPI declarations in the linked Windows executable
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: |
           $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - name: Upload Microsoft Store MSIX
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: minuteson-windows-x64-store
@@ -210,7 +218,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload Microsoft Store build identity
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: minuteson-windows-x64-store-identity
@@ -220,7 +228,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: macOS Swift compiler and capture regression tests
-        if: runner.os == 'macOS'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -239,12 +247,12 @@ jobs:
           swift build --package-path probes/macos-capture --configuration release
           swift test --package-path probes/macos-capture
       - name: macOS common and native regression tests
-        if: runner.os == 'macOS'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: python tools/mon_ci_native_tests.py --swift-fixture
+        run: python tools/mon_ci_native_tests.py --suite full --all-targets --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
       - name: Upload Windows QA installer artifact
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mon-windows-x64-qa
@@ -252,12 +260,20 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows build identity
-        if: runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mon-windows-x64-qa-identity
           path: output/windows-qa-work/*-build.json
           if-no-files-found: error
+          retention-days: 7
+      - name: Upload Rust timing diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-tests-${{ runner.os }}
+          path: output/rust-tests/
+          if-no-files-found: warn
           retention-days: 7
   gate:
     name: CI gate

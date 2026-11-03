@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import MagicMock, call, patch
@@ -205,6 +206,128 @@ class NativeCiTests(unittest.TestCase):
                 redirect_stderr(errors):
             self.assertEqual(native.main(["--swift-fixture"]), 1)
         self.assertIn("cargo unavailable", errors.getvalue())
+
+    def extra_artifact(self):
+        binary = self.executable.with_name("application tests.exe")
+        binary.write_bytes(b"synthetic binary test target")
+        return binary, self.artifact(target={"name": "mon-desktop"}, executable=str(binary))
+
+    def test_all_targets_build_preserves_library_binary_and_doc_checks(self):
+        binary, message = self.extra_artifact()
+        with self.cargo([self.artifact(), message]) as cargo, patch.object(
+                native.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(native.run_native_tests(self.root, all_targets=True), 0)
+        self.assertNotIn("--lib", cargo.call_args.args[0])
+        self.assertEqual([item.args[0] for item in run.call_args_list], [
+            [str(self.executable)], [str(binary)],
+            ["cargo", "test", "--manifest-path", str(self.manifest), "--locked", "--doc"],
+        ])
+
+    def test_quick_uses_common_classifier_and_keeps_binary_and_doc_targets(self):
+        binary, message = self.extra_artifact()
+        suite = MagicMock(return_value=0)
+        module = SimpleNamespace(run_suite=suite)
+        with self.cargo([self.artifact(), message]), patch.dict(
+                "sys.modules", {"tools.mon_rust_suites": module}), patch.object(
+                native.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(native.run_native_tests(
+                self.root, suite="quick", all_targets=True, threads=3), 0)
+        suite.assert_called_once_with(self.executable, cwd=self.package, env=self.environment,
+                                      suite="quick", threads=3)
+        self.assertEqual(run.call_args_list[0].args[0], [str(binary), "--test-threads=3"])
+        self.assertEqual(run.call_args_list[1].args[0][-1], "--doc")
+
+    def test_heavy_uses_common_classifier_without_running_binary_or_docs(self):
+        _, message = self.extra_artifact()
+        suite = MagicMock(return_value=0)
+        with self.cargo([self.artifact(), message]), patch.dict(
+                "sys.modules", {"tools.mon_rust_suites": SimpleNamespace(run_suite=suite)}), \
+                patch.object(native.subprocess, "run") as run:
+            self.assertEqual(native.run_native_tests(self.root, suite="heavy", all_targets=True), 0)
+        self.assertEqual(suite.call_args.kwargs["suite"], "heavy")
+        run.assert_not_called()
+
+    def test_suite_failure_propagates_and_skips_remaining_targets(self):
+        _, message = self.extra_artifact()
+        with self.cargo([self.artifact(), message]), patch.dict(
+                "sys.modules", {"tools.mon_rust_suites": SimpleNamespace(run_suite=MagicMock(return_value=19))}), \
+                patch.object(native.subprocess, "run") as run:
+            self.assertEqual(native.run_native_tests(self.root, suite="quick", all_targets=True), 19)
+        run.assert_not_called()
+
+    def test_parallel_quick_and_heavy_forward_processes_without_hiding_failure(self):
+        for selected, processes in [("quick", 2), ("heavy", 4)]:
+            helper = MagicMock(return_value=23)
+            with self.subTest(suite=selected, processes=processes), self.cargo([self.artifact()]), \
+                    patch.dict("sys.modules", {"tools.mon_rust_suites": SimpleNamespace(run_suite=helper)}), \
+                    patch.object(native.subprocess, "run") as run:
+                self.assertEqual(native.run_native_tests(
+                    self.root, suite=selected, processes=processes, threads=4), 23)
+            helper.assert_called_once_with(self.executable, cwd=self.package, env=self.environment,
+                                           suite=selected, threads=4, processes=processes)
+            run.assert_not_called()
+
+    def test_invalid_or_full_parallel_selection_is_rejected_before_build(self):
+        for selected, processes in [("quick", 0), ("heavy", 5), ("full", 2)]:
+            with self.subTest(suite=selected, processes=processes), \
+                    patch.object(native.subprocess, "Popen") as build:
+                with self.assertRaises(ValueError):
+                    native.run_native_tests(self.root, suite=selected, processes=processes)
+            build.assert_not_called()
+
+    def test_cli_forwards_parallelism_and_reports_measured_process_count(self):
+        helper = MagicMock(return_value=0)
+        report = self.root / "timings.json"
+        with self.cargo([self.artifact()]), patch.object(native, "ROOT", self.root), \
+                patch.dict("sys.modules", {"tools.mon_rust_suites": SimpleNamespace(run_suite=helper)}):
+            self.assertEqual(native.main(["--suite", "quick", "--processes", "2", "--threads", "4",
+                                          "--timings-json", str(report)]), 0)
+        self.assertEqual(helper.call_args.kwargs["processes"], 2)
+        self.assertEqual(json.loads(report.read_text())["processes"], 2)
+
+    def test_binary_failure_prevents_doc_check_and_preserves_exit_code(self):
+        _, message = self.extra_artifact()
+        with self.cargo([self.artifact(), message]), patch.object(native.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 23)]) as run:
+            self.assertEqual(native.run_native_tests(self.root, all_targets=True), 23)
+        self.assertEqual(run.call_count, 2)
+
+    def test_all_targets_missing_or_duplicated_library_is_rejected(self):
+        _, message = self.extra_artifact()
+        for messages in ([message], [self.artifact(), self.artifact(), message]):
+            with self.subTest(messages=messages), self.cargo(messages), \
+                    patch.object(native.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "expected one"):
+                    native.run_native_tests(self.root, all_targets=True)
+                run.assert_not_called()
+
+    def test_quick_cannot_silently_enable_native_fixture_preparation(self):
+        with patch.object(native.subprocess, "Popen") as build:
+            with self.assertRaisesRegex(ValueError, "Swift integration fixture"):
+                native.run_native_tests(self.root, suite="quick", swift_fixture=True)
+        build.assert_not_called()
+
+    def test_timing_report_preserves_failure_and_total_includes_both_phases(self):
+        report = self.root / "diagnostics/rust-tests.json"
+        with self.cargo([], code=101):
+            self.assertEqual(native.run_native_tests(self.root, timings_json=report), 101)
+        value = json.loads(report.read_text())
+        self.assertEqual(value["suite"], "full")
+        self.assertEqual(value["exitCode"], 101)
+        self.assertGreaterEqual(value["totalSeconds"], value["buildSeconds"] + value["executionSeconds"])
+
+    def test_timing_report_is_written_when_build_launch_raises(self):
+        report = self.root / "diagnostics/rust-tests.json"
+        with patch.object(native.subprocess, "Popen", side_effect=OSError("cannot launch")):
+            with self.assertRaisesRegex(OSError, "cannot launch"):
+                native.run_native_tests(self.root, timings_json=report)
+        self.assertEqual(json.loads(report.read_text())["exitCode"], 1)
+
+    def test_full_threads_are_passed_to_normal_and_explicit_fixture(self):
+        with self.cargo([self.artifact()]), patch.object(native.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(native.run_native_tests(self.root, swift_fixture=True, threads=4), 0)
+        self.assertTrue(all(item.args[0][-1] == "--test-threads=4" for item in run.call_args_list))
 
 
 if __name__ == "__main__":
