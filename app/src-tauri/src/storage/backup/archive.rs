@@ -1,5 +1,5 @@
 //! Framed, uncompressed, hashed portable data; no SQL/ZIP/host paths to execute.
-use super::portable::{self, FileReference, Table};
+use super::portable::{self, Table};
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,12 +62,6 @@ pub(super) struct OmittedAsset {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Manifest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) voice_matching_preferences:
-        Option<crate::storage::voice_preferences::VoiceMatchingPreferences>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) speaker_completion_preferences:
-        Option<crate::storage::completion_preferences::CompletionPreferences>,
     pub format_version: u32,
     pub schema_version: usize,
     pub archive_id: String,
@@ -75,11 +69,10 @@ pub(crate) struct Manifest {
     encryption: Encryption,
     hash_basis: HashBasis,
     pub meetings: Vec<Meeting>,
+    #[serde(skip)]
     pub(super) tables: Vec<Table>,
     pub(super) entries: Vec<Entry>,
     pub(super) omitted_assets: Vec<OmittedAsset>,
-    pub(super) file_references: Vec<FileReference>,
-    pub(super) model_catalog: crate::storage::model_profiles::portable::history::Bundle,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) deleted_audio: Vec<deleted_audio::Descriptor>,
 }
@@ -88,6 +81,7 @@ pub(crate) struct VerifiedArchive {
     // This is a validation/source-ID DB, NOT a replacement or a runnable app DB.
     // Connection closes before the private directory is removed on all platforms.
     pub(super) database: Connection,
+    pub(super) contents: contents::Contents,
     pub manifest: Manifest,
     pub(super) assets: BTreeMap<String, PathBuf>,
     pub(super) deleted_audio: deleted_audio::Verified,
@@ -163,156 +157,92 @@ impl Snapshot<'_> {
     ) -> Result<BackupReceipt, String> {
         self.verify(cancelled)?;
         let stage = private_stage(self.stage.path())?;
-        let db = read_only(&self.database)?;
-        let known = crate::storage::model_metadata::retained_files(&db)?;
-        let model_catalog =
-            crate::storage::model_profiles::portable::history::Bundle::export(&db, cancelled)?;
-        let mut references = model_catalog.file_references()?;
-        let mut lookup = BTreeMap::new();
-        let mut sources = Vec::new();
-        let mut entries = Vec::new();
+        let data = stage.path().join("contents.json");
+        let mut file = private_file(&data)?;
+        serde_json::to_writer(&mut file, &self.contents).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        let (size, sha256) = digest_file(&data, cancelled)?;
+        if size > contents::MAX_BYTES {
+            return Err("会議バックアップの内容が大きすぎます".into());
+        }
+        let mut entries = vec![Entry {
+            path: "contents.json".into(),
+            size,
+            sha256,
+            asset_id: None,
+            meeting_id: None,
+            source_size: None,
+            source_sha256: None,
+            transform: Transform::Identity,
+        }];
+        let mut sources = vec![data];
         let mut omitted = Vec::new();
         for item in &self.assets {
-            check_cancelled(cancelled)?;
-            let asset = &item.asset;
-            let reason = if self.deleted_audio.contains_asset(asset) {
-                Some(OmittedReason::SourceAudioDeleted)
-            } else if super::super::meeting_audio::superseded_asset(&db, &asset.id)? {
-                Some(OmittedReason::SupersededAudio)
-            } else if portable::temporary_pcm(&db, asset)? {
-                Some(OmittedReason::RecreatablePcm)
-            } else if portable::native_log(&db, asset)? {
-                Some(OmittedReason::NativeLog)
-            } else {
-                None
-            };
-            let temporary = reason.is_some();
-            let key = format!(
+            let a = &item.asset;
+            let path = format!(
                 "{}/{}",
-                if temporary { "omitted" } else { "assets" },
+                if a.state == "missing" {
+                    "omitted"
+                } else {
+                    "assets"
+                },
                 item.key
             );
-            lookup.insert(asset.id.clone(), (key.clone(), temporary));
-            if let Some(reason) = reason {
+            if a.state == "missing" {
                 omitted.push(OmittedAsset {
-                    asset_id: asset.id.clone(),
-                    meeting_id: asset.meeting_id.clone(),
-                    path: key,
-                    source_size: asset.size_bytes as u64,
-                    source_sha256: asset.content_hash.clone(),
-                    reason,
+                    asset_id: a.id.clone(),
+                    meeting_id: a.meeting_id.clone(),
+                    path,
+                    source_size: a.size_bytes as u64,
+                    source_sha256: a.content_hash.clone(),
+                    reason: OmittedReason::SourceAudioDeleted,
                 });
-                continue;
+            } else {
+                entries.push(Entry {
+                    path,
+                    size: a.size_bytes as u64,
+                    sha256: a.content_hash.clone(),
+                    asset_id: Some(a.id.clone()),
+                    meeting_id: (!a.meeting_id.is_empty()).then(|| a.meeting_id.clone()),
+                    source_size: Some(a.size_bytes as u64),
+                    source_sha256: Some(a.content_hash.clone()),
+                    transform: Transform::Identity,
+                });
+                sources.push(item.path.clone());
             }
-            let is_json = asset.media_type == "application/json"
-                || asset.media_type == "application/vnd.mon.llama-completion";
-            let (source, transform) = if is_json {
-                let capture: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE meeting_id=?1 AND audio_manifest_hash=?2)",params![asset.meeting_id,asset.content_hash],|r|r.get(0)).map_err(|e| e.to_string())?;
-                let (mut file, metadata) = open_source(&item.path)?;
-                if metadata.len() > portable::MAX_ROW_BYTES as u64 {
-                    return Err("管理JSONがバックアップ上限を超えています".into());
-                }
-                let mut bytes = Vec::new();
-                Read::by_ref(&mut file)
-                    .take(portable::MAX_ROW_BYTES as u64 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| e.to_string())?;
-                if bytes.len() as u64 != metadata.len()
-                    || format!("{:x}", Sha256::digest(&bytes)) != asset.content_hash
-                {
-                    return Err("管理JSONが変更されています".into());
-                }
-                let bytes = if asset.media_type == "application/vnd.mon.llama-completion" {
-                    portable::portable_completion(&bytes, &mut references)?
-                } else {
-                    portable::portable_json_with_metadata(&bytes, capture, &mut references, &known)?
-                };
-                let path = stage.path().join(&item.key);
-                let mut out = private_file(&path)?;
-                out.write_all(&bytes)
-                    .and_then(|_| out.sync_all())
-                    .map_err(|e| e.to_string())?;
-                (path, Transform::PortableJson)
-            } else {
-                (item.path.clone(), Transform::Identity)
-            };
-            let (size, sha256) = digest_file(&source, cancelled)?;
-            entries.push(Entry {
-                path: key,
-                size,
-                sha256,
-                asset_id: Some(asset.id.clone()),
-                meeting_id: (!asset.meeting_id.is_empty()).then(|| asset.meeting_id.clone()),
-                source_size: Some(asset.size_bytes as u64),
-                source_sha256: Some(asset.content_hash.clone()),
-                transform,
-            });
-            sources.push(source);
         }
-        let data = stage.path().join("database.jsonl");
-        let tables = portable::dump(self, &data, &lookup, &mut references, cancelled)?;
-        let deleted_audio = if self.deleted_audio.is_empty() {
-            Vec::new()
-        } else {
-            let logical = portable::load(
-                &data,
-                &stage.path().join("availability.sqlite3"),
-                &tables,
-                MIGRATIONS.len(),
-                cancelled,
-            )?;
-            let descriptors = self.deleted_audio.bind(&logical, cancelled)?;
-            deleted_audio::verify(&logical, &descriptors, &omitted, cancelled)?;
-            descriptors
+        let lookup = |_meeting: &str, id: &str| -> Result<String, String> {
+            entries
+                .iter()
+                .find(|e| e.asset_id.as_deref() == Some(id))
+                .map(|e| e.path.clone())
+                .or_else(|| {
+                    omitted
+                        .iter()
+                        .find(|e| e.asset_id == id)
+                        .map(|e| e.path.clone())
+                })
+                .ok_or("会議内容の資産がありません".into())
         };
-        if digest_file(&self.database, cancelled)?
-            != (self.database_size, self.database_hash.clone())
-        {
-            return Err("論理データ取得中にスナップショットDBが変更されています".into());
-        }
-        let (size, sha256) = digest_file(&data, cancelled)?;
-        entries.insert(
-            0,
-            Entry {
-                path: "database.jsonl".into(),
-                size,
-                sha256,
-                asset_id: None,
-                meeting_id: None,
-                source_size: None,
-                source_sha256: None,
-                transform: Transform::Identity,
-            },
-        );
-        sources.insert(0, data);
-        let has_preferences: bool = db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='voice_matching')",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
+        let logical = self.contents.write_database(
+            &stage.path().join("current.sqlite3"),
+            &|_, _, id| Ok(id.to_owned()),
+            &lookup,
+            cancelled,
+        )?;
+        let deleted_audio = self.deleted_audio.bind(&logical, cancelled)?;
+        deleted_audio::verify(&logical, &deleted_audio, &omitted, cancelled)?;
         let manifest = Manifest {
-            speaker_completion_preferences: Some(
-                crate::storage::completion_preferences::load(&db)?.payload,
-            ),
-            voice_matching_preferences: if has_preferences {
-                Some(crate::storage::voice_preferences::load(&db)?.payload)
-            } else {
-                None
-            },
             format_version: crate::current_formats::BACKUP,
             schema_version: MIGRATIONS.len(),
             archive_id: Uuid::new_v4().to_string(),
             created_at: now_ms()?,
             encryption: Encryption::None,
             hash_basis: HashBasis::SourceIdentity,
-            meetings: self.meetings.clone(),
-            tables,
+            meetings: read_meetings(&logical)?,
+            tables: portable::tables(&logical)?,
             entries,
             omitted_assets: omitted,
-            file_references: references.into_iter().collect(),
-            model_catalog,
             deleted_audio,
         };
         validate_manifest(&manifest)?;
@@ -320,28 +250,24 @@ impl Snapshot<'_> {
         if bytes.len() > MAX_MANIFEST {
             return Err("バックアップmanifestが大きすぎます".into());
         }
-        let required =
-            manifest
-                .entries
-                .iter()
-                .try_fold(HEADER_BYTES + bytes.len() as u64, |sum, e| {
-                    sum.checked_add(e.size)
-                        .ok_or("バックアップ容量が範囲外です")
-                })?;
+        let required = manifest
+            .entries
+            .iter()
+            .try_fold(HEADER_BYTES + bytes.len() as u64, |n, e| {
+                n.checked_add(e.size).ok_or("バックアップ容量が範囲外です")
+            })?;
         check_capacity(parent, required)?;
-        // Do not publish a snapshot whose deliberately absent source has
-        // reappeared while the portable data was being reconstructed.
-        self.verify(cancelled)?;
         output
             .write_all(MAGIC)
             .and_then(|_| output.write_all(&(bytes.len() as u32).to_le_bytes()))
             .and_then(|_| output.write_all(&Sha256::digest(&bytes)))
             .and_then(|_| output.write_all(&bytes))
             .map_err(|e| e.to_string())?;
+        crate::operation_observation::stage("writing_backup", Some(required), "bytes");
+        crate::operation_observation::advance(HEADER_BYTES + bytes.len() as u64);
         for (entry, path) in manifest.entries.iter().zip(sources) {
             let (mut source, before) = open_source(&path)?;
-            let (_, hash) = stream(&mut source, Some(output), entry.size, cancelled)?;
-            if hash != entry.sha256
+            if stream_observed(&mut source, Some(output), entry.size, cancelled)?.1 != entry.sha256
                 || !same_file(
                     &before,
                     &crate::native_fs::metadata(&source).map_err(|e| e.to_string())?,
@@ -351,38 +277,22 @@ impl Snapshot<'_> {
             }
         }
         output.sync_all().map_err(|e| e.to_string())?;
-        output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        crate::operation_observation::stage("verifying_backup", Some(required), "bytes");
         let verified = read(output, stage.path(), cancelled)?;
-        let size = crate::native_fs::metadata(&output)
-            .map_err(|e| e.to_string())?
-            .len();
         output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        let (_, sha256) = stream(output, None, size, cancelled)?;
+        crate::operation_observation::stage("verifying_backup", Some(required), "bytes");
+        let (_, sha256) = stream_observed(output, None, required, cancelled)?;
+        crate::operation_observation::stage("checking_source", None, "bytes");
         self.verify(cancelled)?;
         Ok(BackupReceipt {
             archive_id: verified.manifest.archive_id.clone(),
             meeting_count: verified.manifest.meetings.len(),
             asset_count: verified.assets.len(),
-            omitted_pcm_count: verified
-                .manifest
-                .omitted_assets
-                .iter()
-                .filter(|a| a.reason == OmittedReason::RecreatablePcm)
-                .count(),
-            omitted_log_count: verified
-                .manifest
-                .omitted_assets
-                .iter()
-                .filter(|a| a.reason == OmittedReason::NativeLog)
-                .count(),
+            omitted_pcm_count: 0,
+            omitted_log_count: 0,
             deleted_audio_meeting_count: verified.manifest.deleted_audio.len(),
-            deleted_audio_asset_count: verified
-                .manifest
-                .omitted_assets
-                .iter()
-                .filter(|a| a.reason == OmittedReason::SourceAudioDeleted)
-                .count(),
-            size,
+            deleted_audio_asset_count: verified.manifest.omitted_assets.len(),
+            size: required,
             sha256,
         })
     }
@@ -453,17 +363,10 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if let Some(p) = m.speaker_completion_preferences {
-        p.validate()?;
-    }
-    if let Some(p) = m.voice_matching_preferences {
-        p.validate()?;
-    }
-    if !((m.format_version == 7 && m.schema_version == 38)
-        || (m.format_version == 6 && matches!(m.schema_version, 36 | 37))
-        || (m.format_version == 5 && m.schema_version == 35))
-    {
-        return Err("現在の形式ではないバックアップは復元できません".into());
+    if m.format_version != crate::current_formats::BACKUP || m.schema_version != MIGRATIONS.len() {
+        return Err(
+            "このバックアップ形式には対応していません。新しい形式で作成してください".into(),
+        );
     }
     if !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
         || m.created_at < 0
@@ -472,11 +375,6 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         || m.deleted_audio.len() > deleted_audio::MAX_MEETINGS
     {
         return Err("バックアップの形式版・件数が不正です".into());
-    }
-    m.model_catalog.validate()?;
-    let references: BTreeSet<_> = m.file_references.iter().cloned().collect();
-    if !m.model_catalog.file_references()?.is_subset(&references) {
-        return Err("モデル構成履歴の全ファイル情報がmanifestにありません".into());
     }
     let mut meetings = BTreeSet::new();
     for meeting in &m.meetings {
@@ -502,7 +400,9 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             return Err("バックアップのパス・ハッシュが不正です".into());
         }
         if index == 0 {
-            if e.path != "database.jsonl"
+            if e.size == 0
+                || e.size > contents::MAX_BYTES
+                || e.path != "contents.json"
                 || e.asset_id.is_some()
                 || e.meeting_id.is_some()
                 || e.source_size.is_some()
@@ -511,7 +411,8 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             {
                 return Err("バックアップDB記録が不正です".into());
             }
-        } else if !key(&e.path, "assets/")
+        } else if e.transform != Transform::Identity
+            || !key(&e.path, "assets/")
             || e.asset_id
                 .as_deref()
                 .is_none_or(|id| !identifier(id) || !ids.insert(id))
@@ -529,7 +430,8 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         }
     }
     for e in &m.omitted_assets {
-        if !identifier(&e.asset_id)
+        if e.reason != OmittedReason::SourceAudioDeleted
+            || !identifier(&e.asset_id)
             || !ids.insert(&e.asset_id)
             || !meetings.contains(&e.meeting_id)
             || !key(&e.path, "omitted/")
@@ -542,26 +444,6 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         {
             return Err("除外ファイルの由来が不正です".into());
         }
-    }
-    let mut references = BTreeSet::new();
-    for r in &m.file_references {
-        r.validate()?;
-        if !portable::valid_hash(&r.sha256)
-            || !identifier(&r.role)
-            || r.name.is_empty()
-            || r.name.len() > 4096
-            || r.name.contains(['/', '\\', '\0'])
-            || !references.insert(r)
-        {
-            return Err("モデル・実行ファイルの記録が不正です".into());
-        }
-    }
-    let rows = m.tables.iter().try_fold(0_u64, |sum, t| {
-        sum.checked_add(t.row_count)
-            .ok_or("バックアップ行数が範囲外です")
-    })?;
-    if rows > m.entries[0].size {
-        return Err("バックアップ行数と容量が一致しません".into());
     }
     Ok(())
 }
@@ -597,7 +479,7 @@ pub(crate) fn read(
     if Sha256::digest(&bytes).as_slice() != expected {
         return Err("バックアップmanifestハッシュが一致しません".into());
     }
-    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let mut manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     validate_manifest(&manifest)?;
     let total = manifest
         .entries
@@ -617,6 +499,8 @@ pub(crate) fn read(
     let stage = private_stage(parent)?;
     scratch::directories(&stage.path().join("assets"))?;
     let mut assets = BTreeMap::new();
+    crate::operation_observation::stage("reading_backup", Some(total), "bytes");
+    crate::operation_observation::advance(HEADER_BYTES + length as u64);
     for entry in &manifest.entries {
         check_cancelled(cancelled)?;
         let path = stage.path().join(&entry.path);
@@ -635,6 +519,7 @@ pub(crate) fn read(
                 .map_err(|e| e.to_string())?;
             hash.update(&buffer[..count]);
             remaining -= count as u64;
+            crate::operation_observation::advance(count as u64);
         }
         if format!("{:x}", hash.finalize()) != entry.sha256 {
             return Err("バックアップの管理ファイルハッシュが一致しません".into());
@@ -650,13 +535,36 @@ pub(crate) fn read(
     ) {
         return Err("検証中にバックアップが変更されています".into());
     }
-    let database = portable::load(
-        &stage.path().join("database.jsonl"),
+    if manifest.entries[0].size > contents::MAX_BYTES {
+        return Err("会議バックアップの内容が大きすぎます".into());
+    }
+    let contents: contents::Contents = serde_json::from_reader(
+        File::open(stage.path().join("contents.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    contents.verify_audio(&assets, cancelled)?;
+    let lookup = |_meeting: &str, id: &str| -> Result<String, String> {
+        manifest
+            .entries
+            .iter()
+            .find(|e| e.asset_id.as_deref() == Some(id))
+            .map(|e| e.path.clone())
+            .or_else(|| {
+                manifest
+                    .omitted_assets
+                    .iter()
+                    .find(|e| e.asset_id == id)
+                    .map(|e| e.path.clone())
+            })
+            .ok_or("会議内容の資産がありません".into())
+    };
+    let database = contents.write_database(
         &stage.path().join("validation.sqlite3"),
-        &manifest.tables,
-        manifest.schema_version,
+        &|_, _, id| Ok(id.to_owned()),
+        &lookup,
         cancelled,
     )?;
+    manifest.tables = portable::tables(&database)?;
     let deleted_audio = deleted_audio::verify(
         &database,
         &manifest.deleted_audio,
@@ -664,7 +572,7 @@ pub(crate) fn read(
         cancelled,
     )?;
     validate_inventory(&database, &manifest, &deleted_audio)?;
-    validate_portability(&database, &manifest, &assets, cancelled)?;
+
     database
         .execute_batch("PRAGMA query_only=ON")
         .map_err(|e| e.to_string())?;
@@ -674,6 +582,7 @@ pub(crate) fn read(
             .map_err(|e| e.to_string())?;
     Ok(VerifiedArchive {
         database,
+        contents,
         manifest,
         assets,
         deleted_audio,
@@ -794,132 +703,10 @@ fn validate_inventory(
     Ok(())
 }
 
-fn validate_portability(
-    db: &Connection,
-    manifest: &Manifest,
-    assets: &BTreeMap<String, PathBuf>,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
-    let kept_log:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id, json_each(c.checkpoint_json,'$.outputs') o JOIN file_assets f ON f.id=json_extract(o.value,'$.stdoutAssetId') AND f.meeting_id=j.meeting_id WHERE j.kind='diarization' AND f.state!='missing')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if kept_log {
-        return Err("バックアップに話者分離ログ本体が残っています".into());
-    }
-    let invalid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM audio_tracks WHERE device_label IS NOT NULL) OR EXISTS(SELECT 1 FROM export_records WHERE error_message IS NOT NULL) OR EXISTS(SELECT 1 FROM audio_import_commits WHERE error_message IS NOT NULL) OR EXISTS(SELECT 1 FROM analysis_flows WHERE error_message IS NOT NULL)",[],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if invalid {
-        return Err("バックアップに端末固有の診断情報が残っています".into());
-    }
-    if manifest.schema_version>=36 && db.query_row("SELECT EXISTS(SELECT 1 FROM post_analysis_intents WHERE error_message IS NOT NULL)",[],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
-        return Err("バックアップに後続処理の端末固有診断が残っています".into());
-    }
-    let mut statement = db
-        .prepare("SELECT destination_path FROM export_records")
-        .map_err(|e| e.to_string())?;
-    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let name: String = row.get(0).map_err(|e| e.to_string())?;
-        if name.contains(['/', '\\']) {
-            return Err("バックアップに元の出力先が残っています".into());
-        }
-    }
-    let check_json = |bytes: &[u8], capture: bool| -> Result<(), String> {
-        check_cancelled(cancelled)?;
-        let original: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        let mut references = BTreeSet::new();
-        let normalized = portable::portable_json(bytes, capture, &mut references)?;
-        let normalized: serde_json::Value =
-            serde_json::from_slice(&normalized).map_err(|e| e.to_string())?;
-        if original != normalized {
-            return Err(
-                "バックアップに端末固有のパス・機器指定・利用可能状態が残っています".into(),
-            );
-        }
-        for reference in references {
-            if !manifest
-                .file_references
-                .iter()
-                .any(|r| r.sha256 == reference.sha256 && r.size == reference.size)
-            {
-                return Err("固定ファイルのメタデータがmanifestにありません".into());
-            }
-        }
-        Ok(())
-    };
-    for sql in [
-        "SELECT parameters_json FROM processing_jobs UNION ALL SELECT profile_snapshot_json FROM processing_jobs",
-        "SELECT config_json FROM analysis_revisions UNION ALL SELECT profile_snapshot_json FROM analysis_revisions",
-        "SELECT model_snapshot_json FROM minutes_revisions",
-        "SELECT processing_config_json FROM audio_tracks WHERE processing_config_json IS NOT NULL",
-        "SELECT capture_config_json FROM recording_sessions",
-        "SELECT plan_json FROM analysis_flows WHERE plan_json IS NOT NULL",
-        "SELECT checkpoint_json FROM job_checkpoints",
-    ].into_iter().chain((manifest.schema_version>=36).then_some("SELECT spec_json FROM post_analysis_intents")) {
-        let mut statement = db.prepare(sql).map_err(|e|e.to_string())?;
-        let mut rows = statement.query([]).map_err(|e|e.to_string())?;
-        while let Some(row) = rows.next().map_err(|e|e.to_string())? { check_json(row.get::<_,String>(0).map_err(|e|e.to_string())?.as_bytes(),false)?; }
-    }
-    for entry in &manifest.entries[1..] {
-        let id = entry
-            .asset_id
-            .as_ref()
-            .ok_or("管理ファイルのIDがありません")?;
-        if entry.meeting_id.is_none() {
-            if manifest.schema_version < 38 || entry.transform != Transform::Identity {
-                return Err("登録音声の可搬化指定が不正です".into());
-            }
-            let frames: i64 = db
-                .query_row(
-                    "SELECT frame_count FROM voice_sample_audio WHERE id=?1 AND state='ready'",
-                    [id],
-                    |r| r.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            let (file, _) = open_source(assets.get(id).ok_or("登録音声がありません")?)?;
-            let audio = crate::audio::VerifiedAudio::open_cancellable(
-                file,
-                entry.size,
-                &entry.sha256,
-                cancelled,
-            )?;
-            if !audio.format.is_voice_clip() || audio.format.frames != frames as u64 {
-                return Err("バックアップの登録音声の形式・長さが不正です".into());
-            }
-            continue;
-        }
-        let media_type: String = db
-            .query_row(
-                "SELECT media_type FROM file_assets WHERE id=?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let json = matches!(
-            media_type.as_str(),
-            "application/json" | "application/vnd.mon.llama-completion"
-        );
-        if json != (entry.transform == Transform::PortableJson) {
-            return Err("管理JSONの可搬化指定が不正です".into());
-        }
-        if json {
-            let capture: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE meeting_id=?1 AND audio_manifest_hash=?2)",params![entry.meeting_id,entry.source_sha256],|r|r.get(0)).map_err(|e|e.to_string())?;
-            let (file, before) = open_source(assets.get(id).ok_or("管理JSONがありません")?)?;
-            if before.len() > portable::MAX_ROW_BYTES as u64 {
-                return Err("管理JSONが大きすぎます".into());
-            }
-            let mut bytes = Vec::new();
-            file.take(portable::MAX_ROW_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            check_json(&bytes, capture)?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "archive_tests.rs"]
 pub(super) mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "deleted_audio_tests.rs"]
-mod deleted_audio_tests;
+pub(super) mod deleted_audio_tests;

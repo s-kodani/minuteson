@@ -11,6 +11,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
+mod contents;
 mod deleted_audio;
 pub(in crate::storage) mod restored_audio;
 mod retired_audio;
@@ -131,6 +132,13 @@ pub(in crate::storage) fn published_restore_for_rebinding_test(
             .collect(),
     )
 }
+#[cfg(all(test, unix))]
+pub(crate) fn deleted_current_meeting_for_test(storage: &Storage, operation: &str) -> String {
+    let meeting = archive::tests::meeting(storage, operation);
+    archive::deleted_audio_tests::deleted(storage, &meeting);
+    meeting
+}
+
 pub(in crate::storage::backup) mod publication;
 pub(crate) mod restore_fixed;
 pub(crate) mod restore_ids;
@@ -198,8 +206,8 @@ pub(crate) struct Snapshot<'a> {
     pub(super) database_size: u64,
     pub(super) assets: Vec<StagedAsset>,
     pub(super) meetings: Vec<Meeting>,
+    contents: contents::Contents,
     deleted_audio: deleted_audio::Native,
-    input_snapshots: input_snapshots::Native,
     _maintenance: Maintenance<'a>,
 }
 
@@ -324,33 +332,53 @@ impl Storage {
         let database = stage.path().join("snapshot.sqlite3");
         snapshot_database(self, &database, cancelled)?;
         let mut db = read_only(&database)?;
-        validate_database(&mut db, cancelled)?;
+        if verify_migration_history(&db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
+            return Err("未対応のDBスナップショット形式です".into());
+        }
         let meetings = read_meetings(&db)?;
         let deleted_audio = deleted_audio::Native::capture(self, &db, cancelled)?;
-        let input_snapshots = input_snapshots::Native::capture(self, &db, cancelled)?;
-        let mut assets = read_assets_with_deleted(&db, &deleted_audio)?;
-        assets.extend(super::voice::audio::assets(&db)?);
-        let required = assets.iter().try_fold(0_u64, |sum, a| {
-            if a.state == "missing" {
-                return Ok(sum);
-            }
-            sum.checked_add(u64::try_from(a.size_bytes).map_err(|_| "ファイルサイズが不正です")?)
-                .ok_or("バックアップ容量が範囲外です")
-        })?;
-        check_capacity(stage.path(), required)?;
         let asset_directory = stage.path().join("assets");
         scratch::directories(&asset_directory)?;
-        let mut staged = Vec::with_capacity(assets.len());
-        for asset in assets {
+        let (contents, mut staged) =
+            contents::Contents::capture(&mut db, stage.path(), &deleted_audio, cancelled)?;
+        let voices = super::voice::audio::assets(&db)?;
+        let mut selected = Vec::new();
+        for (id, meeting, missing) in contents.assets() {
             check_cancelled(cancelled)?;
+            let asset = if meeting.is_empty() {
+                voices
+                    .iter()
+                    .find(|a| a.id == id)
+                    .cloned()
+                    .ok_or("登録音声がありません")?
+            } else {
+                db.query_row("SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1 AND meeting_id=?2",params![id,meeting],|r|Ok(FileAsset{id:r.get(0)?,meeting_id:r.get(1)?,relative_path:r.get(2)?,media_type:r.get(3)?,size_bytes:r.get(4)?,content_hash:r.get(5)?,state:r.get(6)?})).map_err(|e|e.to_string())?
+            };
+            if asset.state != if missing { "missing" } else { "ready" } {
+                return Err("保存音声の状態がバックアップ内容と一致しません".into());
+            }
+            selected.push(asset);
+        }
+        let total = selected
+            .iter()
+            .filter(|a| a.state == "ready")
+            .try_fold(0u64, |n, a| {
+                n.checked_add(u64::try_from(a.size_bytes).map_err(|_| "音声サイズが不正です")?)
+                    .ok_or("音声容量が範囲外です")
+            })?;
+        check_capacity(stage.path(), total)?;
+        crate::operation_observation::stage("copying_backup", Some(total), "bytes");
+        for asset in selected {
+            let missing = asset.state == "missing";
             let key = Uuid::new_v4().to_string();
             let path = asset_directory.join(&key);
-            if asset.state == "ready" {
-                let source = source_path(self, &asset)?;
-                copy_asset(&source, &path, &asset, cancelled)?;
+            if !missing {
+                copy_asset_observed(&source_path(self, &asset)?, &path, &asset, cancelled)?;
             }
             staged.push(StagedAsset { asset, key, path });
         }
+        crate::operation_observation::report("copying_backup", total, total, "bytes");
+        crate::operation_observation::stage("checking_source", None, "bytes");
         drop(db);
         let (database_size, database_hash) = digest_file(&database, cancelled)?;
         let snapshot = Snapshot {
@@ -361,7 +389,7 @@ impl Storage {
             assets: staged,
             meetings,
             deleted_audio,
-            input_snapshots,
+            contents,
             _maintenance: maintenance,
         };
         snapshot.verify(cancelled)?;
@@ -440,8 +468,6 @@ impl Snapshot<'_> {
             &read_only(&self.database)?,
             cancelled,
         )?;
-        self.input_snapshots
-            .verify(self._maintenance.storage, cancelled)?;
         for staged in &self.assets {
             if staged.asset.state == "missing" {
                 // Only validated exclusion metadata is staged; no dummy body.
@@ -792,6 +818,23 @@ fn stream(
     expected: u64,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(u64, String), String> {
+    stream_inner(file, output, expected, cancelled, false)
+}
+fn stream_observed(
+    file: &mut File,
+    output: Option<&mut File>,
+    expected: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(u64, String), String> {
+    stream_inner(file, output, expected, cancelled, true)
+}
+fn stream_inner(
+    file: &mut File,
+    mut output: Option<&mut File>,
+    expected: u64,
+    cancelled: &impl Fn() -> bool,
+    observed: bool,
+) -> Result<(u64, String), String> {
     let mut buffer = [0_u8; BUFFER_BYTES];
     let mut hash = Sha256::new();
     let mut size = 0_u64;
@@ -809,6 +852,9 @@ fn stream(
             return Err("管理ファイルのサイズが変更されています".into());
         }
         hash.update(&buffer[..count]);
+        if observed {
+            crate::operation_observation::advance(count as u64);
+        }
         if let Some(destination) = output.as_deref_mut() {
             destination
                 .write_all(&buffer[..count])
@@ -827,13 +873,30 @@ fn copy_asset(
     asset: &FileAsset,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    copy_asset_inner(source, target, asset, cancelled, false)
+}
+fn copy_asset_observed(
+    source: &Path,
+    target: &Path,
+    asset: &FileAsset,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    copy_asset_inner(source, target, asset, cancelled, true)
+}
+fn copy_asset_inner(
+    source: &Path,
+    target: &Path,
+    asset: &FileAsset,
+    cancelled: &impl Fn() -> bool,
+    observed: bool,
+) -> Result<(), String> {
     let (mut input, before) = open_source(source)?;
     let expected = u64::try_from(asset.size_bytes).map_err(|_| "管理ファイルサイズが不正です")?;
     if before.len() != expected {
         return Err("管理ファイルサイズが登録値と一致しません".into());
     }
     let mut output = private_file(target)?;
-    let (_, hash) = stream(&mut input, Some(&mut output), expected, cancelled)?;
+    let (_, hash) = stream_inner(&mut input, Some(&mut output), expected, cancelled, observed)?;
     if hash != asset.content_hash
         || !same_file(
             &before,

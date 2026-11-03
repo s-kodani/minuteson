@@ -4,6 +4,7 @@
 //! placement lease, and cannot mint either capability or delete consent.
 use super::*;
 use crate::bootstrap::placement::{NativeHistoryAdmission, Placement};
+use crate::storage::audio_publication::cleanup::relocation as cleanup_history;
 use crate::storage::backup::relocation::NativeSnapshot;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -54,6 +55,8 @@ struct SourceFacts {
     database: Identity,
     native_hash: String,
     workspaces: Vec<Workspace>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    audio_cleanup: Vec<cleanup_history::Claim>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -86,6 +89,8 @@ struct DestinationFacts {
     root: Identity,
     database: Identity,
     workspaces: Vec<BoundWorkspace>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    audio_cleanup: Vec<cleanup_history::Bound>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -99,6 +104,7 @@ pub(in crate::storage) struct Aliases {
     database: Identity,
     plans: BTreeMap<(String, String), (Workspace, BoundWorkspace)>,
     checkpoints: BTreeMap<String, (String, Identity, Identity)>,
+    audio_cleanup: cleanup_history::Aliases,
 }
 fn metadata(root: &Path, path: &str) -> Result<Identity, String> {
     Identity::read(&crate::native_fs::symlink_metadata(root.join(path)).map_err(|e| e.to_string())?)
@@ -122,7 +128,7 @@ fn valid_source(source: &SourceFacts) -> Result<(), String> {
     if source.version != 1
         || !source.source_root.is_absolute()
         || !inventory::valid_hash(&source.native_hash)
-        || source.workspaces.is_empty()
+        || (source.workspaces.is_empty() && source.audio_cleanup.is_empty())
         || source.workspaces.len() > MAX_WORKSPACES
         || source
             .workspaces
@@ -131,7 +137,8 @@ fn valid_source(source: &SourceFacts) -> Result<(), String> {
     {
         return Err("FLAC移動履歴の元領域・件数・順序が不正です".into());
     }
-    let mut claims = 0;
+    cleanup_history::validate(&source.audio_cleanup)?;
+    let mut claims = source.audio_cleanup.len();
     let mut outputs = BTreeSet::new();
     for workspace in &source.workspaces {
         track_base(
@@ -218,6 +225,7 @@ impl Source {
         let mut query = db.prepare("SELECT r.meeting_id,r.id FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE m.source_type='recording' AND r.input_history_snapshot_json IS NULL ORDER BY r.meeting_id,r.id")
             .map_err(|e| e.to_string())?;
         let mut workspaces = Vec::new();
+        let audio_cleanup = cleanup_history::capture(storage, snapshot, &db, cancelled)?;
         let native_files: BTreeMap<_, _> = snapshot
             .manifest()
             .entries
@@ -401,7 +409,7 @@ impl Source {
             }
             root.verify()?;
         }
-        if workspaces.is_empty() {
+        if workspaces.is_empty() && audio_cleanup.is_empty() {
             return Ok(None);
         }
         workspaces.sort_by(|a, b| (&a.base, &a.name).cmp(&(&b.base, &b.name)));
@@ -412,6 +420,7 @@ impl Source {
             database: metadata(&storage.root, "meetings.sqlite3")?,
             native_hash: snapshot.manifest_hash().into(),
             workspaces,
+            audio_cleanup,
         };
         valid_source(&source)?;
         snapshot.verify(cancelled)?;
@@ -484,6 +493,7 @@ impl Source {
             root: metadata(&target, "")?,
             database: copied("meetings.sqlite3", false)?,
             workspaces,
+            audio_cleanup: cleanup_history::bind(&self.0.audio_cleanup, placement)?,
         };
         snapshot.verify_source(cancelled)?;
         placement.verify(snapshot, cancelled)?;
@@ -584,6 +594,11 @@ pub(in crate::storage) fn admitted_history(
     {
         return Err("FLACの承認した元領域・DBと移動先が一致しません".into());
     }
+    let audio_cleanup = cleanup_history::admit(
+        admission,
+        source.audio_cleanup.clone(),
+        &destination.audio_cleanup,
+    )?;
     let mut plans = BTreeMap::new();
     let mut checkpoints = BTreeMap::new();
     for (workspace, bound) in source.workspaces.into_iter().zip(destination.workspaces) {
@@ -652,6 +667,7 @@ pub(in crate::storage) fn admitted_history(
         database: destination.database,
         plans,
         checkpoints,
+        audio_cleanup,
     })))
 }
 impl Aliases {
@@ -665,6 +681,18 @@ impl Aliases {
         }
         Ok(())
     }
+}
+pub(in crate::storage) fn effective_cleanup_identity(
+    storage: &Storage,
+    meeting: &str,
+    file: &crate::storage::audio_publication::cleanup::RetiredAudio,
+    identity: &mut Option<Identity>,
+) -> Result<(), String> {
+    let Some(aliases) = &storage.flac_history else {
+        return Ok(());
+    };
+    aliases.verify(storage)?;
+    cleanup_history::effective(&aliases.audio_cleanup, meeting, file, identity)
 }
 pub(super) fn effective_plan(
     storage: &Storage,

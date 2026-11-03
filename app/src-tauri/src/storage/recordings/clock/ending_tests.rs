@@ -371,12 +371,12 @@ fn capture_ending_does_not_salvage_failed_empty_or_corrupt_capture_as_saved() {
 }
 
 #[test]
-fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without_owner_rewrite() {
+fn capture_ending_current_backup_preserves_duration_and_canonical_pcm() {
     let root = tempfile::tempdir().unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, session, _, value) = ending(&storage);
+    let (meeting, session, _, _) = ending(&storage);
     storage.finalize_recording(&session).unwrap();
     let archive = destination.path().join("ending.monbackup");
     storage
@@ -398,7 +398,7 @@ fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without
     let restored = &receipt.meeting_ids[0];
     assert_ne!(restored, &meeting);
     assert_eq!(meeting_duration(&target, restored), 1100000);
-    assert_eq!(gaps(&target), gaps(&storage));
+    assert!(gaps(&target).is_empty()); // Retired acquisition tracks are excluded.
     assert_whole_gap_playback(&target, restored, 1100000);
     let plan = target.recorded_audio_plan(restored).unwrap();
     for track in &plan.tracks {
@@ -410,18 +410,6 @@ fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without
             .prepare_track_audio(restored, &track.id, track.end_us, 1100000)
             .is_err());
     }
-    let db = target.connection.lock().unwrap();
-    let relative: String = db
-        .query_row(
-            "SELECT relative_path FROM file_assets WHERE id=?1",
-            params![plan.manifest_asset_id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(target.root.join(relative)).unwrap()).unwrap();
-    assert_eq!(manifest["captureEnd"], value["captureEnd"]);
-    assert_eq!(manifest["recordingOwnerId"], json!(session));
 }
 
 #[cfg(target_os = "macos")]

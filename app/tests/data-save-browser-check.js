@@ -39,7 +39,15 @@ async (page) => {
   check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "editing enabled during native work");
   check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
   check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
+  const jobsNav=page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).getByRole("button",{name:"ジョブ一覧",exact:true});
+  check(await jobsNav.isEnabled(),"jobs navigation locked during backup");await jobsNav.click();
+  await page.getByRole("heading",{name:"ジョブ一覧",exact:true}).waitFor();
+  await page.evaluate(()=>window.dataFixture.changed({progress:{stage:"writing_backup",completed:512,total:1024,unit:"bytes"}}));
+  await page.getByRole("region",{name:"バックグラウンドのジョブ一覧"}).getByText("バックアップを書き込み中",{exact:true}).waitFor();
   await page.evaluate(() => window.dataFixture.complete()); await done();
+  const resultsList=page.getByRole("list",{name:"バックアップと復元の結果"});await resultsList.waitFor();
+  check((await calls("start_data_operation")).length===1,"jobs navigation repeated backup");
+  await resultsList.getByRole("button",{name:"結果を閉じる",exact:true}).click();await resultsList.waitFor({state:"hidden"});
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
   results.push("new backup: one admission, busy locks, terminal-only success");
 

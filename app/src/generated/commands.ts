@@ -31,6 +31,8 @@ export interface CommandArguments {
   "start_audio_import": { "request": unknown };
   "cancel_audio_import": { "token": string };
   "get_data_operation": Record<string, never>;
+  "list_data_jobs": Record<string, never>;
+  "dismiss_data_job": { "token": string };
   "get_deletion_items": Record<string, never>;
   "review_meeting_deletion": { "meetingId": string };
   "review_pending_deletion": { "operationId": string };
@@ -688,6 +690,31 @@ export const commandContracts = {
     "response": {
       "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
       "ok": "data_controller::Snapshot",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "list_data_jobs": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<Vec<data_controller::DataJob>,mon_contracts::AppError>",
+      "ok": "Vec<data_controller::DataJob>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "dismiss_data_job": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "token",
+        "wireName": "token",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
       "error": "mon_contracts::AppError"
     }
   },

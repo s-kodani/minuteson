@@ -46,7 +46,7 @@ fn owned_voice_audio_roundtrips_without_its_deleted_source_meeting() {
     let path = output.path().join("independent-voice.monbackup");
     storage.create_backup_archive(&path, &|| false).unwrap();
     let source = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
-    assert_eq!(source.manifest.format_version, 7);
+    assert_eq!(source.manifest.format_version, 8);
     let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
         false
     })

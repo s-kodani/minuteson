@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { observeSnapshots } from "./snapshot-resource";
 import { browserFocus, browserSchedule } from "./snapshot-browser";
 import { useEffect, useRef, useState } from "react";
-import { assertDataAvailability, acceptDataSnapshot, type DataAvailability, type DataSnapshot } from "./data-operation-state";
+import { assertDataJobs, type DataJob, assertDataAvailability, acceptDataSnapshot, type DataAvailability, type DataSnapshot } from "./data-operation-state";
 import { assertDeletionListing, type DeletionListing } from "./deletion-state";
 import { assertModelBodyDeletionListing, type ModelBodyDeletionListing } from "./model-deletion-operation-state";
 import { assertAudioDeletionListing, type AudioDeletionListing } from "./audio-deletion-operation-state";
@@ -14,6 +14,16 @@ export function useDataOperation() {
   const [connected, setConnected] = useState(!isTauri());
   const [availability, setAvailability] = useState<DataAvailability | null>(null);
   const [error, setError] = useState("");
+  const [jobs, setJobs] = useState<DataJob[]>([]);
+  const [jobsError, setJobsError] = useState("");
+  const jobsRead = useRef(0);
+  const refreshJobs = async () => {
+    const generation = ++jobsRead.current;
+    try { const rows: unknown = await invoke("list_data_jobs"); assertDataJobs(rows); if (generation === jobsRead.current) { setJobs(rows); setJobsError(""); } }
+    catch (cause) { if (generation === jobsRead.current) setJobsError(String(cause)); }
+  };
+  const dismissJob = async (token: string) => { jobsRead.current++; await invoke("dismiss_data_job", { token }); await refreshJobs(); };
+
   const [deletionListing, setDeletionListing] = useState<DeletionListing | null>(null);
   const [deletionSupported, setDeletionSupported] = useState(false);
   const [modelDeletionListing, setModelDeletionListing] = useState<ModelBodyDeletionListing | null>(null);
@@ -33,6 +43,7 @@ export function useDataOperation() {
     try {
       const next = await invoke<DataSnapshot>("get_data_operation");
       accept(next);
+      await refreshJobs();
       const value = await invoke<DataAvailability>("get_data_operation_availability");
       assertDataAvailability(value);
       const supported = Object.hasOwn(next, "deletionPreview");
@@ -63,6 +74,6 @@ export function useDataOperation() {
     });
     return observation.stop;
   }, []);
-  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, audioDeletionListing, audioDeletionSupported, error, accept, refresh, getSnapshot: () => current.current };
+  return { jobs, jobsError, dismissJob, snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, audioDeletionListing, audioDeletionSupported, error, accept, refresh, getSnapshot: () => current.current };
 }
 export type DataOperation = ReturnType<typeof useDataOperation>;

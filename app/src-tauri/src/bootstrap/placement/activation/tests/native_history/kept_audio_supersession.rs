@@ -208,6 +208,10 @@ fn kept_audio_owned_v2_child_after_move_purges_without_adopting_old_ancestor_as_
 fn kept_audio_owned_restored_baseline_and_kept_child_survive_purge_cold_start_and_relocation() {
     let mut f = NativeFixture::new(false, false);
     let storage = f.storage.as_ref().unwrap();
+    // Format 8 retains canonical meeting audio, rather than unrelated assets
+    // registered against an empty draft. Use a real saved/deleted meeting.
+    purge(storage, &f.meeting);
+    crate::storage::backup::deleted_current_meeting_for_test(storage, "kept-current-source");
     let archive = f._base.path().join("kept-restored-source.monbackup");
     storage
         .create_backup_archive(&archive, &crate::test_support::never_cancelled)

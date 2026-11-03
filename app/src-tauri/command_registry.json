@@ -757,6 +757,45 @@
       }
     },
     {
+      "name": "list_data_jobs",
+      "handler": "list_data_jobs",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<data_controller::DataJob>,mon_contracts::AppError>",
+          "ok": "Vec<data_controller::DataJob>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "dismiss_data_job",
+      "handler": "dismiss_data_job",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "token",
+            "wireName": "token",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_deletion_items",
       "handler": "get_deletion_items",
       "roles": [

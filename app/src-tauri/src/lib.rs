@@ -735,6 +735,27 @@ fn get_data_operation_availability(
 }
 
 #[tauri::command]
+async fn list_data_jobs(
+    window: WebviewWindow,
+) -> Result<Vec<data_controller::DataJob>, mon_contracts::AppError> {
+    let result: Result<_, String> = (|| data_app(&window)?.state::<DataController>().list_jobs())();
+    result.map_err(|message| mon_contracts::AppError::from_command("list_data_jobs", message))
+}
+
+#[tauri::command]
+async fn dismiss_data_job(
+    window: WebviewWindow,
+    token: String,
+) -> Result<(), mon_contracts::AppError> {
+    let result: Result<_, String> = (|| {
+        data_app(&window)?
+            .state::<DataController>()
+            .dismiss_job(&token)
+    })();
+    result.map_err(|message| mon_contracts::AppError::from_command("dismiss_data_job", message))
+}
+
+#[tauri::command]
 async fn list_restored_meeting_ids(
     window: WebviewWindow,
 ) -> Result<Vec<String>, mon_contracts::AppError> {
@@ -3249,6 +3270,11 @@ pub fn run() {
                     }
                     storage.finish_pending_meeting_audio()?;
                     storage.migrate_single_wav(&|done, total, meeting| {
+                        let _ = handle
+                            .state::<startup_attention::Startup>()
+                            .migration_progress(done, total, meeting);
+                    })?;
+                    storage.upgrade_completed_audio_cleanup(&|done, total, meeting| {
                         let _ = handle
                             .state::<startup_attention::Startup>()
                             .migration_progress(done, total, meeting);
