@@ -209,14 +209,6 @@ jobs:
         run: |
           $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
-      - name: Upload Microsoft Store MSIX
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: minuteson-windows-x64-store
-          path: output/windows-store/*.msix
-          if-no-files-found: error
-          retention-days: 7
       - name: Upload Microsoft Store build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -251,14 +243,6 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
         run: python tools/mon_ci_native_tests.py --suite full --all-targets --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
-      - name: Upload Windows QA installer artifact
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: mon-windows-x64-qa
-          path: app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-          if-no-files-found: error
-          retention-days: 7
       - name: Upload Windows build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

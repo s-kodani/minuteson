@@ -130,13 +130,15 @@ class DesktopWorkflowTests(unittest.TestCase):
         value = value.replace("&&", " and ").replace("||", " or ")
         return eval(value, {"__builtins__": {}}, {"always": lambda: True})
 
-    def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
+    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows"):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
                    "runner.os": operating_system}
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
-        return "\n".join(step.get("run", "") for step in native["steps"]
-                         if self.expression(step.get("if", "True"), context))
+        return [step for step in native["steps"] if self.expression(step.get("if", "True"), context)]
+
+    def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
+        return "\n".join(step.get("run", "") for step in self.native_steps(event, full, suite, operating_system))
 
     def test_pr_and_main_run_quick_without_native_resource_builds(self):
         for event in ("pull_request", "push"):
@@ -168,6 +170,35 @@ class DesktopWorkflowTests(unittest.TestCase):
             self.assertNotIn("--processes", windows + macos)
             self.assertNotIn("--threads", windows + macos)
         self.assertIn("--suite quick", self.native_commands("workflow_dispatch", False, "quick"))
+
+    def test_validation_uploads_are_limited_to_diagnostics_and_json_build_identity(self):
+        allowed_paths = {
+            "output/playwright/",
+            "output/rust-tests/",
+            "output/windows-store-work/*/source.json",
+            "output/windows-store-work/*/build.json",
+            "output/windows-qa-work/*-build.json",
+        }
+        for job, definition in self.workflow["jobs"].items():
+            for step in definition.get("steps", []):
+                if step.get("uses", "").startswith("actions/upload-artifact@"):
+                    with self.subTest(job=job, step=step.get("name")):
+                        paths = set(step["with"]["path"].splitlines())
+                        self.assertTrue(paths)
+                        self.assertLessEqual(paths, allowed_paths)
+
+    def test_quick_and_full_keep_diagnostics_without_uploading_installers(self):
+        for event, full, suite in (("pull_request", False, ""), ("push", False, ""),
+                                   ("workflow_dispatch", False, "quick"),
+                                   ("workflow_dispatch", False, "full"), ("workflow_call", True, "")):
+            for operating_system in ("Windows", "macOS"):
+                with self.subTest(event=event, full=full, suite=suite, os=operating_system):
+                    uploads = {step["with"]["name"] for step in self.native_steps(event, full, suite, operating_system)
+                               if step.get("uses", "").startswith("actions/upload-artifact@")}
+                    expected = {"rust-tests-${{ runner.os }}"}
+                    if operating_system == "Windows" and (full or suite == "full"):
+                        expected |= {"minuteson-windows-x64-store-identity", "mon-windows-x64-qa-identity"}
+                    self.assertEqual(uploads, expected)
 
     def test_daily_and_release_call_full_at_the_selected_source(self):
         daily = yaml.safe_load((release.ROOT / ".github/workflows/desktop-daily.yml").read_text())
