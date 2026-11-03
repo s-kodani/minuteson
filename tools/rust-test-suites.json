@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "heavy": [
+    {
+      "prefix": "bootstrap::placement::history::tests::",
+      "reason": "Native database/control-history handoff, repeated moves and SIGKILL recovery across full copied roots."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_sigkill_reopen_preserves_old_data_and_resumes_only_journal_owned_copy",
+      "reason": "Child-process SIGKILL checkpoints during full native placement."
+    },
+    {
+      "prefix": "storage::backup::relocation::tests::",
+      "reason": "Full native database/image copies, source substitution and crash/seal matrix; basic portable format roundtrips remain in quick."
+    },
+    {
+      "prefix": "storage::backup::relocation::control::tests::",
+      "reason": "Native control-journal handoff, ownership substitutions and crash checkpoint matrix."
+    },
+    {
+      "prefix": "storage::backup::scratch::history::tests::",
+      "reason": "Copied scratch-history installation, tamper cases and repeated native root handoff."
+    },
+    {
+      "name": "storage::backup::scratch::tests::scratch_sigkill_reopen_recovers_real_snapshot_restore_and_partial_copies_but_keeps_creation_gaps",
+      "reason": "Repeated SIGKILL/reopen of real snapshot and restore copy stages."
+    },
+    {
+      "prefix": "storage::backup::publication::journal::tests::",
+      "reason": "Full prepared restore publication, durable recovery/tamper matrix and repeated reopen."
+    },
+    {
+      "prefix": "storage::backup::publication::journal::relocation::tests::",
+      "reason": "Restore-journal rebinding and substituted native identity matrix."
+    },
+    {
+      "prefix": "storage::deletion::audio::intent::removal::renewal::tests::",
+      "reason": "Multi-generation audio-removal history, repeated review and upper-limit fixtures; generation-limit cases exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "prefix": "storage::deletion::removal::tests::renewal_tests::",
+      "reason": "Full meeting-removal renewal/root-history matrix, large inventories and maximum generations."
+    },
+    {
+      "prefix": "storage::deletion::models::tests::durable::",
+      "reason": "Durable model-body consent/removal/renewal with child-process checkpoints and 256-object limit fixtures."
+    },
+    {
+      "prefix": "storage::deletion::relocation::tests::",
+      "reason": "Native historical deletion rebinding and repeated root movement."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_same_parent_many_registered_files_has_exact_progress_and_keeps_unknowns",
+      "reason": "Large registered-file inventory and per-file durable removal; exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fixed_metadata",
+      "reason": "Real FLAC workspace rename/unlink checkpoint matrix; exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "name": "storage::deletion::audio_supersession::tests::audio_supersession_rehashed_scope_membership_order_and_identity_changes_never_admit_detached_history",
+      "reason": "Repeated tampered supersession histories; exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "name": "storage::deletion::removal::tests::file_removal_many_explicit_files_keep_progress_bounded_and_complete_all_observed_paths",
+      "reason": "Large explicit-file removal inventory; exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "name": "recording_segments::tests::four_hour_raw_prefix_exceeds_legacy_chunk_count_without_unbounded_descriptors",
+      "reason": "Four-hour synthetic raw recording and chunk/descriptor limits; exceeded 60 seconds in an existing full-run log."
+    },
+    {
+      "prefix": "windows_integration_tests::",
+      "reason": "Windows capture helper and bundled inference/catalog resources must be built before these native integration tests."
+    },
+    {
+      "name": "capture_test::files::windows_five_second_synthetic_capture_validates_and_releases_audio",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::files::windows_five_second_clock_anomalies_validate_and_release_audio",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::files::windows_five_second_initialization_failure_retains_the_primary_error",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::journal::tests::windows_owned_five_second_helper_completes_with_inherited_lease",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::journal::tests::windows_owned_pc_only_test_keeps_system_audio_without_a_microphone_file",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::journal::tests::windows_owned_test_reports_early_lease_failure_and_rejects_another_parent",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "name": "capture_test::journal::tests::windows_parity_test_lease_survives_parent_handles_and_recovers_after_helper_exit",
+      "reason": "Launches the built Windows capture helper; quick checks must run without QA/native resource preparation."
+    },
+    {
+      "prefix": "bootstrap::placement::activation::tests::",
+      "reason": "Native root cutover repeatedly copies full databases, installs history, injects publication faults and SIGKILLs before/after admission; basic bootstrap and placement tests remain quick."
+    },
+    {
+      "prefix": "storage::deletion::relocation::receiver::startup_admission::tests::",
+      "reason": "Native read-only startup admission builds owned WAL snapshots, corrupts file/control combinations and SIGKILLs each WAL-copy checkpoint before a cold bootstrap reopen."
+    },
+    {
+      "prefix": "storage::deletion::completion::tests::database_renewal_tests::",
+      "reason": "Database renewal repeats all three SQL completion stages across residual-file, cancellation, purge and cold-restart checkpoints; basic row/file deletion remains quick."
+    },
+    {
+      "prefix": "storage::deletion::audio_supersession::tests::kept_history::",
+      "reason": "Multi-generation kept-audio supersession, retained evidence sets and tamper matrices, with crash-boundary cold recovery."
+    },
+    {
+      "prefix": "storage::deletion::audio_supersession::tests::kept_meeting::",
+      "reason": "Mixed kept-meeting/audio generations, full-history boundary tampering and child-process crash recovery."
+    },
+    {
+      "prefix": "storage::deletion::audio::intent::reconfirmation::tests::",
+      "reason": "Real audio reconfirmation repeats durable consent, reservation, inventory/cancel matrices, several generations and SIGKILL/cold-resume paths."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_cancel_at_each_boundary_resumes_same_receipt_without_deleting_retained_files",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_rejects_changes_to_retained_files_at_both_irreversible_boundaries",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_rejects_new_unknown_file_and_missing_retained_file_after_partial_stop",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_staged_change_original_reappearance_and_missing_unstaged_audio_are_refused",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_does_not_adopt_reappeared_missing_or_processed_audio_after_files_removed",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_corrupt_progress_cursor_subtype_and_held_record_never_grant_a_writer",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_reservation_collision_is_never_adopted_even_if_included_in_original_review",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_changed_database_text_and_independent_pending_receipt_stop_before_audio_changes",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_leaf_links_parent_substitution_and_root_substitution_keep_external_data",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::tests::audio_removal_sigkill_preserves_exact_reserved_audio_and_resumes_every_persisted_boundary",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::completion::tests::each_precommit_cancel_rolls_back_all_availability_and_progress_not_deleted_files",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::completion::tests::completed_metadata_corruption_and_ready_resurrection_never_grant_audio_access",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio::intent::removal::completion::tests::completion_sigkill_each_atomic_boundary_is_cleanup_or_fully_completed",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_cancel_before_row_commit_rolls_back_rows_and_progress_together",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_after_row_commit_cancel_retains_partial_state_and_finishes_without_redeleting",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_reappearing_unknown_after_row_commit_is_kept_and_never_acknowledged",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_database_replacement_stops_before_commit_or_next_purge_operation",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::completion::tests::compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_all_phases",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::startup::tests::deletion_startup_corrupt_hash_progress_or_forged_audit_marker_is_attention_not_success",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::startup::tests::deletion_startup_attention_schema_does_not_admit_shadow_tables_or_same_name_substitutions",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::startup::tests::deletion_startup_reappearance_defers_mutable_recovery_and_never_relabels_unrelated_running_jobs",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio_supersession::tests::audio_supersession_preserved_native_metadata_or_chunk_changes_block_backup_and_startup",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio_supersession::tests::audio_supersession_orphan_duplicate_or_path_bearing_markers_fail_closed",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "name": "storage::deletion::audio_supersession::tests::audio_supersession_recreated_db_or_logical_or_reserved_root_is_retained_and_never_reclassified",
+      "reason": "Repeated real-Storage corruption/cancellation or child-process crash checkpoint matrix; each variant reconstructs durable consent/removal and cold-reopens storage. Basic single-path deletion and completion tests remain quick."
+    },
+    {
+      "prefix": "storage::recordings::flac::tests::relocation::",
+      "reason": "Native FLAC workspaces are copied through Bootstrap placement/activation, repeatedly moved and cold-resumed, with output/document/identity tamper combinations and SIGKILL cutover checkpoints. Basic FLAC encoding/verification remains quick."
+    },
+    {
+      "name": "storage::audio_publication::cleanup_tests::pending_cleanup_resumes_after_repeated_native_moves_and_cold_reopens",
+      "reason": "Copies a pending cleanup through native Bootstrap placement/activation and cold reopens, then checks repeated moves or substituted inode refusal. Basic completed-audio cleanup remains quick."
+    },
+    {
+      "name": "storage::audio_publication::cleanup_tests::native_move_never_authorizes_same_content_replacement",
+      "reason": "Copies a pending cleanup through native Bootstrap placement/activation and cold reopens, then checks repeated moves or substituted inode refusal. Basic completed-audio cleanup remains quick."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_target_and_control_links_or_replacements_are_not_adopted",
+      "reason": "Native full-root copy recovery or repeated target/control/owner substitution combinations; the basic native placement preservation test stays quick."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_owned_partial_file_replacement_or_links_refuse_before_payload_write",
+      "reason": "Native full-root copy recovery or repeated target/control/owner substitution combinations; the basic native placement preservation test stays quick."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_runtime_and_reopen_refuse_changed_control_shape_or_identity",
+      "reason": "Native full-root copy recovery or repeated target/control/owner substitution combinations; the basic native placement preservation test stays quick."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_source_database_substitution_keeps_write_stop_after_failed_copy_is_dropped",
+      "reason": "Native full-root copy recovery or repeated target/control/owner substitution combinations; the basic native placement preservation test stays quick."
+    },
+    {
+      "name": "bootstrap::placement::tests::placement_restart_reopens_owned_partial_copy_and_preserves_current_old_root",
+      "reason": "Native full-root copy recovery or repeated target/control/owner substitution combinations; the basic native placement preservation test stays quick."
+    }
+  ]
+}

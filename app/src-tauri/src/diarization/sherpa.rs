@@ -686,6 +686,17 @@ fn run_track_inner(
         "stderr.log",
     )
     .map_err(|e| format!("sherpa-onnxを起動できません: {e}"))?;
+    let check_log_limits = || -> Result<(), String> {
+        for (path, limit) in [
+            (&stdout_path, MAX_OUTPUT_BYTES),
+            (&stderr_path, MAX_LOG_BYTES),
+        ] {
+            if path.metadata().map_err(|e| e.to_string())?.len() > limit {
+                return Err("話者分離ログが上限を超えました".into());
+            }
+        }
+        Ok(())
+    };
     let mut progress_file = File::open(&stderr_path).ok();
     let mut log_progress = progress::LogProgress::default();
     progress(0);
@@ -697,14 +708,7 @@ fn run_track_inner(
         if PROCESS_POLICY.expired(started.elapsed(), Some(timeout)) {
             return Err("話者分離が制限時間を超えました".into());
         }
-        for (path, limit) in [
-            (&stdout_path, MAX_OUTPUT_BYTES),
-            (&stderr_path, MAX_LOG_BYTES),
-        ] {
-            if path.metadata().map_err(|e| e.to_string())?.len() > limit {
-                return Err("話者分離ログが上限を超えました".into());
-            }
-        }
+        check_log_limits()?;
         if let Some(file) = &mut progress_file {
             log_progress.poll(file, progress);
         }
@@ -712,6 +716,9 @@ fn run_track_inner(
             .try_wait()
             .map_err(|e| failure_detail(&stderr_path, &e.to_string()))?
         {
+            // The engine can append its final bytes between the preceding
+            // size check and exit. Enforce both limits before accepting status.
+            check_log_limits()?;
             if !status.success() {
                 return Err(failure_detail(
                     &stderr_path,

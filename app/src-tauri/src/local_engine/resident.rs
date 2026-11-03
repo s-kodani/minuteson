@@ -12,12 +12,40 @@ use std::process::{ChildStdin, ChildStdout, ExitStatus, Stdio};
 const PROCESS_POLICY: mon_native::process::Policy = mon_native::process::Purpose::Resident.policy();
 
 mod installation;
+#[cfg(all(test, windows))]
+pub(crate) use installation::prepare_installed;
 pub(crate) use installation::{prepare, prepare_job, Snapshot};
 #[cfg(all(test, unix))]
 pub(crate) mod tests;
 
 #[cfg(test)]
 thread_local! { static ADMISSION: RefCell<Option<Snapshot>> = const { RefCell::new(None) }; }
+
+#[cfg(test)]
+thread_local! { static INSTALLED_ADMISSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// Explicit admission boundary for tests that exercise installed runtimes
+/// through product job preparation instead of a single supplied snapshot.
+#[cfg(test)]
+pub(crate) struct InstalledAdmission {
+    previous: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+#[cfg(test)]
+impl InstalledAdmission {
+    pub(crate) fn enter() -> Self {
+        Self {
+            previous: INSTALLED_ADMISSION.with(|cell| cell.replace(true)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+#[cfg(test)]
+impl Drop for InstalledAdmission {
+    fn drop(&mut self) {
+        INSTALLED_ADMISSION.with(|cell| cell.set(self.previous));
+    }
+}
 
 thread_local! { static JOB: RefCell<Option<Job>> = const { RefCell::new(None) }; }
 struct Job {

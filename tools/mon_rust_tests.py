@@ -19,6 +19,11 @@ import sys
 import threading
 import time
 
+try:
+    from tools import mon_rust_suites as suites
+except ModuleNotFoundError:
+    import mon_rust_suites as suites
+
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = ".mon-rust-tests.json"
 MIB = 1024 * 1024
@@ -380,6 +385,11 @@ def main(argv=None):
     extra = arguments[split+1:] if split < len(arguments) else []
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("filter", nargs="?")
+    parser.add_argument("--suite", choices=suites.SUITES, default="full")
+    parser.add_argument("--workspace", action="store_true",
+                        help="include common Rust crates in the same locked cache")
+    parser.add_argument("--timings-json", type=Path,
+                        help="write build, execution, cache and total wall times")
     parser.add_argument("--cache-dir", type=Path, default=ROOT / ".cache" / "rust-tests")
     parser.add_argument("--max-cache-mib", type=int, default=10240)
     parser.add_argument("--min-free-mib", type=int, default=2048)
@@ -396,8 +406,10 @@ def main(argv=None):
         parser.error("focused checks require a nonempty test filter")
     if options.max_cache_mib < 1 or options.min_free_mib < 0:
         parser.error("cache budget must be positive; free-space floor must be nonnegative")
+    workflow_started = time.monotonic()
     cache = Cache(options.cache_dir)
     with cache.locked():
+        acquired = time.monotonic()
         maximum = options.max_cache_mib * MIB
         if options.clean:
             cache.remove_debug(incremental_only=False)
@@ -410,34 +422,68 @@ def main(argv=None):
             raise ValueError("insufficient free space before build; no tests started")
         environment = os.environ.copy()
         environment["CARGO_TARGET_DIR"] = str(cache.path)
+        if options.suite == "quick":
+            environment.setdefault("TAURI_CONFIG", json.dumps({
+                "bundle": {"resources": None, "externalBin": None, "active": False},
+            }))
         manifest = ROOT / "app" / "src-tauri" / "Cargo.toml"
         common = ["cargo", "test", "--locked", "--offline", "--jobs", str(options.jobs),
                   "--manifest-path", str(manifest)]
         focused = options.filter is not None or bool(extra)
+        # Build shared crates separately: mon-capture-ffi's cbindgen adds syn
+        # host features to a combined workspace build, invalidating Tauri and
+        # the desktop cache even when their own source/dependencies are fresh.
+        core = common + ["--workspace", "--exclude", "mon-desktop"]
         command = common + (["--lib"] if focused else [])
         started = time.monotonic()
         built, code = started, 1
         finished = False
         try:
-            build_code, executables = build(command + ["--no-run", "--message-format=json"],
-                                            environment, manifest.parent, cache.lock_fd)
+            build_code = 0
+            executables = []
+            if options.workspace and not focused:
+                build_code, _ = build(core + ["--lib", "--no-run", "--message-format=json"],
+                                      environment, ROOT, cache.lock_fd)
+            if not build_code:
+                build_code, executables = build(command + ["--no-run", "--message-format=json"],
+                                                environment, manifest.parent, cache.lock_fd)
             built = time.monotonic()
             code = build_code
             if not code and not executables:
                 code = 1
                 raise ValueError("Cargo produced no test executable")
             if not code and not options.build_only:
+                if options.workspace and not focused and options.suite != "heavy":
+                    code = subprocess.run(core + ["--lib"], cwd=ROOT, env=environment,
+                                          pass_fds=(cache.lock_fd,)).returncode
                 for executable in executables:
-                    code = run_units(executable, manifest.parent, environment,
-                                     options.processes, options.threads, options.filter, extra,
-                                     cache.lock_fd)
                     if code:
                         break
-                if not code and not focused:
+                    # Only the desktop library owns these heavy test rules.
+                    # Other packages and bin/integration targets remain normal.
+                    desktop = executable.name.startswith("mon_desktop_lib-")
+                    if options.suite != "full" and desktop:
+                        arguments = ([] if options.filter is None else [options.filter]) + extra
+                        code = suites.run_suite(executable, cwd=manifest.parent, env=environment,
+                                                suite=options.suite, threads=options.threads,
+                                                extra=arguments, pass_fds=(cache.lock_fd,),
+                                                processes=options.processes)
+                    elif options.suite == "heavy":
+                        continue
+                    else:
+                        code = run_units(executable, manifest.parent, environment,
+                                         options.processes, options.threads, options.filter, extra,
+                                         cache.lock_fd)
+                    if code:
+                        break
+                if not code and not focused and options.suite != "heavy":
                     # Cargo --no-run excludes doc tests. Preserve full-check
                     # coverage, including future binary/integration test targets.
                     code = subprocess.run(common + ["--doc"], cwd=manifest.parent,
                                           env=environment, pass_fds=(cache.lock_fd,)).returncode
+                    if not code and options.workspace:
+                        code = subprocess.run(core + ["--doc"], cwd=ROOT, env=environment,
+                                              pass_fds=(cache.lock_fd,)).returncode
             finished = True
         finally:
             elapsed = time.monotonic() - built
@@ -447,8 +493,20 @@ def main(argv=None):
             size = cache.trim(maximum) if finished else footprint(cache.path)
             if not finished:
                 report("[rust-tests] Interrupted workflow: cache retained until a later locked run")
+            ended = time.monotonic()
             report(f"[rust-tests] Build {built-started:.2f}s; execution {elapsed:.2f}s; "
-                   f"cache {size/MIB:.1f} MiB; exit {code}")
+                   f"total {ended-workflow_started:.2f}s; cache {size/MIB:.1f} MiB; exit {code}")
+            if options.timings_json:
+                suites.write_report(options.timings_json, {
+                    "suite": options.suite, "workspace": options.workspace,
+                    "buildOnly": options.build_only, "focused": focused,
+                    "jobs": options.jobs, "threads": options.threads, "processes": options.processes,
+                    "buildSeconds": built-started, "executionSeconds": elapsed,
+                    "cacheSeconds": started-acquired + ended-built-elapsed,
+                    "waitSeconds": acquired-workflow_started,
+                    "totalSeconds": ended-workflow_started, "cacheMiB": size/MIB,
+                    "exitCode": code, "completed": finished,
+                })
         return code
 
 

@@ -324,6 +324,63 @@ class RustRunnerTests(unittest.TestCase):
         self.assertEqual(build.call_count, 1)
         units.assert_not_called()
 
+    def test_quick_workspace_reuses_locked_cache_and_covers_docs(self):
+        executable = Path("/mon_desktop_lib-123")
+        with patch.object(runner, "ROOT", self.repository), redirect_stdout(io.StringIO()), \
+                patch.object(runner, "build", return_value=(0, [executable, Path("/mon_core-123")])) as build, \
+                patch.object(runner.suites, "run_suite", return_value=0) as suite, \
+                patch.object(runner, "run_units", return_value=0) as units, \
+                patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as doc:
+            result = runner.main(["--cache-dir", str(self.cache.path), "--min-free-mib", "0",
+                                  "--workspace", "--suite", "quick"])
+        self.assertEqual(result, 0)
+        self.assertIn("--workspace", build.call_args_list[0].args[0])
+        self.assertIn("--exclude", build.call_args_list[0].args[0])
+        self.assertIn("mon-desktop", build.call_args_list[0].args[0])
+        self.assertNotIn("--workspace", build.call_args_list[1].args[0])
+        self.assertEqual(build.call_args_list[0].args[1], build.call_args_list[1].args[1])
+        self.assertEqual(build.call_args_list[0].args[-1], build.call_args_list[1].args[-1])
+        self.assertEqual(suite.call_args.kwargs["suite"], "quick")
+        self.assertEqual(suite.call_args.kwargs["pass_fds"], (build.call_args.args[-1],))
+        self.assertEqual(units.call_args.args[0], Path("/mon_core-123"))
+        self.assertIn("--doc", doc.call_args.args[0])
+
+    def test_heavy_skips_other_targets_and_docs_and_propagates_failure(self):
+        with patch.object(runner, "ROOT", self.repository), redirect_stdout(io.StringIO()), \
+                patch.object(runner, "build", return_value=(0, [Path("/mon_core-123"), Path("/mon_desktop_lib-123")])), \
+                patch.object(runner.suites, "run_suite", return_value=7) as suite, \
+                patch.object(runner, "run_units") as units, \
+                patch.object(runner.subprocess, "run") as doc:
+            result = runner.main(["--cache-dir", str(self.cache.path), "--min-free-mib", "0", "--suite", "heavy"])
+        self.assertEqual(result, 7)
+        self.assertEqual(suite.call_args.kwargs["suite"], "heavy")
+        units.assert_not_called()
+        doc.assert_not_called()
+
+    def test_shared_build_failure_prevents_desktop_build_and_execution(self):
+        with patch.object(runner, "ROOT", self.repository), redirect_stdout(io.StringIO()), \
+                patch.object(runner, "build", return_value=(17, [])) as build, \
+                patch.object(runner, "run_units") as units, \
+                patch.object(runner.subprocess, "run") as execute:
+            result = runner.main(["--cache-dir", str(self.cache.path), "--min-free-mib", "0",
+                                  "--workspace", "--suite", "quick"])
+        self.assertEqual(result, 17)
+        build.assert_called_once()
+        self.assertIn("--exclude", build.call_args.args[0])
+        units.assert_not_called()
+        execute.assert_not_called()
+
+    def test_build_failure_writes_non_success_timings(self):
+        timing = self.root / "timings.json"
+        with patch.object(runner, "ROOT", self.repository), redirect_stdout(io.StringIO()), \
+                patch.object(runner, "build", return_value=(13, [])):
+            result = runner.main(["--cache-dir", str(self.cache.path), "--min-free-mib", "0",
+                                  "--timings-json", str(timing)])
+        metrics = json.loads(timing.read_text())
+        self.assertEqual(result, 13)
+        self.assertEqual(metrics["exitCode"], 13)
+        self.assertGreaterEqual(metrics["totalSeconds"], metrics["buildSeconds"] + metrics["executionSeconds"])
+
     def test_build_only_reuses_full_test_profile_without_running_units_or_docs(self):
         with patch.object(runner, "ROOT", self.repository), redirect_stdout(io.StringIO()), \
                 patch.object(runner, "build", return_value=(0, [Path("/test")])) as build, \
