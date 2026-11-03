@@ -673,9 +673,10 @@ fn download_record_rejects_origin_schema_hash_and_database_source_relabel() {
     drop(db);
     let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
     assert!(storage.list_model_placements().is_err());
+    // Model placement history is excluded from the current-content backup.
     assert!(storage
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
-        .is_err());
+        .is_ok());
 }
 
 #[test]

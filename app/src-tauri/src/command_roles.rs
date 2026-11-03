@@ -33,6 +33,8 @@ pub fn permits(command: &str, role: &str) -> bool {
         "start_audio_import" => matches!(role, "main"),
         "cancel_audio_import" => matches!(role, "main"),
         "get_data_operation" => matches!(role, "main"),
+        "list_data_jobs" => matches!(role, "main"),
+        "dismiss_data_job" => matches!(role, "main"),
         "get_deletion_items" => matches!(role, "main"),
         "review_meeting_deletion" => matches!(role, "main"),
         "review_pending_deletion" => matches!(role, "main"),

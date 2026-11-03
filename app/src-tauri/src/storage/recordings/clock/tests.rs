@@ -506,28 +506,14 @@ fn old_capture_manifest_is_rejected_without_inventing_maps() {
 }
 
 #[test]
-fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playback() {
-    fn source_plan(storage: &Storage, meeting: &str) -> crate::storage::RecordedAudioPlan {
-        let json: String = storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
-                [meeting],
-                |r| r.get(0),
-            )
-            .unwrap();
-        serde_json::from_str(&json).unwrap()
-    }
+fn corrected_capture_current_backup_preserves_canonical_wave_timing_and_playback() {
     let root = tempfile::tempdir().unwrap();
     let target_root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, session, _, value) = corrected(&storage);
+    let (meeting, session, _, _) = corrected(&storage);
     storage.finalize_recording(&session).unwrap();
     let original = storage.recorded_audio_plan(&meeting).unwrap();
-    let original_source = source_plan(&storage, &meeting);
     let archive = output.path().join("clock.monbackup");
     storage
         .create_backup_archive(&archive, &crate::test_support::never_cancelled)
@@ -549,15 +535,8 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
     assert_eq!(receipt.meeting_ids.len(), 1);
     assert_eq!(target.get_meeting(&neighbor.id).unwrap(), Some(neighbor));
     let restored = target.recorded_audio_plan(&receipt.meeting_ids[0]).unwrap();
-    let restored_source = source_plan(&target, &receipt.meeting_ids[0]);
-    assert_eq!(original_source.tracks.len(), 2);
-    // Retired input IDs belong to the immutable historical snapshot. The
-    // canonical playback plan below is the current, rebased source of audio.
-    assert_eq!(original_source, restored_source);
-    assert!(restored_source.tracks.iter().all(|track| track
-        .chunks
-        .iter()
-        .all(|chunk| !chunk.clock_segments.is_empty())));
+    assert_eq!(restored.tracks.len(), 1);
+    assert_eq!(restored.tracks[0].kind, "processed");
     for (before, after) in original.tracks.iter().zip(&restored.tracks) {
         assert_ne!(before.id, after.id);
         assert_ne!(before.chunks[0].asset_id, after.chunks[0].asset_id);
@@ -580,31 +559,4 @@ fn corrected_capture_real_additive_restore_preserves_maps_shared_clock_and_playb
             32 * after.channels as usize * 4
         );
     }
-    let db = target.connection.lock().unwrap();
-    let path: String = db
-        .query_row(
-            "SELECT f.relative_path FROM file_assets f JOIN recording_sessions r ON r.meeting_id=f.meeting_id AND r.audio_manifest_hash=f.content_hash WHERE r.meeting_id=?1",
-            params![receipt.meeting_ids[0]],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let config: String = db
-        .query_row(
-            "SELECT processing_config_json FROM audio_tracks WHERE meeting_id=?1 AND kind='mic'",
-            params![receipt.meeting_ids[0]],
-            |r| r.get(0),
-        )
-        .unwrap();
-    drop(db);
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(target.root.join(path)).unwrap()).unwrap();
-    assert_eq!(manifest["captureClock"], value["captureClock"]);
-    assert_eq!(
-        manifest["microphone"]["clockSegments"],
-        value["microphone"]["clockSegments"]
-    );
-    assert_eq!(
-        serde_json::from_str::<Value>(&config).unwrap()["capture_clock"],
-        value["captureClock"]
-    );
 }

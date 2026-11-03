@@ -7,7 +7,9 @@ export type DataKind = "backup" | "restore" | "relocation" | "deletion" | "audio
 export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number | null; requiredBytes: number; availableBytes: number; pending: boolean; resumeAllowed: boolean; resumeReason: string | null; copiedPaths: number | null; expectedPaths: number | null }
 export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean; retained: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
+export interface RegistryCounts { people: number; samples: number; audio: number; links: number }
 export interface RestorePreview {
+  registry?: RegistryCounts;
   confirmationId: string; batchId: string; archiveId: string; meetingTitles: string[];
   deletedAudioMeetingCount: number; deletedAudioAssetCount: number;
   requiredBytes: number; availableBytes: number;
@@ -18,6 +20,7 @@ export interface BackupReceipt {
   omittedLogCount: number; deletedAudioMeetingCount: number; deletedAudioAssetCount: number; size: number; sha256: string;
 }
 export interface RestoreReceipt {
+  registry?: RegistryCounts;
   batchId: string; archiveId: string; meetingIds: string[]; alreadyPublished: boolean;
   deletedAudioMeetingCount: number; deletedAudioAssetCount: number;
   vocabularyAdded: number | null; vocabularyDeduplicated: number | null; vocabularyConflicts: string[] | null;
@@ -32,6 +35,18 @@ export interface DataSnapshot { progress?: StageProgress | null; modelDeletionPr
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
 export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "keep" | "delete_including_unregistered" | "review_remaining" }
+export interface DataJob { snapshot: DataSnapshot; startedAtMs: number; finishedAtMs: number | null }
+export function assertDataJobs(value: unknown): asserts value is DataJob[] {
+  if (!Array.isArray(value)) throw Error("データジョブ一覧を確認できません。");
+  const seen = new Set<string>();
+  for (const job of value) {
+    assertDataSnapshot(job?.snapshot);
+    if (!["backup", "restore"].includes(job.snapshot.kind ?? "") || !job.snapshot.token || seen.has(job.snapshot.token)
+      || !Number.isSafeInteger(job.startedAtMs) || job.startedAtMs < 0
+      || !(job.finishedAtMs === null || Number.isSafeInteger(job.finishedAtMs) && job.finishedAtMs >= job.startedAtMs)) throw Error("データジョブの結果が不正です。");
+    seen.add(job.snapshot.token);
+  }
+}
 export type DataAvailabilityReasonCode = "recording_active" | "import_active" | "operation_active" | "relocation_restart_required" | "meeting_deletion_pending";
 export interface DataAvailability { available: boolean; reason: string | null; reasonCode?: DataAvailabilityReasonCode | null; deletionAvailable?: boolean; deletionReason?: string | null; deletionReasonCode?: DataAvailabilityReasonCode | null }
 export function assertDataAvailability(value: DataAvailability): void {
@@ -47,6 +62,7 @@ const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as nu
 const texts = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 65536 && values.every(v => typeof v === "string" && !v.includes("\0"));
 export function assertDataSnapshot(s: DataSnapshot): void {
   checkedStageProgress(s?.progress);
+  for (const r of [s?.restorePreview, s?.restoreReceipt]) { if (r?.registry && ![r.registry.people,r.registry.samples,r.registry.audio,r.registry.links].every(integer)) throw Error("人物・登録音声の件数が不正です。"); }
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
   if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database", "verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed", "verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"

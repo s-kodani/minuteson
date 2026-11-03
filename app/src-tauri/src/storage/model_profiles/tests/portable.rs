@@ -297,8 +297,7 @@ fn portable_model_catalog_rejects_unknown_fields_hash_roles_missing_packages_dup
 }
 
 #[test]
-fn portable_model_catalog_rejects_corrupt_unused_package_and_backup_releases_maintenance_without_publishing(
-) {
+fn portable_model_catalog_rejects_corrupt_unused_package_but_current_backup_is_independent() {
     let mut f = Fixture::new();
     let index = f.add(Engine::Whisper, false, false);
     let output = tempfile::tempdir().unwrap();
@@ -312,13 +311,10 @@ fn portable_model_catalog_rejects_corrupt_unused_package_and_backup_releases_mai
         .unwrap();
         assert!(export(&db, &crate::test_support::never_cancelled).is_err());
     }
-    let failure = f
-        .storage
+    f.storage
         .create_backup_archive(&target, &crate::test_support::never_cancelled)
-        .err()
         .unwrap();
-    assert!(!failure.published);
-    assert!(!target.exists());
+    assert!(target.is_file());
     let meeting = f.storage.get_meeting(&f.meeting).unwrap().unwrap();
     assert!(f
         .storage

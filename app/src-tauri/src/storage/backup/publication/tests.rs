@@ -351,9 +351,14 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
         .unwrap()
         .execute_batch("DROP TRIGGER unknown_restore;")
         .unwrap();
-    let json:String=sealed.connection().query_row("SELECT payload_json FROM working_drafts WHERE json_array_length(payload_json,'$.manual_speakers')>0 LIMIT 1",[],|r|r.get(0)).unwrap();
-    let restored: crate::storage::TranscriptDraftPayload = serde_json::from_str(&json).unwrap();
-    let manual = restored.manual_speakers[0].id.clone();
+    let manual: String = sealed
+        .connection()
+        .query_row(
+            "SELECT id FROM speakers WHERE label='復元用手動話者' LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     // A pre-existing draft can introduce a new JSON-only manual identity after
     // preparation. Reuse the incoming manual ID to force an exact collision.
     let meeting = f.target.list_meetings().unwrap().remove(0).id;

@@ -44,16 +44,16 @@ pub struct AnalysisInput {
     pub utterances: Vec<UtteranceInput>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AnalysisSpeaker {
     pub id: String,
     pub label: String,
     pub display_name: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SpeakerIdentification {
     pub similarity_milli: i32,
     pub runner_up_milli: Option<i32>,
@@ -61,8 +61,8 @@ pub struct SpeakerIdentification {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AnalysisUtterance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_identification: Option<SpeakerIdentification>,
@@ -74,12 +74,12 @@ pub struct AnalysisUtterance {
     pub effective_text: String,
     pub attribution_state: String,
     pub speaker_ids: Vec<String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recognition_is_source: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AnalysisView {
     pub review_ranges: Vec<crate::transcription::ReviewRange>,
     pub id: String,

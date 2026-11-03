@@ -233,7 +233,7 @@ fn failed_database_completion_retries_without_requiring_deleted_inputs() {
 }
 
 #[test]
-fn restored_retired_inputs_do_not_block_initial_cleanup() {
+fn restored_current_contents_preserve_unowned_workspace_during_initial_cleanup() {
     let (_temp, storage, meeting, _) = tests::fixture();
     storage
         .publish_single_wav(&meeting, &|| false, &|_, _| {})
@@ -251,7 +251,9 @@ fn restored_retired_inputs_do_not_block_initial_cleanup() {
     restored
         .upgrade_completed_audio_cleanup(&|_, _, _| {})
         .unwrap();
-    assert!(!leftover.exists());
+    // Current-content restore carries no original input tracks or producer receipts.
+    // A directory created afterward is unknown, even under the restored session.
+    assert!(leftover.exists());
     assert_eq!(std::fs::read(wav(&restored, &id)).unwrap(), before);
 }
 

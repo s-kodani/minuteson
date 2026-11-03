@@ -17,6 +17,11 @@ impl Restored {
     fn new() -> Self {
         let mut fixture = NativeFixture::new(false, false);
         let storage = fixture.storage.as_ref().unwrap();
+        let current = crate::storage::backup::deleted_current_meeting_for_test(
+            storage,
+            "restored-current-audio",
+        );
+        let title = storage.get_meeting(&current).unwrap().unwrap().title;
         let archive = fixture._base.path().join("restored-input.monbackup");
         storage
             .create_backup_archive(&archive, &crate::test_support::never_cancelled)
@@ -32,8 +37,10 @@ impl Restored {
                 &|_| {},
             )
             .unwrap()
-            .meeting_ids[0]
-            .clone();
+            .meeting_ids
+            .into_iter()
+            .find(|id| storage.get_meeting(id).unwrap().unwrap().title == title)
+            .unwrap();
         drop(selected);
         let original = synthetic_restored_audio_operation(storage, &meeting);
         let before = record(storage, &original);

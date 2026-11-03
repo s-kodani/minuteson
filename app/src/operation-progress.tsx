@@ -24,11 +24,11 @@ export function OperationProgressBar({ progress, disclosure, children }: { progr
   const id = useId(), percent = progressPercent(progress.completed, progress.total);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (progress.startedAtMs === undefined) return;
+    if (progress.startedAtMs === undefined || progress.finishedAtMs !== undefined) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [progress.startedAtMs]);
+  }, [progress.startedAtMs, progress.finishedAtMs]);
   const detail = [progress.detail, operationElapsed(progress, now)].filter(Boolean).join(" · ");
   const expanded = disclosure?.expanded ?? true;
   const controlled = [`${id}-heading`, ...(detail ? [`${id}-detail`] : []), ...(children ? [`${id}-footer`] : [])].join(" ");

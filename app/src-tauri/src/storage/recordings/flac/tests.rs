@@ -749,7 +749,7 @@ fn partial_recovery_failed_commit_keeps_all_audio_and_resumes_same_checkpoint_id
 }
 
 #[test]
-fn partial_startup_backup_additive_restore_and_audio_deletion_keep_history_not_authority() {
+fn partial_startup_backup_restores_saved_prefix_without_recovery_history_or_authority() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
@@ -794,22 +794,11 @@ fn partial_startup_backup_additive_restore_and_audio_deletion_keep_history_not_a
         )
         .unwrap();
     assert_ne!(id, fixture.session.id);
-    assert_eq!(state, "interrupted");
+    assert_eq!(state, "saved");
     assert_eq!(ended, None);
     assert!(target.review_partial_recording(&id).is_err());
     let history = target.partial_recovery_listing(None).unwrap();
-    assert_eq!(history.items.len(), 1);
-    let saved = &history.items[0].summary;
-    assert_eq!(&saved.meeting_id, meeting);
-    assert_eq!(saved.session_id, id);
-    assert!(!saved.acquisition_end_known);
-    assert_eq!(saved.tail_loss_us, None);
-    assert_eq!(
-        target
-            .partial_recovery_result(&id, &saved.review_hash)
-            .unwrap(),
-        Some(saved.clone())
-    );
+    assert!(history.items.is_empty());
     assert!(target.get_meeting(&existing).unwrap().is_some());
     let path: String = target
         .connection
@@ -823,18 +812,10 @@ fn partial_startup_backup_additive_restore_and_audio_deletion_keep_history_not_a
         .unwrap();
     let manifest: Value =
         serde_json::from_slice(&std::fs::read(target.root.join(path)).unwrap()).unwrap();
-    assert_eq!(manifest["partialRecovery"]["kind"], "sealed_prefix");
-    assert_eq!(manifest["partialRecovery"]["acquisitionEndKnown"], false);
-    assert!(manifest["partialRecovery"]["tailLossUs"].is_null());
-    assert_eq!(remove_reviewed_audio(&target, meeting), 3);
+    assert!(manifest.get("partialRecovery").is_none());
+    assert_eq!(remove_reviewed_audio(&target, meeting), 1);
     assert!(target.recorded_analysis_input(meeting).is_err());
     assert_eq!(target.partial_recovery_listing(None).unwrap(), history);
-    assert_eq!(
-        target
-            .partial_recovery_result(&id, &saved.review_hash)
-            .unwrap(),
-        Some(saved.clone())
-    );
     assert!(target.review_partial_recording(&id).is_err());
     assert!(fixture
         .storage

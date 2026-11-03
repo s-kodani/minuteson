@@ -877,8 +877,7 @@ fn profile_application_corrupted_heads_and_rehashed_invalid_component_are_not_si
 }
 
 #[test]
-fn profile_application_current_reopen_and_backup_keep_host_binding_local_but_retain_profile_origin()
-{
+fn profile_application_current_reopen_keeps_settings_and_backup_excludes_profile_history() {
     let mut f = Fixture::new();
     let index = f.add(Engine::Llama, true, false);
     let before = f.storage.list_meetings().unwrap();
@@ -921,9 +920,8 @@ fn profile_application_current_reopen_and_backup_keep_host_binding_local_but_ret
         .create_backup_archive(&archive, &crate::test_support::never_cancelled)
         .unwrap();
     let bytes = std::fs::read(archive).unwrap();
-    // The profile's operation ID is also its source profile ID. Preserve it
-    // only as origin metadata; CPU trial operations and host bindings stay out.
-    assert!(bytes
+    // The backup excludes model settings and their origin history.
+    assert!(!bytes
         .windows(operation.len())
         .any(|b| b == operation.as_bytes()));
     for local in [

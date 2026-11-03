@@ -18,6 +18,9 @@ pub(super) struct Native {
     meetings: BTreeSet<String>,
 }
 impl Native {
+    pub(super) fn contains_meeting(&self, meeting: &str) -> bool {
+        self.meetings.contains(meeting)
+    }
     pub(super) fn empty() -> Self {
         Self {
             meetings: BTreeSet::new(),

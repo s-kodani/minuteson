@@ -2,9 +2,63 @@
 //! Keep verified source copies, not client paths/SQL or self-referential borrows.
 use super::*;
 use publication::{required_bytes, Publication};
-use restore_fixed::{workspace::seal::SealedWorkspace, FixedData};
+use restore_fixed::workspace::seal::SealedWorkspace;
 use restore_ids::{BatchPreparation, RestoreIds};
 use serde::Serialize;
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RegistryCounts {
+    pub people: usize,
+    pub samples: usize,
+    pub audio: usize,
+    pub links: usize,
+}
+impl RegistryCounts {
+    fn read(db: &Connection) -> Result<Self, String> {
+        let count = |sql: &str| {
+            db.query_row(sql, [], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())
+                .and_then(|n| usize::try_from(n).map_err(|e| e.to_string()))
+        };
+        Ok(Self {
+            people: count("SELECT COUNT(*) FROM voice_people")?,
+            samples: count("SELECT COUNT(*) FROM voice_samples")?,
+            audio: count("SELECT COUNT(*) FROM voice_sample_audio WHERE state='ready'")?,
+            links: count("SELECT COUNT(*) FROM voice_matches WHERE person_id IS NOT NULL")?,
+        })
+    }
+}
+pub(super) fn validate_registry_addition(
+    target: &Connection,
+    source: &Connection,
+) -> Result<(), String> {
+    super::super::voice::validate_registry(target)?;
+    super::super::voice::validate_registry(source)?;
+    let a = RegistryCounts::read(target)?;
+    let b = RegistryCounts::read(source)?;
+    if a.people + b.people > 1000 || a.samples + b.samples > 8192 {
+        return Err("追加後の人物・登録音声が上限を超えます".into());
+    }
+    let mut dimensions = std::collections::BTreeMap::new();
+    for db in [target, source] {
+        let mut q = db
+            .prepare("SELECT model_hash,extractor_version,dimension FROM voice_samples")
+            .map_err(|e| e.to_string())?;
+        let mut rows = q.query([]).map_err(|e| e.to_string())?;
+        while let Some(r) = rows.next().map_err(|e| e.to_string())? {
+            let key = (
+                r.get::<_, String>(0).map_err(|e| e.to_string())?,
+                r.get::<_, String>(1).map_err(|e| e.to_string())?,
+            );
+            let dim = r.get::<_, i64>(2).map_err(|e| e.to_string())?;
+            if dimensions.insert(key, dim).is_some_and(|old| old != dim) {
+                return Err("既存と追加する声の特徴量の次元が一致しません".into());
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +120,7 @@ pub(crate) struct RestorePreview {
     pub deleted_audio_asset_count: usize,
     pub required_bytes: u64,
     pub available_bytes: u64,
+    pub registry: RegistryCounts,
     pub vocabulary_added: usize,
     pub vocabulary_deduplicated: usize,
     pub vocabulary_conflicts: Vec<String>,
@@ -81,6 +136,7 @@ pub(crate) struct RestoreReceipt {
     pub deleted_audio_asset_count: usize,
     pub already_published: bool,
     // A terminal replay must not invent the previous merge's counts.
+    pub registry: RegistryCounts,
     pub vocabulary_added: Option<usize>,
     pub vocabulary_deduplicated: Option<usize>,
     pub vocabulary_conflicts: Option<Vec<String>>,
@@ -92,6 +148,7 @@ pub(crate) struct PreparedRestore {
     scratch: scratch::Stage,
     preview: RestorePreview,
     vocabulary_fingerprint: String,
+    registry_fingerprint: String,
     destination_root: PathBuf,
 }
 
@@ -166,13 +223,13 @@ impl PreparedRestore {
             }
         };
         progress("reconstructing");
-        let fixed = FixedData::new(&ids, self.scratch.path(), cancelled)?;
-        let sealed = SealedWorkspace::prepare(&fixed, self.scratch.path(), cancelled)?;
+        let sealed = SealedWorkspace::prepare_current(&ids, self.scratch.path(), cancelled)?;
         progress("verifying");
         let db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        validate_registry_addition(&db, sealed.connection())?;
         let merge = sealed.global_merge(&db, cancelled)?;
         let required = required_bytes(&db, &sealed, &ids)?
             .checked_add(reservation_bytes(&ids, cancelled)?)
@@ -196,6 +253,7 @@ impl PreparedRestore {
             deleted_audio_meeting_count: self.archive.deleted_audio.meetings().count(),
             deleted_audio_asset_count: self.archive.deleted_audio.asset_count(),
             available_bytes: crate::audio_import::available_bytes(&storage.root)?,
+            registry: RegistryCounts::read(&self.archive.database)?,
             vocabulary_added: receipt.added,
             vocabulary_deduplicated: receipt.deduplicated,
             vocabulary_conflicts: receipt.conflicts.iter().map(|c| c.term.clone()).collect(),
@@ -203,6 +261,7 @@ impl PreparedRestore {
         check_cancelled(cancelled)?;
         self.archive.verify_validation_database(cancelled)?;
         self.vocabulary_fingerprint = merge.confirmation_fingerprint().into();
+        self.registry_fingerprint = super::super::voice::book_hash(&db)?;
         self.preview = next;
         drop(db);
         drop(maintenance);
@@ -243,8 +302,7 @@ impl PreparedRestore {
             }
         };
         progress("reconstructing");
-        let fixed = FixedData::new(&ids, self.scratch.path(), cancelled)?;
-        let sealed = SealedWorkspace::prepare(&fixed, self.scratch.path(), cancelled)?;
+        let sealed = SealedWorkspace::prepare_current(&ids, self.scratch.path(), cancelled)?;
         let meetings = self
             .archive
             .manifest
@@ -254,10 +312,15 @@ impl PreparedRestore {
             .collect::<Result<Vec<_>, _>>()?;
         self.archive.verify_validation_database(cancelled)?;
         progress("publishing");
+        crate::operation_observation::stage("publishing_restore", None, "paths");
         let outcome = storage.publish_restore_confirmed(
             &sealed,
             &ids,
-            (&self.vocabulary_fingerprint, self.preview.required_bytes),
+            (
+                &self.vocabulary_fingerprint,
+                self.preview.required_bytes,
+                &self.registry_fingerprint,
+            ),
             cancelled,
         )?;
         let (already_published, counts) = match outcome {
@@ -273,6 +336,7 @@ impl PreparedRestore {
             deleted_audio_meeting_count: self.archive.deleted_audio.meetings().count(),
             deleted_audio_asset_count: self.archive.deleted_audio.asset_count(),
             already_published,
+            registry: self.preview.registry.clone(),
             vocabulary_added: counts.as_ref().map(|r| r.added),
             vocabulary_deduplicated: counts.as_ref().map(|r| r.deduplicated),
             vocabulary_conflicts: counts.map(|r| r.conflicts.into_iter().map(|c| c.term).collect()),
@@ -293,6 +357,7 @@ impl PreparedRestore {
             deleted_audio_meeting_count: self.archive.deleted_audio.meetings().count(),
             deleted_audio_asset_count: self.archive.deleted_audio.asset_count(),
             already_published: true,
+            registry: self.preview.registry.clone(),
             vocabulary_added: None,
             vocabulary_deduplicated: None,
             vocabulary_conflicts: None,
@@ -366,11 +431,13 @@ impl Storage {
                 deleted_audio_asset_count: 0,
                 required_bytes: 0,
                 available_bytes: 0,
+                registry: RegistryCounts::default(),
                 vocabulary_added: 0,
                 vocabulary_deduplicated: 0,
                 vocabulary_conflicts: vec![],
             },
             vocabulary_fingerprint: String::new(),
+            registry_fingerprint: String::new(),
             destination_root: self.root.clone(),
         };
         selection.refresh(self, cancelled, progress)?;

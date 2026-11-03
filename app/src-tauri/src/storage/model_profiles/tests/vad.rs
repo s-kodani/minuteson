@@ -16,7 +16,7 @@ fn tuning(f: &Fixture, index: usize, options: VadOptions) -> Result<ApplyPreview
     )
 }
 #[test]
-fn vad_tuning_is_atomic_keeps_jobs_other_settings_and_portable_roundtrip() {
+fn vad_tuning_is_atomic_and_keeps_fixed_jobs_and_other_settings() {
     let mut f = Fixture::new();
     let i = f.add(Engine::Whisper, true, false);
     let options = VadOptions {
@@ -107,24 +107,6 @@ fn vad_tuning_is_atomic_keeps_jobs_other_settings_and_portable_roundtrip() {
     )
     .unwrap();
     assert_eq!(f.storage.fixed_job_input(&job.id).unwrap(), frozen);
-    let target_root = tempfile::tempdir().unwrap();
-    let (target, _, jobs) = crate::storage::backup::published_restore_for_rebinding_test(
-        &f.storage,
-        target_root.path(),
-        &f.meeting,
-        &[job.id],
-    );
-    let restored = target.fixed_job_input(&jobs[0]).unwrap().0;
-    assert_eq!(
-        restored.parameters["engine"]["vadOptions"]["enabled"],
-        false
-    );
-    assert_eq!(
-        restored.parameters["engine"]["vadOptions"]["thresholdMilli"],
-        750
-    );
-    let history = serde_json::to_value(target.model_catalog_history().unwrap()).unwrap();
-    assert!(history.to_string().contains("\"enabled\":false"));
     let mut changed = preview.clone();
     changed
         .whisper_vad_options
