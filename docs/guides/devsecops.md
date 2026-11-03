@@ -8,7 +8,9 @@ sources:
   - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/.github/workflows/security.yml"
   - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_security.py"
   - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_macos_ci_sign.py"
-  - resource: "https://github.com/s-kodani/mon/blob/e789585e6d40b4e20ba8719b0e118e9c289f0d0e/tools/mon_store_submission.py"
+  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/tools/mon_store_submission.py"
+  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/mon/blob/0c3146a917f3929c1a3f46c6053fc5e4086c127e/tools/mon_macos_release.py"
 ---
 
 # DevSecOpsの検査と運用
@@ -76,7 +78,7 @@ make check-security
 
 資格情報をGitやPR本文へ記載しません。ビルドジョブには渡さず、準備済みアーカイブを検証した署名ジョブだけで一時ファイル・キーチェーンへ導入します。署名ジョブはビルド処理を実行せず、終了時に削除します。Secretsへ登録するための値をCIログへ出力しません。
 
-`release-publish`には独自PATを登録せず、ジョブの`GITHUB_TOKEN`とOIDCで公開・証明を行います。ビルドや検査には書き込み権限を渡しません。
+`release-publish`には独自PATを登録せず、ジョブの`GITHUB_TOKEN`とOIDCで公開・証明を行います。下書き受付の`guard`も、GitHubの下書き参照に必要な`contents: write`を持ちます。この権限は受付ジョブに限定し、アプリのビルドやコード検査には書き込み権限を渡しません。macOS準備処理は`cargo fetch --locked`で依存を先に取得してから、オフラインのライセンス収集を含むビルドへ進みます。
 
 所有者が公開設定、CI、資格情報を確認してから、Repository variable **`RELEASE_AUTOMATION_ENABLED=true`**を設定します。未設定では下書きの自動処理を行いません。**`RELEASE_PUBLISH_ENABLED`は未設定または`false`のまま**、公開開始指定のある下書きで試行します。この状態の検出処理は`dry_run=true`を指定し、公開せずに成果物を作成します。試行結果を確認してから**`RELEASE_PUBLISH_ENABLED=true`**にし、claim済み下書きはmainのRelease buildを`dry_run=false`で実行します。以降に作成する下書きは通常どおり自動公開します。実際のApple署名・公証は別途成功を確認し、模擬検査の結果から成功を推測しません。
 
@@ -88,7 +90,7 @@ make check-security
 
 設定と初回公開を確認してから、Repository variable **`STORE_PUBLISH_ENABLED=true`**を設定します。以降に公開するリリースが自動提出の対象です。Store処理は毎時07分・37分（UTC、日本時間も同じ分）に実行し、提出IDと状態をリリースの状態コメントへ記録します。提出済みとStore公開済みを区別し、認定失敗を公開成功にしません。
 
-失敗時はPartner Centerと状態を確認し、main上の**Microsoft Store submission → Run workflow**に対象の`release_id`を指定して同じ提出を再開します。別のpending submissionがある場合は自動で流用・削除せず停止します。作成直後に状態保存が失敗した場合も重複提出を避けるため停止し、既存提出を手動で照合します。API作成した提出をPartner Centerから同時編集しません。
+失敗時はPartner Centerと状態を確認し、main上の**Microsoft Store submission → Run workflow**に対象の`release_id`を指定して同じ提出を再開します。PUT後にアップロード等が中断した場合も、追加済みのMSIXのIDとアップロード状態を保って再利用し、同名の削除・追加レコードを重複作成しません。別のpending submissionがある場合は自動で流用・削除せず停止します。作成直後に状態保存が失敗した場合も重複提出を避けるため停止し、既存提出を手動で照合します。API作成した提出をPartner Centerから同時編集しません。
 
 MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソースで勝手に再構築せず、原本の保管状況と提出を確認します。失敗状態は自動で繰り返し提出せず、修正後に明示再開します。
 
