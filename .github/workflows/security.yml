@@ -129,7 +129,6 @@ jobs:
           # Cache only Rust; Swift must compile again under CodeQL extraction.
           workspaces: . -> probes/macos-capture/.build/capture-core
           key: codeql-swift-ffi-v1
-          cache-workspace-crates: true
           save-if: ${{ env.MON_SAVE_CI_CACHE == 'true' }}
       - name: Select Swift 6.2 and prepare Rust FFI
         if: matrix.language == 'swift'
