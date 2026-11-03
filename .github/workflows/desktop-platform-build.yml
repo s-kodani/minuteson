@@ -119,7 +119,9 @@ jobs:
           python -m unittest discover -s tests -p test_mon_windows_unsigned.py -v
       - name: Frontend tests and build
         working-directory: app
+        shell: bash
         run: |
+          set -euo pipefail
           npm test
           npm run build
       - name: Restore browser engine

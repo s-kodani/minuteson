@@ -236,14 +236,19 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertNotIn('cache-hit', extraction['if'])
 
     @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'Run the CI Bash control test on Unix, not the Windows WSL launcher')
-    def test_first_generated_contract_failure_cannot_be_masked_by_a_later_success(self):
-        step = next(s for s in self.workflow['jobs']['browser']['steps'] if s.get('name') == 'Check generated command contracts')
-        self.assertEqual(step['shell'], 'bash')
-        script = step['run'].replace('python tools/mon_contracts.py --check', 'false').replace(
-            'python tools/mon_model_catalog.py --check', "printf 'incorrectly continued'")
-        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('incorrectly continued', result.stdout)
+    def test_required_browser_check_failure_cannot_be_masked_by_a_later_success(self):
+        cases = (
+            ('Check generated command contracts', 'python tools/mon_contracts.py --check', 'python tools/mon_model_catalog.py --check'),
+            ('Frontend tests and build', 'npm test', 'npm run build'),
+        )
+        for name, check, later in cases:
+            with self.subTest(step=name):
+                step = next(s for s in self.workflow['jobs']['browser']['steps'] if s.get('name') == name)
+                self.assertEqual(step['shell'], 'bash')
+                script = step['run'].replace(check, 'false').replace(later, "printf 'incorrectly continued'")
+                result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('incorrectly continued', result.stdout)
 
     def test_pr_and_main_run_quick_without_native_resource_builds(self):
         for event in ("pull_request", "push"):
