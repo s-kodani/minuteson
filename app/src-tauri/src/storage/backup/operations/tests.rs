@@ -142,6 +142,65 @@ fn rows(storage: &Storage) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
 }
 
 #[test]
+fn failed_and_cancelled_imports_do_not_block_restoring_other_meetings() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let source = Storage::open(root.path().into()).unwrap();
+    archive::tests::meeting(&source, "completed-import");
+    source.create_meeting("未収録の会議").unwrap();
+    for code in ["failed", "cancelled"] {
+        let (import, _, _) = crate::storage::imports::tests::pending(&source, code);
+        source
+            .fail_audio_import(&import.id, code, "音声確定前に終了")
+            .unwrap();
+    }
+    let path = output.path().join("including-failed-imports.monbackup");
+    source.create_backup_archive(&path, &|| false).unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let selected = target
+        .prepare_additive_restore(&path, &|| false, &|_| {})
+        .unwrap();
+    let receipt = selected
+        .publish(
+            &target,
+            &selected.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(receipt.meeting_ids.len(), 4);
+    let db = target.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM meetings WHERE lifecycle='draft'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM meeting_audio_commits", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM audio_import_commits", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(db);
+    let second = output.path().join("backed-up-again.monbackup");
+    target.create_backup_archive(&second, &|| false).unwrap();
+    assert!(target
+        .prepare_additive_restore(&second, &|| false, &|_| {})
+        .is_ok());
+}
+
+#[test]
 fn restore_operation_preview_fully_reconstructs_read_only_reports_capacity_terms_and_cleans_owned_copies_on_drop(
 ) {
     let f = fixture();

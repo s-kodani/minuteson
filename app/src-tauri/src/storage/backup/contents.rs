@@ -4,6 +4,7 @@ use super::*;
 use crate::storage::{analysis::AnalysisView, vocabulary::VocabularyEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Seek};
 
 pub(super) const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -52,11 +53,22 @@ struct MeetingContents {
     manifest: Asset,
     audio: Option<Audio>,
     transcript: Option<AnalysisView>,
+    segments: Vec<Segment>,
     markdown: Option<String>,
     vocabulary: Vec<VocabularyEntry>,
     matches: Vec<Match>,
     // Even a document-only transcript needs a scoped track for timed utterances.
     track: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Segment {
+    id: String,
+    speaker: Option<String>,
+    start: i64,
+    end: i64,
+    overlap: Option<String>,
+    confidence: Option<f64>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -109,6 +121,15 @@ fn vocabulary(db: &Connection, scope: &str) -> Result<Vec<VocabularyEntry>, Stri
 }
 pub(super) fn manifest_bytes() -> &'static [u8] {
     br#"{"version":1,"kind":"meeting_snapshot","audioPolicy":"meeting_wav_pcm16_16000_v1"}"#
+}
+
+fn verify_meeting_wav(file: &mut (impl Read + Seek), size: u64, frames: i64) -> Result<(), String> {
+    // Canonical meeting WAVs use RIFF or RF64, depending on their length.
+    let layout = crate::audio::wave::inspect(file, size)?;
+    if i64::try_from(layout.frames).map_err(err)? != frames {
+        return Err("バックアップ音声の形式・長さが不正です".into());
+    }
+    Ok(())
 }
 
 impl Contents {
@@ -190,7 +211,26 @@ impl Contents {
                 .map(|t| t.speakers.iter().map(|s| s.id.clone()).collect())
                 .unwrap_or_default();
             let mut matches = Vec::new();
+            let mut segments = Vec::new();
             if let Some(t) = &transcript {
+                // Keep current acoustic evidence independently of edited
+                // utterance assignments. Playback and enrollment use the
+                // canonical meeting track, including for retired source tracks.
+                let mut q = db.prepare("SELECT id,speaker_id,start_us,end_us,overlap_group_id,confidence FROM speaker_segments WHERE analysis_revision_id=?1 ORDER BY id").map_err(err)?;
+                segments = q
+                    .query_map([&t.id], |r| {
+                        Ok(Segment {
+                            id: r.get(0)?,
+                            speaker: r.get(1)?,
+                            start: r.get(2)?,
+                            end: r.get(3)?,
+                            overlap: r.get(4)?,
+                            confidence: r.get(5)?,
+                        })
+                    })
+                    .map_err(err)?
+                    .collect::<Result<_, _>>()
+                    .map_err(err)?;
                 let mut q = db.prepare("SELECT id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at FROM voice_matches WHERE analysis_revision_id=?1 ORDER BY speaker_id").map_err(err)?;
                 let rows = q
                     .query_map([&t.id], |r| {
@@ -227,6 +267,7 @@ impl Contents {
                 manifest,
                 audio,
                 transcript,
+                segments,
                 markdown,
                 vocabulary,
                 matches,
@@ -336,17 +377,18 @@ impl Contents {
         assets: &BTreeMap<String, PathBuf>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let verify = |a: &Asset, frames: i64| -> Result<(), String> {
+        let verify = |a: &Asset, frames: i64, voice_clip: bool| -> Result<(), String> {
             let path = assets
                 .get(&a.id)
                 .ok_or("バックアップに音声ファイルがありません")?;
-            let audio = crate::audio::VerifiedAudio::open_cancellable(
-                File::open(path).map_err(err)?,
-                u64::try_from(a.size).map_err(err)?,
-                &a.hash,
-                cancelled,
-            )?;
-            if !audio.format.is_voice_clip()
+            let mut file = File::open(path).map_err(err)?;
+            let size = u64::try_from(a.size).map_err(err)?;
+            if !voice_clip {
+                verify_meeting_wav(&mut file, size, frames)?;
+            }
+            let audio =
+                crate::audio::VerifiedAudio::open_cancellable(file, size, &a.hash, cancelled)?;
+            if (voice_clip && !audio.format.is_voice_clip())
                 || i64::try_from(audio.format.frames).map_err(err)? != frames
             {
                 return Err("バックアップ音声の形式・長さが不正です".into());
@@ -356,7 +398,7 @@ impl Contents {
         for m in &self.meetings {
             if let Some(a) = &m.audio {
                 if !a.deleted {
-                    verify(&a.asset, a.frames)?;
+                    verify(&a.asset, a.frames, false)?;
                 }
             }
         }
@@ -366,7 +408,7 @@ impl Contents {
                     if a.id != s.id {
                         return Err("登録音声の識別子が一致しません".into());
                     }
-                    verify(a, s.frames.ok_or("登録音声の長さがありません")?)?;
+                    verify(a, s.frames.ok_or("登録音声の長さがありません")?, true)?;
                 } else if s.frames.is_some() {
                     return Err("欠落した登録音声に長さがあります".into());
                 }
@@ -462,7 +504,8 @@ impl Contents {
             let get = |domain: &str, key: &str| identity(domain, old, key);
             let source = m.meeting.source_type.as_deref().unwrap_or("recording");
             let has_track = m.audio.is_some() || m.transcript.is_some();
-            let source_id = if m.meeting.source_type.is_some() || has_track {
+            let has_source = m.meeting.source_type.is_some() || has_track;
+            let source_id = if has_source {
                 get(
                     if source == "recording" {
                         "recording_sessions"
@@ -474,7 +517,10 @@ impl Contents {
             } else {
                 m.source_id.clone()
             };
-            let operation = if m.meeting.source_type.is_some() || has_track || m.markdown.is_some()
+            // An import without saved audio has no commit operation to remap.
+            let operation = if (has_source && source == "recording")
+                || m.audio.is_some()
+                || m.markdown.is_some()
             {
                 get("operation", &m.operation_id)?
             } else {
@@ -501,8 +547,7 @@ impl Contents {
                 &m.manifest,
                 false,
             )?;
-            let has_track = m.audio.is_some() || analysis.is_some();
-            if m.meeting.source_type.is_some() || has_track {
+            if has_source {
                 if source == "recording" {
                     tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at,audio_policy) VALUES(?1,?2,'saved','system','{}',?3,?4,?5,?4,?6,?6,'single_wav_v1')",params![source_id,mid,operation,m.duration,m.manifest.hash,m.meeting.created_at]).map_err(err)?;
                 } else if source == "audio_import" {
@@ -592,6 +637,12 @@ impl Contents {
                 for s in &t.speakers {
                     tx.execute("INSERT INTO speakers(id,analysis_revision_id,lineage_id,label,display_name,input_scope,identification_state,created_at) VALUES(?1,?2,?3,?4,?5,'all','unknown',?6)",params![get("speakers",&s.id)?,analysis,get("speaker_lineage",&s.id)?,s.label,s.display_name,m.meeting.created_at]).map_err(err)?;
                 }
+                for s in &m.segments {
+                    if s.speaker.as_deref().is_some_and(|s| !speakers.contains(s)) {
+                        return Err("音声区間の話者参照が不正です".into());
+                    }
+                    tx.execute("INSERT INTO speaker_segments(id,meeting_id,analysis_revision_id,track_id,speaker_id,start_us,end_us,overlap_group_id,confidence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![get("speaker_segments",&s.id)?,mid,analysis,track,s.speaker.as_deref().map(|s|get("speakers",s)).transpose()?,s.start,s.end,s.overlap.as_deref().map(|g|get("overlap_group",g)).transpose()?,s.confidence]).map_err(err)?;
+                }
                 for (position, u) in t.utterances.iter().enumerate() {
                     let uid = get("utterances", &u.id)?;
                     if u.speaker_ids.iter().any(|s| !speakers.contains(s.as_str())) {
@@ -600,21 +651,6 @@ impl Contents {
                     tx.execute("INSERT INTO utterances(id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![uid,mid,analysis,track,get("utterance_lineage",&u.id)?,position as i64,u.start_us,u.end_us,u.recognized_text,u.effective_text,u.attribution_state]).map_err(err)?;
                     if u.speaker_ids.iter().collect::<BTreeSet<_>>().len() != u.speaker_ids.len() {
                         return Err("発言の話者が重複しています".into());
-                    }
-                    let overlap = if u.speaker_ids.len() > 1 {
-                        Some(get(
-                            "overlap_group",
-                            &format!("overlap-{:x}", Sha256::digest(u.id.as_bytes())),
-                        )?)
-                    } else {
-                        None
-                    };
-                    for s in &u.speaker_ids {
-                        let key = format!(
-                            "segment-{:x}",
-                            Sha256::digest(serde_json::to_vec(&(&u.id, s)).map_err(err)?)
-                        );
-                        tx.execute("INSERT INTO speaker_segments(id,meeting_id,analysis_revision_id,track_id,speaker_id,start_us,end_us,overlap_group_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![get("speaker_segments",&key)?,mid,analysis,track,get("speakers",s)?,u.start_us,u.end_us,overlap]).map_err(err)?;
                     }
                     for (i, s) in u.speaker_ids.iter().enumerate() {
                         tx.execute("INSERT INTO utterance_speakers(utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES(?1,?2,?3,?4,'manual')",params![uid,get("speakers",s)?,analysis,if i==0{"primary"}else{"overlap"}]).map_err(err)?;
@@ -633,8 +669,8 @@ impl Contents {
                     }
                     tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![get("voice_matches",&v.id)?,mid,analysis,get("speakers",&v.speaker)?,v.person.as_deref().map(|p|identity("voice_people","",p)).transpose()?,v.name,v.state,v.similarity,v.model,v.policy,v.created_at]).map_err(err)?;
                 }
-            } else if !m.matches.is_empty() {
-                return Err("人物対応の文字起こしがありません".into());
+            } else if !m.matches.is_empty() || !m.segments.is_empty() {
+                return Err("人物対応・音声区間の文字起こしがありません".into());
             }
             write_book(&tx, Some((old, &mid)), &m.vocabulary, identity)?;
             if let Some(markdown) = &m.markdown {
@@ -685,4 +721,89 @@ fn write_book(
     )
     .map_err(err)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn meeting_wav_verification_accepts_riff_and_long_rf64_without_allocating_pcm() {
+        for frames in [160, i64::from(u32::MAX) / 2] {
+            let header = crate::audio::wave::header(frames as u64).unwrap();
+            let size = frames as u64 * 2 + header.len() as u64;
+            let mut file = Cursor::new(header.clone());
+            verify_meeting_wav(&mut file, size, frames).unwrap();
+            assert!(verify_meeting_wav(&mut file, size, frames - 1).is_err());
+            assert!(verify_meeting_wav(&mut file, size - 2, frames).is_err());
+            // Corrupt the PCM channel count in either header layout.
+            let mut stereo = header;
+            let channels = stereo.len() - 22;
+            stereo[channels..channels + 2].copy_from_slice(&2u16.to_le_bytes());
+            assert!(verify_meeting_wav(&mut Cursor::new(stereo), size, frames).is_err());
+        }
+    }
+
+    #[test]
+    fn rf64_backup_audio_keeps_integrity_checks_and_strict_voice_clip_format() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        archive::tests::meeting(&storage, "rf64-audio");
+        std::fs::create_dir(stage.path().join("assets")).unwrap();
+        let (mut contents, _) = Contents::capture(
+            &mut storage.connection.lock().unwrap(),
+            stage.path(),
+            &deleted_audio::Native::empty(),
+            &|| false,
+        )
+        .unwrap();
+        // A short RF64 fixture exercises the full hash/format path without
+        // creating or hashing several GiB of PCM. The long header is tested above.
+        let frames = 160u64;
+        let size = frames * 2 + 80;
+        let mut bytes = crate::audio::wave::header(u64::from(u32::MAX) / 2).unwrap();
+        bytes[20..28].copy_from_slice(&(size - 8).to_le_bytes());
+        bytes[28..36].copy_from_slice(&(frames * 2).to_le_bytes());
+        bytes[36..44].copy_from_slice(&frames.to_le_bytes());
+        bytes.resize(size as usize, 0);
+        let path = stage.path().join("meeting.rf64.wav");
+        std::fs::write(&path, &bytes).unwrap();
+        let audio = contents.meetings[0].audio.as_mut().unwrap();
+        audio.frames = frames as i64;
+        audio.asset.size = size as i64;
+        audio.asset.hash = format!("{:x}", Sha256::digest(&bytes));
+        let asset = audio.asset.clone();
+        let assets = BTreeMap::from([(asset.id.clone(), path.clone())]);
+        contents.verify_audio(&assets, &|| false).unwrap();
+        assert!(contents.verify_audio(&assets, &|| true).is_err());
+        bytes[size as usize - 1] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(contents.verify_audio(&assets, &|| false).is_err());
+        bytes[size as usize - 1] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        contents.people.push(Person {
+            id: "person".into(),
+            name: "登録者".into(),
+            created_at: 0,
+            samples: vec![Sample {
+                id: asset.id.clone(),
+                model: "a".repeat(64),
+                extractor: crate::voice::EXTRACTOR.into(),
+                dimension: 2,
+                vector: "".into(),
+                source_meeting: None,
+                source_analysis: None,
+                source_track: None,
+                start: 0,
+                end: 10_000,
+                created_at: 0,
+                audio: Some(asset),
+                frames: Some(frames as i64),
+            }],
+        });
+        // Registered clips retain their existing 44-byte RIFF requirement.
+        assert!(contents.verify_audio(&assets, &|| false).is_err());
+    }
 }

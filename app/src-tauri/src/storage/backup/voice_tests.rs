@@ -5,6 +5,138 @@ use restore_ids::RestoreIds;
 use serde_json::{json, Value};
 
 #[test]
+fn current_acoustic_segments_preserve_voice_windows_overlap_and_unknown_speakers() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let source = Storage::open(root.path().into()).unwrap();
+    let meeting = archive::tests::meeting(&source, "acoustic-evidence");
+    source
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE working_drafts SET active=0 WHERE meeting_id=?1",
+            [&meeting],
+        )
+        .unwrap();
+    let plan = source.canonical_audio_plan(&meeting).unwrap();
+    let track = plan.tracks[0].id.clone();
+    let segments = [
+        (Some("a"), 0, 1_000_000, None, Some(0.9)),
+        (Some("b"), 1_000_000, 2_000_000, None, Some(0.8)),
+        (Some("a"), 2_000_000, 3_000_000, None, None),
+        (Some("a"), 3_000_000, 4_000_000, Some("overlap"), Some(0.7)),
+        (Some("b"), 3_000_000, 4_000_000, Some("overlap"), Some(0.6)),
+        (None, 3_250_000, 3_500_000, None, None),
+    ]
+    .into_iter()
+    .map(
+        |(speaker, start, end, overlap, confidence)| SpeakerSegmentInput {
+            track_id: track.clone(),
+            speaker_key: speaker.map(str::to_owned),
+            start_us: start,
+            end_us: end,
+            overlap_group: overlap.map(str::to_owned),
+            confidence,
+        },
+    )
+    .collect();
+    let analysis = source
+        .create_analysis_candidate(
+            &meeting,
+            AnalysisInput {
+                audio_manifest_hash: plan.manifest_hash,
+                profile_snapshot: json!({}),
+                config: json!({}),
+                speakers: vec![
+                    SpeakerInput {
+                        key: "a".into(),
+                        label: "A".into(),
+                    },
+                    SpeakerInput {
+                        key: "b".into(),
+                        label: "B".into(),
+                    },
+                ],
+                segments,
+                utterances: vec![UtteranceInput {
+                    track_id: track,
+                    start_us: 0,
+                    end_us: 4_000_000,
+                    text: "Aの発言区間にBと重複区間も含まれる".into(),
+                    speaker_keys: vec!["a".into()],
+                    confidence: None,
+                }],
+            },
+        )
+        .unwrap();
+    source
+        .commit_analysis_candidate(
+            &meeting,
+            &analysis,
+            source.get_meeting(&meeting).unwrap().unwrap().lock_version,
+            false,
+        )
+        .unwrap();
+    let windows = |storage: &Storage, meeting: &str| -> Vec<_> {
+        storage
+            .voice_context(meeting)
+            .unwrap()
+            .windows
+            .iter()
+            .map(|w| (w.start_us, w.end_us))
+            .collect()
+    };
+    let before = windows(&source, &meeting);
+    assert_eq!(before, vec![(0, 1_000_000), (2_000_000, 3_000_000)]);
+    let evidence = |storage: &Storage, meeting: &str| {
+        let db = storage.connection.lock().unwrap();
+        let mut q = db.prepare("SELECT p.label,s.start_us,s.end_us,s.overlap_group_id IS NOT NULL,s.confidence FROM speaker_segments s LEFT JOIN speakers p ON p.id=s.speaker_id WHERE s.meeting_id=?1 ORDER BY s.start_us,s.end_us,p.label").unwrap();
+        q.query_map([meeting], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, bool>(3)?,
+                r.get::<_, Option<f64>>(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    let original = evidence(&source, &meeting);
+    let path = output.path().join("acoustic-evidence.monbackup");
+    source.create_backup_archive(&path, &|| false).unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let selected = target
+        .prepare_additive_restore(&path, &|| false, &|_| {})
+        .unwrap();
+    let preview = selected.preview();
+    let receipt = selected
+        .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+        .unwrap();
+    let restored = &receipt.meeting_ids[0];
+    assert_eq!(windows(&target, restored), before);
+    assert_eq!(evidence(&target, restored), original);
+    let db = target.connection.lock().unwrap();
+    let (segments, groups, tracks): (i64, i64, i64) = db.query_row(
+        "SELECT COUNT(*),COUNT(DISTINCT overlap_group_id),COUNT(DISTINCT track_id) FROM speaker_segments WHERE meeting_id=?1",
+        [restored], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+    ).unwrap();
+    assert_eq!((segments, groups, tracks), (6, 1, 1));
+    for domain in ["speaker_segments", "overlap_group"] {
+        let remapped: i64 = db.query_row("SELECT COUNT(*) FROM restore_identity_maps WHERE batch_id=?1 AND domain=?2 AND source_key!=target_key", params![preview.batch_id,domain], |r| r.get(0)).unwrap();
+        assert_eq!(remapped, if domain == "speaker_segments" { 6 } else { 1 });
+    }
+    drop(db);
+    target
+        .create_backup_archive(&output.path().join("again.monbackup"), &|| false)
+        .unwrap();
+}
+
+#[test]
 fn speaker_assignment_update_round_trip_keeps_current_assignments_without_history() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
