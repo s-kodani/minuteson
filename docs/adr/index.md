@@ -11,4 +11,6 @@
 - [ADR 0007 限定的な前進更新と追加復元](0007-forward-updates-backup.md) — 実装が明示的に対応する旧形式だけ更新・復元し、既存データを保持する。
 - [ADR 0008 完成版の位置付けとOKF文書管理](0008-release-documentation.md) — 1.0.1を完成版として扱い、現行仕様・手順・判断理由をOKFへ集約する。
 
+- [ADR 0009 完成WAVを残して作業音声を整理する](0009-completed-wav-cleanup.md) — Windows・macOSでWAV確定後の作業音声を整理し、外部原本と未救出音声を保持する。
+
 [ドキュメント目次へ戻る](../index.md)

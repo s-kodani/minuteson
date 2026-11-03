@@ -5,6 +5,7 @@ description: "モデルの準備から録音・取り込み・修正・議事録
 tags: ["usage", "getting-started"]
 status: "stable"
 sources:
+  - resource: "https://github.com/s-kodani/mon/blob/5fc01fea243b8bdc0c9995ae3c5d804c44a9bbbd/app/src-tauri/src/storage/audio_publication/cleanup.rs"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/audio-import.tsx"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/recorder-inputs.tsx"
   - resource: "https://github.com/s-kodani/mon/blob/4f44b1ed39d81f0a27c88a084e7bfc2b9bb3a83b/app/src/transcript.tsx"
@@ -37,7 +38,7 @@ sources:
 
 ## 保存済みの音声から始める
 
-「音声を取り込む」からWAV・MP3・AAC/ALAC M4A・FLACを1件選ぶか、一覧へ1件ドロップします。表示された形式・長さ・必要容量を確認し、会議名と用語を設定して取り込みます。元のファイルは保持されます。
+「音声を取り込む」からWAV・MP3・AAC/ALAC M4A・FLACを1件選ぶか、一覧へ1件ドロップします。表示された形式・長さ・必要容量を確認し、会議名と用語を設定して取り込みます。選択したオリジナルファイルは変更・削除しません。アプリ管理領域内のコピーと中間音声は、最終WAVの保存・検証完了後に自動整理します。この動作はWindows・macOS共通です。
 
 ## 発言と話者を修正する
 
