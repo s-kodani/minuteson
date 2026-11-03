@@ -41,6 +41,8 @@ python tools/mon_windows_msix.py verify --manifest 'output/windows-store-work/<b
 
 ## 原本と同じ内容のローカル検証
 
+署名済みコピーを用意した後の証明書登録・導入コマンドと機能チェックリストは[MSIXのローカル実機検証](testing-windows-msix.md)を参照してください。同じ版数で検証する場合も、インストール済みの本体ハッシュを照合して今回のビルドを識別します。
+
 Windows 11 24H2以降の隔離検証環境を使います。Windows Serverの構築成功は対象クライアントOSへのインストール確認の代わりにはなりません。
 
 ```powershell
