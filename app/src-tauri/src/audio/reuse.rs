@@ -235,6 +235,10 @@ mod tests {
         let (_root, path, bytes, hash) = fixture();
         let scope = Scope::enter().unwrap();
         let original = read(&path, &hash).unwrap();
+        // Windows may report the same clock tick for two completed mutations.
+        // Keep this fixture's change proof distinct even on fast CI storage.
+        #[cfg(windows)]
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let modified = crate::native_fs::metadata(&path)
             .unwrap()
             .modified()

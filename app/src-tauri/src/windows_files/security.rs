@@ -9,6 +9,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree},
     Security::{Authorization::*, *},
+    Storage::FileSystem::FILE_ALL_ACCESS,
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 struct Local(*mut core::ffi::c_void);
@@ -103,10 +104,14 @@ fn inspect(file: &File) -> Result<(String, bool), String> {
     let Some(dacl) = NonNull::new(dacl) else {
         return Ok((owner_text, false));
     };
-    // uid() is a compact compatibility identifier, not an authorization
-    // boundary. Private ownership must compare the complete token SID so a
-    // collision in that identifier cannot authorize another account's files.
-    let mut private = owner_text == current_sid()?;
+    // uid() is a compatibility identifier. Authorize against the complete SID.
+    // Elevated tokens may give inherited children an Administrators owner.
+    // Such an object belongs logically to this user only when its effective
+    // DACL grants this exact user full control and excludes other users.
+    let user = current_sid()?;
+    let administrator_owner = owner_text == "S-1-5-32-544";
+    let mut private = owner_text == user || administrator_owner;
+    let mut user_controls = false;
     // GetSecurityInfo outputs borrow from sd, retained by _owned until return.
     for index in 0..unsafe { dacl.as_ref().AceCount } {
         let mut ace = std::ptr::null_mut();
@@ -132,8 +137,17 @@ fn inspect(file: &File) -> Result<(String, bool), String> {
             continue;
         }
         let sid = sid_text((&allowed.SidStart as *const u32).cast_mut().cast())?;
-        if sid != owner_text && sid != "S-1-5-18" && sid != "S-1-5-32-544" {
+        if sid == user && allowed.Mask & FILE_ALL_ACCESS == FILE_ALL_ACCESS {
+            user_controls = true;
+        }
+        if sid != user && sid != "S-1-5-18" && sid != "S-1-5-32-544" {
             private = false;
+        }
+    }
+    if administrator_owner {
+        private &= user_controls;
+        if private {
+            return Ok((user, true));
         }
     }
     Ok((owner_text, private))

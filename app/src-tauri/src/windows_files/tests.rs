@@ -20,6 +20,31 @@ fn directory_for_test(path: &std::path::Path) -> std::fs::File {
     directory(path).unwrap()
 }
 #[test]
+fn inherited_private_acl_binds_children_to_the_user_and_rejects_public_grants() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    set_private(&root).unwrap();
+    let path = root.join("inherited.txt");
+    std::fs::write(&path, b"private payload").unwrap();
+    // Do not call set_private on the child: deny-sharing leases and SQLite
+    // files must be able to rely on the verified parent's inherited DACL.
+    assert_eq!(
+        security_metadata(&open_metadata(&path).unwrap()).unwrap(),
+        (current_owner().unwrap(), true)
+    );
+    let result = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .args(["/grant", "*S-1-1-0:(F)"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!security_metadata(&open_metadata(&path).unwrap()).unwrap().1);
+}
+#[test]
 fn private_root_reopen_keeps_descendant_change_proofs() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();

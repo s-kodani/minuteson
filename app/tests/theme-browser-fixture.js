@@ -28,16 +28,19 @@ mockIPC(async (command, args) => {
   }
   if (command === "get_ui_preferences") { if (f.readFail) throw Error("模擬表示設定読込失敗"); return stored(); }
   if (command === "save_ui_preferences") {
+    const mode = f.mode;
     if (window.audioDeletionFixture.blocked || window.dataFixture.snapshot.restartRequired || window.dataFixture.snapshot.busy) throw Error("模擬データ保守の書込停止");
-    if (f.mode === "delay") await new Promise(resolve => { f.releaseSave = resolve; });
-    if (f.mode === "fail") throw Error("模擬テーマ保存失敗");
+    if (mode === "delay") await new Promise(resolve => { f.releaseSave = resolve; });
+    if (mode === "fail") throw Error("模擬テーマ保存失敗");
     const current = stored();
     if (args.expectedLockVersion !== current.lockVersion) throw Error("模擬表示設定の競合");
-    if (f.mode === "forged") return { ...current, id: "foreign" };
+    if (mode === "forged") return { ...current, id: "foreign" };
     const next = { ...current, payload: args.payload, lockVersion: current.lockVersion + (JSON.stringify(current.payload) === JSON.stringify(args.payload) ? 0 : 1) };
+    // Make the requested read failure effective before broadcasting the
+    // committed version; otherwise a fast hint read can already confirm it.
+    if (mode === "lostUnreadable") f.readFail = true;
     await f.setStored(next);
-    if (f.mode === "lostUnreadable") f.readFail = true;
-    if (["lost", "lostUnreadable"].includes(f.mode)) throw Error("模擬保存結果の応答喪失");
+    if (["lost", "lostUnreadable"].includes(mode)) throw Error("模擬保存結果の応答喪失");
     return next;
   }
   if (command === "prepare_utterance_playback") return { token: "theme-silent-audio", sampleRate: 16000, channels: 1, totalFrames: 16000, startUs: 0, endUs: 1000000, trackKind: "mic", alignment: "unverified" };
