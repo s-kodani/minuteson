@@ -111,7 +111,7 @@ jobs:
         run: |
           mkdir -p output
           python tools/mon_macos_release.py --prepare --output-dir "$GITHUB_WORKSPACE/output/macos-prepare"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prepared-macos
           path: |
@@ -147,7 +147,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
         run: python tools/mon_macos_ci_sign.py
       - run: python tools/mon_release_artifacts.py collect --flavor macos --output output/release-macos
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos
           path: output/release-macos/
@@ -173,7 +173,7 @@ jobs:
       - run: cargo fetch --locked
       - run: npm --prefix app run tauri:windows:unsigned:build
       - run: python tools/mon_release_artifacts.py collect --flavor windows --output output/release-windows
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows
           path: output/release-windows/
@@ -199,7 +199,7 @@ jobs:
       - run: cargo fetch --locked
       - run: npm --prefix app run tauri:windows:store:build
       - run: python tools/mon_release_artifacts.py collect --flavor store --output output/release-store
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-store
           path: output/release-store/
@@ -240,7 +240,7 @@ jobs:
         env:
           MON_PROVENANCE: ${{ steps.attest.outputs.bundle-path }}
         run: cp "$MON_PROVENANCE" output/publish/provenance.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-release-preview
           path: output/publish/
