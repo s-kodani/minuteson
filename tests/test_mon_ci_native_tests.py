@@ -34,6 +34,12 @@ class NativeCiTests(unittest.TestCase):
         runtime = patch.object(native, "runtime_environment", return_value=self.environment)
         self.runtime = runtime.start()
         self.addCleanup(runtime.stop)
+        # Windows may spawn a process to resolve uname on its first call.
+        # Keep host diagnostics independent of the mocked Cargo/test processes.
+        host = patch.object(native.platform, "uname", return_value=SimpleNamespace(
+            system="TestOS", release="test-release", machine="test-machine"))
+        host.start()
+        self.addCleanup(host.stop)
 
     def artifact(self, **patches):
         return {"reason": "compiler-artifact", "target": {"name": native.TEST_TARGET},
@@ -313,6 +319,7 @@ class NativeCiTests(unittest.TestCase):
             self.assertEqual(native.run_native_tests(self.root, timings_json=report), 101)
         value = json.loads(report.read_text())
         self.assertEqual(value["suite"], "full")
+        self.assertEqual(value["platform"], "TestOS-test-release-test-machine")
         self.assertEqual(value["exitCode"], 101)
         self.assertGreaterEqual(value["totalSeconds"], value["buildSeconds"] + value["executionSeconds"])
 
