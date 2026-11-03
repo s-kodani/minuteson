@@ -108,6 +108,7 @@ jobs:
     timeout-minutes: 60
     env:
       TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
+      MON_SAVE_CI_CACHE: ${{ github.ref == 'refs/heads/main' && github.workflow != 'Release build' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.source_ref == '' || inputs.source_ref == github.sha) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -121,6 +122,15 @@ jobs:
       - run: python -m pip install -r tools/requirements-security.txt
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: matrix.language == 'rust' || matrix.language == 'swift'
+      - name: Restore Rust FFI build for Swift analysis
+        if: matrix.language == 'swift'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          # Cache only Rust; Swift must compile again under CodeQL extraction.
+          workspaces: . -> probes/macos-capture/.build/capture-core
+          key: codeql-swift-ffi-v1
+          cache-workspace-crates: true
+          save-if: ${{ env.MON_SAVE_CI_CACHE == 'true' }}
       - name: Select Swift 6.2 and prepare Rust FFI
         if: matrix.language == 'swift'
         shell: bash

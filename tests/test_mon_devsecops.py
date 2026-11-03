@@ -216,6 +216,25 @@ class DesktopWorkflowTests(unittest.TestCase):
                     self.assertIn('success()', step['if'])
                     self.assertIn("env.MON_SAVE_CI_CACHE == 'true'", step['if'])
 
+    def test_swift_analysis_cache_preserves_extraction_and_trusted_main_writes(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
+        job = workflow['jobs']['codeql']
+        cache = next(step for step in job['steps'] if step.get('uses', '').startswith('Swatinem/rust-cache@'))
+        self.assertEqual(cache['if'], "matrix.language == 'swift'")
+        self.assertEqual(cache['with']['workspaces'], '. -> probes/macos-capture/.build/capture-core')
+        self.assertEqual(cache['with']['save-if'], "${{ env.MON_SAVE_CI_CACHE == 'true' }}")
+        context = {'github.ref': 'refs/heads/main', 'github.workflow': 'Security validation',
+                   'github.event_name': 'push', 'inputs.source_ref': '', 'github.sha': SHA}
+        expression = job['env']['MON_SAVE_CI_CACHE']
+        self.assertTrue(self.expression(expression, context))
+        for change in ({'github.event_name': 'pull_request'}, {'inputs.source_ref': '2' * 40},
+                       {'github.workflow': 'Release build'}, {'github.ref': 'refs/heads/topic'}):
+            self.assertFalse(self.expression(expression, {**context, **change}), change)
+        extraction = next(step for step in job['steps'] if step.get('name') == 'Swift extraction build')
+        self.assertEqual(extraction['if'], "matrix.language == 'swift'")
+        self.assertIn('swift build', extraction['run'])
+        self.assertNotIn('cache-hit', extraction['if'])
+
     @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'Run the CI Bash control test on Unix, not the Windows WSL launcher')
     def test_first_generated_contract_failure_cannot_be_masked_by_a_later_success(self):
         step = next(s for s in self.workflow['jobs']['browser']['steps'] if s.get('name') == 'Check generated command contracts')
