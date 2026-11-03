@@ -174,11 +174,11 @@ mod tests {
         let directory = Path::new(&directory);
         match mode.as_str() {
             "descendant" => {
-                std::fs::write(
-                    directory.join("descendant.pid"),
-                    std::process::id().to_string(),
-                )
-                .unwrap();
+                let pending = directory.join("descendant.pid.tmp");
+                std::fs::write(&pending, std::process::id().to_string()).unwrap();
+                // Existence signals readiness to the parent. Publish only
+                // after write_all and close, rather than exposing an empty PID.
+                std::fs::rename(pending, directory.join("descendant.pid")).unwrap();
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
                 }

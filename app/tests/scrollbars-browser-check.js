@@ -20,7 +20,12 @@ async (page, capturePath) => {
   results.push('both scrollbar axes share 10px geometry and real thumb drags reach the end');
   await vertical.hover(); await page.mouse.wheel(0, 300);
   await page.waitForFunction(() => document.querySelector('[data-testid="vertical"]').scrollTop > 0);
-  await textarea.focus(); await page.keyboard.press('PageDown');
+  // Start the editor's caret and scroll position explicitly. WebKit may
+  // otherwise retain its initial end selection when focus follows a wheel.
+  await textarea.click();
+  await textarea.evaluate(element => { element.setSelectionRange(0, 0); element.scrollTop = 0; });
+  await page.waitForFunction(() => { const input=document.querySelector('textarea'); return document.activeElement === input && input.selectionStart === 0 && input.scrollTop === 0; });
+  await textarea.press('PageDown');
   await page.waitForFunction(() => document.querySelector('textarea').scrollTop > 0);
   check(await page.getByTestId('short').evaluate(element => element.scrollHeight <= element.clientHeight && element.scrollWidth <= element.clientWidth), 'short content gained overflow');
   results.push('wheel and textarea keyboard scrolling work; short content remains without overflow');

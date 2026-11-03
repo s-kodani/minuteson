@@ -187,6 +187,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> app/src-tauri/target
+          # Start a new immutable cache containing workspace crates.
+          key: native-workspace-v1
           cache-workspace-crates: true
           save-if: ${{ env.MON_SAVE_CI_CACHE == 'true' }}
       - name: Select Swift toolchain for native cache
