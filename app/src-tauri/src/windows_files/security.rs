@@ -70,6 +70,15 @@ pub(super) fn current_owner() -> Result<u32, String> {
     }))
 }
 pub(super) fn metadata(file: &File) -> Result<(u32, bool), String> {
+    let (owner, private) = inspect(file)?;
+    Ok((
+        owner.bytes().fold(2166136261u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(16777619)
+        }),
+        private,
+    ))
+}
+fn inspect(file: &File) -> Result<(String, bool), String> {
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
     let mut sd = std::ptr::null_mut();
@@ -91,11 +100,8 @@ pub(super) fn metadata(file: &File) -> Result<(u32, bool), String> {
     let _owned = Local(sd);
     let owner = NonNull::new(owner).ok_or("ファイルの所有者情報がありません")?;
     let owner_text = sid_text(owner.as_ptr())?;
-    let owner_id = owner_text.bytes().fold(2166136261u32, |h, b| {
-        (h ^ u32::from(b)).wrapping_mul(16777619)
-    });
     let Some(dacl) = NonNull::new(dacl) else {
-        return Ok((owner_id, false));
+        return Ok((owner_text, false));
     };
     // uid() is a compact compatibility identifier, not an authorization
     // boundary. Private ownership must compare the complete token SID so a
@@ -130,12 +136,12 @@ pub(super) fn metadata(file: &File) -> Result<(u32, bool), String> {
             private = false;
         }
     }
-    Ok((owner_id, private))
+    Ok((owner_text, private))
 }
 pub(crate) fn set_private(path: &Path) -> Result<(), String> {
     let _parents = super::parents(path.parent().ok_or("非公開領域の親がありません")?)?;
     let sid = current_sid()?;
-    let sddl: Vec<u16> = format!("D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+    let sddl: Vec<u16> = format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
         .encode_utf16()
         .chain(Some(0))
         .collect();
@@ -152,6 +158,13 @@ pub(crate) fn set_private(path: &Path) -> Result<(), String> {
         return Err(std::io::Error::last_os_error().to_string());
     }
     let _owned = Local(sd);
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    if unsafe { GetSecurityDescriptorOwner(sd, &mut owner, &mut owner_defaulted) } == 0
+        || owner.is_null()
+    {
+        return Err("非公開領域の所有者を生成できません".into());
+    }
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl = std::ptr::null_mut();
@@ -170,15 +183,48 @@ pub(crate) fn set_private(path: &Path) -> Result<(), String> {
     super::identity(&file)?;
     // Reapplying an identical inheritable DACL changes NTFS change times on
     // descendants. Cold recovery must retain their saved identity proofs.
-    if metadata(&file)? == (current_owner()?, true) {
+    let (existing_owner, private) = inspect(&file)?;
+    if existing_owner == sid && private {
         return Ok(());
     }
+    // Elevated Windows tokens can default new objects to Administrators.
+    // Bind our private payload to the actual user; never adopt another user's
+    // object. Keep the original handle/parents pinned while requesting the
+    // additional WRITE_OWNER right only for this group-owned case.
+    let change_owner = existing_owner != sid;
+    let file = if change_owner {
+        if existing_owner != "S-1-5-32-544" {
+            return Err("非公開領域の所有者が現在の利用者と異なります".into());
+        }
+        let owned = OpenOptions::new()
+            .access_mode(0x80000 | 0x40000 | 0x20000 | 0x80)
+            .share_mode(3)
+            .custom_flags(0x02000000 | 0x00200000)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        if super::identity(&owned)? != super::identity(&file)? {
+            return Err("非公開領域の実体が変更されています".into());
+        }
+        owned
+    } else {
+        file
+    };
     let result = unsafe {
         SetSecurityInfo(
             file.as_raw_handle(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION
+                | if change_owner {
+                    OWNER_SECURITY_INFORMATION
+                } else {
+                    0
+                },
+            if change_owner {
+                owner
+            } else {
+                std::ptr::null_mut()
+            },
             std::ptr::null_mut(),
             dacl,
             std::ptr::null(),

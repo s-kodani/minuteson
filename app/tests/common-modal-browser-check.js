@@ -35,6 +35,7 @@ async (page) => {
     const review = document.querySelector('dialog[aria-labelledby="fixture-title"]');
     return review?.matches(":modal") && review.querySelector('[aria-label="確認をキャンセル"]')?.disabled === true;
   });
+  check(await dialog().evaluate(element => element.contains(document.activeElement) && !document.activeElement.matches(":disabled")), "busy modal lost its keyboard guard after disabling the focused command");
   for (let i = 0; i < 5; i++) await page.keyboard.press("Escape");
   await page.mouse.click(1, 1);
   check(await dialog().isVisible() && await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).isDisabled(), "busy modal dismissed");

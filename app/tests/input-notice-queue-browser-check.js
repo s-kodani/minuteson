@@ -41,7 +41,9 @@ async page => {
     await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "transparent ancestor acknowledged rendering");
     results.push("transparent ancestors prevent rendering confirmation despite an attached card");
-    await page.evaluate(() => { const host=document.querySelector(".mon-notification-stack"); host.style.opacity="1"; host.style.transform="translateY(-2000px)"; }); await page.waitForTimeout(400);
+    // Sonner transitions transforms for 400ms. Keep the synthetic move
+    // instantaneous so the card cannot really render during that transition.
+    await page.evaluate(() => { const host=document.querySelector(".mon-notification-stack"); host.style.transition="none"; host.style.transform="translateY(-2000px)"; host.style.opacity="1"; }); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "off-viewport card acknowledged rendering");
     results.push("off-viewport cards do not acknowledge rendering");
     await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.transform=""; document.querySelector("#render-cover").showModal(); });

@@ -105,15 +105,15 @@ test("a read-busy replacement exposes safe cancellation after readiness without 
   assert.match(source,/replacementInitialFocus.current = false/);
 });
 
-test("confirmation phase transitions recover only lost focus in the actual front dialog", () => {
+test("confirmation and busy transitions recover only lost focus in the actual front dialog", () => {
   const source = readFileSync(new URL("../src/common-modal.tsx", import.meta.url), "utf8");
   assert.match(source, /const displayedConfirmation = owned \?\? \(confirmation && !confirmation.parent && attributes\["aria-labelledby"\] === `\$\{confirmation.id\}-title`/);
-  assert.match(source, /if \(!displayedConfirmation \|\| !element\?\.open \|\| topOpenModal\(\) !== element\) return/);
+  assert.match(source, /if \(\(!displayedConfirmation && !effectiveBlocked\) \|\| !element\?\.open \|\| topOpenModal\(\) !== element\) return/);
   assert.match(source, /active === document.body \|\| active === element \|\| active === heading/);
   assert.match(source, /element.contains\(active\) && active.matches\(":disabled"\)/);
   assert.match(source, /if \(!lost\) return/);
   assert.match(source, /\(cancel \?\? heading\)\?\.focus\(\{ preventScroll: true \}\)/);
-  assert.match(source, /\[displayedConfirmation\?\.id, displayedConfirmation\?\.phase, open, ref\]/);
+  assert.match(source, /\[displayedConfirmation\?\.id, displayedConfirmation\?\.phase, effectiveBlocked, open, ref\]/);
 });
 
 test("modal top follows native opening order, not portaled trigger DOM order", () => {

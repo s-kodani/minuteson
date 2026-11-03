@@ -41,7 +41,10 @@ fn windows_parity_private_files_retain_sqlite_writes_and_reject_public_acl() {
     let path = root.join("owned.sqlite3");
     std::fs::write(&path, b"").unwrap();
     set_private(&path).unwrap();
-    assert!(security_metadata(&open_metadata(&path).unwrap()).unwrap().1);
+    assert_eq!(
+        security_metadata(&open_metadata(&path).unwrap()).unwrap(),
+        (current_owner().unwrap(), true)
+    );
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch("CREATE TABLE v(value); INSERT INTO v VALUES(1);")
         .unwrap();

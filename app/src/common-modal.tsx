@@ -229,17 +229,18 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
   }, [replacement?.key, owned?.id, effectiveBlocked, restoreReady, open, ref]);
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!displayedConfirmation || !element?.open || topOpenModal() !== element) return;
-    const heading = element.querySelector<HTMLElement>(".action-confirmation h2");
+    if ((!displayedConfirmation && !effectiveBlocked) || !element?.open || topOpenModal() !== element) return;
+    const heading = visibleModalTarget(element, "h2, h3");
     const active = document.activeElement;
     // Disabling the focused execution button can leave focus on body. Keep
-    // the running confirmation inside its native boundary, then expose its
+    // the busy modal inside its native boundary, then expose its
     // safe close action on failure without stealing another valid focus.
     const lost = active === document.body || active === element || active === heading || active instanceof HTMLElement && element.contains(active) && active.matches(":disabled");
     if (!lost) return;
     const cancel = element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)");
+    if (heading) heading.tabIndex = -1;
     (cancel ?? heading)?.focus({ preventScroll: true });
-  }, [displayedConfirmation?.id, displayedConfirmation?.phase, open, ref]);
+  }, [displayedConfirmation?.id, displayedConfirmation?.phase, effectiveBlocked, open, ref]);
   const dismiss = () => { if (!latest.current.blocked) { if (owned) confirmations.cancel(owned.id); else void latest.current.onDismiss(); } };
   const keyDown = (event: Pick<KeyboardEvent,"key" | "shiftKey" | "target" | "preventDefault" | "stopPropagation" | "defaultPrevented" | "isComposing" | "keyCode" | "repeat">) => {
     const element = ref.current;

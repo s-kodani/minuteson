@@ -244,6 +244,9 @@ mod tests {
         file.write_all(&1.0_f32.to_le_bytes()).unwrap();
         file.set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
+        // NTFS can defer change-time publication until the writing handle
+        // closes. Observe the completed mutation, including restored mtime.
+        drop(file);
         assert!(original.check_unchanged().is_err());
         assert!(scope.verify().is_err());
         assert!(read(&path, &hash).is_err());
