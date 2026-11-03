@@ -4,6 +4,7 @@ use std::{
     fs::{File, OpenOptions},
     os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
     path::Path,
+    ptr::NonNull,
 };
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree},
@@ -88,23 +89,27 @@ pub(super) fn metadata(file: &File) -> Result<(u32, bool), String> {
         return Err(std::io::Error::from_raw_os_error(error as i32).to_string());
     }
     let _owned = Local(sd);
-    let owner_text = sid_text(owner)?;
+    let owner = NonNull::new(owner).ok_or("ファイルの所有者情報がありません")?;
+    let owner_text = sid_text(owner.as_ptr())?;
     let owner_id = owner_text.bytes().fold(2166136261u32, |h, b| {
         (h ^ u32::from(b)).wrapping_mul(16777619)
     });
-    if dacl.is_null() {
+    let Some(dacl) = NonNull::new(dacl) else {
         return Ok((owner_id, false));
-    }
+    };
     // uid() is a compact compatibility identifier, not an authorization
     // boundary. Private ownership must compare the complete token SID so a
     // collision in that identifier cannot authorize another account's files.
     let mut private = owner_text == current_sid()?;
-    for index in 0..unsafe { (*dacl).AceCount } {
+    // GetSecurityInfo outputs borrow from sd, retained by _owned until return.
+    for index in 0..unsafe { dacl.as_ref().AceCount } {
         let mut ace = std::ptr::null_mut();
-        if unsafe { GetAce(dacl, u32::from(index), &mut ace) } == 0 {
+        if unsafe { GetAce(dacl.as_ptr(), u32::from(index), &mut ace) } == 0 {
             return Err("ファイル権限を検査できません".into());
         }
-        let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+        let ace = NonNull::new(ace).ok_or("ファイル権限の項目がありません")?;
+        // GetAce success supplies an entry inside the same live ACL allocation.
+        let header = unsafe { ace.cast::<ACE_HEADER>().as_ref() };
         if header.AceFlags & 0x08 != 0 {
             continue;
         }
@@ -116,7 +121,7 @@ pub(super) fn metadata(file: &File) -> Result<(u32, bool), String> {
             private = false;
             continue;
         }
-        let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+        let allowed = unsafe { ace.cast::<ACCESS_ALLOWED_ACE>().as_ref() };
         if allowed.Mask == 0 {
             continue;
         }

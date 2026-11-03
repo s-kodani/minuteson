@@ -1,4 +1,4 @@
-async function (page, capturePath, { approveModelLicense }) {
+(async function (page, capturePath, { approveModelLicense }) {
   const check = (value, message) => { if (!value) throw Error(message); }, results = [];
   const field = page.getByRole("combobox", { name: "文字起こしのモデル", exact: true });
   await field.waitFor();
@@ -48,4 +48,4 @@ async function (page, capturePath, { approveModelLicense }) {
   results.push("model selectors retain matching button height and fit wide and narrow viewports");
   await page.screenshot({ path: "output/playwright/whisper-variants-large-v3.png" });
   return { passed: results.length, results };
-}
+})

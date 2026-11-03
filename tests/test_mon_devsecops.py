@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import stat
 import subprocess
@@ -109,7 +110,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             release.discover(api)
             with patch.object(api, "release", side_effect=read_draft), patch.object(release, "GitHub", return_value=api):
                 exec(compile(script, "release-guard", "exec"), {})
-            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\n")
+            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\nsource_sha=" + SHA + "\n")
         for name in ("ci", "security", "macos-prepare", "macos-sign", "windows", "store"):
             with self.subTest(job=name):
                 effective = workflow["jobs"][name].get("permissions", workflow["permissions"])
@@ -125,20 +126,51 @@ class DesktopWorkflowTests(unittest.TestCase):
     def expression(value, context):
         """Evaluate the small boolean subset used by the native step guards."""
         value = value.removeprefix("${{ ").removesuffix(" }}")
-        value = re.sub(r"\b(?:inputs|github|runner|env)(?:\.[A-Za-z_][A-Za-z_0-9]*)+",
+        value = re.sub(r"\b(?:inputs|github|runner|env|steps)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
                        lambda match: repr(context[match[0]]), value)
         value = value.replace("&&", " and ").replace("||", " or ")
-        return eval(value, {"__builtins__": {}}, {"always": lambda: True})
+        return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
 
     def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows"):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
-                   "runner.os": operating_system}
+                   "runner.os": operating_system, "github.ref": "refs/heads/main",
+                   "github.workflow": "Desktop platform validation", "inputs.source_ref": "", "github.sha": SHA,
+                   "steps.native_cache.outputs.cache-hit": "false", "steps.native_downloads.outputs.cache-hit": "false"}
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
+        context["env.MON_SAVE_CI_CACHE"] = str(self.expression(native["env"]["MON_SAVE_CI_CACHE"], context)).lower()
         return [step for step in native["steps"] if self.expression(step.get("if", "True"), context)]
 
     def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
         return "\n".join(step.get("run", "") for step in self.native_steps(event, full, suite, operating_system))
+
+    def test_native_cache_is_exact_and_only_successful_trusted_main_jobs_save(self):
+        context = {"github.ref": "refs/heads/main", "github.workflow": "Desktop platform validation",
+                   "github.event_name": "push", "inputs.source_ref": "", "github.sha": SHA}
+        expression = self.workflow['jobs']['native']['env']['MON_SAVE_CI_CACHE']
+        self.assertTrue(self.expression(expression, context))
+        for change in ({'github.ref': 'refs/pull/1/merge'}, {'github.event_name': 'pull_request'},
+                       {'inputs.source_ref': '2' * 40}, {'github.workflow': 'Release build'}):
+            self.assertFalse(self.expression(expression, {**context, **change}), change)
+        self.assertTrue(self.expression(expression, {**context, 'github.event_name': 'schedule', 'inputs.source_ref': SHA}))
+        for job in ('native', 'browser'):
+            for step in self.workflow['jobs'][job]['steps']:
+                action = step.get('uses', '')
+                if action.startswith('actions/cache/restore@'):
+                    self.assertNotIn('restore-keys', step['with'])
+                if action.startswith('actions/cache/save@'):
+                    self.assertIn('success()', step['if'])
+                    self.assertIn("env.MON_SAVE_CI_CACHE == 'true'", step['if'])
+
+    @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'Run the CI Bash control test on Unix, not the Windows WSL launcher')
+    def test_first_generated_contract_failure_cannot_be_masked_by_a_later_success(self):
+        step = next(s for s in self.workflow['jobs']['browser']['steps'] if s.get('name') == 'Check generated command contracts')
+        self.assertEqual(step['shell'], 'bash')
+        script = step['run'].replace('python tools/mon_contracts.py --check', 'false').replace(
+            'python tools/mon_model_catalog.py --check', "printf 'incorrectly continued'")
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('incorrectly continued', result.stdout)
 
     def test_pr_and_main_run_quick_without_native_resource_builds(self):
         for event in ("pull_request", "push"):
@@ -213,7 +245,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         release_workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
         release_ci = release_workflow["jobs"]["ci"]
         self.assertTrue(release_ci["with"]["full"])
-        self.assertEqual(release_ci["with"]["source_ref"], "${{ inputs.source_sha }}")
+        self.assertEqual(release_ci["with"]["source_ref"], "${{ needs.guard.outputs.source_sha }}")
         self.assertNotEqual(daily["concurrency"]["group"], self.workflow["concurrency"]["group"])
 
     def test_gate_rejects_required_failure_cancellation_or_skip_but_allows_docs_only(self):

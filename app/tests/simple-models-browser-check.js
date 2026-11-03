@@ -1,4 +1,4 @@
-async function (page, capturePath, { approveModelLicense }) {
+(async function (page, capturePath, { approveModelLicense }) {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   await page.evaluate(() => window.modelDownloadFixture.setParent(true));
   const select = page.getByRole("combobox", { name: "文字起こしのモデル", exact: true });
@@ -144,4 +144,4 @@ async function (page, capturePath, { approveModelLicense }) {
   results.push("successful selection with a lost reply is read back as selected without reapplying");
   await page.screenshot({path:"simple-models.png"});
   return {passed:results.length,results};
-}
+})

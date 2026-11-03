@@ -237,7 +237,7 @@ def command_signatures(source):
 
 def registry_commands(root=ROOT, synchronize=False):
     native = root / "app/src-tauri"
-    registry = json.loads((native / "command_registry.json").read_text())
+    registry = json.loads((native / "command_registry.json").read_text(encoding="utf8"))
     roles = ("main", "recorder", "recorder-info", "recording-confirmation")
     commands = registry["commands"]
     names = [c["name"] for c in commands]
@@ -253,7 +253,7 @@ def registry_commands(root=ROOT, synchronize=False):
         if not path.exists():
             path = native / "src" / relative / "mod.rs"
         if path not in cache:
-            cache[path] = command_signatures(path.read_text())
+            cache[path] = command_signatures(path.read_text(encoding="utf8"))
         signature = cache[path].get(command["name"])
         if signature is None:
             raise ValueError(f"registered handler lacks #[tauri::command]: {command['handler']}")
@@ -265,12 +265,12 @@ def registry_commands(root=ROOT, synchronize=False):
     # Every declared native command needs an explicit role and wire contract.
     for path in sorted((native / "src").rglob("*.rs")):
         if path not in cache:
-            cache[path] = command_signatures(path.read_text())
+            cache[path] = command_signatures(path.read_text(encoding="utf8"))
         for name in cache[path]:
             if (path, name) not in registered:
                 raise ValueError(f"native command absent from registry: {path.relative_to(native)}::{name}")
     if synchronize:
-        (native / "command_registry.json").write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n")
+        (native / "command_registry.json").write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf8", newline="\n")
     return commands
 
 
@@ -336,10 +336,10 @@ def main():
         registry_commands(synchronize=True)
     for path, content in products().items():
         if args.check:
-            if not path.exists() or path.read_text() != content:
+            if not path.exists() or path.read_text(encoding="utf8") != content:
                 raise SystemExit(f"Stale generated contract: {path.relative_to(ROOT)}")
         else:
-            path.write_text(content)
+            path.write_text(content, encoding="utf8", newline="\n")
 
 
 if __name__ == "__main__":

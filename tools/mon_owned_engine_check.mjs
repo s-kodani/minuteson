@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
-import { createHash } from "node:crypto";
+import { readVerifiedExecutable, stageVerifiedExecutable } from "./mon_verified_executable.mjs";
 
 const ENTRY = "--mon-owned-engine-guard-v1", script = fileURLToPath(import.meta.url);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -97,16 +97,13 @@ if (process.argv[2] === "--synthetic-owner") {
   const expected = process.argv[5]; assert.match(expected, /^[0-9a-f]{64}$/);
   // An old MON without this entry would open its GUI. Refuse before spawn:
   // caller must pin the known headless-enabled binary, not any app pathname.
-  const metadata = lstatSync(executable);
-  assert.ok(metadata.isFile() && !metadata.isSymbolicLink() && metadata.size > 0 && metadata.size <= 128 * 1024 * 1024);
-  const binary = readFileSync(executable);
-  assert.equal(createHash("sha256").update(binary).digest("hex"), expected);
-  assert.ok(binary.includes(Buffer.from(ENTRY)), "binary has no owned-engine entry");
+  const binary = readVerifiedExecutable(executable, expected, ENTRY);
   const root = mkdtempSync(join(tmpdir(), "mon-owned-engine-native-")), identity = lstatSync(root);
   writeFileSync(join(root, "fixture-marker"), "synthetic owned engine only", { flag: "wx", mode: 0o600 });
   const started = performance.now();
   try {
-    const cases = await nativeCheck(executable, root);
+    const staged = stageVerifiedExecutable(binary, root);
+    const cases = await nativeCheck(staged, root);
     assert.equal(readFileSync(join(root, "fixture-marker"), "utf8"), "synthetic owned engine only");
     console.log(JSON.stringify({ cases, passed: cases, elapsedSeconds: (performance.now() - started) / 1000, guiLaunched: false, realModels: false }));
   } finally {

@@ -1,4 +1,4 @@
-async function (page, capturePath, { approveModelLicense }) {
+(async function (page, capturePath, { approveModelLicense }) {
   const check=(v,m)=>{if(!v)throw Error(m);}, results=[];
   const model=page.getByRole('combobox',{name:'文字起こしのモデル',exact:true});
   const row=page.locator('.model-selection-row').filter({has:model});
@@ -88,4 +88,4 @@ async function (page, capturePath, { approveModelLicense }) {
   await row.getByRole('button',{name:'VADを追加して使用',exact:true}).waitFor();
   results.push('installed pre-VAD weights offer an explicit VAD upgrade without duplicate choices');
   return {passed:results.length,results};
-}
+})
