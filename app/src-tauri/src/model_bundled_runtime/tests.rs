@@ -37,7 +37,44 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Value) {
 }
 #[test]
 fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness() {
-    let (temp, root, bytes, _) = fixture();
+    let (temp, root, bytes, mut index) = fixture();
+    // Catalog disclosures require the pinned notice identities even when the
+    // executable/archive are inert fixtures. Keep the synthetic runtime bytes.
+    let policy: Value = serde_json::from_str(include_str!(
+        "../../../model-catalog/model-license-policy.json"
+    ))
+    .unwrap();
+    let notice = |name: &str| {
+        policy["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|notice| notice["name"] == name)
+            .unwrap()
+    };
+    let whisper = notice("whisper-MIT.txt");
+    index["files"][1]["bytes"] = whisper["bytes"].clone();
+    index["files"][1]["sha256"] = whisper["sha256"].clone();
+    std::fs::write(
+        root.join("runtime-index.json"),
+        serde_json::to_vec(&index).unwrap(),
+    )
+    .unwrap();
+    let runtime_bytes: u64 = index["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["bytes"].as_u64().unwrap())
+        .sum();
+    let asr_path = root
+        .parent()
+        .unwrap()
+        .join("inference-runtime/asr-index.json");
+    let mut asr: Value = serde_json::from_slice(&std::fs::read(&asr_path).unwrap()).unwrap();
+    let nlohmann = notice("nlohmann-MIT.txt");
+    asr["files"][1]["expectedSize"] = nlohmann["bytes"].clone();
+    asr["files"][1]["expectedHash"] = nlohmann["sha256"].clone();
+    std::fs::write(asr_path, serde_json::to_vec(&asr).unwrap()).unwrap();
     let bundle = Bundle::open(&root).unwrap();
     assert!(bundle.archive.is_none());
     let catalog =
@@ -60,7 +97,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     assert_eq!(review.download_bytes, 488_492_581);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
-    assert_eq!(review.total_bytes, 488_492_581 + 48);
+    assert_eq!(review.total_bytes, 488_492_581 + runtime_bytes);
     assert!(!review.installed && !review.ready);
     assert_eq!(review.publisher_authenticity, "not_verified");
     let origin = recipe.origin(&uuid::Uuid::new_v4().to_string()).unwrap();
