@@ -351,3 +351,220 @@ fn workspace_links_are_not_followed_or_removed() {
     assert!(external.path().join("keep.caf").exists());
     assert!(area.join("linked").is_symlink());
 }
+
+#[test]
+fn legacy_flac_input_directory_retires_unregistered_parts() {
+    let (_temp, storage, meeting, originals) = tests::fixture();
+    let (track, asset, frames, size, hash): (String, String, i64, i64, String) = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT t.id,a.id,c.frame_count,a.size_bytes,a.content_hash FROM audio_tracks t JOIN audio_chunks c ON c.track_id=t.id JOIN file_assets a ON a.id=c.file_asset_id WHERE t.meeting_id=?1 AND t.kind='mic'",
+            [&meeting],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    let relative = Path::new("meetings")
+        .join(&meeting)
+        .join("audio")
+        .join(&track);
+    let area = storage.root.join(&relative);
+    crate::native_fs::private_directories(&area, true).unwrap();
+    let path = area.join("legacy.flac");
+    let mut source = crate::audio::VerifiedAudio::open(
+        std::fs::File::open(&originals[0]).unwrap(),
+        size as u64,
+        &hash,
+    )
+    .unwrap();
+    let saved =
+        crate::audio::flac::write_segment(&mut source, 0, frames as u64, &path, &|| false, &|_| {})
+            .unwrap();
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE audio_tracks SET format='flac' WHERE id=?1",
+            [&track],
+        )
+        .unwrap();
+        db.execute("UPDATE file_assets SET relative_path=?2,media_type='audio/flac',size_bytes=?3,content_hash=?4 WHERE id=?1", params![asset,relative.join("legacy.flac").to_string_lossy().replace('\\',"/"),saved.size as i64,saved.sha256]).unwrap();
+    }
+    let part = area.join(".unregistered-old.part");
+    std::fs::write(&part, b"crashed encoder").unwrap();
+    std::fs::write(area.join("retained.json"), b"metadata").unwrap();
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
+    assert!(!path.exists());
+    assert!(!part.exists());
+    assert!(area.join("retained.json").exists());
+    assert!(wav(&storage, &meeting).is_file());
+}
+
+#[test]
+fn native_legacy_plan_admits_track_with_only_unclaimed_crash_parts() {
+    use crate::storage::publication_files::Directory;
+    let (_temp, storage, meeting, _) = tests::fixture();
+    let root = Directory::open(&workspace(&storage, &meeting)).unwrap();
+    drop(root.create(".final-flac.lock").unwrap());
+    let track = Uuid::new_v4().to_string();
+    let chunk = Uuid::new_v4().to_string();
+    let area = root.path.parent().unwrap().join(&track);
+    crate::native_fs::private_directories(&area, true).unwrap();
+    let output = Directory::open(&area).unwrap();
+    let uncheckpointed_track = Uuid::new_v4().to_string();
+    let uncheckpointed = root.path.parent().unwrap().join(&uncheckpointed_track);
+    crate::native_fs::private_directories(&uncheckpointed, true).unwrap();
+    let uncheckpointed_directory = Directory::open(&uncheckpointed).unwrap();
+    let input_hash = "a".repeat(64);
+    root.json(
+        "final-flac.json",
+        &serde_json::json!({
+            "schema_version":1,"input_hash":input_hash,
+            "recording_directory":root.identity,
+            "tracks":[
+                {"id":track,"directory":output.identity,"chunks":[chunk]},
+                {"id":uncheckpointed_track,"directory":uncheckpointed_directory.identity,"chunks":[Uuid::new_v4().to_string()]}
+            ]
+        }),
+        None,
+    )
+    .unwrap();
+    output
+        .json(
+            &format!(".{chunk}.json"),
+            &serde_json::json!({
+                "schema_version":1,"input_hash":input_hash,"chunk_id":chunk,
+                "staging_name":format!(".{chunk}.{}.part", Uuid::new_v4()),
+                "staging_identity":null,"audio":null
+            }),
+            None,
+        )
+        .unwrap();
+    let part = area.join(".unclaimed-previous-attempt.part");
+    std::fs::write(&part, b"created before an identity receipt was durable").unwrap();
+    let no_checkpoint_part = uncheckpointed.join(".unclaimed.part");
+    std::fs::write(&no_checkpoint_part, b"unregistered encoder leftover").unwrap();
+    storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .unwrap();
+    assert!(!part.exists());
+    assert!(!no_checkpoint_part.exists());
+    assert!(area.join(format!(".{chunk}.json")).exists());
+    assert!(root.path.join("final-flac.json").exists());
+    assert!(root.path.join(".final-flac.lock").exists());
+    assert!(wav(&storage, &meeting).is_file());
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn move_pending_cleanup(storage: Storage, config: &Path, legacy: &Path, target: &Path) -> Storage {
+    use crate::bootstrap::Bootstrap;
+    if !config.join("bootstrap.json").exists() {
+        crate::bootstrap::set_test_root(config, &config.join("fixture-app-data"), storage.root());
+    }
+    let bootstrap = Bootstrap::open(config, legacy).unwrap();
+    bootstrap.initialize(&storage).unwrap();
+    crate::native_fs::private_directories(target, true).unwrap();
+    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    let revision = bootstrap.view().unwrap().revision;
+    let operation = Uuid::new_v4().to_string();
+    let confirmation = Uuid::new_v4().to_string();
+    bootstrap
+        .begin_move(
+            &operation,
+            &confirmation,
+            target,
+            snapshot.manifest_hash(),
+            revision,
+        )
+        .unwrap();
+    let mut placement = bootstrap.pending_placement(&operation, &snapshot).unwrap();
+    placement.copy(&snapshot, &|| false).unwrap();
+    let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
+    placement.install_history(&handoff, &|| false).unwrap();
+    placement
+        .activate_for_restart(&handoff, &confirmation, revision + 1, &|| false)
+        .unwrap();
+    drop(placement);
+    drop(handoff);
+    drop(snapshot);
+    drop(storage);
+    drop(bootstrap);
+    Bootstrap::open(config, legacy)
+        .unwrap()
+        .open_storage()
+        .unwrap()
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[test]
+fn pending_cleanup_resumes_after_repeated_native_moves_and_cold_reopens() {
+    use crate::bootstrap::Bootstrap;
+    let (_temp, storage, meeting, originals) = tests::fixture();
+    let owner = storage.begin_meeting_work(&meeting, "job", None).unwrap();
+    assert!(storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .is_err());
+    drop(owner);
+    let before = std::fs::read(wav(&storage, &meeting)).unwrap();
+    let control = tempfile::tempdir().unwrap();
+    let root = control.path().canonicalize().unwrap();
+    let config = root.join("config");
+    let source = storage.root.clone();
+    let relative: Vec<_> = originals
+        .iter()
+        .map(|p| p.strip_prefix(&source).unwrap().to_owned())
+        .collect();
+    let storage = move_pending_cleanup(storage, &config, &source, &root.join("first"));
+    let storage = move_pending_cleanup(storage, &config, &source, &root.join("second"));
+    assert!(storage
+        .publish_single_wav(
+            &meeting,
+            &|| relative.iter().any(|p| !storage.root.join(p).exists()),
+            &|_, _| panic!("must reuse WAV after relocation")
+        )
+        .is_err());
+    assert!(relative.iter().any(|p| !storage.root.join(p).exists()));
+    assert!(relative.iter().any(|p| storage.root.join(p).exists()));
+    drop(storage);
+    let storage = Bootstrap::open(&config, &source)
+        .unwrap()
+        .open_storage()
+        .unwrap();
+    storage.finish_pending_meeting_audio().unwrap();
+    assert!(relative.iter().all(|p| !storage.root.join(p).exists()));
+    assert_eq!(std::fs::read(wav(&storage, &meeting)).unwrap(), before);
+    drop(storage);
+    let storage = Bootstrap::open(&config, &source)
+        .unwrap()
+        .open_storage()
+        .unwrap();
+    storage.finish_pending_meeting_audio().unwrap();
+    assert_eq!(std::fs::read(wav(&storage, &meeting)).unwrap(), before);
+    assert!(originals.iter().all(|p| p.is_file()));
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[test]
+fn native_move_never_authorizes_same_content_replacement() {
+    let (_temp, storage, meeting, originals) = tests::fixture();
+    let owner = storage.begin_meeting_work(&meeting, "job", None).unwrap();
+    assert!(storage
+        .publish_single_wav(&meeting, &|| false, &|_, _| {})
+        .is_err());
+    drop(owner);
+    let relative = originals[0].strip_prefix(&storage.root).unwrap().to_owned();
+    let source = storage.root.clone();
+    let control = tempfile::tempdir().unwrap();
+    let root = control.path().canonicalize().unwrap();
+    let storage =
+        move_pending_cleanup(storage, &root.join("config"), &source, &root.join("target"));
+    let path = storage.root.join(relative);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::rename(&path, path.with_extension("held")).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    assert!(storage.finish_pending_meeting_audio().is_err());
+    assert!(path.is_file());
+    assert!(wav(&storage, &meeting).is_file());
+}

@@ -1,6 +1,6 @@
 //! Verified publication and source retirement for newly captured/imported audio.
 use super::*;
-mod cleanup;
+pub(in crate::storage) mod cleanup;
 use cleanup::RetiredAudio;
 #[cfg(test)]
 mod cleanup_tests;

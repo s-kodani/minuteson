@@ -8,14 +8,17 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+#[cfg(any(target_os = "macos", windows))]
+pub(in crate::storage) mod relocation;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct RetiredAudio {
+pub(in crate::storage) struct RetiredAudio {
     pub relative: String,
     pub bytes: u64,
     pub hash: String,
     // Old receipts remain readable; new receipts also pin same-content swaps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    identity: Option<Identity>,
+    pub(in crate::storage) identity: Option<Identity>,
 }
 
 fn check(storage: &Storage, cancelled: &impl Fn() -> bool) -> Result<(), String> {
@@ -198,6 +201,7 @@ pub(super) fn inventory(
 ) -> Result<(), String> {
     let mut ids = BTreeSet::new();
     let mut workspaces = BTreeSet::new();
+    let mut completed_sessions = BTreeSet::new();
     let mut registered = BTreeMap::new();
     let mut protected = BTreeSet::new();
     {
@@ -229,22 +233,31 @@ pub(super) fn inventory(
             for id in rows {
                 ids.insert(id.map_err(|e| e.to_string())?);
             }
-            let (session, import): (Option<String>, Option<String>) = db
+            let (session, import, format): (Option<String>, Option<String>, String) = db
                 .query_row(
-                    "SELECT session_id,import_id FROM audio_tracks WHERE id=?1 AND meeting_id=?2",
+                    "SELECT session_id,import_id,format FROM audio_tracks WHERE id=?1 AND meeting_id=?2",
                     params![track, meeting],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .map_err(|e| e.to_string())?;
             if let Some(session) = session {
                 let complete: bool = db.query_row("SELECT state='saved' FROM recording_sessions WHERE id=?1 AND meeting_id=?2", params![session, meeting], |r| r.get(0)).map_err(|e|e.to_string())?;
                 if complete && crate::input_levels::valid_owner(&session) {
+                    completed_sessions.insert(session.clone());
                     workspaces.insert(
                         Path::new("meetings")
                             .join(meeting)
                             .join("audio")
                             .join(session),
                     );
+                    if format == "flac" && crate::input_levels::valid_owner(&track) {
+                        workspaces.insert(
+                            Path::new("meetings")
+                                .join(meeting)
+                                .join("audio")
+                                .join(&track),
+                        );
+                    }
                 }
             }
             if let Some(import) = import {
@@ -286,6 +299,13 @@ pub(super) fn inventory(
             }
         }
     }
+    let producers = crate::storage::recordings::flac::inspect_workspaces(
+        storage,
+        meeting,
+        &completed_sessions,
+        cancelled,
+    )?;
+    workspaces.extend(producers.directories().map(Path::to_path_buf));
     if !workspaces.is_empty() {
         if let Some(parent) = keep
             .parent()
@@ -386,10 +406,17 @@ pub(super) fn finish(
         }
         crate::local_engine::verification::release(&path)?;
         let (actual, observed) = snapshot(storage, meeting, &expected.relative, cancelled)?;
+        let mut identity = expected.identity.clone();
+        #[cfg(any(target_os = "macos", windows))]
+        crate::storage::recordings::flac::relocation::effective_cleanup_identity(
+            storage,
+            meeting,
+            expected,
+            &mut identity,
+        )?;
         if actual.bytes != expected.bytes
             || actual.hash != expected.hash
-            || expected
-                .identity
+            || identity
                 .as_ref()
                 .is_some_and(|id| Some(id) != actual.identity.as_ref())
         {

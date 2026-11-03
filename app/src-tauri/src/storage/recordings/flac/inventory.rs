@@ -5,14 +5,22 @@ use crate::input_levels;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default, PartialEq, Eq)]
-pub(in crate::storage) struct WorkspaceFiles(BTreeMap<String, (Stamp, bool)>);
+pub(in crate::storage) struct WorkspaceFiles {
+    files: BTreeMap<String, (Stamp, bool)>,
+    directories: BTreeSet<String>,
+}
 impl WorkspaceFiles {
+    /// Directories admitted through a native producer plan, including tracks
+    /// whose only audio is an unclaimed crash leftover.
+    pub(in crate::storage) fn directories(&self) -> impl Iterator<Item = &Path> {
+        self.directories.iter().map(Path::new)
+    }
     pub(in crate::storage) fn hint(
         &self,
         path: &str,
         file: &File,
     ) -> Result<Option<String>, String> {
-        let Some((stamp, audio)) = self.0.get(path) else {
+        let Some((stamp, audio)) = self.files.get(path) else {
             return Ok(None);
         };
         stamp.require(file)?;
@@ -26,7 +34,7 @@ impl WorkspaceFiles {
         ))
     }
     fn add(&mut self, path: String, stamp: Stamp, audio: bool) -> Result<(), String> {
-        if self.0.len() >= 8192 || self.0.insert(path, (stamp, audio)).is_some() {
+        if self.files.len() >= 8192 || self.files.insert(path, (stamp, audio)).is_some() {
             return Err("FLAC所有記録の件数・出力先の重複が不正です".into());
         }
         Ok(())
@@ -102,6 +110,7 @@ pub(in crate::storage) fn inspect_workspaces(
                 return Err("FLAC変換計画の形式・排他記録が不正です".into());
             }
             found.add(format!("{relative}/{name}"), stamp.clone(), false)?;
+            found.directories.insert(relative.clone());
             documents.push((name.to_string(), stamp));
             for track in &plan.tracks {
                 partial::check_cancel(cancelled)?;
@@ -125,6 +134,7 @@ pub(in crate::storage) fn inspect_workspaces(
                     // and receipts copied from the original producer.
                     continue;
                 }
+                found.directories.insert(track_relative.clone());
                 let mut receipts = Vec::new();
                 for chunk in &track.chunks {
                     partial::check_cancel(cancelled)?;
