@@ -77,7 +77,7 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -152,7 +152,7 @@ jobs:
           key: ${{ steps.browser_cache.outputs.cache-primary-key }}
       - name: Upload browser diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-diagnostics-${{ runner.os }}
           path: output/playwright/
@@ -175,7 +175,7 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -275,7 +275,7 @@ jobs:
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - name: Upload Microsoft Store build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: minuteson-windows-x64-store-identity
           path: |
@@ -309,7 +309,7 @@ jobs:
         run: python tools/mon_ci_native_tests.py --suite full --all-targets --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
       - name: Upload Windows build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mon-windows-x64-qa-identity
           path: output/windows-qa-work/*-build.json
@@ -342,7 +342,7 @@ jobs:
           key: ${{ steps.native_downloads.outputs.cache-primary-key }}
       - name: Upload Rust timing diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-tests-${{ runner.os }}
           path: output/rust-tests/
