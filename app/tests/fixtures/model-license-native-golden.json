@@ -4,7 +4,7 @@
     "モデル: Apache-2.0",
     "実行エンジン: MIT"
   ],
-  "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+  "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
   "restrictions": [],
   "notices": [
     {
@@ -21,7 +21,7 @@
     }
   ],
   "official": true,
-  "disclosureHash": "5c93b4d3a51c4a2a45bdcc92bd77331e5374bc3bfe8b48cea3f8a9f12f368322",
+  "disclosureHash": "b76a64011d60367a1f4a049e256694a144eadc4fe9fe10ca94ce1c93d28bdaa3",
   "targetBinding": {
     "recipeHash": "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083"
   }

@@ -192,7 +192,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -270,7 +270,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -348,7 +348,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -377,7 +377,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -406,7 +406,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -435,7 +435,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -464,7 +464,7 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -493,7 +493,7 @@
         "モデル: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはMIT、llama.cpp実行エンジンにはMITが適用されます。",
+      "summary": "モデル本体にはMIT、llama.cpp実行エンジンにはMITが適用されます。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -522,7 +522,7 @@
         "モデル: LFM Open License v1.0",
         "実行エンジン: MIT"
       ],
-      "summary": "LFM3の重みはLFM Open License v1.0です。商用利用には年間売上高による条件があります。llama.cpp実行エンジンはMITです。",
+      "summary": "LFM3のモデル本体はLFM Open License v1.0です。商用利用には年間売上高による条件があります。llama.cpp実行エンジンはMITです。",
       "restrictions": [
         "第1条・第5条: 年間売上高US$10,000,000以上をThresholdと定義し、これを超える法人の商用利用は本ライセンスでは許諾されません。支配・被支配・共通支配下の関連法人を含むLegal Entity単位の条件です。",
         "第5条(c)の適格非営利組織による非商用・研究目的利用の例外を含め、適用可否を原文で確認してください。条件を満たさない商用利用はLiquid AIとの別途契約等が必要です。"
@@ -774,7 +774,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -818,7 +818,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -862,7 +862,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -906,7 +906,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -950,7 +950,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
@@ -994,7 +994,7 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
       "restrictions": [],
       "requiredNotices": [
         {
