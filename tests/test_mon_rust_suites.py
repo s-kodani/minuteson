@@ -254,6 +254,78 @@ class SuiteSubprocessTests(unittest.TestCase):
         self.assertEqual(result["exitCode"], 0)
         self.assertGreaterEqual(result["seconds"], 0)
 
+    def test_diagnostic_filters_are_exact_repeatable_and_keep_ignored_tests_excluded(self):
+        report = self.root / "diagnostics/profile.json"
+        self.environment["FAKE_NAMES"] = json.dumps(
+            ["regular::first", "regular::first_longer", "regular::second", "slow::child"])
+        self.assertEqual(suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                         suite="quick", report_path=report,
+                         tests=["regular::first", "regular::second", "regular::first"], repeat=3), 0)
+        self.assertEqual([run["tests"] for run in self.runs()],
+                         [["regular::first"], ["regular::second"]] * 3)
+        self.assertTrue(all("--exact" in run["args"] and "--test-threads=1" in run["args"]
+                            for run in self.runs()))
+        result = json.loads(report.read_text())
+        self.assertTrue(result["diagnosticOnly"])
+        self.assertEqual(result["selected"], ["regular::first", "regular::second"])
+        self.assertEqual(result["repeat"], 3)
+        self.assertEqual(sorted(item["iteration"] for item in result["tests"]), [1, 1, 2, 2, 3, 3])
+
+    def test_diagnostic_rejects_unknown_ignored_and_other_suite_before_any_test_launch(self):
+        report = self.root / "profile.json"
+        for name in ("regular::fir", "unknown::test", "slow::boundary", "slow::child"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "unknown, ignored or outside"):
+                suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                                     suite="quick", report_path=report, tests=["regular::first", name])
+            self.assertEqual(self.runs(), [])
+            self.assertFalse(report.exists())
+        with self.assertRaisesRegex(ValueError, "unknown, ignored or outside"):
+            suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                                 suite="heavy", report_path=report, tests=["slow::child"])
+        self.assertEqual(self.runs(), [])
+
+    def test_diagnostic_defaults_to_all_runnable_selected_tests_and_failure_stops_repeats(self):
+        report = self.root / "profile.json"
+        self.assertEqual(suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                         suite="full", report_path=report), 0)
+        self.assertEqual([run["tests"] for run in self.runs()],
+                         [["regular::first"], ["regular::second"], ["slow::boundary"]])
+        self.log.unlink()
+        self.environment["FAKE_FAIL"] = "regular::first"
+        self.assertEqual(suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                         suite="quick", report_path=report, repeat=3), 23)
+        self.assertEqual(len(self.runs()), 1)
+        result = json.loads(report.read_text())
+        self.assertEqual(result["exitCode"], 23)
+        self.assertEqual(result["tests"][0]["exitCode"], 23)
+
+    def test_diagnostic_cli_accepts_multiple_exact_names_and_rejects_invalid_selection(self):
+        report = self.root / "profile.json"
+        with patch.dict(os.environ, self.environment):
+            self.assertEqual(suites.main([str(self.executable), "--suite", "quick", "--cwd", str(self.root),
+                             "--profile-json", str(report), "--test", "regular::first",
+                             "--test", "regular::second", "--repeat", "2"]), 0)
+            self.assertEqual(len(self.runs()), 4)
+            self.log.unlink()
+            self.assertEqual(suites.main([str(self.executable), "--suite", "quick", "--cwd", str(self.root),
+                             "--profile-json", str(report), "--test", "slow::boundary"]), 1)
+        self.assertEqual(self.runs(), [])
+
+    def test_diagnostic_launch_failure_writes_a_failed_partial_report(self):
+        report = self.root / "profile.json"
+        original_run = suites.subprocess.run
+        def launch(command, **options):
+            if "--list" in command:
+                return original_run(command, **options)
+            raise OSError("test launch failed")
+        with patch.object(suites.subprocess, "run", side_effect=launch), \
+                self.assertRaisesRegex(OSError, "test launch failed"):
+            suites.profile_tests(self.executable, cwd=self.root, env=self.environment,
+                                 suite="quick", report_path=report, tests=["regular::first"])
+        result = json.loads(report.read_text())
+        self.assertEqual(result["exitCode"], 1)
+        self.assertEqual(result["tests"], [])
+
 
 @unittest.skipUnless(shutil.which("rustc"), "standalone Rust fixture requires rustc")
 class RealLibtestTests(unittest.TestCase):
@@ -303,6 +375,20 @@ mod slow {
                     executed = log.read_text().splitlines()
                     self.assertEqual(set(executed), expected)
                     self.assertEqual(len(executed), len(expected))
+
+    def test_actual_libtest_diagnostic_repeats_only_requested_runnable_exact_test(self):
+        log = self.root / "profile-runs.log"
+        report = self.root / "profile.json"
+        log.unlink(missing_ok=True)
+        environment = {**os.environ, "MON_SUITE_RUST_LOG": str(log)}
+        with patch.object(suites, "heavy_rules", return_value=[
+                {"prefix": "slow::", "reason": "standalone test integration"}]):
+            self.assertEqual(suites.profile_tests(self.executable, cwd=self.root, env=environment,
+                suite="quick", tests=["regular::first"], repeat=3, report_path=report), 0)
+            self.assertEqual(log.read_text().splitlines(), ["regular::first"] * 3)
+            with self.assertRaisesRegex(ValueError, "unknown, ignored or outside"):
+                suites.profile_tests(self.executable, cwd=self.root, env=environment,
+                    suite="heavy", tests=["slow::child"], report_path=report)
 
 
 if __name__ == "__main__":

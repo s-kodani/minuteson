@@ -73,6 +73,7 @@ jobs:
     with:
       source_ref: ${{ needs.guard.outputs.source_sha }}
       full: true
+      skip_windows_msix: true
   security:
     needs: guard
     permissions:
@@ -238,6 +239,10 @@ jobs:
       - run: npm ci --prefix app
       - run: cargo fetch --locked
       - run: npm --prefix app run tauri:windows:store:build
+      - name: Verify DPI declarations in the linked Store executable
+        run: |
+          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
+          python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - run: python tools/mon_release_artifacts.py collect --flavor store --output output/release-store
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

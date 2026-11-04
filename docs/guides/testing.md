@@ -53,7 +53,11 @@ python3 tools/mon_llama_runtime_check.py --metal --report output/rust-tests/llam
 
 macOSの準備には`python3 tools/mon_inference_runtime.py`、Windowsの準備には[Windowsビルド手順](build-windows.md)を使います。通常の検査はCPUを使い、Metalの追加検査はGPUへのレイヤー配置をログでも要求します。実マイク・利用中DB・会議音声は使用しません。固定資材の取得には数GiBのネットワーク・空き容量が必要です。`--models-dir`で同じIDの`.gguf`を渡す場合も容量とSHAを照合します。
 
-専用の`.cache/llama-runtime-check`へ取得するモデルデータはActionsのキャッシュと成果物へアップロードしません。full CIはJSONの実行記録・ビルド証跡・時間計測と必要な診断だけを残します。QAインストーラー・MSIX・モデル・実行ファイルの生成と、配布・アップロードは別に扱います。
+専用の`.cache/llama-runtime-check`へ取得するモデルデータはActionsのキャッシュと成果物へアップロードしません。3モデルの合計は約5.92 GiBで、初回取得と推論の時間を分けて確認します。同じ代表モデルの準備中は、同一archiveを開いたまま照合・展開を共有します。取り出す各ファイルのサイズ・SHA検査は省略せず、次のモデルではarchiveを再照合します。
+
+JSONには既存の`directSeconds`・`residentThreeRequestsSeconds`に加え、`preparationSeconds`、取得・照合・展開・直接実行・常駐実行の`phaseSeconds`、モデルごとの`totalSeconds`、検査全体の`runTotalSeconds`を記録します。取得には台帳更新などの小さな付随処理もあり、その時間は`acquisitionOverhead`です。`preparationSeconds`は準備全体の時間なので、内訳の`phaseSeconds`へ重ねて加算しません。途中失敗やtimeoutでも、それまでの結果、失敗した`stage`、終了状態を保存します。workerやcatalogを読めない初期段階の失敗は`choice: null`の記録となります。
+
+full CIはJSONの実行記録・ビルド証跡・時間計測と必要な診断だけを残します。QAインストーラー・MSIX・モデル・実行ファイルの生成と、配布・アップロードは別に扱います。
 
 ## 通常・重い検証・全件の使い分け
 
@@ -63,15 +67,23 @@ Rustランナーの`--suite quick|heavy|full`で実行範囲を選びます。�
 
 PRとmain更新は通常スイートを使い、QAインストーラー・MSIX・ネイティブ資材の準備を待ちません。日次04:17（日本時間）と全検証の手動実行、リリース前は全件と既存のSwift／Windows連携・配布物検証を実行します。日次の開始時刻はGitHub側で遅れる場合があります。セキュリティ検証の実行条件は変更しません。構成は[開発フロー](development-workflow.md)を参照してください。
 
-全件CIで作るQAインストーラーとMSIXは、ビルド・内容照合の検証用です。バイナリはActions成果物へアップロードせず、ビルド証跡JSONとテスト時間・診断資料を保持します。パッケージ生成の成功を、実機確認や配布条件の承認とは扱いません。
+Windows全件CIは、同じrunner内で「資材準備→native全件・実モデル検証→QA NSISとQA本体のDPI検査→MSIXとStore本体のDPI検査」の順に実行します。テストは準備したhelper／runtimeを直接使うため、インストーラー作成を待ちません。QAとStoreは識別子が異なり、本体とビルド証跡をそれぞれ作ります。
+
+全件CIで作るQAインストーラーとMSIXは、ビルド・内容照合の検証用です。バイナリはActions成果物へアップロードせず、ビルド証跡JSONとテスト時間・CargoのHTML診断を保持します。パッケージ生成の成功を、実機確認や配布条件の承認とは扱いません。
+
+日次と手動fullはQA／MSIXの両方が必須です。リリース内の再利用workflowだけは`skip_windows_msix: true`を指定し、MSIX作成・内容照合・DPI検査を後続の必須Storeジョブへ委譲します。QAと本番unsigned NSISは別の識別子なので個別に検証します。通常の呼出しでMSIXを省略する指定は拒否し、公開処理はStoreジョブの成功を要求します。
 
 実モデル・実機・専用連携を必要とする既存のignoredテストは、各テストの条件を満たした専用コマンドで呼び出します。`full`でも全ignoredテストを一括実行しません。
 
 ## CIのキャッシュ
 
-CIはnpm・検査用pip依存、Playwrightのブラウザー、Rustの依存を再利用します。チェックアウトごとの更新時刻で再ビルドされるワークスペース出力はRust依存キャッシュに追加しません。通常CIは既存のキーを維持し、全件用はリリース依存も保存できる別キーを使います。全件用に完全一致しない場合だけ既存の依存キャッシュも復元し、完全一致時の二重転送を避けます。全件検証ではWindowsのCMake／Vulkanビルド中間資材と固定ダウンロード、macOSのSwift／Rust FFIビルドもキャッシュします。SwiftのCodeQL検査ではRust FFIの依存だけを再利用し、解析対象のSwiftコードは毎回ビルドします。配布用パッケージ、署名状態、インストーラー、モデルデータ、会議データはキャッシュ対象に含めません。
+CIはnpm・検査用pip依存、Playwrightのブラウザー、Rustの依存を再利用します。チェックアウトごとの更新時刻で再ビルドされるワークスペース出力はRust依存キャッシュに追加しません。通常CIは既存のキーを維持し、全件用はリリース依存も保存できる別キーを使います。全件用に完全一致しない場合だけ既存の依存キャッシュも復元し、完全一致時の二重転送を避けます。
 
-ネイティブ中間資材は[入力定義](../../tools/mon_ci_cache.py)のソース・設定・固定資材定義と、OS・アーキテクチャ・ランナーイメージ・Rust・CMakeまたはSwift／SDK・ビルドフラグを照合した完全一致キーで復元します。別の入力へ広く一致させる復元キーは使いません。復元後も通常のビルド・固定SHA照合・全件検査を実行します。
+ネイティブ中間資材はWindows runtime/workers、Windows capture、macOS Swift/FFI、macOS workersの4コンポーネントでキーを分けます。macOS workersは`.cache/inference-runtime/intermediates`と固定ソースの`downloads`だけを保存し、復元後もCMakeのconfigure/buildを実行します。同一入力のソースを再コピー・再patchして更新時刻を変えず、署名・組立・SHA検査は別の一時packageで毎回実行してから配置を置き換えます。失敗時は既存packageを保持します。
+
+SwiftのCodeQL検査ではRust FFIの依存だけを再利用し、解析対象のSwiftコードは毎回ビルドします。配布用パッケージ、署名状態、インストーラー、モデルデータ、会議データはキャッシュ対象に含めません。
+
+ネイティブ中間資材は[入力定義](../../tools/mon_ci_cache.py)の関連ソース・設定・固定資材定義と、OS・アーキテクチャ・ランナーイメージ・実使用のcompiler／SDK・ビルドフラグを照合した完全一致キーで復元します。macOS workerのcompilerとSDKは、実際のビルドに使うclean環境から調べ、Swift用のXcode選択と同一とは仮定しません。別の入力へ広く一致させる復元キーは使いません。復元後も通常のビルド・固定SHA照合・全件検査を実行します。
 
 共有するビルド・ブラウザーキャッシュは、任意のソース指定がないmainのpush・日次・手動実行が成功した場合だけ保存します。PRとリリース検証は復元のみです。初回とキャッシュ復元時の所要時間を区別し、Actionsのキャッシュ命中表示とRust時間診断で確認します。キャッシュ未作成時や入力変更後の短縮は保証しません。
 
@@ -111,9 +123,11 @@ python tools/mon_ci_native_tests.py --suite quick --all-targets
 
 この例で設定した`TAURI_CONFIG`は通常検証用です。QAビルドへ進む前に`Remove-Item Env:TAURI_CONFIG`で解除します。もともと設定があった場合はその値へ戻してください。
 
-重い側・全件では[QAビルド](build-windows.md)で録音ヘルパーと推論ランタイムを準備してから実行します。引数なしの既存コマンドはライブラリ全件、`--all-targets`付きはデスクトップパッケージのその他のテスト対象も含みます。
+重い側・全件では録音ヘルパーと推論ランタイムを先に準備します。QAインストーラーは必須ではなく、リポジトリルートから次の準備コマンドだけでも実行できます。[QAビルド](build-windows.md)も同じ準備を利用します。引数なしの既存コマンドはライブラリ全件、`--all-targets`付きはデスクトップパッケージのその他のテスト対象も含みます。
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File app/prepare-windows.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
 python tools/mon_ci_native_tests.py --suite heavy
 python tools/mon_ci_native_tests.py --suite full --all-targets
@@ -130,6 +144,16 @@ python3 tools/mon_rust_tests.py --workspace --suite quick --processes 4 --thread
 ```
 
 Windowsは`python tools/mon_ci_native_tests.py --suite quick --all-targets --timings-json "$env:TEMP/mon-rust-quick.json"`でデスクトップ側を計測し、上記の共有クレート検査の時間も合算します。端末のOS・CPU・メモリ・Rust版と、テスト件数、ビルド・実行・合計時間を併せて確認してください。他のビルドを重ねず、代表的な実装変更とテスト変更の後で連続3回300秒以内となった環境だけを達成済みとします。Macの計測をWindowsの達成結果へ転用しません。分類定義に過去の遅い実行の根拠があっても、最新ソースの5分達成を示すものではありません。
+
+CIの計測JSONは既存の`buildSeconds`・`executionSeconds`・`totalSeconds`を維持し、`phaseSeconds`で通常テスト・追加ターゲット・Swift fixture・doc testなどを分けます。`executionSeconds`にはdoc test用Cargoのコンパイルも含むため、テスト本体だけの時間とは扱いません。Windowsは資材準備・QA・Storeの時間も別JSONに記録します。
+
+個別ケースの診断には、Cargoが出力したdesktop libtest実行ファイルの絶対パスを指定します。`--test`は複数指定でき、不明・ignored・指定スイート外の名前は実行前に拒否します。`--repeat 3`は各ケースを単独で3回実行します。これらの合計を並列suiteの所要時間とは扱いません。
+
+```sh
+python3 tools/mon_rust_suites.py /absolute/path/to/mon_desktop_lib-executable --suite quick --test storage::backup::operations::tests::restore_operation_preview_fully_reconstructs_read_only_reports_capacity_terms_and_cleans_owned_copies_on_drop --repeat 3 --profile-json /private/tmp/mon-backup-profile.json
+```
+
+Rustの`incremental=false`や`rlib`のみの生成は、既定設定へ自動適用しません。同じ入力・runner・依存キャッシュ条件でコンパイルと実行の合計を3回比較し、10%以上の短縮と両OSの配布物検証が揃った候補だけ採用します。比較では無変更のworkspace出力を再利用した結果を、新しいcheckoutの初期コンパイルと混同しません。
 
 ## ブラウザーとASR
 

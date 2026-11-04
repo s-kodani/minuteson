@@ -1,6 +1,7 @@
 import io
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -13,6 +14,43 @@ import mon_windows_workers as workers
 
 
 class WorkerExtractionTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'directory links require Windows privileges')
+    def test_sync_rejects_linked_destination_parent_before_copying(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / 'source'; source.mkdir()
+            (source / 'worker.hpp').write_bytes(b'input')
+            external = root / 'other'; external.mkdir()
+            linked = root / 'linked'; linked.symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'links'):
+                workers.sync_worker_sources(source, linked / 'mon')
+            self.assertEqual(list(external.iterdir()), [])
+
+    def test_identical_checkout_preserves_compiler_input_mtime_and_syncs_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / 'checkout'; source.mkdir()
+            destination = root / 'cached/mon'; destination.mkdir(parents=True)
+            (source / 'worker.hpp').write_bytes(b'unchanged header')
+            (source / 'new.cpp').write_bytes(b'added source')
+            cached = destination / 'worker.hpp'; cached.write_bytes(b'unchanged header')
+            os.utime(cached, ns=(1_000_000_000, 1_000_000_000))
+            (destination / 'obsolete.cpp').write_bytes(b'removed source')
+            (destination / 'new.cpp').write_bytes(b'old source')
+            (destination / 'json.hpp').write_bytes(b'upstream JSON header')
+            (destination / 'c-api.h').write_bytes(b'upstream C API')
+            (destination / '.patched').write_bytes(b'patch marker')
+            workers.sync_worker_sources(source, destination)
+            self.assertEqual(cached.stat().st_mtime_ns, 1_000_000_000)
+            self.assertEqual((destination / 'new.cpp').read_bytes(), b'added source')
+            self.assertFalse((destination / 'obsolete.cpp').exists())
+            self.assertEqual((destination / 'json.hpp').read_bytes(), b'upstream JSON header')
+            self.assertEqual((destination / 'c-api.h').read_bytes(), b'upstream C API')
+            self.assertEqual((destination / '.patched').read_bytes(), b'patch marker')
+            (source / 'worker.hpp').write_bytes(b'changed header')
+            workers.sync_worker_sources(source, destination)
+            self.assertEqual(cached.read_bytes(), b'changed header')
+
     def test_generated_nlohmann_notice_matches_the_offline_license_policy_bytes(self):
         policy = json.loads((ROOT / 'app/model-catalog/model-license-policy.json').read_text(encoding='utf8'))
         record = next(n for n in policy['notices'] if n['name'] == 'nlohmann-MIT.txt')

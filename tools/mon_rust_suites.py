@@ -11,6 +11,7 @@ from pathlib import Path
 import platform
 import re
 import subprocess
+import sys
 import threading
 import time
 
@@ -170,40 +171,71 @@ def write_report(path, values):
                                 "cpuCount": os.cpu_count(), **values}, indent=2) + "\n", encoding="utf-8")
 
 
-def main():
+def profile_tests(executable, *, cwd, suite, report_path, tests=(), repeat=1, env=None):
+    """Measure runnable exact tests, including process startup, without reclassification."""
+    if not 1 <= repeat <= 20:
+        raise ValueError("diagnostic repeat count must be between 1 and 20")
+    options = {"cwd": cwd}
+    if env is not None:
+        options["env"] = env
+    output = subprocess.run([str(executable), "--list"],
+                            capture_output=True, text=True, check=True, **options)
+    names = select_tests(inventory(output.stdout), suite)
+    # --list includes ignored children. Obtain only runnable tests explicitly.
+    ignored_output = subprocess.run([str(executable), "--list", "--ignored"],
+                                    capture_output=True, text=True, check=True, **options)
+    ignored = set(inventory(ignored_output.stdout))
+    runnable = [name for name in names if name not in ignored]
+    selected = list(dict.fromkeys(tests)) if tests else runnable
+    if not selected:
+        raise ValueError("no runnable tests in the requested diagnostic suite")
+    for name in selected:
+        if name not in runnable:
+            raise ValueError(f"diagnostic test is unknown, ignored or outside the {suite} suite: {name}")
+    results = []
+    code = 0
+    try:
+        for iteration in range(1, repeat + 1):
+            for name in selected:
+                started = time.monotonic()
+                result = subprocess.run([str(executable), name, "--exact", "--test-threads=1"], **options)
+                elapsed = time.monotonic() - started
+                results.append({"name": name, "iteration": iteration,
+                                "seconds": elapsed, "exitCode": result.returncode})
+                print(f"[rust-tests] diagnostic {iteration}/{repeat}: {elapsed:.3f}s {name}", flush=True)
+                if result.returncode:
+                    code = result.returncode
+                    break
+            if code:
+                break
+    except (OSError, subprocess.SubprocessError):
+        code = 1
+        raise
+    finally:
+        write_report(report_path, {"suite": suite, "diagnosticOnly": True,
+                                  "selected": selected, "repeat": repeat,
+                                  "tests": sorted(results, key=lambda item: -item["seconds"]),
+                                  "exitCode": code})
+    return code
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Profile tests individually; diagnostic timings are not suite wall time")
     parser.add_argument("executable", type=Path)
     parser.add_argument("--suite", choices=SUITES, default="full")
     parser.add_argument("--cwd", type=Path, default=Path(__file__).resolve().parents[1] / "app/src-tauri")
     parser.add_argument("--profile-json", type=Path, required=True)
-    args = parser.parse_args()
-    executable = args.executable.resolve(strict=True)
-    output = subprocess.run([str(executable), "--list"],
-                            cwd=args.cwd, capture_output=True, text=True, check=True)
-    names = select_tests(inventory(output.stdout), args.suite)
-    # --list includes ignored children. Obtain only runnable tests explicitly.
-    runnable = subprocess.run([str(executable), "--list", "--ignored"], cwd=args.cwd,
-                              capture_output=True, text=True, check=True)
-    ignored = set(inventory(runnable.stdout))
-    results = []
-    code = 0
+    parser.add_argument("--test", action="append", default=[], metavar="EXACT_NAME",
+                        help="profile only this exact runnable test in the selected suite; repeat for multiple tests")
+    parser.add_argument("--repeat", type=int, choices=range(1, 21), default=1,
+                        help="number of diagnostic iterations; default 1")
+    args = parser.parse_args(argv)
     try:
-        for name in names:
-            if name in ignored:
-                continue
-            started = time.monotonic()
-            result = subprocess.run([str(executable), name, "--exact", "--test-threads=1"], cwd=args.cwd)
-            elapsed = time.monotonic() - started
-            results.append({"name": name, "seconds": elapsed, "exitCode": result.returncode})
-            print(f"[rust-tests] {elapsed:.3f}s {name}", flush=True)
-            if result.returncode:
-                code = result.returncode
-                break
-    finally:
-        write_report(args.profile_json, {"suite": args.suite, "diagnosticOnly": True,
-                                        "tests": sorted(results, key=lambda item: -item["seconds"]),
-                                        "exitCode": code})
-    return code
+        return profile_tests(args.executable.resolve(strict=True), cwd=args.cwd, suite=args.suite,
+                             report_path=args.profile_json, tests=args.test, repeat=args.repeat)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f"Rust diagnostic failed: {error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

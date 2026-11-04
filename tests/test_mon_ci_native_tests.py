@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -40,6 +41,10 @@ class NativeCiTests(unittest.TestCase):
             system="TestOS", release="test-release", machine="test-machine"))
         host.start()
         self.addCleanup(host.stop)
+        self.original_diagnostic_context = native.diagnostic_context
+        context = patch.object(native, "diagnostic_context", return_value={"rustc": "fixture rustc"})
+        context.start()
+        self.addCleanup(context.stop)
 
     def artifact(self, **patches):
         return {"reason": "compiler-artifact", "target": {"name": native.TEST_TARGET},
@@ -58,7 +63,7 @@ class NativeCiTests(unittest.TestCase):
             self.assertEqual(native.run_native_tests(self.root, swift_fixture=True), 0)
         cargo.assert_called_once_with(
             ["cargo", "test", "--manifest-path", str(self.manifest), "--locked", "--lib",
-             "--no-run", "--message-format=json"], cwd=self.package, stdout=subprocess.PIPE,
+             "--timings", "--no-run", "--message-format=json"], cwd=self.package, stdout=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace")
         self.assertEqual(run.call_args_list, [
             call([str(self.executable)], cwd=self.package, env=self.environment, check=False),
@@ -226,7 +231,7 @@ class NativeCiTests(unittest.TestCase):
         self.assertNotIn("--lib", cargo.call_args.args[0])
         self.assertEqual([item.args[0] for item in run.call_args_list], [
             [str(self.executable)], [str(binary)],
-            ["cargo", "test", "--manifest-path", str(self.manifest), "--locked", "--doc"],
+            ["cargo", "test", "--manifest-path", str(self.manifest), "--locked", "--timings", "--doc"],
         ])
 
     def test_quick_uses_common_classifier_and_keeps_binary_and_doc_targets(self):
@@ -335,6 +340,158 @@ class NativeCiTests(unittest.TestCase):
                 return_value=subprocess.CompletedProcess([], 0)) as run:
             self.assertEqual(native.run_native_tests(self.root, swift_fixture=True, threads=4), 0)
         self.assertTrue(all(item.args[0][-1] == "--test-threads=4" for item in run.call_args_list))
+
+    def test_phase_timings_separate_doctest_cargo_work_without_changing_execution_total(self):
+        binary, message = self.extra_artifact()
+        report = self.root / "phases.json"
+        clock = [0]
+        def wait():
+            clock[0] += 2
+            return 0
+        def environment(*_):
+            clock[0] += 1
+            return self.environment
+        def run(command, **_):
+            clock[0] += 11 if command[0] == "cargo" else 7 if native.SWIFT_FIXTURE in command else 5 if command[0] == str(binary) else 3
+            return subprocess.CompletedProcess(command, 0)
+        with self.cargo([self.artifact(), message]) as build, \
+                patch.object(native.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(native, "runtime_environment", side_effect=environment), \
+                patch.object(native.subprocess, "run", side_effect=run):
+            build.return_value.wait.side_effect = wait
+            self.assertEqual(native.run_native_tests(self.root, all_targets=True, swift_fixture=True,
+                                                    timings_json=report), 0)
+        metrics = json.loads(report.read_text())
+        self.assertEqual(metrics["phaseSeconds"], {"diagnosticContext": 0, "runtimeEnvironment": 2, "libraryTests": 3,
+                         "otherTargets": 5, "swiftFixture": 7, "docTests": 11})
+        self.assertEqual(metrics["buildSeconds"], 2)
+        self.assertEqual(metrics["executionSeconds"], 28)
+        self.assertEqual(metrics["totalSeconds"], 30)
+        self.assertEqual(metrics["context"]["rustc"], "fixture rustc")
+
+    def test_failed_phase_is_recorded_and_later_phases_remain_zero(self):
+        report = self.root / "failure-phases.json"
+        with self.cargo([self.artifact()]), patch.object(native.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 17)):
+            self.assertEqual(native.run_native_tests(self.root, swift_fixture=True, timings_json=report), 17)
+        phases = json.loads(report.read_text())["phaseSeconds"]
+        self.assertGreaterEqual(phases["libraryTests"], 0)
+        self.assertEqual(phases["otherTargets"], 0)
+        self.assertEqual(phases["swiftFixture"], 0)
+        self.assertEqual(phases["docTests"], 0)
+
+    def test_diagnostics_allowlist_build_context_and_hash_tauri_configuration(self):
+        environment = {"RUNNER_OS": "Windows", "ImageVersion": "fixture-image", "RUSTFLAGS": "-C opt-level=1",
+                       "MON_CI_RUST_CACHE_HIT": "true", "TAURI_CONFIG": '{"bundle":{"active":false}}',
+                       "GITHUB_TOKEN": "must-not-be-recorded", "PRIVATE_OTHER": "also-secret"}
+        with patch.dict(native.os.environ, environment, clear=True), patch.object(
+                native.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "rustc fixture\nhost: target\n")):
+            context = self.original_diagnostic_context(self.manifest)
+        self.assertEqual(context["rustc"], "rustc fixture\nhost: target")
+        self.assertEqual(context["environment"], {k: environment[k] for k in
+                         ("RUNNER_OS", "ImageVersion", "RUSTFLAGS", "MON_CI_RUST_CACHE_HIT")})
+        serialized = json.dumps(context)
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn(environment["TAURI_CONFIG"], serialized)
+        self.assertEqual(len(context["tauriConfigSha256"]), 64)
+
+    def test_optional_toolchain_diagnostic_failure_does_not_prevent_tests(self):
+        with patch.object(native.subprocess, "run", side_effect=OSError("rustc unavailable")):
+            self.assertIsNone(self.original_diagnostic_context(self.manifest)["rustc"])
+
+    def test_diagnostic_source_sha_uses_actual_checkout_instead_of_workflow_sha(self):
+        actual = "a" * 40
+        def query(command, **options):
+            if command[0] == "git":
+                self.assertEqual(command, ["git", "-C", str(self.root), "rev-parse", "HEAD"])
+                self.assertEqual(options["timeout"], 10)
+                self.assertFalse(options["check"])
+                return subprocess.CompletedProcess(command, 0, actual + "\n")
+            return subprocess.CompletedProcess(command, 0, "rustc fixture")
+        with patch.dict(native.os.environ, {"GITHUB_SHA": "b" * 40}), \
+                patch.object(native.subprocess, "run", side_effect=query):
+            context = self.original_diagnostic_context(self.manifest)
+        self.assertEqual(context["sourceSha"], actual)
+        self.assertNotIn("GITHUB_SHA", context["environment"])
+
+    def test_missing_or_invalid_git_source_sha_is_nonfatal_and_recorded_as_null(self):
+        for git_result in (OSError("git unavailable"), subprocess.TimeoutExpired("git", 10),
+                           subprocess.CompletedProcess([], 128, ""),
+                           subprocess.CompletedProcess([], 0, "unrelated diagnostic text")):
+            def query(command, **_):
+                if command[0] != "git":
+                    return subprocess.CompletedProcess(command, 0, "rustc fixture")
+                if isinstance(git_result, Exception):
+                    raise git_result
+                return git_result
+            with self.subTest(git_result=git_result), patch.object(native.subprocess, "run", side_effect=query):
+                context = self.original_diagnostic_context(self.manifest)
+            self.assertIsNone(context["sourceSha"])
+            self.assertEqual(context["rustc"], "rustc fixture")
+
+    def test_cargo_timing_collection_excludes_stale_and_unrelated_html(self):
+        source = self.executable.parent.parent.parent / "cargo-timings"
+        source.mkdir()
+        fresh = source / "cargo-timing.html"
+        stale = source / "cargo-timing-old.html"
+        unrelated = source / "other.html"
+        for path in (fresh, stale, unrelated):
+            path.write_text(path.name)
+        os.utime(fresh, ns=(200, 200))
+        os.utime(stale, ns=(50, 50))
+        destination = self.root / "output/rust-tests/cargo-timings"
+        reports = native.collect_cargo_timings(self.manifest, [self.executable], destination, "build", 100)
+        self.assertEqual(len(reports), 1)
+        self.assertEqual((destination.parent / reports[0]).read_text(), fresh.name)
+        self.assertIn("cargo-timings/build/", reports[0])
+        self.assertFalse(any(path.name == stale.name for path in destination.rglob("*.html")))
+
+    def test_cargo_timing_collection_honors_relative_target_dir_on_failed_build(self):
+        source = self.package / "custom-target/cargo-timings"
+        source.mkdir(parents=True)
+        report = self.root / "output/rust-tests/failure.json"
+        def wait():
+            (source / "cargo-timing.html").write_text("failed compilation timing")
+            return 101
+        with patch.dict(native.os.environ, {"CARGO_TARGET_DIR": "custom-target"}), self.cargo([]) as build:
+            build.return_value.wait.side_effect = wait
+            self.assertEqual(native.run_native_tests(self.root, timings_json=report), 101)
+        metrics = json.loads(report.read_text())
+        self.assertEqual(len(metrics["cargoTimingReports"]), 1)
+        self.assertEqual((report.parent / metrics["cargoTimingReports"][0]).read_text(),
+                         "failed compilation timing")
+
+    def test_build_and_doc_timing_html_are_snapshotted_before_cargo_overwrites_latest(self):
+        report = self.root / "output/rust-tests/phases.json"
+        source = self.executable.parent.parent.parent / "cargo-timings"
+        source.mkdir()
+        latest = source / "cargo-timing.html"
+        def write(text, modified):
+            latest.write_text(text)
+            os.utime(latest, ns=(modified, modified))
+        def wait():
+            write("test build", 150)
+            return 0
+        def run(command, **_):
+            if command[0] == "cargo":
+                write("doc compilation", 250)
+            return subprocess.CompletedProcess(command, 0)
+        with self.cargo([self.artifact()]) as build, patch.object(native.time, "time_ns", side_effect=[100, 200]), \
+                patch.object(native.subprocess, "run", side_effect=run):
+            build.return_value.wait.side_effect = wait
+            self.assertEqual(native.run_native_tests(self.root, all_targets=True, timings_json=report), 0)
+        reports = json.loads(report.read_text())["cargoTimingReports"]
+        self.assertEqual(len(reports), 2)
+        self.assertEqual([(report.parent / path).read_text() for path in reports],
+                         ["test build", "doc compilation"])
+
+    def test_cargo_timing_copy_error_cannot_mask_test_failure_or_json_report(self):
+        report = self.root / "failure.json"
+        with self.cargo([self.artifact()]), patch.object(native, "collect_cargo_timings", side_effect=OSError("full disk")), \
+                patch.object(native.subprocess, "run", return_value=subprocess.CompletedProcess([], 17)), \
+                redirect_stderr(io.StringIO()):
+            self.assertEqual(native.run_native_tests(self.root, timings_json=report), 17)
+        self.assertEqual(json.loads(report.read_text())["exitCode"], 17)
 
 
 if __name__ == "__main__":

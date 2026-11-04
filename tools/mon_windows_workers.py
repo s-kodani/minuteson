@@ -19,6 +19,38 @@ OPTIONS=['-DBUILD_SHARED_LIBS=OFF','-DGGML_NATIVE=OFF','-DGGML_OPENMP=OFF','-DGG
     '-DGGML_AVX=OFF','-DGGML_AVX2=OFF','-DGGML_FMA=OFF','-DGGML_F16C=OFF',
     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DCMAKE_CXX_FLAGS=/utf-8 /EHsc']
 
+def sync_worker_sources(source, destination):
+    """Keep cached compiler inputs' mtimes when a checkout has identical bytes."""
+    if source.resolve() != source.absolute() or destination.resolve() != destination.absolute():
+        raise ValueError('worker source directories must not contain links')
+    destination.mkdir(parents=True, exist_ok=True)
+    preserved = {'json.hpp', 'c-api.h', '.patched'}
+    wanted = set()
+    for path in source.rglob('*'):
+        if path.is_symlink():
+            raise ValueError('worker source must not be a link')
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source)
+        wanted.add(relative.as_posix())
+        target = destination / relative
+        if target.is_symlink():
+            raise ValueError('cached worker source must not be a link')
+        if target.is_file() and target.read_bytes() == path.read_bytes():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+    # The destination contains only copied worker inputs and these three
+    # generated upstream headers/patch marker. Removed inputs must not linger.
+    for path in sorted(destination.rglob('*'), reverse=True):
+        relative = path.relative_to(destination).as_posix()
+        if path.is_symlink():
+            raise ValueError('cached worker source must not be a link')
+        if path.is_file() and relative not in wanted | preserved:
+            path.unlink()
+        elif path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
 def write_nlohmann_notice(package, header):
     license_text=(ROOT/'third-party/notices/spdx-MIT-template.txt').read_text(encoding='utf8').replace('<year> <copyright holders>','2013 - 2025 Niels Lohmann')
     # This is a cross-platform, SHA-bound disclosure, including its LF bytes.
@@ -59,17 +91,19 @@ def prepare(vulkan=False, jobs=4, package_root=None):
     for path in sorted((ROOT/'probes/inference-worker').iterdir()):
         if path.is_file():digest.update(path.name.encode()+path.read_bytes())
     stamp=digest.hexdigest()[:16]
-    source_stamp=hashlib.sha256(Path(shared.__file__).read_bytes()).hexdigest()[:12]
+    source_stamp=hashlib.sha256(Path(shared.__file__).read_bytes()+definition['sourceSha256'].encode()
+        +shared.LLAMA_SHA.encode()+shared.HEADER_SHA.encode()
+        +hashlib.sha256((ROOT/'.cache/windows-capture-headers/json.hpp').read_bytes()).digest()).hexdigest()[:12]
     roots={}
     for engine,archive in [('whisper',whisper),('llama',llama)]:
         source=extract(archive,CACHE/f'workers-source-{source_stamp}'/engine)
         if not (source/'mon/.patched').exists():
-            shutil.copytree(ROOT/'probes/inference-worker',source/'mon',dirs_exist_ok=True)
+            sync_worker_sources(ROOT/'probes/inference-worker',source/'mon')
             shutil.copyfile(ROOT/'.cache/windows-capture-headers/json.hpp',source/'mon/json.hpp')
             shutil.copyfile(header,source/'mon/c-api.h')
             (shared.patch_whisper if engine=='whisper' else shared.patch_llama)(source)
             (source/'mon/.patched').write_text(source_stamp,encoding='utf8')
-        shutil.copytree(ROOT/'probes/inference-worker',source/'mon',dirs_exist_ok=True)
+        sync_worker_sources(ROOT/'probes/inference-worker',source/'mon')
         cmake=source/'CMakeLists.txt'
         marker='# MON Windows UTF-8 and long native paths'
         text=cmake.read_text(encoding='utf8')
