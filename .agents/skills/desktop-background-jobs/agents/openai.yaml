@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップの長時間処理"
+  short_description: "待機・進捗・取消・排他・再開・プロセス終了を一貫して設計する"

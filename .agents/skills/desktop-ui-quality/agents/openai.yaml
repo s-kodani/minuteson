@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップUIの品質確認"
+  short_description: "画面密度・文言・通知・入力・ウィンドウ操作の品質を確認する"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップのOS横断変更"
+  short_description: "共通処理・IPC・OS固有部分への影響と環境別の検証を整理する"

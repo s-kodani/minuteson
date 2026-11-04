@@ -1,0 +1,3 @@
+interface:
+  display_name: "ローカルAIの組み込みと評価"
+  short_description: "モデル資材・実行契約・メモリ・内容品質を分けて実装と評価を行う"
