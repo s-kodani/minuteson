@@ -11,7 +11,7 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_windows_runtime.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_model_catalog.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src-tauri/src/model_license.rs"
-  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/app/model-catalog/model-license-policy.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/704f591687b824a87897213fce899d6172d65b84/app/model-catalog/model-license-policy.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src/model-inspection.tsx"
   - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/model-license.tsx"
   - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src-tauri/src/startup_notices.rs"
