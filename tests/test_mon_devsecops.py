@@ -4,6 +4,7 @@ All provider mutations are in-memory fakes. No signing, publication or Store
 submission is performed by this suite.
 """
 import base64
+from contextlib import chdir
 from copy import deepcopy
 from datetime import date
 import hashlib
@@ -379,6 +380,8 @@ class DesktopWorkflowTests(unittest.TestCase):
             "output/windows-store-work/*/source.json",
             "output/windows-store-work/*/build.json",
             "output/windows-qa-work/*-build.json",
+            "output/rust-tests/benchmark-${{ runner.os }}.json",
+            "output/rust-tests/cargo-timings/**/*.html",
         }
         for job, definition in self.workflow["jobs"].items():
             for step in definition.get("steps", []):
@@ -419,7 +422,7 @@ class DesktopWorkflowTests(unittest.TestCase):
 
     def test_gate_rejects_required_failure_cancellation_or_skip_but_allows_docs_only(self):
         gate = self.workflow["jobs"]["gate"]
-        self.assertEqual(gate["if"], "always()")
+        self.assertEqual(gate["if"], "always() && (inputs.benchmark_mode == '' || inputs.benchmark_mode == 'none')")
         self.assertEqual(set(gate["needs"]), {"changes", "python", "browser", "native"})
         script = "\n".join(gate["steps"][0]["run"].splitlines()[1:-1])
         successful = {"MON_CHANGES": "success", "MON_PYTHON": "success", "MON_BROWSER": "success",
@@ -447,6 +450,83 @@ class DesktopWorkflowTests(unittest.TestCase):
                 scope.main()
                 diff.assert_not_called()
             self.assertEqual(output.read_text(), "native=true\n")
+
+    def test_manual_benchmarks_are_separate_from_normal_validation(self):
+        dispatch = self.events['workflow_dispatch']['inputs']
+        self.assertEqual(dispatch['benchmark_mode']['default'], 'none')
+        self.assertEqual(dispatch['benchmark_mode']['options'], ['none', 'cache', 'rust'])
+        self.assertIn('effective Rust settings audit', dispatch['benchmark_mode']['description'])
+        benchmark = self.workflow['jobs']['benchmark']
+        self.assertEqual(benchmark['strategy']['matrix']['os'], ['macos-15', 'windows-2022'])
+        self.assertFalse(benchmark['strategy']['fail-fast'])
+        self.assertEqual(benchmark['timeout-minutes'], 180)
+        for mode in ('', 'none', 'cache', 'rust'):
+            context = {'inputs.benchmark_mode': mode, 'github.event_name': 'workflow_dispatch'}
+            ordinary = mode in ('', 'none')
+            for name in ('changes', 'python', 'gate'):
+                with self.subTest(mode=mode, job=name):
+                    self.assertEqual(bool(self.expression(self.workflow['jobs'][name]['if'], context)), ordinary)
+            self.assertEqual(bool(self.expression(benchmark['if'], context)), not ordinary)
+        self.assertFalse(self.expression(benchmark['if'], {'inputs.benchmark_mode': 'cache', 'github.event_name': 'pull_request'}))
+        for name in ('native', 'browser'):
+            self.assertEqual(self.workflow['jobs'][name]['needs'], 'changes')
+
+    def test_benchmark_preserves_harness_before_checking_out_pinned_source(self):
+        steps = self.workflow['jobs']['benchmark']['steps']
+        checkouts = [(index, step) for index, step in enumerate(steps) if step.get('uses', '').startswith('actions/checkout@')]
+        self.assertEqual(len(checkouts), 2)
+        self.assertEqual(checkouts[0][1]['with']['ref'], '${{ github.sha }}')
+        self.assertEqual(checkouts[1][1]['with']['ref'], '${{ inputs.benchmark_source_sha }}')
+        self.assertTrue(all(step['with']['persist-credentials'] is False for _, step in checkouts))
+        preserve = next(index for index, step in enumerate(steps) if step.get('name') == 'Validate inputs and preserve standalone harness')
+        self.assertLess(checkouts[0][0], preserve)
+        self.assertLess(preserve, checkouts[1][0])
+        measurement = next(step for step in steps if step.get('name') == 'Measure native caches or audit effective Rust settings at the pinned source')
+        self.assertIn('python "$MON_CI_BENCHMARK_TOOL"', measurement['run'])
+        for argument in ('--root "$GITHUB_WORKSPACE"', '--source-sha "$MON_BENCHMARK_SOURCE_SHA"', '--mode "$MON_BENCHMARK_MODE"'):
+            self.assertIn(argument, measurement['run'])
+
+    def test_benchmark_admission_requires_full_sha_and_copies_tool_outside_checkout(self):
+        step = next(s for s in self.workflow['jobs']['benchmark']['steps'] if s.get('name') == 'Validate inputs and preserve standalone harness')
+        script = '\n'.join(step['run'].splitlines()[1:-1])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            root, runner = directory / 'workspace', directory / 'runner'
+            (root / 'tools').mkdir(parents=True)
+            runner.mkdir()
+            source = root / 'tools/mon_ci_benchmark.py'
+            source.write_bytes(b'# standalone harness fixture; never executed\n')
+            environment_file = directory / 'github-env'
+            with chdir(root), patch.dict(os.environ, {'RUNNER_TEMP': str(runner), 'GITHUB_ENV': str(environment_file)}):
+                for mode, sha in (('cache', ''), ('rust', '1234567'), ('cache', 'g' * 40), ('invalid', SHA)):
+                    with self.subTest(mode=mode, sha=sha), patch.dict(os.environ, {'MON_BENCHMARK_MODE': mode, 'MON_BENCHMARK_SOURCE_SHA': sha}):
+                        with self.assertRaises(SystemExit):
+                            exec(compile(script, 'benchmark-admission', 'exec'), {})
+                    self.assertEqual(list(runner.iterdir()), [])
+                with patch.dict(os.environ, {'MON_BENCHMARK_MODE': 'cache', 'MON_BENCHMARK_SOURCE_SHA': SHA}):
+                    exec(compile(script, 'benchmark-admission', 'exec'), {})
+            copied = runner / 'mon_ci_benchmark.py'
+            self.assertEqual(copied.read_bytes(), source.read_bytes())
+            self.assertEqual(environment_file.read_text(), 'MON_CI_BENCHMARK_TOOL=' + str(copied) + '\n')
+
+    def test_benchmark_never_saves_native_or_dependency_caches_and_uploads_only_reports(self):
+        benchmark = self.workflow['jobs']['benchmark']
+        self.assertEqual(benchmark['env']['MON_SAVE_CI_CACHE'], 'false')
+        for step in benchmark['steps']:
+            action = step.get('uses', '')
+            self.assertFalse(action.startswith('actions/cache/'))
+            if action.startswith('Swatinem/rust-cache@'):
+                self.assertEqual(step['with']['save-if'], 'false')
+            if action.startswith(('actions/setup-node@', 'actions/setup-python@')):
+                self.assertNotIn('cache', step['with'])
+            if action.startswith('actions/upload-artifact@'):
+                self.assertEqual(step['if'], 'always()')
+                self.assertEqual(set(step['with']['path'].splitlines()), {
+                    'output/rust-tests/benchmark-${{ runner.os }}.json',
+                    'output/rust-tests/cargo-timings/**/*.html',
+                })
+        frontend = next(step for step in benchmark['steps'] if step.get('name') == 'Install pinned frontend dependencies')
+        self.assertEqual(frontend['if'], "inputs.benchmark_mode == 'cache'")
 
 
 class SecurityPolicyTests(unittest.TestCase):

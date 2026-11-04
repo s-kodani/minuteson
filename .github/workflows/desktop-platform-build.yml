@@ -8,6 +8,15 @@ on:
         type: choice
         options: [full, quick]
         default: full
+      benchmark_mode:
+        description: 'Manual cache measurements or effective Rust settings audit; ordinary validation uses none'
+        type: choice
+        options: [none, cache, rust]
+        default: none
+      benchmark_source_sha:
+        description: 'Full source commit SHA to measure or audit when benchmark_mode is cache or rust'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       source_ref:
@@ -33,6 +42,7 @@ concurrency:
 
 jobs:
   changes:
+    if: inputs.benchmark_mode == '' || inputs.benchmark_mode == 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -60,6 +70,7 @@ jobs:
           MON_FULL: ${{ inputs.full || github.event_name == 'workflow_dispatch' }}
         run: python3 tools/mon_ci_scope.py
   python:
+    if: inputs.benchmark_mode == '' || inputs.benchmark_mode == 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -450,9 +461,107 @@ jobs:
           path: output/rust-tests/
           if-no-files-found: warn
           retention-days: 7
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' && inputs.benchmark_mode != '' && inputs.benchmark_mode != 'none'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      PYTHONUTF8: '1'
+      MON_SAVE_CI_CACHE: 'false'
+      MON_BENCHMARK_MODE: ${{ inputs.benchmark_mode }}
+      MON_BENCHMARK_SOURCE_SHA: ${{ inputs.benchmark_source_sha }}
+    steps:
+      - name: Check out measurement harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate inputs and preserve standalone harness
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re, shutil
+          from pathlib import Path
+          if os.environ['MON_BENCHMARK_MODE'] not in ('cache', 'rust'):
+              raise SystemExit('Unknown benchmark mode')
+          if not re.fullmatch(r'[0-9a-f]{40}', os.environ['MON_BENCHMARK_SOURCE_SHA']):
+              raise SystemExit('A full lowercase 40-character source SHA is required for benchmarks')
+          tool = Path(os.environ['RUNNER_TEMP']).resolve() / 'mon_ci_benchmark.py'
+          shutil.copyfile('tools/mon_ci_benchmark.py', tool)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf8') as output:
+              output.write('MON_CI_BENCHMARK_TOOL=' + str(tool) + '\n')
+          PY
+      - name: Check out pinned measurement source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.benchmark_source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+      - name: Restore existing Rust dependencies without saving
+        id: benchmark_rust_cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: . -> app/src-tauri/target
+          key: ${{ inputs.benchmark_mode == 'cache' && 'full' || '' }}
+          save-if: 'false'
+      - name: Restore legacy Rust dependencies on a full-cache miss
+        if: inputs.benchmark_mode == 'cache' && steps.benchmark_rust_cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: . -> app/src-tauri/target
+          save-if: 'false'
+      - name: Select Swift 6.2 for native cache measurements
+        if: inputs.benchmark_mode == 'cache' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected=''
+          for developer in "$(xcode-select -p)" /Applications/Xcode*.app/Contents/Developer; do
+            if DEVELOPER_DIR="$developer" /usr/bin/swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else 1)'; then
+              selected="$developer"
+              echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          test -n "$selected"
+          DEVELOPER_DIR="$selected" /usr/bin/swift --version
+      - name: Install pinned frontend dependencies
+        if: inputs.benchmark_mode == 'cache'
+        run: npm ci --prefix app
+      - name: Fetch locked notice metadata for Windows resource preparation
+        if: inputs.benchmark_mode == 'cache' && runner.os == 'Windows'
+        run: cargo fetch --manifest-path app/src-tauri/Cargo.toml --locked
+      - name: Measure native caches or audit effective Rust settings at the pinned source
+        shell: bash
+        env:
+          MON_CI_RUST_CACHE_HIT: ${{ steps.benchmark_rust_cache.outputs.cache-hit }}
+        run: |
+          python "$MON_CI_BENCHMARK_TOOL" --root "$GITHUB_WORKSPACE" --source-sha "$MON_BENCHMARK_SOURCE_SHA" --mode "$MON_BENCHMARK_MODE" --report output/rust-tests/benchmark-${{ runner.os }}.json
+      - name: Upload benchmark JSON and Cargo timing HTML
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-benchmark-${{ inputs.benchmark_mode }}-${{ runner.os }}
+          path: |
+            output/rust-tests/benchmark-${{ runner.os }}.json
+            output/rust-tests/cargo-timings/**/*.html
+          if-no-files-found: warn
+          retention-days: 7
   gate:
     name: CI gate
-    if: always()
+    if: always() && (inputs.benchmark_mode == '' || inputs.benchmark_mode == 'none')
     needs: [changes, python, browser, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
