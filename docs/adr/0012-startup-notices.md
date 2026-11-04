@@ -5,10 +5,10 @@ description: "共通の案内一覧と既読・延期を管理し、更新は既
 tags: ["startup", "ui", "models", "notifications"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src-tauri/src/startup_notices.rs"
+  - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src-tauri/src/startup_notices.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src-tauri/src/storage/startup_notices.rs"
-  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/startup-notices.tsx"
-  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/model-inspection.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src/startup-notices.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src/model-inspection.tsx"
 ---
 
 # ADR 0012 起動時の案内と明示操作の分離
@@ -25,7 +25,7 @@ sources:
 
 更新案内の既読を更新完了として保存しません。機能側が同じモーダルへ条件確認を埋め込み、実行直前に現在の選択・対象パッケージ・公式レシピ・開示ハッシュを照合します。モデル確認欄は毎回未選択です。実行は既存のモデル準備と適用処理を使い、成功後の実際の状態から案内を解消します。閲覧や延期だけで通信・配置・互換性実行を始めません。
 
-最初の適用対象は、使用中の公式管理コピーの重みが一致する旧議事録ランタイムです。重みの再利用と旧コピーの保持を案内し、利用者が「今すぐ更新」を確定してから処理します。開始済みジョブの実行条件は固定したままです。
+最初の適用対象は、使用中の公式管理コピーのモデルデータが一致する旧議事録ランタイムです。モデルデータの再利用と旧コピーの保持を案内し、利用者が「今すぐ更新」を確定してから処理します。開始済みジョブの実行条件は固定したままです。
 
 ## 理由
 
