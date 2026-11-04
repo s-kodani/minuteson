@@ -10,7 +10,8 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_rust_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_ci_native_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/rust-test-suites.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/15cf879bd48bf9e77eba3ee17a6aa8633a06da6e/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_llama_runtime_check.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/evaluation/README.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_docs.py"
@@ -38,6 +39,21 @@ cargo fmt --all --check
 ```
 
 契約やモデルカタログを変更した場合は対応する生成コマンドを実行し、生成済みファイルの差分もレビューします。`--check`は生成物を更新しません。OS別の構築条件と検査範囲は[CI定義](../../.github/workflows/desktop-platform-build.yml)にあります。
+
+## 議事録ランタイムの実資材検証
+
+Desktopの`full`では、Windows x64とmacOSで固定カタログのQwen 2.5 1.5B Q4、Qwen 3 4B Q4、Qwen 3.5 4B Q4を実際に読み込みます。合成JSON入力を使い、CLIの直接実行と常駐workerの連続3要求について、出力内容・プロトコル完了・重みとworkerのSHAを確認します。3モデルは旧ランタイムを使っていた系列の代表であり、全量子化・全容量や実会議の議事録品質を評価する検査ではありません。
+
+```sh
+# OS別のランタイム・workerを準備した後で実行します。
+python3 tools/mon_llama_runtime_check.py --report output/rust-tests/llama-runtime-local.json
+# macOSのMetalを実際に利用できる端末での追加検証
+python3 tools/mon_llama_runtime_check.py --metal --report output/rust-tests/llama-runtime-metal.json
+```
+
+macOSの準備には`python3 tools/mon_inference_runtime.py`、Windowsの準備には[Windowsビルド手順](build-windows.md)を使います。通常の検査はCPUを使い、Metalの追加検査はGPUへのレイヤー配置をログでも要求します。実マイク・利用中DB・会議音声は使用しません。固定資材の取得には数GiBのネットワーク・空き容量が必要です。`--models-dir`で同じIDの`.gguf`を渡す場合も容量とSHAを照合します。
+
+専用の`.cache/llama-runtime-check`へ取得する重みはActionsのキャッシュと成果物へアップロードしません。full CIはJSONの実行記録・ビルド証跡・時間計測と必要な診断だけを残します。QAインストーラー・MSIX・モデル・実行ファイルの生成と、配布・アップロードは別に扱います。
 
 ## 通常・重い検証・全件の使い分け
 

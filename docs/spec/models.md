@@ -5,15 +5,16 @@ description: "全体モデル設定、取得・切替・削除とASRバックエ
 tags: ["models", "asr", "runtime"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/model-catalog/model-definitions.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/app/model-catalog/model-definitions.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/transcription/asr.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/development/asr-adapters.md"
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_windows_runtime.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_windows_runtime.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_model_catalog.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src-tauri/src/model_license.rs"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/model-catalog/model-license-policy.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-inspection.tsx"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-license.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/app/model-catalog/model-license-policy.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/model-inspection.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/model-license.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src-tauri/src/startup_notices.rs"
 ---
 
 # AIモデルの導入と実行
@@ -27,6 +28,16 @@ sources:
 LFM3のLFM Open License v1.0には、関連会社等を含む組織の定義と年商1,000万米ドルを基準とした商用利用条件があります。原文の第1条・第5条を確認してください。本体のMITとは別の条件です。年商や組織情報は収集しません。公式モデルと一致しない導入済みコピーでは条件未確認と導入元情報を表示し、既存の互換性・利用可否の判定を維持します。
 
 モデルは全体設定で指定し、その後に開始するジョブへ適用します。開始済みジョブのモデル・実行ファイル・条件は変更しません。ローカルファイルからの手動導入や取得定義JSONの入力は提供しません。
+
+## 起動時の案内と実行エンジンの更新
+
+起動時の案内は共通の一覧・詳細画面にまとめます。復旧が必要な場合は既存の復旧案内を先に表示します。録音・解析やデータ操作中など、操作を中断できない場合は通知一覧から確認できます。案内の取得・表示だけではモデルやエンジンの更新を始めません。
+
+現在使用中の公式管理コピーが旧`llama.cpp b11533`で、重みが現行カタログと一致する場合は、`b11960`への更新を案内します。「今すぐ更新」は同じ画面の利用条件を確認し、未選択の確認欄を選んでから実行します。「後で」・閉じる・Escでは取得も設定変更も行わず、同じプロセス中は自動表示しません。通知一覧から再度開くことができ、次のアプリ起動時には必要性を再判定します。一般のお知らせの既読と、更新の完了は別に扱います。
+
+更新は既存の取得・容量とSHA照合・配置・互換性確認・設定適用を使い、成功を通知します。モデルの重みは変更しません。完全な容量・SHAを確認できる導入済み重みはネットワークから再取得せず新しい管理コピーへコピーします。旧コピーを保持するため追加の空き容量とコピー時間が必要です。失敗・取消時に使用中の構成を置き換えず、未使用の旧コピーは後から管理操作で削除できます。
+
+既存ジョブは開始時の実行環境へ固定します。Windowsの旧protocol 2で保存した実行条件も、記録したworkerの実バイトと一致する場合だけ再開します。その環境を利用できない場合は新しい設定で処理を開始するよう案内し、現行workerへ黙って差し替えません。新しい起動時案内を追加する保守上の境界は[ADR 0012](../adr/0012-startup-notices.md)を参照してください。
 
 ## 候補と実行方式
 
