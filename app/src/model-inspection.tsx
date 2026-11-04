@@ -408,7 +408,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={event => void useModel(engine, value, true, actionLabel, event.currentTarget)}>{actionLabel}</button></div>
-        {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデルの重みは変更しません。再利用できる重みはコピーします。旧コピーを保持するため追加の空き容量が必要です。</p>}
+        {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデル本体は変更しません。再利用できるモデルデータはコピーします。旧コピーを保持するため追加の空き容量が必要です。</p>}
         {choice && <div className="model-license-summary"><div><span>{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
           <p>{choice.option?.licenseSummary.summary ?? "このモデルと実行エンジンの利用条件は確認できていません。配布元の利用条件を確認してください。"}</p>
           {choice.option?.licenseSummary.restrictions.map((restriction, index) => <p className="model-license-restriction" key={index}>{restriction}</p>)}

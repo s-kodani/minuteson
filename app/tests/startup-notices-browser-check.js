@@ -2,10 +2,18 @@ async(page,capturePath)=>{
  const check=(v,m)=>{if(!v)throw Error(m);},results=[];
  const calls=command=>page.evaluate(command=>window.modelDownloadFixture.calls.filter(c=>c.command===command),command);
  const summary=page.getByRole('dialog',{name:'起動時の案内',exact:true});
- await page.waitForFunction(()=>window.modelDownloadFixture?.noticeReads>0 && !!window.modelDownloadFixture.setReady);
+ await page.waitForFunction(()=>!!window.modelDownloadFixture?.setReady);
  check(await summary.count()===0,"notice appeared before initial state was ready");
- await page.evaluate(()=>window.modelDownloadFixture.setReady(true));
+ check(await page.evaluate(()=>!window.modelDownloadFixture.noticeReads),"notice was read before initial state was ready");
+ await page.evaluate(()=>{
+  const recovery=document.createElement('dialog');recovery.id='synthetic-startup-recovery';recovery.setAttribute('aria-labelledby','startup-recovery-title');document.body.append(recovery);recovery.showModal();
+  window.modelDownloadFixture.setReady(true);
+ });
+ await page.waitForTimeout(100);
+ check(await page.evaluate(()=>!window.modelDownloadFixture.noticeReads),"notice was read during startup recovery");
+ await page.evaluate(()=>document.getElementById('synthetic-startup-recovery').close());
  await summary.waitFor();
+ results.push('initial state and recovery complete before notices are read or displayed');
  check((await calls('start_model_download')).length===0,'startup listing started a download');
  await summary.getByRole('button',{name:'議事録生成エンジンの更新',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'議事録生成エンジンの更新',exact:true});

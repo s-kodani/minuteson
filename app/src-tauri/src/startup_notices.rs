@@ -121,7 +121,7 @@ fn candidates(app: &tauri::AppHandle) -> Result<Vec<Notice>, String> {
                     entry.package_id, option.review.recipe_hash
                 ))
             );
-            result.push(Notice { id:"llama-runtime-update".into(),revision,kind:"model_runtime_update",title:"議事録生成エンジンの更新".into(),message:"モデルの重みは変更せず、議事録生成エンジンを更新します。再利用できる重みはダウンロードせずコピーします。旧コピーを保持するため追加の空き容量が必要です。更新完了までは現在の構成を保持します。".into(),priority:0,deferred:false,option_id:Some(option.id),package_id:Some(entry.package_id.clone()),recipe_hash:Some(option.review.recipe_hash) });
+            result.push(Notice { id:"llama-runtime-update".into(),revision,kind:"model_runtime_update",title:"議事録生成エンジンの更新".into(),message:"モデル本体は変更せず、議事録生成エンジンを更新します。再利用できるモデルデータはダウンロードせずコピーします。旧コピーを保持するため追加の空き容量が必要です。更新完了までは現在の構成を保持します。".into(),priority:0,deferred:false,option_id:Some(option.id),package_id:Some(entry.package_id.clone()),recipe_hash:Some(option.review.recipe_hash) });
             break;
         }
     }

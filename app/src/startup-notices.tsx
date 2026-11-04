@@ -22,7 +22,7 @@ export function StartupNoticeHost({ ready, locked, refreshKey, onReview, onDismi
     try { const rows = checkedStartupNotices(await invoke("get_startup_notices")); if(live.current && epoch===generation.current){setNotices(rows);setError("");} }
     catch(cause){if(live.current && epoch===generation.current)setError(String(cause));}
   };
-  useEffect(()=>{live.current=true;if(isTauri())void load();return()=>{live.current=false;generation.current++;};},[refreshKey]);
+  useEffect(()=>{live.current=true;if(isTauri() && ready && topOpenModal()?.getAttribute("aria-labelledby")!=="startup-recovery-title")void load();return()=>{live.current=false;generation.current++;};},[refreshKey,ready,modalEpoch]);
   useEffect(()=>{const closed=()=>setModalEpoch(v=>v+1);document.addEventListener("close",closed,true);return()=>document.removeEventListener("close",closed,true);},[]);
   const show = (rows: StartupNotice[], choice: StartupNotice|null) => {
     if(latest.current.locked || topOpenModal())return;
