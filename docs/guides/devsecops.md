@@ -5,7 +5,9 @@ description: "セキュリティ検査、例外、GitHub保護設定、署名と
 tags: ["security", "ci", "maintenance"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/Cargo.lock"
+  - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/app/src-tauri/Cargo.toml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_security.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_macos_ci_sign.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_submission.py"
@@ -55,6 +57,22 @@ make check-security
 例外は[例外定義](../../.github/security-exceptions.json)の`exceptions`へ追加します。`tool`は`osv`または`codeql`、`id`は指摘ID、`target`はレポートの完全一致対象、`reason`は影響しない根拠、`owner`は担当者です。`created`と`expires`はUTCの日付を`YYYY-MM-DD`で記載し、作成日から最長30日、期限日は無効とします。理由と担当者を含む全項目を必須にし、包括的な除外は認めません。重大度不明を無条件に低と見なさず、確認結果を残します。Gitleaksの一括除外は行いません。既知の非秘密値は、ファイルと検出値を完全に限定した設定で扱います。現在の除外は履歴内のSQLite設定キー`meeting_mix_v1_initialized`だけです。
 
 2026-11-03の依存検査では、旧任意ランタイム`llama.cpp b11533`のRPCサーバーに対する[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)と[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)を個別判断しています。議事録処理は固定引数の`llama-completion`を起動し、`LLAMA_ARG_RPC`を含む継承環境を消去します。RPCサーバーを起動する呼出しはありません。macOSの旧任意パッケージにはRPCライブラリが含まれますが、Windows配布対象にはRPC実行物・DLLを含めません。この到達性の判断に限定し、2026-11-17 UTCまでの例外とします。上流バイナリ全体の安全性確認や修正完了を意味しません。RPCを導入する前、または期限までに再評価し、旧ランタイムを修正済み版へ更新する際はレシピ・ハッシュ・既存モデルの互換性を検証します。
+
+### GLibの対象プラットフォーム
+
+`glib 0.18.5`の[RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)は、`VariantStrIter`のC関数への出力ポインターの渡し方に関する未定義動作です。修正版は`0.20.0`以降ですが、現在のTauriのLinux向けGTK／WebKit2GTK依存は`glib 0.18`を要求するため、GLibだけを更新することはできません。
+
+2026-11-04に、通常ビルドと`tauri/custom-protocol`を有効にしたビルドの依存グラフを確認しました。対応対象のWindows x64とmacOSでは`glib`は通常・ビルド依存に選択されず、Linux x64では選択されます。GitHubの該当アラートを個別判断する場合は、対応プラットフォームで未使用であることを根拠にします。上流の脆弱性修正完了や、Linux向けビルドの安全性を示す判断ではありません。OSVの診断からは除外しません。
+
+```sh
+cargo tree --frozen --target x86_64-pc-windows-msvc --edges normal,build --invert glib@0.18.5
+cargo tree --frozen --target aarch64-apple-darwin --edges normal,build --invert glib@0.18.5
+cargo tree --frozen --target x86_64-pc-windows-msvc --features tauri/custom-protocol --edges normal,build --invert glib@0.18.5
+cargo tree --frozen --target aarch64-apple-darwin --features tauri/custom-protocol --edges normal,build --invert glib@0.18.5
+cargo tree --frozen --target x86_64-unknown-linux-gnu --edges normal,build --invert glib@0.18.5
+```
+
+対象OS、Tauriの機能指定、GTK／WebKit2GTK依存が変わる場合は、この判断を再検証します。lockfile全体を対象とする検査と、実際にビルドへ選択される依存の確認を区別し、包括的なアラート除外や重大度ゲートの緩和で回避しません。
 
 ## GitHubの初期設定
 
