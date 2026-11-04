@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップ開発の事前設計"
+  short_description: "完成形・データ保持・対応環境・検証・配布条件を開発前に整理する"

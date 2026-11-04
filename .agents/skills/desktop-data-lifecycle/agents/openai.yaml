@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップデータの保存と復旧"
+  short_description: "正本・一時物・削除・移行・バックアップの責務と整合性を設計する"

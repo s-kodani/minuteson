@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップの検証と配布物作成"
+  short_description: "変更範囲の検証とソース・配布物の対応を確認し検証手順を渡す"
