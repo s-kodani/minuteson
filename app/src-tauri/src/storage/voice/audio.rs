@@ -87,6 +87,20 @@ impl Drop for Cleanup<'_> {
     }
 }
 impl Storage {
+    pub(crate) fn voice_audio_storage_state(&self) -> Result<super::AudioStorageState, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let cleanup_pending = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM voice_audio_operations WHERE kind='delete')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(super::AudioStorageState { cleanup_pending })
+    }
     pub(in crate::storage) fn lock_voice_audio(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, ()>, String> {
@@ -556,6 +570,36 @@ mod tests {
     use super::*;
     use crate::storage::voice::tests::{fixture, register, seed_person};
     const NEVER: fn() -> bool = || false;
+    #[test]
+    fn pending_delete_remains_readable_after_restart_without_a_person_row() {
+        let (root, s, _, _) = fixture();
+        let person = Uuid::new_v4().to_string();
+        let sample = Uuid::new_v4().to_string();
+        let operation = Uuid::new_v4().to_string();
+        let path = relative(&person, &sample).unwrap();
+        crate::native_fs::private_directories(&s.root().join("voices").join(&person), true)
+            .unwrap();
+        std::fs::write(
+            s.root().join(&path),
+            b"synthetic changed file; no deletion proof",
+        )
+        .unwrap();
+        s.connection.lock().unwrap().execute("INSERT INTO voice_audio_operations(id,sample_key,relative_path,kind) VALUES(?1,?2,?3,'delete')",params![operation,sample,path]).unwrap();
+        assert!(s.voice_people().unwrap().is_empty());
+        assert!(s.voice_audio_storage_state().unwrap().cleanup_pending);
+        assert!(s.preserve_voice_audio(None, &NEVER).is_err());
+        drop(s);
+        let s = Storage::open(root.path().into()).unwrap();
+        assert!(s.voice_people().unwrap().is_empty());
+        assert!(s.voice_audio_storage_state().unwrap().cleanup_pending);
+        assert!(
+            s.root().join(&path).exists(),
+            "reading status must not perform recovery"
+        );
+        std::fs::remove_file(s.root().join(&path)).unwrap();
+        s.preserve_voice_audio(None, &NEVER).unwrap();
+        assert!(!s.voice_audio_storage_state().unwrap().cleanup_pending);
+    }
     #[test]
     fn registered_audio_survives_source_loss_reopen_and_person_rename() {
         let (root, s, m, speaker) = fixture();

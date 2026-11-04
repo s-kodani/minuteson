@@ -13,6 +13,8 @@ export interface CommandArguments {
   "retry_startup": Record<string, never>;
   "get_residency_state": Record<string, never>;
   "hide_main_to_background": Record<string, never>;
+  "get_startup_notices": Record<string, never>;
+  "respond_startup_notice": { "id": string; "revision": string; "response": unknown };
   "get_official_model_options": Record<string, never>;
   "get_model_license_review": { "target": unknown };
   "start_model_download": { "token": string; "definition": string; "expectedRecipeHash": string };
@@ -136,6 +138,7 @@ export interface CommandArguments {
   "get_voice_context": { "meetingId": string };
   "start_voice_job": { "request": unknown };
   "manage_voice_person": { "personId": string; "expectedVersion": number; "name"?: (string) | null; "sampleId"?: (string) | null };
+  "get_voice_audio_storage_state": Record<string, never>;
   "retry_voice_audio_storage": Record<string, never>;
   "decide_voice_match": { "meetingId": string; "analysisId": string; "speakerId": string; "personId"?: (string) | null; "expectedWorkingHash": string };
   "retry_voice_job": { "jobId": string; "operationId": string };
@@ -297,6 +300,43 @@ export const commandContracts = {
   "hide_main_to_background": {
     "async": false,
     "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_startup_notices": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<Vec<Notice>,mon_contracts::AppError>",
+      "ok": "Vec<Notice>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "respond_startup_notice": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "id",
+        "wireName": "id",
+        "type": "String",
+        "optional": false
+      },
+      {
+        "name": "revision",
+        "wireName": "revision",
+        "type": "String",
+        "optional": false
+      },
+      {
+        "name": "response",
+        "wireName": "response",
+        "type": "Response",
+        "optional": false
+      }
+    ],
     "response": {
       "type": "Result<(),mon_contracts::AppError>",
       "ok": "()",
@@ -2517,6 +2557,15 @@ export const commandContracts = {
     "response": {
       "type": "Result<storage::voice::PersonMutation,mon_contracts::AppError>",
       "ok": "storage::voice::PersonMutation",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_voice_audio_storage_state": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<storage::voice::AudioStorageState,mon_contracts::AppError>",
+      "ok": "storage::voice::AudioStorageState",
       "error": "mon_contracts::AppError"
     }
   },

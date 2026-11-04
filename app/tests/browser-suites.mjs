@@ -1,5 +1,6 @@
 // Shared manifest for local and CI synthetic-browser regression tests.
 export const browserSuites = [
+  ["startup-notices", "startup-notices-browser-fixture.tsx", "startup-notices-browser-check.js"],
   ["prototype-markdown", null, "prototype-markdown-browser-check.js"],
   ["scrollbars", "scrollbars-browser-fixture.tsx", "scrollbars-browser-check.js"],
   ["compact-progress", "browser-fixture.js", "compact-progress-browser-check.js"],

@@ -15,7 +15,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
   const items = orderedProgress(useProgressItems()), read = useJobReadStatus();
   const [error, setError] = useState("");
   const run = async (action: () => Promise<unknown>) => { setError(""); try { await action(); } catch (cause) { setError(String(cause)); } };
-  const ended = data?.jobs.filter(job => ["completed", "failed", "cancelled", "attention"].includes(job.snapshot.phase)) ?? [];
+  const ended = data?.jobs.filter(job => ["completed", "failed", "cancelled", "attention"].includes(job.snapshot.phase) && !(job.snapshot.kind === "backup" && job.snapshot.phase === "completed")) ?? [];
   return <section className="job-list" aria-label="バックグラウンドのジョブ一覧">
     <div className="page-heading heading-with-info"><h1>ジョブ一覧</h1><InfoPopover label="ジョブ一覧">処理中・待機中の作業と、バックアップ・復元の結果を確認できます。結果は閉じるかアプリを終了するまで表示します。</InfoPopover></div>
     {read.state === "loading" && <p role="status">ジョブの状態を確認しています。</p>}

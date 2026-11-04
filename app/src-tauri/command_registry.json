@@ -240,6 +240,57 @@
       }
     },
     {
+      "name": "get_startup_notices",
+      "handler": "startup_notices::get_startup_notices",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<Notice>,mon_contracts::AppError>",
+          "ok": "Vec<Notice>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "respond_startup_notice",
+      "handler": "startup_notices::respond_startup_notice",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "id",
+            "wireName": "id",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "revision",
+            "wireName": "revision",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "response",
+            "wireName": "response",
+            "type": "Response",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_official_model_options",
       "handler": "model_official_catalog::get_official_model_options",
       "roles": [
@@ -3333,6 +3384,22 @@
         "response": {
           "type": "Result<storage::voice::PersonMutation,mon_contracts::AppError>",
           "ok": "storage::voice::PersonMutation",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_voice_audio_storage_state",
+      "handler": "get_voice_audio_storage_state",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::voice::AudioStorageState,mon_contracts::AppError>",
+          "ok": "storage::voice::AudioStorageState",
           "error": "mon_contracts::AppError"
         }
       }

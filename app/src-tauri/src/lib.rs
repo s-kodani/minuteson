@@ -68,6 +68,7 @@ mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
 mod startup_instance;
+mod startup_notices;
 mod startup_reset;
 mod storage;
 mod transcription;
@@ -1571,6 +1572,18 @@ async fn retry_voice_audio_storage(window: WebviewWindow) -> Result<(), mon_cont
     .await;
     result.map_err(|message| {
         mon_contracts::AppError::from_command("retry_voice_audio_storage", message)
+    })
+}
+#[tauri::command]
+fn get_voice_audio_storage_state(
+    window: WebviewWindow,
+) -> Result<storage::voice::AudioStorageState, mon_contracts::AppError> {
+    let result: Result<storage::voice::AudioStorageState, String> = (|| {
+        let app = minutes_app(&window)?;
+        app.state::<Storage>().voice_audio_storage_state()
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_voice_audio_storage_state", message)
     })
 }
 #[tauri::command]
@@ -3084,6 +3097,7 @@ pub fn run() {
     builder
         .manage(startup_attention::Startup::default())
         .manage(startup_reset::Reset::default())
+        .manage(startup_notices::Notices::default())
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
         .manage(recording_recovery::Recovery::default())

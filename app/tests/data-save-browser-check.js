@@ -45,14 +45,14 @@ async (page) => {
   await page.evaluate(()=>window.dataFixture.changed({progress:{stage:"writing_backup",completed:512,total:1024,unit:"bytes"}}));
   await page.getByRole("region",{name:"バックグラウンドのジョブ一覧"}).getByText("バックアップを書き込み中",{exact:true}).waitFor();
   await page.evaluate(() => window.dataFixture.complete()); await done();
-  const resultsList=page.getByRole("list",{name:"バックアップと復元の結果"});await resultsList.waitFor();
+  const resultsList=page.getByRole("list",{name:"バックアップと復元の結果"});check(await resultsList.count()===0,"completed backup still has a result card");
   check((await calls("start_data_operation")).length===1,"jobs navigation repeated backup");
-  await resultsList.getByRole("button",{name:"結果を閉じる",exact:true}).click();await resultsList.waitFor({state:"hidden"});
+  check(await region().getByText("完了",{exact:true}).count()===0,"completed backup status remains in settings");
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
   results.push("new backup: one admission, busy locks, terminal-only success");
 
   await boot(); await set({ deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4 }); await choose("backup"); await done();
-  const deletedWarning = region().getByRole("alert").filter({ hasText: "音声削除済みの会議" });
+  const deletedWarning = notifications().locator(".toast-card > .toast-body > .toast-details").filter({ hasText: "音声削除済みの会議" });
   await deletedWarning.waitFor();
   const deletedText = await deletedWarning.innerText();
   check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("保存済み文書と音声の欠落情報") && deletedText.includes("音声本体は含みません") && deletedText.includes("削除済み音声の再生・再解析はできません"), "deleted-source counts or restore limitation missing");
