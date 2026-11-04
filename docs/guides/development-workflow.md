@@ -7,6 +7,7 @@ status: "stable"
 sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-daily.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/cd647f3d8c5917619f266eba8d2112d909182862/.github/dependabot.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/release-controller.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_release.py"
@@ -24,7 +25,7 @@ sources:
 4. `CI gate`と`Security gate`が成功したことを確認します。検査失敗・取消・必要な検査の未実施を成功扱いにしません。低・中程度の報告も確認します。
 5. 差分を確認してマージします。保守担当者1名の運用では承認数を0にし、本人が自分のPRを確認してマージします。mainへのマージだけでは公開しません。
 
-Dependabotの通常更新を有効にすると、月曜10:00（日本時間）に更新PRを作成します。現在の停止状態と再開手順は[DevSecOps運用](devsecops.md#githubの初期設定)を参照してください。自動マージはせず、通常のPRと同じ検査・確認を通します。定期検査で見つかった問題も作業ブランチとPRで修正します。
+Dependabotは毎週月曜10:00（日本時間）に依存の更新を確認し、更新PRを作成します。対象・上限・セキュリティ更新の扱いは[DevSecOps運用](devsecops.md#githubの初期設定)を参照してください。自動マージはせず、通常のPRと同じ検査・確認を通します。定期検査で見つかった問題も作業ブランチとPRで修正します。
 
 ```mermaid
 flowchart TD
