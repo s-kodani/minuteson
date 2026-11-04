@@ -63,7 +63,7 @@ fn all_six_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_ch
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
     assert_eq!(registry.models.len(), 20);
-    assert_eq!(registry.notices.len(), 26);
+    assert_eq!(registry.notices.len(), 25);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();
         let text = verify_notice(record, bytes).unwrap();
@@ -144,7 +144,7 @@ fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
     let manifest = fixed().remove(0);
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "43c5c55eaad7db3cc5bcd98f72e93b4bc11102536ce1c397a394f29ba7d7a8e4"
+        "b76a64011d60367a1f4a049e256694a144eadc4fe9fe10ca94ce1c93d28bdaa3"
     );
     let gemma = fixed()
         .into_iter()

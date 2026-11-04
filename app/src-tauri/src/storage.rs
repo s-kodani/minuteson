@@ -74,6 +74,7 @@ mod windows_tests;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
+mod startup_notices;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub(crate) mod voice;

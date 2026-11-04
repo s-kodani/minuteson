@@ -2,6 +2,7 @@ import type { AnalysisJob } from "./analysis-state.ts";
 import type { RecordingSnapshot } from "./session.ts";
 import { stageLabel, stageDetail } from "./stage-progress.ts";
 import type { DataSnapshot, DataJob } from "./data-operation-state.ts";
+import { displayNativePath } from "./native-path.ts";
 import { bytesLabel, importLabel, type ImportSnapshot } from "./import-state.ts";
 
 export interface OperationProgress {
@@ -28,7 +29,7 @@ export function dataJobProgress(job: DataJob): OperationProgress {
   const name = s.kind === "backup" ? "バックアップ" : "バックアップから復元";
   const label = completed ? "完了" : waiting ? "確認待ち" : s.phase === "cancelling" ? "安全な停止を待機中" : s.phase === "failed" ? "失敗" : s.phase === "cancelled" ? "取消済み" : s.phase === "attention" ? "結果の確認が必要" : stageLabel(s.progress) ?? ({ reading:"読み込み中", verifying:"検証中", reconstructing:"会議を準備中", publishing:"保存結果を確定中" } as Record<string,string>)[s.phase] ?? "準備中";
   return { id:`data:${s.token}`, kind:s.kind as "backup" | "restore", state,
-    target:s.backupPreview?.destination ?? (s.restorePreview ? `会議 ${s.restorePreview.meetingTitles.length} 件・用語・声` : name),
+    target:displayNativePath(s.backupPreview?.destination) || (s.restorePreview ? `会議 ${s.restorePreview.meetingTitles.length} 件・用語・声` : name),
     label, startedAtMs:job.startedAtMs, finishedAtMs:job.finishedAtMs ?? undefined,
     completed:completed ? 1 : s.progress?.completed ?? null, total:completed ? 1 : s.progress?.total ?? null,
     detail:s.errorMessage ?? stageDetail(s.progress),

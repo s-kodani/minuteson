@@ -10,7 +10,8 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_rust_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_ci_native_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/rust-test-suites.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/15cf879bd48bf9e77eba3ee17a6aa8633a06da6e/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_llama_runtime_check.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/evaluation/README.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_docs.py"
@@ -39,6 +40,21 @@ cargo fmt --all --check
 
 契約やモデルカタログを変更した場合は対応する生成コマンドを実行し、生成済みファイルの差分もレビューします。`--check`は生成物を更新しません。OS別の構築条件と検査範囲は[CI定義](../../.github/workflows/desktop-platform-build.yml)にあります。
 
+## 議事録ランタイムの実資材検証
+
+Desktopの`full`では、Windows x64とmacOSで固定カタログのQwen 2.5 1.5B Q4、Qwen 3 4B Q4、Qwen 3.5 4B Q4を実際に読み込みます。合成JSON入力を使い、CLIの直接実行と常駐workerの連続3要求について、出力内容・プロトコル完了・モデルデータとworkerのSHAを確認します。3モデルは旧ランタイムを使っていた系列の代表であり、全量子化・全容量や実会議の議事録品質を評価する検査ではありません。
+
+```sh
+# OS別のランタイム・workerを準備した後で実行します。
+python3 tools/mon_llama_runtime_check.py --report output/rust-tests/llama-runtime-local.json
+# macOSのMetalを実際に利用できる端末での追加検証
+python3 tools/mon_llama_runtime_check.py --metal --report output/rust-tests/llama-runtime-metal.json
+```
+
+macOSの準備には`python3 tools/mon_inference_runtime.py`、Windowsの準備には[Windowsビルド手順](build-windows.md)を使います。通常の検査はCPUを使い、Metalの追加検査はGPUへのレイヤー配置をログでも要求します。実マイク・利用中DB・会議音声は使用しません。固定資材の取得には数GiBのネットワーク・空き容量が必要です。`--models-dir`で同じIDの`.gguf`を渡す場合も容量とSHAを照合します。
+
+専用の`.cache/llama-runtime-check`へ取得するモデルデータはActionsのキャッシュと成果物へアップロードしません。full CIはJSONの実行記録・ビルド証跡・時間計測と必要な診断だけを残します。QAインストーラー・MSIX・モデル・実行ファイルの生成と、配布・アップロードは別に扱います。
+
 ## 通常・重い検証・全件の使い分け
 
 Rustランナーの`--suite quick|heavy|full`で実行範囲を選びます。省略時は従来どおり全件です。日常の変更後確認には`quick`を使い、配布物の作成や大容量・多数の中断地点・履歴世代上限を調べる検証は`heavy`で実行します。`full`は両方を実行します。通常側の成功を全件成功とは扱いません。
@@ -53,7 +69,7 @@ PRとmain更新は通常スイートを使い、QAインストーラー・MSIX�
 
 ## CIのキャッシュ
 
-CIはnpm・検査用pip依存、Playwrightのブラウザー、Rustの依存を再利用します。チェックアウトごとの更新時刻で再ビルドされるワークスペース出力はRust依存キャッシュに追加しません。通常CIは既存のキーを維持し、全件用はリリース依存も保存できる別キーを使います。全件用に完全一致しない場合だけ既存の依存キャッシュも復元し、完全一致時の二重転送を避けます。全件検証ではWindowsのCMake／Vulkanビルド中間資材と固定ダウンロード、macOSのSwift／Rust FFIビルドもキャッシュします。SwiftのCodeQL検査ではRust FFIの依存だけを再利用し、解析対象のSwiftコードは毎回ビルドします。配布用パッケージ、署名状態、インストーラー、モデルの重み、会議データはキャッシュ対象に含めません。
+CIはnpm・検査用pip依存、Playwrightのブラウザー、Rustの依存を再利用します。チェックアウトごとの更新時刻で再ビルドされるワークスペース出力はRust依存キャッシュに追加しません。通常CIは既存のキーを維持し、全件用はリリース依存も保存できる別キーを使います。全件用に完全一致しない場合だけ既存の依存キャッシュも復元し、完全一致時の二重転送を避けます。全件検証ではWindowsのCMake／Vulkanビルド中間資材と固定ダウンロード、macOSのSwift／Rust FFIビルドもキャッシュします。SwiftのCodeQL検査ではRust FFIの依存だけを再利用し、解析対象のSwiftコードは毎回ビルドします。配布用パッケージ、署名状態、インストーラー、モデルデータ、会議データはキャッシュ対象に含めません。
 
 ネイティブ中間資材は[入力定義](../../tools/mon_ci_cache.py)のソース・設定・固定資材定義と、OS・アーキテクチャ・ランナーイメージ・Rust・CMakeまたはSwift／SDK・ビルドフラグを照合した完全一致キーで復元します。別の入力へ広く一致させる復元キーは使いません。復元後も通常のビルド・固定SHA照合・全件検査を実行します。
 

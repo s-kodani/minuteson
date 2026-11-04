@@ -14,7 +14,9 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/tools/mon_macos_release.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/.github/security-exceptions.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/.github/security-exceptions.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_windows_runtime.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_llama_runtime_check.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/cd647f3d8c5917619f266eba8d2112d909182862/.github/dependabot.yml"
 ---
@@ -34,7 +36,7 @@ sources:
 
 低・中程度の指摘と保守終了の通知は診断成果物で確認します。別名IDは同一の指摘としてまとめ、既知の重大度を共有します。検査サービスへの通信失敗、壊れた出力、必要なジョブの取消・未実施は成功にしません。CodeQLが非公開設定により省略された場合は、その未実施を明示します。解析未実施の状態をSAST合格と扱いません。
 
-OSVのネイティブ依存の収録範囲は完全ではありません。SDK、CRT、OSライブラリ、モデルの重みはこの脆弱性検査の対象外です。取得時の既存ハッシュ照合は維持し、毎週の保守時に固定資材と上流の更新・通知も確認します。SBOMにはCargoの通常・ビルド依存、npmの製品依存、ネイティブ取得定義を記録し、任意ダウンロード資材が含まれる範囲も明示します。
+OSVのネイティブ依存の収録範囲は完全ではありません。SDK、CRT、OSライブラリ、モデルデータはこの脆弱性検査の対象外です。取得時の既存ハッシュ照合は維持し、毎週の保守時に固定資材と上流の更新・通知も確認します。SBOMにはCargoの通常・ビルド依存、npmの製品依存、ネイティブ取得定義を記録し、任意ダウンロード資材が含まれる範囲も明示します。
 
 CodeQLの解析ジョブが成功しても安全とは断定せず、検出結果を別途評価します。独自IPC・OS権限・保存操作の安全性は既存テストと変更レビューでも確認します。
 
@@ -56,7 +58,9 @@ make check-security
 
 例外は[例外定義](../../.github/security-exceptions.json)の`exceptions`へ追加します。`tool`は`osv`または`codeql`、`id`は指摘ID、`target`はレポートの完全一致対象、`reason`は影響しない根拠、`owner`は担当者です。`created`と`expires`はUTCの日付を`YYYY-MM-DD`で記載し、作成日から最長30日、期限日は無効とします。理由と担当者を含む全項目を必須にし、包括的な除外は認めません。重大度不明を無条件に低と見なさず、確認結果を残します。Gitleaksの一括除外は行いません。既知の非秘密値は、ファイルと検出値を完全に限定した設定で扱います。現在の除外は履歴内のSQLite設定キー`meeting_mix_v1_initialized`だけです。
 
-2026-11-03の依存検査では、旧任意ランタイム`llama.cpp b11533`のRPCサーバーに対する[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)と[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)を個別判断しています。議事録処理は固定引数の`llama-completion`を起動し、`LLAMA_ARG_RPC`を含む継承環境を消去します。RPCサーバーを起動する呼出しはありません。macOSの旧任意パッケージにはRPCライブラリが含まれますが、Windows配布対象にはRPC実行物・DLLを含めません。この到達性の判断に限定し、2026-11-17 UTCまでの例外とします。上流バイナリ全体の安全性確認や修正完了を意味しません。RPCを導入する前、または期限までに再評価し、旧ランタイムを修正済み版へ更新する際はレシピ・ハッシュ・既存モデルの互換性を検証します。
+公式カタログとWindows生成資材の議事録エンジンは、RPCサーバーの[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)・[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)の修正を含む`llama.cpp b11960`へ統一しています。旧`b11533`の取得定義と2件の期限付き例外は除去しています。Windowsは両方の互換パスで同じ固定版を取得し、許可したCLI・ライブラリ・通知だけを新しいパッケージ領域へ配置します。復元キャッシュの旧DLLを成果物へ混ぜません。
+
+既に利用者が導入した旧コピーは自動変更せず、起動時の明示的な更新操作を案内します。既存コピー全体や上流バイナリ全体の安全性を保証する変更ではありません。議事録処理は固定引数で起動し、継承環境を消去する境界を維持します。今後RPCを導入する場合は到達性を再評価します。更新時は取得元・実バイトの容量とSHA、レシピ、モデルデータの再利用、開始済みジョブの条件固定、両OSの互換性を確認します。代表モデルの実行検査は[テスト運用](testing.md#議事録ランタイムの実資材検証)を参照してください。
 
 ### GLibの対象プラットフォーム
 

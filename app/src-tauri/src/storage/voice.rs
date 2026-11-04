@@ -14,6 +14,11 @@ pub(crate) struct PersonMutation {
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct AudioStorageState {
+    pub cleanup_pending: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SampleView {
     pub id: String,
     pub model_hash: String,

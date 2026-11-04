@@ -104,13 +104,6 @@
       "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
       "bytes": 1078,
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
-    },
-    {
-      "name": "llama-MIT.txt",
-      "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
-      "bytes": 1078,
-      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
       "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
     },
     {
@@ -199,15 +192,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -236,9 +227,7 @@
         "実行エンジン: Apache-2.0 / MIT"
       ],
       "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
-      "restrictions": [
-        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "segmentation-MIT.txt",
@@ -281,15 +270,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -318,9 +305,7 @@
         "実行エンジン: Apache-2.0 / MIT"
       ],
       "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
-      "restrictions": [
-        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "segmentation-MIT.txt",
@@ -363,15 +348,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -394,15 +377,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -425,15 +406,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -456,15 +435,13 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -487,10 +464,8 @@
         "モデル: Apache-2.0",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
@@ -518,10 +493,8 @@
         "モデル: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "モデルの重みにはMIT、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-      "restrictions": [
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "summary": "モデル本体にはMIT、llama.cpp実行エンジンにはMITが適用されます。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "llama-MIT.txt",
@@ -549,11 +522,10 @@
         "モデル: LFM Open License v1.0",
         "実行エンジン: MIT"
       ],
-      "summary": "LFM3の重みはLFM Open License v1.0です。商用利用には年間売上高による条件があります。llama.cpp実行エンジンはMITです。",
+      "summary": "LFM3のモデル本体はLFM Open License v1.0です。商用利用には年間売上高による条件があります。llama.cpp実行エンジンはMITです。",
       "restrictions": [
         "第1条・第5条: 年間売上高US$10,000,000以上をThresholdと定義し、これを超える法人の商用利用は本ライセンスでは許諾されません。支配・被支配・共通支配下の関連法人を含むLegal Entity単位の条件です。",
-        "第5条(c)の適格非営利組織による非商用・研究目的利用の例外を含め、適用可否を原文で確認してください。条件を満たさない商用利用はLiquid AIとの別途契約等が必要です。",
-        "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
+        "第5条(c)の適格非営利組織による非商用・研究目的利用の例外を含め、適用可否を原文で確認してください。条件を満たさない商用利用はLiquid AIとの別途契約等が必要です。"
       ],
       "requiredNotices": [
         {
@@ -604,9 +576,7 @@
         "実行エンジン: Apache-2.0 / MIT"
       ],
       "summary": "ReazonSpeech-k2-v2のモデルカードはApache-2.0を宣言しています。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
-      "restrictions": [
-        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "sherpa-Apache-2.0.txt",
@@ -671,9 +641,7 @@
         "実行エンジン: Apache-2.0 / MIT"
       ],
       "summary": "ReazonSpeech-k2-v2のモデルカードはApache-2.0を宣言しています。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
-      "restrictions": [
-        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "sherpa-Apache-2.0.txt",
@@ -748,9 +716,7 @@
         "実行エンジン: Apache-2.0 / MIT"
       ],
       "summary": "Haas-ja-v1.0とコミュニティONNX変換はApache-2.0です。非公式変換でありThird Intelligenceの承認を示しません。Silero VADはMIT、sherpa-onnxはApache-2.0、ONNX Runtimeとnlohmann/jsonはMITおよび同梱の第三者条件に従います。",
-      "restrictions": [
-        "再配布時は各ライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-      ],
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "sherpa-Apache-2.0.txt",
@@ -808,10 +774,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",
@@ -854,10 +818,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",
@@ -900,10 +862,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",
@@ -946,10 +906,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",
@@ -992,10 +950,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",
@@ -1038,10 +994,8 @@
         "モデル・VAD: MIT",
         "実行エンジン: MIT"
       ],
-      "summary": "OpenAI Whisperの重み、Silero VAD、whisper.cpp実行エンジンはMITです。各モデルカードと著作権表示も確認してください。",
-      "restrictions": [
-        "再配布時はMITのライセンス本文と著作権表示を保持してください。"
-      ],
+      "summary": "OpenAI Whisperのモデル本体、Silero VAD、whisper.cpp実行エンジンはMITです。",
+      "restrictions": [],
       "requiredNotices": [
         {
           "name": "whisper-model-card.md",

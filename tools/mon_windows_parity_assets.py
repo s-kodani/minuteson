@@ -31,21 +31,23 @@ def save(path,value):
             time.sleep(0.02)
 
 class Fetch:
-    def __init__(self,budget):
+    def __init__(self,budget,base=None):
         self.limit=budget
-        records=[json.loads(p.read_text(encoding='utf8')) for p in (LEDGER,LEDGER.with_suffix('.json.pending')) if p.exists()]
+        self.base=BASE if base is None else Path(base)
+        self.ledger_path=LEDGER if base is None else self.base/'download-ledger.json'
+        records=[json.loads(p.read_text(encoding='utf8')) for p in (self.ledger_path,self.ledger_path.with_suffix('.json.pending')) if p.exists()]
         self.ledger=max(records,key=lambda r:r['downloadedBytes']) if records else dict(downloadedBytes=0,attempts=[])
         if self.ledger['downloadedBytes']>budget:raise ValueError('previous network usage exceeds this budget')
     def acquire(self,url,size,digest):
         if not url.startswith('https://'):raise ValueError('fixed HTTPS input required')
-        target=BASE/'assets'/digest
+        target=self.base/'assets'/digest
         candidates=[target,*list((ROOT/'.cache/windows-runtime/downloads').glob(digest[:16]+'-*'))]
         for p in candidates:
             if p.is_file() and p.stat().st_size==size and sha(p)==digest:return p
         target.parent.mkdir(parents=True,exist_ok=True)
         pending=target.with_suffix('.partial')
         attempt=dict(url=url,expectedBytes=size,receivedBytes=0,state='running')
-        self.ledger['attempts'].append(attempt);save(LEDGER,self.ledger)
+        self.ledger['attempts'].append(attempt);save(self.ledger_path,self.ledger)
         try:
             request=urllib.request.Request(url,headers={'User-Agent':'MON-Windows-parity-validation'})
             with urllib.request.urlopen(request,timeout=60) as response,pending.open('wb') as output:
@@ -55,14 +57,14 @@ class Fetch:
                     data=response.read(min(1024*1024,remaining))
                     if not data:break
                     attempt['receivedBytes']+=len(data);self.ledger['downloadedBytes']+=len(data)
-                    save(LEDGER,self.ledger)
+                    save(self.ledger_path,self.ledger)
                     if attempt['receivedBytes']>size:raise ValueError('fixed input exceeded expected size')
                     output.write(data)
             if pending.stat().st_size!=size or sha(pending)!=digest:raise ValueError('fixed input checksum mismatch')
             pending.replace(target);attempt['state']='verified';return target
         except Exception:
             attempt['state']='failed';raise
-        finally:save(LEDGER,self.ledger)
+        finally:save(self.ledger_path,self.ledger)
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--budget-gib',type=int,default=30,choices=range(1,31));parser.add_argument('--all-inputs',action='store_true');args=parser.parse_args()

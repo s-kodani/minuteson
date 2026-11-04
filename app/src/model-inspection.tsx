@@ -20,13 +20,16 @@ import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult
 import type { DiarizationPreferences } from "./diarization-state";
 import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 import { modelVocabularySupport } from "./model-vocabulary-support";
+import { StartupNoticeHost } from "./startup-notices";
+import type { StartupNotice } from "./startup-notice-state";
+import { ToastNotice } from "./toast";
 import { ModelLicenseDialog } from "./model-license";
 import { assertModelLicenseReview, sameModelLicenseTarget, type ModelLicenseReview, type ModelLicenseSummary, type ModelLicenseTarget } from "./model-license-state";
 import type { ModelChoice } from "./model-selection-state";
 
 type PlacementInput = { packageId: string; downloadId: string; recipeHash: string; reviewHash: string; totalBytes: number };
 type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; placement?: PlacementInput; verifying?: boolean; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
-type LicenseRequest = { id: number; engine: string; value: string; target: ModelLicenseTarget; summary?: ModelLicenseSummary; actionLabel: string; confirmation: boolean; review: ModelLicenseReview | null; loading: boolean; error: string; acknowledged: boolean; confirming: boolean; opener: HTMLElement | null };
+type LicenseRequest = { startup?: StartupNotice; id: number; engine: string; value: string; target: ModelLicenseTarget; summary?: ModelLicenseSummary; actionLabel: string; confirmation: boolean; review: ModelLicenseReview | null; loading: boolean; error: string; acknowledged: boolean; confirming: boolean; opener: HTMLElement | null };
 function licenseTarget(choice: ModelChoice): ModelLicenseTarget | null {
   return choice.option ? { recipeHash: choice.option.review.recipeHash } : choice.entry ? { packageId: choice.entry.packageId, expectedReviewHash: choice.entry.reviewHash } : null;
 }
@@ -37,7 +40,7 @@ let unresolved: Pending | null = null;
 const downloads = new Map<string, DownloadReceipt>();
 const automaticMergeChoices = [{value:500,label:"従来（分けやすい）"},{value:900,label:"ややまとめる"},{value:1100,label:"まとめる"},{value:1300,label:"強くまとめる"},{value:1500,label:"さらに強くまとめる"}];
 const engines = [{ engine: "asr", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion, startupNoticesLocked = false, startupNoticesReady = true }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl; startupNoticesLocked?: boolean; startupNoticesReady?: boolean }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
   useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => { setBackends([]); setError(modelPreparationError(cause)); }); }, [visible]);
@@ -51,9 +54,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState<Pending | null>(unresolved);
   const [recovering, setRecovering] = useState(false);
   const [license, setLicense] = useState<LicenseRequest | null>(null);
+  const [runtimeNotice,setRuntimeNotice] = useState<{id:string;message:string}|null>(null);
+  const startupReviewSequence = useRef(0);
+  const [startupReviewError,setStartupReviewError] = useState("");
   const licenseRequest = useRef<LicenseRequest | null>(null), licenseSequence = useRef(0);
-  const latest = useRef({ visible, locked, recordingActive, options, entries, profiles, selection });
-  latest.current = { visible, locked, recordingActive, options, entries, profiles, selection };
+  const latest = useRef({ visible: visible || !!license?.startup, locked, recordingActive, options, entries, profiles, selection });
+  latest.current = { visible: visible || !!license?.startup, locked, recordingActive, options, entries, profiles, selection };
   const updateLicense = (id: number, patch: Partial<LicenseRequest>) => {
     if (!mounted.current || licenseRequest.current?.id !== id) return;
     licenseRequest.current = { ...licenseRequest.current, ...patch }; setLicense(licenseRequest.current);
@@ -122,13 +128,13 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     return () => { active = false; };
   }, [visible, profileId, selectedWhisper?.packageId]);
   useEffect(() => { if (mustStop && unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); }, [mustStop]);
-  useEffect(() => { if (!visible || locked || recordingActive || mustStop) closeLicense(); }, [visible, locked, recordingActive, mustStop]);
+  useEffect(() => { if ((!visible && !licenseRequest.current?.startup) || locked || recordingActive || mustStop) closeLicense(); }, [visible, locked, recordingActive, mustStop]);
   const run = async (label: string, action: () => Promise<void>) => {
     if (running.current || locked || blocked.current || !isTauri()) return;
     startedAt.current = unresolved?.startedAtMs ?? Date.now();
     running.current = true; failure.current = null; setBusy(label); setWaitingToken(null); setError("");
-    try { await action(); }
-    catch (cause) { if (unresolved) failure.current = cause; else if (mounted.current) setError(modelPreparationError(cause)); }
+    try { await action(); return true; }
+    catch (cause) { if (unresolved) failure.current = cause; else if (mounted.current) setError(modelPreparationError(cause)); return false; }
     finally { if (mounted.current) { await load().catch(cause => { if (!unresolved) setError(modelPreparationError(cause)); }); setBusy(""); } running.current = false; }
   };
   const step = async <T,>(stage: Pending["stage"], action: (token: string) => Promise<T>, context: Omit<Pending, "token" | "stage" | "startedAtMs"> = {}): Promise<T> => {
@@ -247,11 +253,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     if (mounted.current) setSelection(current => ({ ...current, [engine]: entry!.packageId }));
     });
   };
-  const currentLicenseChoice = (request: Pick<LicenseRequest, "engine" | "value" | "target">, current = latest.current) => {
+  const currentLicenseChoice = (request: Pick<LicenseRequest, "engine" | "value" | "target" | "startup">, current = latest.current) => {
     const used = current.profiles.find(profile => profile.name === "standard")?.components.find(item => request.engine === "asr" ? isAsrEngine(item.engine) : item.engine === request.engine);
     const selected = current.selection[request.engine] ?? used?.packageId ?? "";
     const choice = modelChoices(request.engine, current.entries, current.options, current.profiles).find(item => item.value === selected || item.packageIds.includes(selected));
     const target = choice && licenseTarget(choice);
+    if (request.startup && (used?.packageId !== request.startup.packageId || choice?.option?.review.recipeHash !== request.startup.recipeHash)) throw Error("更新対象の構成が変わりました。案内を開き直してください。");
     if (!choice || choice.value !== request.value || !target || !sameModelLicenseTarget(target, request.target)) throw Error("モデルの選択内容が変わりました。利用条件を開き直してください。");
     return { choice, used };
   };
@@ -271,7 +278,24 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       updateLicense(request.id, { review, loading: false });
     } catch (cause) { updateLicense(request.id, { loading: false, error: modelPreparationError(cause) }); }
   };
-  const confirmLicense = async () => {
+  const openStartupReview = async (notice: StartupNotice) => {
+    if (locked || recordingActive || blocked.current || running.current || unresolved || licenseRequest.current) return;
+    const sequence=++startupReviewSequence.current;setStartupReviewError("");
+    try {
+      const [current, official] = await Promise.all([load(false), invoke("get_official_model_options").then(assertOfficialModelOptions)]);
+      if (blocked.current || !mounted.current || sequence!==startupReviewSequence.current) return;
+      const used = current.catalog.find(p=>p.name==="standard")?.components.find(c=>c.engine==="llama.cpp");
+      const choice = modelChoices("llama.cpp",current.placed,official,current.catalog).find(c=>c.option?.id===notice.optionId);
+      const target = choice && licenseTarget(choice);
+      if (!choice || !target || choice.option?.review.recipeHash!==notice.recipeHash || used?.packageId!==notice.packageId || modelChoiceAction(choice,current.placed,used)!=="update_runtime") throw Error("更新対象が変更されました。案内を再確認してください。");
+      setEntries(current.placed);setProfiles(current.catalog);setOptions(official);setSelection(v=>({...v,"llama.cpp":choice.value}));
+      const request: LicenseRequest = {id:++licenseSequence.current,startup:notice,engine:"llama.cpp",value:choice.value,target,summary:choice.option.licenseSummary,actionLabel:"今すぐ更新",confirmation:true,review:null,loading:true,error:"",acknowledged:false,confirming:false,opener:document.activeElement instanceof HTMLElement?document.activeElement:null};
+      licenseRequest.current=request;setLicense(request);
+      try { const review=await assertModelLicenseReview(await invoke("get_model_license_review",{target}),target,request.summary);updateLicense(request.id,{review,loading:false}); }
+      catch(cause){updateLicense(request.id,{loading:false,error:modelPreparationError(cause)});}
+    } catch(cause){if(sequence===startupReviewSequence.current)setStartupReviewError(modelPreparationError(cause));}
+  };
+  const confirmLicense = async (closeStartup?: () => void) => {
     const request = licenseRequest.current;
     if (!request?.confirmation || !request.acknowledged || !request.review || request.loading || request.error || request.confirming || !canConfirmLicense()) return;
     updateLicense(request.id, { confirming: true });
@@ -288,9 +312,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (!canConfirmLicense() || licenseRequest.current?.id !== request.id) return;
       currentLicenseChoice(request);
       if (review.disclosureHash !== request.review.disclosureHash) throw Error("モデルの利用条件が変わりました。利用条件を開き直してください。");
+      const runtimeUpdate = request.engine === "llama.cpp" && modelChoiceAction(choice,current.placed,used) === "update_runtime";
       setOptions(official); setEntries(current.placed); setProfiles(current.catalog);
-      closeLicense();
-      await executeModelUse(request.engine, choice, current.placed);
+      closeLicense(); closeStartup?.();
+      const succeeded = await executeModelUse(request.engine, choice, current.placed);
+      if (succeeded && runtimeUpdate) setRuntimeNotice({id:crypto.randomUUID(),message:"議事録生成エンジンを更新しました。"});
     } catch (cause) { updateLicense(request.id, { confirming: false, acknowledged: false, error: modelPreparationError(cause) }); }
   };
   const recheck = async (): Promise<"waiting" | "resolved" | "applied"> => {
@@ -382,7 +408,8 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={event => void useModel(engine, value, true, actionLabel, event.currentTarget)}>{actionLabel}</button></div>
-        {choice && <div className="model-license-summary"><div><span>モデル・実行エンジン：{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
+        {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデル本体は変更しません。再利用できるモデルデータはコピーします。旧コピーを保持するため追加の空き容量が必要です。</p>}
+        {choice && <div className="model-license-summary"><div><span>{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
           <p>{choice.option?.licenseSummary.summary ?? "このモデルと実行エンジンの利用条件は確認できていません。配布元の利用条件を確認してください。"}</p>
           {choice.option?.licenseSummary.restrictions.map((restriction, index) => <p className="model-license-restriction" key={index}>{restriction}</p>)}
         </div>}
@@ -455,7 +482,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     {deletion?.protectedNow && <p role="status">モデル削除の受付結果を確認中です。</p>}
     {deletion?.unknown && <button type="button" disabled={deletion.rpcBusy} onClick={() => void deletion.retryUnknown()}>同じ削除操作の結果を確認</button>}
   </section>
-  {license && <ModelLicenseDialog key={license.id} open={visible} review={license.review} loading={license.loading} error={license.error} confirmation={license.confirmation} actionLabel={license.actionLabel}
+  <ToastNotice scope="model" type="runtime-update" eventId={runtimeNotice?.id} message={runtimeNotice?.message} onClose={()=>setRuntimeNotice(null)} />
+  <StartupNoticeHost ready={startupNoticesReady} locked={startupNoticesLocked || disabled} refreshKey={profiles.find(p=>p.name==="standard")?.id??"initial"}
+    onReview={notice=>void openStartupReview(notice)} onDismissReview={()=>{startupReviewSequence.current++;if(licenseRequest.current?.startup)closeLicense();}}
+    renderAction={(notice,dismiss)=>license?.startup?.revision===notice.revision ? <ModelLicenseDialog key={license.id} embedded open review={license.review} loading={license.loading} error={license.error} confirmation actionLabel="今すぐ更新" acknowledged={license.acknowledged} confirming={license.confirming} onAcknowledge={acknowledged=>updateLicense(license.id,{acknowledged})} onConfirm={()=>void confirmLicense(dismiss)} onDismiss={dismiss} restoreTarget={()=>license.opener} /> : startupReviewError ? <><p role="alert">{startupReviewError}</p><button disabled={disabled} onClick={()=>void openStartupReview(notice)}>再確認</button></> : <p role="status">更新対象を確認しています。</p>} />
+  {license && !license.startup && <ModelLicenseDialog key={license.id} open={visible} review={license.review} loading={license.loading} error={license.error} confirmation={license.confirmation} actionLabel={license.actionLabel}
     acknowledged={license.acknowledged} confirming={license.confirming} onAcknowledge={acknowledged => updateLicense(license.id, { acknowledged })} onConfirm={() => void confirmLicense()} onDismiss={closeLicense} restoreTarget={() => license.opener} />}
   </>;
 }

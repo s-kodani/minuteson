@@ -1,0 +1,44 @@
+async(page,capturePath)=>{
+ const check=(v,m)=>{if(!v)throw Error(m);},results=[];
+ const calls=command=>page.evaluate(command=>window.modelDownloadFixture.calls.filter(c=>c.command===command),command);
+ const summary=page.getByRole('dialog',{name:'起動時の案内',exact:true});
+ await page.waitForFunction(()=>!!window.modelDownloadFixture?.setReady);
+ check(await summary.count()===0,"notice appeared before initial state was ready");
+ check(await page.evaluate(()=>!window.modelDownloadFixture.noticeReads),"notice was read before initial state was ready");
+ await page.evaluate(()=>{
+  const recovery=document.createElement('dialog');recovery.id='synthetic-startup-recovery';recovery.setAttribute('aria-labelledby','startup-recovery-title');document.body.append(recovery);recovery.showModal();
+  window.modelDownloadFixture.setReady(true);
+ });
+ await page.waitForTimeout(100);
+ check(await page.evaluate(()=>!window.modelDownloadFixture.noticeReads),"notice was read during startup recovery");
+ await page.evaluate(()=>document.getElementById('synthetic-startup-recovery').close());
+ await summary.waitFor();
+ results.push('initial state and recovery complete before notices are read or displayed');
+ check((await calls('start_model_download')).length===0,'startup listing started a download');
+ await summary.getByRole('button',{name:'議事録生成エンジンの更新',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'議事録生成エンジンの更新',exact:true});
+ const checkbox=dialog.getByRole('checkbox',{name:'モデルと実行エンジンの利用条件を確認しました。',exact:true});
+ await checkbox.waitFor();check(!await checkbox.isChecked(),'startup consent was prechecked');
+ check(await dialog.getByRole('button',{name:'今すぐ更新',exact:true}).isDisabled(),'startup update enabled without review');
+ await dialog.getByRole('button',{name:'後で',exact:true}).last().click();await dialog.waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'画面を再生成',exact:true}).click();
+ await page.waitForTimeout(250);
+ check(await page.getByRole('dialog').count()===0,'deferred notice returned after remount');
+ check((await calls('start_model_download')).length===0,'later started an operation');
+ results.push('listing and deferral remain read-only and native deferral survives UI remount');
+ const card=page.getByRole('region',{name:'通知一覧の内容',exact:true}).locator('.toast-card').filter({hasText:'議事録生成エンジンの更新'});
+ await card.getByRole('button',{name:'案内を開く',exact:true}).click();await checkbox.waitFor();
+ await page.screenshot({path:capturePath('startup-runtime-update.png')});
+ await checkbox.check();await dialog.getByRole('button',{name:'今すぐ更新',exact:true}).click();
+ await dialog.waitFor({state:'hidden'});
+ await page.getByRole('status').filter({hasText:'議事録生成エンジンを更新しました。'}).waitFor();
+ for(const command of ['start_model_download','place_downloaded_model','check_model_compatibility','apply_model_profile_application'])check((await calls(command)).length===1,command+' did not run exactly once');
+ check(await page.evaluate(()=>window.modelDownloadFixture.entries.length===2),'old installed copy was removed');
+ results.push('startup review uses the real shared preparation pipeline exactly once and retains old copies');
+ const infoCard=page.getByRole('region',{name:'通知一覧の内容',exact:true}).locator('.toast-card').filter({hasText:'機能変更のお知らせ（合成）'});
+ await infoCard.getByRole('button',{name:'案内を開く',exact:true}).click();
+ await page.getByRole('dialog',{name:'機能変更のお知らせ（合成）',exact:true}).getByRole('button',{name:'確認しました',exact:true}).click();
+ check(await page.evaluate(()=>window.modelDownloadFixture.acknowledged),'information acknowledgement was not recorded');
+ results.push('informational acknowledgement is separate from model-update completion');
+ return{passed:results.length,results};
+}

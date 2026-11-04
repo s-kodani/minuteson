@@ -234,7 +234,7 @@ impl Registry {
                     .iter()
                     .any(|n| !hashes.contains(&n.key()))
             {
-                return Err("モデル利用条件と重みの識別情報が不正です".into());
+                return Err("モデル利用条件とモデル本体の識別情報が不正です".into());
             }
         }
         registry.validate_coverage()?;
@@ -281,7 +281,7 @@ impl Registry {
             serde_json::from_str(include_str!("../../model-catalog/whisper-variants.json"))
                 .map_err(|_| "Whisper候補が不正です")?;
         for variant in variants {
-            let weight = files.first_mut().ok_or("Whisper重みがありません")?;
+            let weight = files.first_mut().ok_or("Whisperのモデル本体がありません")?;
             weight.expected_size = variant["bytes"].as_u64();
             weight.expected_hash = variant["sha256"].as_str().map(str::to_owned);
             if !self.covers(Engine::Whisper, &files) {

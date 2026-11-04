@@ -307,6 +307,12 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
         run: python tools/mon_ci_native_tests.py --suite full --all-targets --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
+      - name: Prepare macOS resident workers for runtime regression
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        run: python tools/mon_inference_runtime.py
+      - name: Validate upgraded LLM runtimes with representative weights
+        if: env.MON_CI_FULL == 'true'
+        run: python tools/mon_llama_runtime_check.py --report output/rust-tests/llama-runtime-${{ runner.os }}.json
       - name: Upload Windows build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

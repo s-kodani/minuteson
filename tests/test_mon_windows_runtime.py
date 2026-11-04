@@ -6,6 +6,8 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zipfile
+from types import SimpleNamespace
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
@@ -16,6 +18,53 @@ SPEC.loader.exec_module(runtime)
 
 
 class WindowsRuntimeRedistributableTests(unittest.TestCase):
+    def test_worker_destination_is_explicit_even_for_a_separately_imported_builder(self):
+        import sys
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);package=root/'package';package.mkdir();(package/'old.txt').write_bytes(b'old')
+            destinations=[]
+            def workers(*,package_root,vulkan=False):
+                destinations.append(package_root)
+                self.assertNotEqual(package_root,package)
+                (package_root/'workers').mkdir(exist_ok=True)
+                (package_root/'workers/mon-transducer-worker.exe').write_bytes(b'fixed worker')
+            def append(package_root):
+                self.assertEqual((package_root/'workers/mon-transducer-worker.exe').read_bytes(),b'fixed worker')
+            modules={'mon_windows_workers':SimpleNamespace(prepare=workers),'mon_asr_bundle':SimpleNamespace(append_windows_choices=append)}
+            with patch.dict(sys.modules,modules),patch.object(runtime,'os',SimpleNamespace(name='nt')),patch.object(runtime,'CACHE',root),patch.object(runtime,'PACKAGE',package),patch.object(runtime,'visual_cpp_runtime_files',return_value={}),patch.object(runtime,'build_whisper'),patch.object(runtime,'upstream_engines'),patch.object(runtime,'catalog'),patch.object(runtime,'build_embedding'):
+                runtime.main()
+            self.assertEqual(len(destinations),2)
+            self.assertEqual((package/'workers/mon-transducer-worker.exe').read_bytes(),b'fixed worker')
+            self.assertFalse((package/'old.txt').exists())
+
+    def test_fixed_archives_replace_entire_engine_subtrees_and_filter_installer_dlls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);package=root/'package';archive=root/'llama.zip';sherpa=root/'sherpa.tar'
+            for engine in ('llama','llama11960'):
+                (package/engine).mkdir(parents=True);(package/engine/'obsolete.dll').write_bytes(b'old vulnerable runtime')
+            with zipfile.ZipFile(archive,'w') as z:
+                for name in ('llama-completion.exe','ggml-base.dll','ggml-rpc.dll','rpc-server.exe','LICENSE'):
+                    z.writestr(name,b'fixed '+name.encode())
+            with tarfile.open(sherpa,'w') as tar:
+                data=b'sherpa';entry=tarfile.TarInfo('sherpa/sherpa-onnx-offline-speaker-diarization.exe');entry.size=len(data);tar.addfile(entry,io.BytesIO(data))
+            def acquire(url,*_):
+                self.assertNotIn('/b11533/',url)
+                return archive if '/llama.cpp/' in url else sherpa
+            with patch.object(runtime,'PACKAGE',package),patch.object(runtime,'acquire',side_effect=acquire),patch.object(runtime.mon_model_catalog,'compile_target',return_value=[]):
+                runtime.upstream_engines()
+            for engine in ('llama','llama11960'):
+                self.assertEqual({p.relative_to(package/engine).as_posix() for p in (package/engine).rglob('*') if p.is_file()},{'llama-completion.exe','ggml-base.dll','notices/llama-MIT.txt'})
+                self.assertEqual((package/engine/'llama-completion.exe').read_bytes(),b'fixed llama-completion.exe')
+
+    def test_failure_in_new_staging_preserves_published_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);package=root/'package';package.mkdir();(package/'runtime.tar').write_bytes(b'previous package')
+            with patch.object(runtime,'os',SimpleNamespace(name='nt')),patch.object(runtime,'CACHE',root),patch.object(runtime,'PACKAGE',package),patch.object(runtime,'visual_cpp_runtime_files',return_value={}),patch.object(runtime,'build_whisper',side_effect=ValueError('synthetic staging failure')):
+                with self.assertRaisesRegex(ValueError,'staging failure'):runtime.main()
+                self.assertEqual(runtime.PACKAGE,package)
+            self.assertEqual((package/'runtime.tar').read_bytes(),b'previous package')
+            self.assertEqual(list(root.iterdir()),[package])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

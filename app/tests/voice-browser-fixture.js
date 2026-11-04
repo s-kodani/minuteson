@@ -13,6 +13,7 @@ bridge.invoke=async(command,args={})=>{
     data.calls.push({command,args:copy(args)});const r=args.request;
     const info={token:"voice-preview",sampleRate:16000,channels:1,totalFrames:Math.ceil(r.endUs*16000/1e6)-Math.ceil(r.startUs*16000/1e6),startUs:r.startUs,endUs:r.endUs,trackKind:r.mode,alignment:"unverified"};data.meetingAudio.sessions[info.token]=info;return info;
   }
+  if(command==="get_voice_audio_storage_state")return {cleanupPending:state.cleanupPending??false};
   if(command==="get_voice_people"){if(state.failPeople)throw Error("合成のボイス一覧取得失敗");return copy(state.people);}
   if(command==="prepare_voice_sample_playback"){
     data.calls.push({command,args:copy(args)});
@@ -41,7 +42,7 @@ bridge.invoke=async(command,args={})=>{
     data.calls.push({command,args:copy(args)});
     if(state.failAudioStorage)throw Error("合成の音声保存失敗");
     for(const p of state.people)for(const s of p.samples)if(["pending","failed"].includes(s.audioStorageState))Object.assign(s,{audioStorageState:"ready",audioAvailable:true,audioStorageError:null});
-    return;
+    state.cleanupPending=false;return;
   }
   if(command==="manage_voice_person"){
     const p=state.people.find(p=>p.id===args.personId);if(!p||p.version!==args.expectedVersion)throw Error("人物登録が変更されています");

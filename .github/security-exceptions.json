@@ -1,22 +1,3 @@
 {
-  "exceptions": [
-    {
-      "tool": "osv",
-      "id": "CVE-2026-118375",
-      "target": "GIT:ggml-org/llama.cpp@b11533",
-      "reason": "RPC RDMA server path is not invoked by MinutesOn: generation/llama.rs launches fixed llama-completion arguments; direct and resident worker launches independently clear inherited environment. No RPC listener startup is called; removal of LLAMA_ARG_RPC prevents client overrides as defense in depth. Mac optional package includes libggml-rpc but does not start a listener; Windows mon_windows_runtime.py native_files excludes RPC executables/DLLs. This is a scoped reachability assessment, not clearance of the upstream binary. Reassess before adding RPC or by expiry; replace legacy runtime with fixed >=b11935 under recipe/hash compatibility tests.",
-      "owner": "s-kodani",
-      "created": "2026-11-03",
-      "expires": "2026-11-17"
-    },
-    {
-      "tool": "osv",
-      "id": "CVE-2026-119052",
-      "target": "GIT:ggml-org/llama.cpp@b11533",
-      "reason": "Oversized RPC server receive path is not invoked by MinutesOn: generation/llama.rs launches fixed llama-completion arguments; direct and resident worker launches independently clear inherited environment. No RPC listener startup is called; removal of LLAMA_ARG_RPC prevents client overrides as defense in depth. Mac optional package includes libggml-rpc but does not start a listener; Windows mon_windows_runtime.py native_files excludes RPC executables/DLLs. This is a scoped reachability assessment, not clearance of the upstream binary. Reassess before adding RPC or by expiry; replace legacy runtime with fixed >=b11935 under recipe/hash compatibility tests.",
-      "owner": "s-kodani",
-      "created": "2026-11-03",
-      "expires": "2026-11-17"
-    }
-  ]
+  "exceptions": []
 }

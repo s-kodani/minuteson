@@ -17,7 +17,10 @@ pub(super) fn candidates(
 ) -> Vec<Candidate> {
     let mut result = vec![];
     for (file, source) in recipe.manifest.files.iter().zip(&recipe.sources) {
-        if !matches!(file.role, Role::Asr | Role::AsrAsset | Role::Vad) || source.archive.is_some()
+        if !matches!(
+            file.role,
+            Role::Asr | Role::AsrAsset | Role::Vad | Role::Llm
+        ) || source.archive.is_some()
         {
             continue;
         }
@@ -101,6 +104,13 @@ mod tests {
     use crate::model_download_recipe::RecipeExt;
     #[test]
     fn asr_model_acquisition_reuses_weights_when_only_the_runtime_recipe_changes() {
+        acquisition_reuses_weights(Role::Asr, "whisper.cpp");
+    }
+    #[test]
+    fn llm_runtime_update_reuses_only_hash_verified_weights_without_a_model_fetch() {
+        acquisition_reuses_weights(Role::Llm, "llama.cpp");
+    }
+    fn acquisition_reuses_weights(role: Role, engine_name: &str) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let models = root.join("models");
@@ -113,9 +123,9 @@ mod tests {
         let sha = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
         std::fs::write(package.join("models/model.bin"), weights).unwrap();
         let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{
-            "schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"Whisper test","modelVersion":"unchanged","quantization":null,"target":"macos_aarch64","licenseRef":"test",
+            "schemaVersion":1,"engine":engine_name,"engineVersion":"v1.9.4","modelName":"Whisper test","modelVersion":"unchanged","quantization":null,"target":"macos_aarch64","licenseRef":"test",
             "files":[{"relativePath":"bin/engine","role":"executable","expectedSize":engine.len(),"expectedHash":sha(engine)},
-                     {"relativePath":"models/model.bin","role":"asr","expectedSize":weights.len(),"expectedHash":sha(weights)}]},
+                     {"relativePath":"models/model.bin","role":role,"expectedSize":weights.len(),"expectedHash":sha(weights)}]},
             "sources":[{"relativePath":"bin/engine","url":"https://runtime.invalid/engine"},{"relativePath":"models/model.bin","url":"https://weights.invalid/model"}]})).unwrap();
         let entry = CatalogEntry {
             backend_id: None,
@@ -126,11 +136,11 @@ mod tests {
             model_version: "unchanged".into(),
             quantization: None,
             model_files: vec![crate::model_placement::ModelFileIdentity {
-                role: Role::Asr,
+                role,
                 size: weights.len() as u64,
                 sha256: sha(weights),
             }],
-            engine: "whisper.cpp".into(),
+            engine: engine_name.into(),
             engine_version: "old runtime".into(),
             total_bytes: weights.len() as u64,
             placement_recorded: true,
@@ -168,7 +178,7 @@ mod tests {
                 .report
                 .files
                 .iter()
-                .find(|f| f.role == Role::Asr)
+                .find(|f| f.role == role)
                 .unwrap()
                 .actual_hash,
             sha(weights)

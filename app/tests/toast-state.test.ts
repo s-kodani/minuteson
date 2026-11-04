@@ -15,6 +15,17 @@ function setup() {
 }
 const notice = (key = "one", props: Partial<ToastInput> = {}): ToastInput => ({ key, level: "success", message: "保存しました", ...props });
 
+test("history-only feature actions require an explicit list action and detach with their owner",async()=>{
+  const {c}=setup();let calls=0,release!:()=>void;
+  const run=async()=>{calls++;await new Promise<void>(resolve=>{release=resolve;});};
+  c.record(notice("startup",{historyOnly:true,details:"保存先: C:\\会議\\長い名前.monbackup",action:{kind:"open",label:"案内を開く",run}}));
+  assert.equal(c.getSnapshot().length,0);const item=c.getHistorySnapshot()[0];
+  assert.match(item.details!,/長い名前/);
+  await c.act(item.key,item.id);assert.equal(calls,0);
+  const pending=c.act(item.key,item.id,true);await c.act(item.key,item.id,true);assert.equal(calls,1);
+  release();await pending;c.detachAction(item.key,run);await c.act(item.key,item.id,true);assert.equal(calls,1);
+});
+
 test("verified recovery silently forgets active, dismissed and history-only notices without receipts",()=>{
   const {c,advance,jobs}=setup();let closed=0,rendered=0,acted=0;
   c.show(notice("active",{onClose:()=>closed++,onRendered:()=>rendered++,action:{kind:"retry",label:"再試行",run:()=>{acted++;}}}));

@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tarfile
 import urllib.request
 import zipfile
@@ -26,9 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.cache/windows-runtime'
 PACKAGE = CACHE / 'package'
 URI = 'mon-bundled://windows-runtime-v1/runtime.tar'
-LLAMA = ('https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-win-cpu-x64.zip', 19513403, '659ac73690e588bf60ba1c8de02479683e60ed2ce2915ddf3e15904b520fa933')
 LLAMA_11960 = ('https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-win-cpu-x64.zip', 24407745, '73f962f82850d244db47eaacb9d913637027b82399124324298576d58c5f4287')
 SHERPA = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-no-tts.tar.bz2',23271851,'4b0a94f7b5c606b1b64a19a831c2127559e4b3d34e195465ebc7be73d9ed4783')
+LLAMA_NATIVE_FILES = {'llama-completion.exe','llama-completion-impl.dll','llama-common.dll','llama.dll','ggml.dll','ggml-base.dll','libomp.dll','ggml-cpu-x64.dll','ggml-cpu-haswell.dll','ggml-cpu-skylakex.dll','ggml-cpu-zen4.dll','ggml-cpu-sapphirerapids.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'}
 VC_RUNTIME_FILES = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
 
 
@@ -130,11 +131,18 @@ def build_whisper():
     dump((source/'LICENSE').read_bytes(),PACKAGE/'whisper/notices/whisper-MIT.txt')
 
 def upstream_engines():
-    for engine, release in [('llama', LLAMA), ('llama11960', LLAMA_11960)]:
+    for engine, release in [('llama', LLAMA_11960), ('llama11960', LLAMA_11960)]:
+        # Both compatibility paths contain only the fixed release. Never merge
+        # an older subtree restored by a cache into the actual installer payload.
+        destination = PACKAGE / engine
+        if destination.is_symlink():
+            raise ValueError('runtime subtree must not be a link')
+        if destination.exists():
+            shutil.rmtree(destination)
         with zipfile.ZipFile(acquire(*release)) as archive:
             for name in archive.namelist():
                 leaf=Path(name).name
-                if leaf=='llama-completion.exe' or leaf.lower().endswith('.dll') or leaf=='LICENSE':
+                if leaf in LLAMA_NATIVE_FILES or leaf=='LICENSE':
                     if not leaf: continue
                     rel='notices/llama-MIT.txt' if leaf=='LICENSE' else leaf
                     dump(archive.read(name),PACKAGE/engine/rel)
@@ -152,7 +160,7 @@ def upstream_engines():
             if file['role']!='notice':continue
             if file['relativePath']=='notices/Qwen-Apache-2.0.txt' or file['relativePath']=='notices/segmentation-MIT.txt':continue
             url=source['url']
-            if file['relativePath']=='notices/llama-MIT.txt':url='https://raw.githubusercontent.com/ggml-org/llama.cpp/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE'
+            if file['relativePath']=='notices/llama-MIT.txt':url='https://raw.githubusercontent.com/ggml-org/llama.cpp/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE'
             path=acquire(url,file['expectedSize'],file['expectedHash'])
             dump(path.read_bytes(),PACKAGE/engine/file['relativePath'])
     # The CPU package is verified as an entire upstream release. Preserve the
@@ -194,7 +202,7 @@ def catalog(redist_files=None):
     def native_files(engine):
         paths=sorted(p for p in (PACKAGE/engine).rglob('*') if p.is_file())
         if engine in ('llama', 'llama11960'):
-            keep={'llama-completion.exe','llama-completion-impl.dll','llama-common.dll','llama.dll','ggml.dll','ggml-base.dll','libomp.dll','ggml-cpu-x64.dll','ggml-cpu-haswell.dll','ggml-cpu-skylakex.dll','ggml-cpu-zen4.dll','ggml-cpu-sapphirerapids.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'}
+            keep=LLAMA_NATIVE_FILES
             paths=[p for p in paths if p.name in keep or p.relative_to(PACKAGE/engine).parts[0]=='notices']
         return paths
     # Create one deterministic TAR of native bytes. Runtime filenames and their
@@ -235,17 +243,32 @@ def build_embedding():
         bytes=helper.stat().st_size,sha256=digest(helper)))+'\n',encoding='utf8',newline='\n')
 
 def main():
+    global PACKAGE
     if os.name!='nt':raise ValueError('build Windows native runtimes on Windows')
     # A missing/unreadable redist must fail before builds or downloads replace
     # files in a previously usable package.
     redist_files = visual_cpp_runtime_files()
-    PACKAGE.mkdir(parents=True,exist_ok=True)
-    build_whisper();upstream_engines();catalog(redist_files);build_embedding()
-    import mon_windows_workers
-    mon_windows_workers.prepare()
-    mon_windows_workers.prepare(vulkan=True)
-    from mon_asr_bundle import append_windows_choices
-    append_windows_choices(PACKAGE)
-    print('Windows native runtime package ready:',PACKAGE)
+    CACHE.mkdir(parents=True,exist_ok=True)
+    published=PACKAGE
+    pending=Path(tempfile.mkdtemp(prefix='package-update-',dir=CACHE))
+    previous=pending.with_name(pending.name+'-previous')
+    PACKAGE=pending
+    try:
+        build_whisper();upstream_engines();catalog(redist_files);build_embedding()
+        import mon_windows_workers
+        mon_windows_workers.prepare(package_root=PACKAGE)
+        mon_windows_workers.prepare(vulkan=True,package_root=PACKAGE)
+        from mon_asr_bundle import append_windows_choices
+        append_windows_choices(PACKAGE)
+        if published.exists():published.rename(previous)
+        try:pending.rename(published)
+        except Exception:
+            if previous.exists():previous.rename(published)
+            raise
+        if previous.exists():shutil.rmtree(previous)
+    finally:
+        PACKAGE=published
+        if pending.exists():shutil.rmtree(pending)
+    print('Windows native runtime package ready:',published)
 
 if __name__=='__main__':main()

@@ -5,15 +5,16 @@ description: "全体モデル設定、取得・切替・削除とASRバックエ
 tags: ["models", "asr", "runtime"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/model-catalog/model-definitions.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/app/model-catalog/model-definitions.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/transcription/asr.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/development/asr-adapters.md"
-  - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_windows_runtime.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_windows_runtime.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/mon_model_catalog.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src-tauri/src/model_license.rs"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/model-catalog/model-license-policy.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-inspection.tsx"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-license.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/704f591687b824a87897213fce899d6172d65b84/app/model-catalog/model-license-policy.json"
+  - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src/model-inspection.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src/model-license.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src-tauri/src/startup_notices.rs"
 ---
 
 # AIモデルの導入と実行
@@ -28,6 +29,16 @@ LFM3のLFM Open License v1.0には、関連会社等を含む組織の定義と�
 
 モデルは全体設定で指定し、その後に開始するジョブへ適用します。開始済みジョブのモデル・実行ファイル・条件は変更しません。ローカルファイルからの手動導入や取得定義JSONの入力は提供しません。
 
+## 起動時の案内と実行エンジンの更新
+
+起動時の案内は共通の一覧・詳細画面にまとめます。復旧が必要な場合は既存の復旧案内を先に表示します。録音・解析やデータ操作中など、操作を中断できない場合は通知一覧から確認できます。案内の取得・表示だけではモデルやエンジンの更新を始めません。
+
+現在使用中の公式管理コピーが旧`llama.cpp b11533`で、モデルデータが現行カタログと一致する場合は、`b11960`への更新を案内します。「今すぐ更新」は同じ画面の利用条件を確認し、未選択の確認欄を選んでから実行します。「後で」・閉じる・Escでは取得も設定変更も行わず、同じプロセス中は自動表示しません。通知一覧から再度開くことができ、次のアプリ起動時には必要性を再判定します。一般のお知らせの既読と、更新の完了は別に扱います。
+
+更新は既存の取得・容量とSHA照合・配置・互換性確認・設定適用を使い、成功を通知します。モデルデータは変更しません。完全な容量・SHAを確認できる導入済みモデルデータはネットワークから再取得せず新しい管理コピーへコピーします。旧コピーを保持するため追加の空き容量とコピー時間が必要です。失敗・取消時に使用中の構成を置き換えず、未使用の旧コピーは後から管理操作で削除できます。
+
+既存ジョブは開始時の実行環境へ固定します。Windowsの旧protocol 2で保存した実行条件も、記録したworkerの実バイトと一致する場合だけ再開します。その環境を利用できない場合は新しい設定で処理を開始するよう案内し、現行workerへ黙って差し替えません。新しい起動時案内を追加する保守上の境界は[ADR 0012](../adr/0012-startup-notices.md)を参照してください。
+
 ## 候補と実行方式
 
 | 用途 | モデル系列 |
@@ -36,7 +47,7 @@ LFM3のLFM Open License v1.0には、関連会社等を含む組織の定義と�
 | 話者分離 | Pyannote segmentationとERes2Net、標準／int8構成 |
 | 議事録 | Qwen 2.5／3／3.5、Gemma 4 E4B IT、Phi-4-mini-instruct、LFM3 |
 
-実際に選択できる量子化形式・OS別候補・容量・取得元・SHA・利用条件の正本は[モデルカタログ](../../app/model-catalog/)です。利用条件の対応は`model-license-policy.json`で重みと通知原文の容量・SHA・出典へ結び付け、既存の取得レシピとは分けて管理します。[同梱原文](../../third-party/model-licenses/README.md)はクレジットでも表示します。UIはその定義と同梱ランタイムから候補を構成します。候補総数や全ファイルのハッシュを文書へ複製しません。
+実際に選択できる量子化形式・OS別候補・容量・取得元・SHA・利用条件の正本は[モデルカタログ](../../app/model-catalog/)です。利用条件の対応は`model-license-policy.json`でモデルデータと通知原文の容量・SHA・出典へ結び付け、既存の取得レシピとは分けて管理します。[同梱原文](../../third-party/model-licenses/README.md)はクレジットでも表示します。UIはその定義と同梱ランタイムから候補を構成します。候補総数や全ファイルのハッシュを文書へ複製しません。
 
 Whisperや議事録エンジンでは対応するGPUを試行し、条件に従ってCPUへ切り替えます。macOSはMetal、Windowsは同梱CPU／Vulkanワーカーを使います。ReazonSpeechとHaasはCPUで動作します。CPUでの導入確認はGPU動作や認識品質の保証ではありません。
 
@@ -46,7 +57,7 @@ Whisperや議事録エンジンでは対応するGPUを試行し、条件に従�
 
 導入済みの同じモデルの複数コピーは1候補にまとめ、コピー数・合計容量と各コピーの管理操作を提供します。選択中であることだけでは削除を禁止せず、実際に競合する処理や状態取得失敗などの理由を表示します。
 
-モデル本体の同一性はバックエンドと完全なモデルファイル集合から決めます。配布レシピやランタイム更新だけで本体の同一性を変えず、検証できた同じ重みは再利用します。由来不明・未完了・破損した素材を使用可能にしません。
+モデル本体の同一性はバックエンドと完全なモデルファイル集合から決めます。配布レシピやランタイム更新だけで本体の同一性を変えず、検証できた同じモデルデータは再利用します。由来不明・未完了・破損した素材を使用可能にしません。
 
 準備の中断・応答喪失時は元の処理の停止と保存結果を照合します。設定画面を開いただけでは取得を開始しません。失敗の確定後は通常の導入・切替操作から再試行でき、成功した取得は再利用します。
 

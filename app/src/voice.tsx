@@ -136,10 +136,12 @@ export function VoicePanel({meetingId,speakers,revision,locked,beforeOperation,o
 export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boolean;standalone?:boolean}){
   const [open,setOpen]=useState(standalone),[people,setPeople]=useState<VoicePerson[]>([]),[error,setError]=useState(""),[busy,setBusy]=useState(false),[loaded,setLoaded]=useState(false),[editing,setEditing]=useState<VoicePerson|null>(null),[name,setName]=useState(""),[deleting,setDeleting]=useState<VoicePerson|null>(null);
   const opener=useRef<HTMLElement|null>(null),inFlight=useRef(false),active=useRef(true),savingAudio=useRef(false);
+  const [cleanupPending,setCleanupPending]=useState(false);
+  const preservationFailed=people.some(p=>p.samples.some(s=>s.audioStorageState==="failed"));
   savingAudio.current=people.some(p=>p.samples.some(s=>s.audioStorageState==="pending"));
   const audio=useTranscriptAudio("voice-library",locked,{inline:true,scope:"voice"});
   useEffect(()=>{active.current=true;return()=>{active.current=false;};},[]);
-  const load=async()=>{const next=await invoke<VoicePerson[]>("get_voice_people");if(active.current){if(audio.selected&&!next.some(p=>p.samples.some(s=>s.id===audio.selected&&s.audioAvailable)))audio.clear();setPeople(next);setLoaded(true);}};
+  const load=async()=>{const [next,audioState]=await Promise.all([invoke<VoicePerson[]>("get_voice_people"),invoke<{cleanupPending:boolean}>("get_voice_audio_storage_state")]);if(!audioState||typeof audioState.cleanupPending!=="boolean")throw Error("登録音声の保存状態を確認できません。");if(active.current){if(audio.selected&&!next.some(p=>p.samples.some(s=>s.id===audio.selected&&s.audioAvailable)))audio.clear();setPeople(next);setCleanupPending(audioState.cleanupPending);setLoaded(true);}};
   const run=async(action:()=>Promise<void>)=>{if(locked||inFlight.current)return;inFlight.current=true;setBusy(true);setError("");try{await flushPendingEdits();try{await action();}finally{await load();}}catch(c){if(active.current)setError(String(c));}finally{inFlight.current=false;if(active.current)setBusy(false);}};
   const refresh=useRef(()=>run(async()=>{}));refresh.current=()=>run(async()=>{});
   useEffect(()=>{
@@ -153,11 +155,12 @@ export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boo
   const manage=async(p:VoicePerson,name:string|null,sampleId:string|null)=>{
     if(name===null){audio.clear();await stopAllPlayback();}
     const receipt=await invoke<{audioCleanupPending:boolean;audioCleanupError:string|null}>("manage_voice_person",{personId:p.id,expectedVersion:p.version,name,sampleId});
-    if(receipt?.audioCleanupPending)throw Error(`登録は削除しましたが音声ファイルの削除が保留されています。音声保存・削除を再試行してください。${receipt.audioCleanupError??""}`);
+    if(receipt?.audioCleanupPending){setCleanupPending(true);setError(`登録は削除しましたが、音声ファイルの削除が完了していません。${receipt.audioCleanupError??""}`);}
   };
   const help=<InfoPopover label={standalone?"ボイス一覧":"登録した話者"}><p>声を登録した人物と、登録に使った音声を確認できます。</p><p>登録区間の音声と声の特徴量はこの端末内に保存し、バックアップにも含めます。元の会議や会議音声を削除しても登録音声は残ります。削除しても過去の会議に付けた名前は残ります。異なるモデルで登録した声は照合に使いません。モデル変更後は、会議から声を追加登録してください。</p></InfoPopover>;
   const content=<>
-    <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><button className="small-secondary" disabled={locked||busy} onClick={()=>void run(()=>invoke<void>("retry_voice_audio_storage"))}>音声保存・削除を再試行</button><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
+    <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
+    {(cleanupPending||preservationFailed)&&<div className="voice-audio-recovery" role="status"><p>{cleanupPending?"登録音声の削除が完了していません。":"登録音声を保存できませんでした。"}</p><button className="small-secondary" disabled={locked||busy} onClick={()=>void run(async()=>{await invoke<void>("retry_voice_audio_storage");})}>再試行</button></div>}
     {loaded&&!people.length&&!error&&<p>登録した話者はいません。</p>}
     {people.map(p=><section className="voice-person" key={p.id} aria-label={p.name}><strong>{p.name}</strong><small>識別子 {p.id.slice(0,8)} · {p.samples.length}区間</small>
       <button className="small-secondary" disabled={locked||busy} onClick={e=>{opener.current=e.currentTarget;setEditing(p);setName(p.name);}}>名前を変更</button>

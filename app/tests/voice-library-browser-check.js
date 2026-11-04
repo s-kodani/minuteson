@@ -8,6 +8,7 @@ async (page,capturePath) => {
   await library.getByText('登録した話者はいません。',{exact:true}).waitFor();
   check(await nav.getByRole('button',{name:'ボイス一覧',exact:true}).getAttribute('aria-current')==='page','voice navigation is not selected');
   check((await calls('prepare_voice_sample_playback')).length===0,'opening the library started playback');
+  check(await library.getByRole('button',{name:'再試行',exact:true}).count()===0,'normal library shows a storage retry');
   results.push('sidebar opens the voice library with an empty state and no automatic playback');
 
   await page.evaluate(()=>{
@@ -117,12 +118,20 @@ async (page,capturePath) => {
   });
   await library.getByRole('button',{name:'ボイス一覧を再読込',exact:true}).click();
   await renamed.getByText('登録音声の保存に失敗しました。合成の音声保存失敗',{exact:true}).waitFor();
-  await library.getByRole('button',{name:'音声保存・削除を再試行',exact:true}).click();
+  await library.getByRole('button',{name:'再試行',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'合成の音声保存失敗'}).waitFor();
   await page.evaluate(()=>{window.monVoiceFixture.failAudioStorage=false;});
-  await library.getByRole('button',{name:'音声保存・削除を再試行',exact:true}).click();
+  await library.getByRole('button',{name:'再試行',exact:true}).click();
   await renamed.getByText('登録音声は保存済みです。元の会議を削除しても再生できます。',{exact:true}).waitFor();
   check(await renamed.getByRole('button',{name:'登録者の田中の登録区間1を再生',exact:true}).isEnabled(),'saved audio remains disabled after retry');
   results.push('saved clips play without their source meeting and failed preservation can be retried from the library');
+  await page.evaluate(()=>{window.monVoiceFixture.people=[];window.monVoiceFixture.cleanupPending=true;});
+  await nav.getByRole('button',{name:'会議一覧',exact:true}).click();
+  await nav.getByRole('button',{name:'ボイス一覧',exact:true}).click();
+  await library.getByText('登録音声の削除が完了していません。',{exact:true}).waitFor();
+  await library.getByRole('button',{name:'再試行',exact:true}).click();
+  await library.getByRole('button',{name:'再試行',exact:true}).waitFor({state:'hidden'});
+  check(await page.evaluate(()=>!window.monVoiceFixture.cleanupPending),'orphan cleanup was not retried');
+  results.push('native cleanup status exposes retry after an empty library is remounted');
   return {passed:results.length,results};
 }

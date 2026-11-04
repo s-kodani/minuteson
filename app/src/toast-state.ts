@@ -9,6 +9,8 @@ export interface ToastInput {
   key: string;
   level: ToastLevel;
   message: string;
+  details?: string;
+  historyOnly?: boolean;
   important?: boolean;
   eventId?: string;
   meetingId?: string;
@@ -24,7 +26,7 @@ interface Clock {
 }
 interface Entry { toast: Toast; remaining: number; started: number | null; timer: unknown; pauses: Set<string>; rendered:boolean }
 const priority = (t: Toast) => t.important ? 0 : t.level === "error" ? 1 : t.level === "warning" ? 2 : 3;
-const signature = (t: ToastInput) => JSON.stringify([t.level, t.message, t.important ?? t.level === "error", t.eventId ?? null]);
+const signature = (t: ToastInput) => JSON.stringify([t.level, t.message, t.important ?? t.level === "error", t.eventId ?? null, t.details ?? null]);
 export const toastKey = (scope: string, type: string) => JSON.stringify([scope, type]);
 
 /** Timers run only while a notice is visible and not being read/operated.
@@ -193,6 +195,15 @@ export class ToastController {
     if(changed)this.publish();
   }
   async act(key: string, id: number, fromList=false) {
+    const historical = this.history.get(id);
+    if (fromList && historical?.key === key && historical.historyOnly) {
+      const action = historical.action;
+      if (!action || action.disabled || historical.actionBusy || [...this.pauses].some(reason=>reason!=="modal")) return;
+      this.history.set(id,{...historical,actionBusy:true});this.publish();
+      try { await action.run(); }
+      finally { const current=this.history.get(id);if(current){this.history.set(id,{...current,actionBusy:false});this.publish();} }
+      return;
+    }
     const entry = this.entries.get(key), action = entry?.toast.action;
     if (!entry || entry.toast.id !== id || !action || action.disabled || entry.pauses.has("action") || [...this.pauses].some(reason=>!fromList||reason!=="modal")) return;
     entry.toast = { ...entry.toast, actionBusy: true };
