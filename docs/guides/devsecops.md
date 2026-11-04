@@ -16,7 +16,7 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/.github/security-exceptions.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/94b513548614f37cb070273abe492975d062b29d/.github/dependabot.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/cd647f3d8c5917619f266eba8d2112d909182862/.github/dependabot.yml"
 ---
 
 # DevSecOpsの検査と運用
@@ -82,7 +82,11 @@ cargo tree --frozen --target x86_64-unknown-linux-gnu --edges normal,build --inv
 4. mainのrulesetでPR、`CI gate`と`Security gate`の成功、force push・削除の禁止を設定します。チェック名は初回実行結果から選択します。承認数は0とし、本人が自分のPRを確認してマージできるようにします。通常のバイパスは設けません。
 5. `v*`タグの更新・削除を禁止します。新規作成はReleasesと公開用ワークフローに許可します。Actionsの既定権限はread-only、forkワークフローの実行承認を有効化します。各ジョブで必要な権限だけを宣言します。
 
-設定や検査が未完了の状態を導入済みの保護と扱いません。Dependabotの通常更新はnpm/Cargo/Actionsと検査用Python依存が対象です。現在は[Dependabot定義](../../.github/dependabot.yml)の全4対象を`open-pull-requests-limit: 0`で停止しています。CI・セキュリティ検査と保護設定を確認してから、上限を`5`へ戻すPRを検査・マージして再開します。バージョン更新はActions停止と別に動作します。[GitHubの停止手順](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates#disabling-dependabot-version-updates)に従い、上限`0`は通常のバージョン更新を止めるもので、セキュリティ更新は別のリポジトリ設定で管理します。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
+設定や検査が未完了の状態を導入済みの保護と扱いません。
+
+Dependabotは[定義](../../.github/dependabot.yml)に従い、npm・Cargo・GitHub Actions・検査用Python依存の4対象を毎週月曜10:00（日本時間）に確認します。バージョン更新PRの上限は対象ごとに5件です。npm/Cargoのminor・patch更新はグループ化し、major更新は別PRで確認します。自動マージは行わず、通常のPRと同じ必須検査と互換性の確認を通して取り込みます。
+
+バージョン更新はActionsの有効・無効と別に動作します。[GitHubの設定仕様](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#open-pull-requests-limit)に従い、セキュリティ更新はバージョン更新PRの上限とは別に、リポジトリ設定で管理します。スキャナーのバイナリ定義と手動固定する資材は保守担当者が確認・更新します。
 
 ## 自動配布の初期設定
 

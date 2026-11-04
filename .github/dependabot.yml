@@ -1,5 +1,4 @@
 version: 2
-# Version updates are paused; restore 5 after CI and repository protection checks.
 updates:
   - package-ecosystem: npm
     directory: /app
@@ -11,7 +10,7 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -22,7 +21,7 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -30,7 +29,7 @@ updates:
       day: monday
       time: '10:00'
       timezone: Asia/Tokyo
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
   - package-ecosystem: pip
     directory: /tools
     schedule:
@@ -38,4 +37,4 @@ updates:
       day: monday
       time: '10:00'
       timezone: Asia/Tokyo
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
