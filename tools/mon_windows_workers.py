@@ -1,5 +1,5 @@
 """Build Windows resident v1 workers from the same fixed engine sources as Mac.
-The old protocol-2 CLI package remains available for existing saved jobs.
+Protocol-2 CLI paths still require the exact bytes recorded by saved jobs.
 Additional source bytes share the parity download budget and SHA ledger.
 """
 import hashlib
@@ -44,7 +44,7 @@ def extract(archive,target):
         (target/'.complete').write_text('verified source\n',encoding='utf8')
     return target/'tree'
 
-def prepare(vulkan=False, jobs=4):
+def prepare(vulkan=False, jobs=4, package_root=None):
     if not isinstance(jobs,int) or not 1 <= jobs <= 64:raise ValueError('worker build jobs must be between 1 and 64')
     if vulkan:
         from mon_windows_vulkan_sdk import prepare as sdk
@@ -79,7 +79,7 @@ def prepare(vulkan=False, jobs=4):
                 text+=f'  if(TARGET {target})\n    target_link_options({target} PRIVATE "/MANIFESTINPUT:${{CMAKE_CURRENT_SOURCE_DIR}}/mon/windows.manifest")\n  endif()\n'
             text+='endif()\n';cmake.write_text(text,encoding='utf8')
         roots[engine]=source
-    package=runtime.PACKAGE/'workers';package.mkdir(parents=True,exist_ok=True)
+    package=(runtime.PACKAGE if package_root is None else Path(package_root))/'workers';package.mkdir(parents=True,exist_ok=True)
     if vulkan:
         shutil.copyfile(sdk_root/'Licenses/LICENSE.txt',package/'Vulkan-SDK-LICENSE.txt')
         (package/'Vulkan-Headers-LICENSE.txt').write_bytes(b'Copyright 2014-2025 The Khronos Group Inc.\nVulkan SDK 1.4.328.1 headers (Apache-2.0).\n\n'+(ROOT/'third-party/notices/defmt-LICENSE-APACHE.txt').read_bytes())

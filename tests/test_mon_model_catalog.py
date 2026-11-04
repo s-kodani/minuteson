@@ -20,7 +20,7 @@ def canonical_hash(value):
 
 
 class ModelCatalogTests(unittest.TestCase):
-    def test_windows_packages_bind_new_models_to_new_runtime_and_keep_old_models_on_old_runtime(self):
+    def test_windows_packages_bind_all_llm_choices_to_the_fixed_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             package = root / 'package'
@@ -43,16 +43,17 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertEqual(len(llms), 9)
             for choice in llms:
                 manifest = choice['recipe']['manifest']
-                engine = 'llama11960' if manifest['engineVersion'] == 'b11960' else 'llama'
+                self.assertEqual(manifest['engineVersion'], 'b11960')
+                engine = 'llama11960'
                 executable = next(f for f in manifest['files'] if f['role'] == 'executable')
                 self.assertEqual(executable['expectedHash'], hashlib.sha256(engine.encode()).hexdigest())
                 source = next(s for s in choice['recipe']['sources'] if s['relativePath'] == executable['relativePath'])
                 self.assertEqual(source['archive']['memberPath'], engine + '/llama-completion.exe')
                 self.assertTrue(choice['id'].startswith('windows-llama-'))
 
-    def test_generated_macos_compatibility_recipes_retain_every_old_field_and_order(self):
+    def test_generated_macos_recipes_bind_the_reviewed_runtime_and_preserve_asr(self):
         expected = {
-            'macos.json': ('base', 'dadd46dffb9404f0a0ed2814ce9e2343b2b7f824ddc06d4bb6f3d90306172895'),
+            'macos.json': ('base', '0c1632dca27daa2b0174c4b5a1e94c33e2075717053397458988751260cdd902'),
             'asr-transducer.json': ('asr', 'd72e39de3b7a96da478e4d267bf88f83400dee5fc64cb35d4deaade73eadc8a1'),
         }
         for name, (group, golden) in expected.items():

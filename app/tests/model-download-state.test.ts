@@ -238,8 +238,8 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
   assert.equal(options[1].tokenLimits, null);
   assert.equal(options[0].review.manifest.files.filter(f => f.role === "notice").length, 2);
-  assert.equal(options[0].review.downloadBytes, 1_129_407_950);
-  assert.equal(options[0].review.recipeHash, "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3");
+  assert.equal(options[0].review.downloadBytes, 1_133_797_153);
+  assert.equal(options[0].review.recipeHash, "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083");
   assert.equal(options[1].review.manifest.engine, "sherpa-onnx");
   assert.equal(options[1].review.manifest.files.filter(f => f.role === "notice").length, 5);
   assert.equal(options[1].review.downloadBytes, 65_153_215);
@@ -247,7 +247,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   assert.equal(options[1].review.totalBytes, 78_117_057);
   assert.equal(options[1].review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
   assert.deepEqual(options.slice(2, 4).map(o => o.review.recipeHash), [
-    "a8f5330b3cd2a0c700b81b0d0402473c441dad3faa3814060162ec132d1fdd59",
+    "c22378addb7bfa61fa5cb4c1856d64b263d5c82923dc556ab7a9bef348f70106",
     "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96",
   ]);
   for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && o.id.includes("qwen25-"))) {
@@ -258,18 +258,18 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const qwen3 = options[4];
   assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
   assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });
-  assert.equal(qwen3.review.recipeHash, "344413ffe456e123c918af5f422a82f64f7443fa6a81f332a58068caeed12f14");
+  assert.equal(qwen3.review.recipeHash, "d985b93ece8e0c10e87af2a2a7342be13f22a4bba729c7f8ffb44fd306b597ee");
   assert.equal(qwen3.review.manifest.files.find(file => file.role === "llm")?.expectedHash, "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785");
   const qwen3_4b = options.find(o => o.id === "llama-b11533-qwen3-4b-q4km")!;
   assert.equal(qwen3_4b.label, "Qwen 3 4B · Q4_K_M");
   assert.deepEqual(qwen3_4b.tokenLimits, qwen3.tokenLimits);
-  assert.equal(qwen3_4b.review.recipeHash, "920cc12b71fdc8d1dc66234050be25d0c577f16a639e4bf55048ca8e634e70b8");
+  assert.equal(qwen3_4b.review.recipeHash, "19548a8e0a3221266c8d231c2146f85f6575c3cb71adadf89de51b000eb29a66");
   const model4b = qwen3_4b.review.manifest.files.find(file => file.role === "llm")!;
   assert.equal(model4b.expectedHash, "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5");
   assert.equal(model4b.expectedSize, 2_497_280_256);
   for (const [size, bytes, hash, recipeHash] of [
-    ["4B", 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "00f77ecbf06bfa6823532998d9a79785097ad153838ee90c5fb85bfe6e7835b7"],
-    ["9B", 5_680_522_464, "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "a87db4f037d6eb2276580a1a2f296cdbe479025b84b0363a6b969ac78e0f2ac2"],
+    ["4B", 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "0cef3f0c5a4ff344b1c52b1b0e793a6f0dad8c85528c79dad11c9d3fbfd30d82"],
+    ["9B", 5_680_522_464, "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "9ff8c744fd3f2d8094d28a9830b0b5b829fa4f5944441b92c21a471af54327a2"],
   ] as const) {
     const option = options.find(o => o.id === `llama-b11533-qwen35-${size.toLowerCase()}-q4km`)!;
     assert.equal(option.label, `Qwen 3.5 ${size} · Q4_K_M`);

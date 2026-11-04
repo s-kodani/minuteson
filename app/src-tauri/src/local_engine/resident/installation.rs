@@ -139,7 +139,7 @@ impl Snapshot {
                 size: self.bytes,
                 sha256: self.sha256.clone(),
             };
-            proof.verify(&|| false)?;
+            proof.verify(&|| false).map_err(|error| format!("このジョブが記録したWindows実行環境を利用できません。実行条件は変更していません。現在のモデル設定で新しく実行してください: {error}"))?;
             return Ok(proof);
         }
         self.resolve_from(root, || Ok(resources()?.join(&self.name)))

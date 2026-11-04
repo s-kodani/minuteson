@@ -18,8 +18,8 @@ struct Choice {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OptionView {
-    id: String,
-    label: String,
+    pub(crate) id: String,
+    pub(crate) label: String,
     description: String,
     pub(crate) definition: String,
     pub(crate) review: crate::model_download_recipe::Review,
@@ -167,28 +167,28 @@ mod tests {
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
             let expected = match choice.id.as_str() {
                 "llama-b11533-qwen25-15b-q4km" => {
-                    "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3"
+                    "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083"
                 }
                 "sherpa-1138-pyannote3-eres2net-base" => {
                     "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
                 }
                 "llama-b11533-qwen25-15b-q8" => {
-                    "a8f5330b3cd2a0c700b81b0d0402473c441dad3faa3814060162ec132d1fdd59"
+                    "c22378addb7bfa61fa5cb4c1856d64b263d5c82923dc556ab7a9bef348f70106"
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
                     "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96"
                 }
                 "llama-b11533-qwen3-8b-q4km" => {
-                    "344413ffe456e123c918af5f422a82f64f7443fa6a81f332a58068caeed12f14"
+                    "d985b93ece8e0c10e87af2a2a7342be13f22a4bba729c7f8ffb44fd306b597ee"
                 }
                 "llama-b11533-qwen3-4b-q4km" => {
-                    "920cc12b71fdc8d1dc66234050be25d0c577f16a639e4bf55048ca8e634e70b8"
+                    "19548a8e0a3221266c8d231c2146f85f6575c3cb71adadf89de51b000eb29a66"
                 }
                 "llama-b11533-qwen35-4b-q4km" => {
-                    "00f77ecbf06bfa6823532998d9a79785097ad153838ee90c5fb85bfe6e7835b7"
+                    "0cef3f0c5a4ff344b1c52b1b0e793a6f0dad8c85528c79dad11c9d3fbfd30d82"
                 }
                 "llama-b11533-qwen35-9b-q4km" => {
-                    "a87db4f037d6eb2276580a1a2f296cdbe479025b84b0363a6b969ac78e0f2ac2"
+                    "9ff8c744fd3f2d8094d28a9830b0b5b829fa4f5944441b92c21a471af54327a2"
                 }
                 "llama-b11960-gemma4-e4b-it-q4km" => {
                     "733daf690e7514e028c97f186ecb3f806a00338347ba2aed83f15abf9facd4aa"

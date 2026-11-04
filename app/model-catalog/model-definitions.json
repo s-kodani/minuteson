@@ -14,7 +14,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen2.5-1.5B-Instruct",
       "modelVersion": "91cad51170dc346986eccefdc2dd33a9da36ead9",
       "quantization": "Q4_K_M",
@@ -47,12 +47,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {
@@ -186,7 +186,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen2.5-1.5B-Instruct Q8_0",
       "modelVersion": "91cad51170dc346986eccefdc2dd33a9da36ead9",
       "quantization": "Q8_0",
@@ -219,12 +219,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {
@@ -358,7 +358,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen3-8B",
       "modelVersion": "7c41481f57cb95916b40956ab2f0b139b296d974",
       "quantization": "Q4_K_M",
@@ -391,12 +391,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {
@@ -424,7 +424,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen3-4B",
       "modelVersion": "bc640142c66e1fdd12af0bd68f40445458f3869b",
       "quantization": "Q4_K_M",
@@ -457,12 +457,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {
@@ -490,7 +490,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen3.5-4B",
       "modelVersion": "e87f176479d0855a907a41277aca2f8ee7a09523",
       "quantization": "Q4_K_M",
@@ -523,12 +523,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {
@@ -556,7 +556,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11533",
+      "engineVersion": "b11960",
       "modelName": "Qwen3.5-9B",
       "modelVersion": "3885219b6810b007914f3a7950a8d1b469d598a5",
       "quantization": "Q4_K_M",
@@ -589,12 +589,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 12075871,
-          "expectedHash": "1bc6e1ed668d8199705468aeea13d57542fa8892f409d5a640d1f6f2701193ed",
-          "memberPath": "llama-b11533/LICENSE"
+          "expectedSize": 16465074,
+          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+          "memberPath": "llama-b11960/LICENSE"
         }
       },
       {

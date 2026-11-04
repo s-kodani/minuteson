@@ -4,10 +4,8 @@
     "モデル: Apache-2.0",
     "実行エンジン: MIT"
   ],
-  "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。各条件と著作権表示を保持してください。",
-  "restrictions": [
-    "再配布時は適用されるライセンス本文・著作権表示・NOTICEを保持し、変更表示など本文の条件に従ってください。"
-  ],
+  "summary": "モデルの重みにはApache-2.0、llama.cpp実行エンジンにはMITが適用されます。",
+  "restrictions": [],
   "notices": [
     {
       "name": "Qwen-Apache-2.0.txt",
@@ -19,12 +17,12 @@
       "name": "llama-MIT.txt",
       "text": "MIT License\n\nCopyright (c) 2023-2026 The ggml authors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11533/llama-b11533-bin-macos-arm64.tar.gz"
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
     }
   ],
   "official": true,
-  "disclosureHash": "43c5c55eaad7db3cc5bcd98f72e93b4bc11102536ce1c397a394f29ba7d7a8e4",
+  "disclosureHash": "5c93b4d3a51c4a2a45bdcc92bd77331e5374bc3bfe8b48cea3f8a9f12f368322",
   "targetBinding": {
-    "recipeHash": "4f2b8fe8ba750b9dcf5feb531f13f1929845556b91265d09f51a52e4d215d7a3"
+    "recipeHash": "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083"
   }
 }
