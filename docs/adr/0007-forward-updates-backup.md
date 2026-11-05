@@ -3,7 +3,7 @@ type: "ADR"
 title: "ADR 0007 限定的な前進更新と追加復元"
 description: "実装が明示的に対応する旧形式だけ更新・復元し、既存データを保持する。"
 tags: ["migration", "backup"]
-status: "stable"
+status: "deprecated"
 sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/storage/schema_upgrade.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/src/storage/backup/archive.rs"
@@ -13,6 +13,8 @@ sources:
 # ADR 0007 限定的な前進更新と追加復元
 
 2026-11-02に現行コードと既存記録から整理したADRです。原決定日はこの整理日と区別します。
+
+公開前の保存方針は[現行形式](../spec/storage.md#現行形式)を参照してください。
 
 ## 背景
 
@@ -32,5 +34,5 @@ sources:
 
 ## 参照元
 
-- [保存形式](../spec/storage.md#現行形式と対応する更新元)
+- [保存形式](../spec/storage.md#現行形式)
 - [更新手順](../guides/updating.md)

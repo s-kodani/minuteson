@@ -2,7 +2,7 @@ import { assertMarkdownDocument, type MarkdownDocument, type MarkdownStamp } fro
 
 export interface MarkdownExportRequest { meetingId:string; operationId:string; expected:MarkdownStamp }
 export interface MarkdownExportRecord {
-  id:string; meetingId:string; minutesRevisionId:null; exportedContentHash:string;
+  id:string; meetingId:string; exportedContentHash:string;
   outputContentHash:string; outputSizeBytes:number; destinationPath:string;
   state:"writing"|"succeeded"|"failed"|"interrupted";
   errorMessage:string|null; createdAt:number; exportedAt:number|null;
@@ -31,7 +31,7 @@ export class MarkdownExportController {
   private notify(){for(const listener of this.listeners)listener();}
   private validate(record:MarkdownExportRecord,pending:Pending) {
     if(!record||record.id!==pending.request.operationId||record.meetingId!==this.meetingId
-      ||record.minutesRevisionId!==null||record.exportedContentHash!==pending.request.expected.contentHash
+      ||record.exportedContentHash!==pending.request.expected.contentHash
       ||record.outputContentHash!==pending.outputHash||record.outputSizeBytes!==pending.size
       ||typeof record.destinationPath!=="string"||!record.destinationPath||record.destinationPath.includes("\0")
       ||(record.errorMessage!==null&&typeof record.errorMessage!=="string")

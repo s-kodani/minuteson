@@ -330,18 +330,10 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
             .len(),
         2
     );
-    let versions = storage.analysis_versions(&meeting).unwrap();
-    let summary = versions
-        .versions
-        .iter()
-        .find(|item| item.id == candidate)
-        .unwrap();
-    assert_eq!(summary.config["retryOfJobId"], failed.id);
-    assert_eq!(summary.config["attempt"], 2);
-    assert_eq!(
-        summary.config["vocabulary"],
-        saved.0.parameters["vocabulary"]
-    );
+    let config = candidate_config(&storage, &candidate);
+    assert_eq!(config["retryOfJobId"], failed.id);
+    assert_eq!(config["attempt"], 2);
+    assert_eq!(config["vocabulary"], saved.0.parameters["vocabulary"]);
 }
 
 fn vocabulary_entry(term: &str) -> VocabularyEntry {
@@ -491,14 +483,8 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .iter()
         .all(|u| u.recognized_text == "天気ビーです" && u.effective_text == "天気ビーです"));
     assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
-    let versions = storage.analysis_versions(&meeting).unwrap();
     assert_eq!(
-        versions
-            .versions
-            .iter()
-            .find(|v| v.id == candidate)
-            .unwrap()
-            .config["vocabulary"],
+        candidate_config(&storage, &candidate)["vocabulary"],
         spec.parameters["vocabulary"]
     );
 }
@@ -1054,4 +1040,18 @@ for line in sys.stdin:
         lines[0].split_whitespace().next(),
         lines[1].split_whitespace().next()
     );
+}
+
+fn candidate_config(storage: &Storage, id: &str) -> serde_json::Value {
+    let config: String = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT config_json FROM analysis_revisions WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    serde_json::from_str(&config).unwrap()
 }

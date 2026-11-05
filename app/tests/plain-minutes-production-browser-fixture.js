@@ -20,7 +20,7 @@ data.completePlain=()=>{
   const saved=data.plain[job.meetingId]??null,expected=job.expected;
   if((saved?.lockVersion??null)!==(expected?.lockVersion??null)||(saved?.contentHash??null)!==(expected?.contentHash??null)) {job.state="failed";job.errorCode="合成の人間保存との競合";}
   else {data.plain[job.meetingId]={meetingId:job.meetingId,markdown:"# 生成された議事録\n\n- 点検日を確認する\n",lockVersion:(expected?.lockVersion??0)+1,contentHash:"b".repeat(64),operationId:job.operationId,updatedAt:2};job.state="succeeded";job.completedUnits=job.totalUnits;}
-  data.emitPlain("analysis-job-changed");data.emitPlain("minutes-version-changed");
+  data.emitPlain("analysis-job-changed");
 };
 bridge.invoke=async(cmd,args={})=>{
   if(cmd==="get_ready_analysis_flows")return [];
@@ -81,7 +81,7 @@ bridge.invoke=async(cmd,args={})=>{
       if(current?.lockVersion!==r.expected.lockVersion||current?.contentHash!==r.expected.contentHash)throw Error("合成の保存先選択中の本文競合");
       const bytes=new TextEncoder().encode(saved.markdown),hash=await crypto.subtle.digest("SHA-256",bytes);
       const failed=data.exportMode==="failure";
-      const record={id:r.operationId,meetingId:r.meetingId,minutesRevisionId:null,exportedContentHash:r.expected.contentHash,
+      const record={id:r.operationId,meetingId:r.meetingId,exportedContentHash:r.expected.contentHash,
         outputContentHash:Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,"0")).join(""),outputSizeBytes:bytes.length,
         destinationPath:"/synthetic/議事録.md",state:failed?"failed":"succeeded",errorMessage:failed?"合成の外部書込み失敗":null,createdAt:0,exportedAt:failed?null:1};
       data.exportRecords[r.operationId]=record;
@@ -94,7 +94,7 @@ bridge.invoke=async(cmd,args={})=>{
     let job=data.jobs.find(j=>j.operationId===r.input.operationId);
     if(!job){
       if((saved?.lockVersion??null)!==(args.expected?.lockVersion??null)||(saved?.contentHash??null)!==(args.expected?.contentHash??null))throw Error("changed Markdown target");
-      job={id:`plain-job-${data.jobs.length+1}`,meetingId:r.input.meetingId,kind:"minutes_generation",state:"queued",completedUnits:0,totalUnits:3,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,specHash:"d".repeat(64),retryOfJobId:null,attempt:1,operationId:r.input.operationId,expected:copy(args.expected)};
+      job={id:`plain-job-${data.jobs.length+1}`,meetingId:r.input.meetingId,kind:"minutes_generation",state:"queued",completedUnits:0,totalUnits:3,errorCode:null,outputAnalysisId:null,pauseReason:null,specHash:"d".repeat(64),retryOfJobId:null,attempt:1,operationId:r.input.operationId,expected:copy(args.expected)};
       data.jobs.push(job);data.emitPlain("analysis-job-changed");
     }
     if(data.startMode==="lost")throw Error("合成の生成開始応答喪失");return copy(job);

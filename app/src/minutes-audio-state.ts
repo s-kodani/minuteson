@@ -13,14 +13,6 @@ export function validateAudioSummary(value: MeetingAudioSummary): MeetingAudioSu
     || value.modes.some(mode => !modes.includes(mode)) || new Set(value.modes).size !== value.modes.length) throw Error("会議音声の時間・種類を確認できません。");
   return { ...value, modes: [...value.modes] };
 }
-export function markdownIntervalRequest(meetingId: string, summary: MeetingAudioSummary, interval: MarkdownAudioInterval): MarkdownIntervalRequest {
-  validateAudioSummary(summary);
-  const mode = summary.modes.includes("mixed") ? "mixed" : null;
-  if (!meetingId || !mode || !Number.isSafeInteger(interval.startUs) || !Number.isSafeInteger(interval.endUs)
-    || interval.startUs < 0 || interval.endUs <= interval.startUs || interval.endUs > summary.durationUs)
-    throw Error("Markdownの再生区間に保存音声がありません。");
-  return { meetingId, mode, startUs: interval.startUs, endUs: interval.endUs, expectedDurationUs: summary.durationUs };
-}
 export function validateMarkdownPlayback(info: PlaybackInfo, request: MarkdownIntervalRequest): void {
   const frame = (us: number) => (BigInt(us) * BigInt(MEETING_SAMPLE_RATE) + 999999n) / 1000000n;
   if (!info.token || info.startUs !== request.startUs || info.endUs !== request.endUs

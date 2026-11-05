@@ -5,7 +5,7 @@ import type {NoticeReception} from "./recording-input-queue.ts";
 
 type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean;watch:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
-export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;deliveryUnavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"];checked:boolean;historySaveConfirmed:boolean};
+export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"];checked:boolean;historySaveConfirmed:boolean};
 
 /** Main WebView lifetime, independent of the selected meeting. One paginated
  * traversal, bounded owners and identity-fenced asynchronous acknowledgements. */
@@ -30,7 +30,6 @@ export class ArchivedInputController {
     return rows;
   }
   removeMeetings(ids:Set<string>){for(const [id,e]of this.entries)if(ids.has(e.row.meetingId))this.entries.delete(id);}
-  retainMeetings(ids:Set<string>){for(const [id,entry]of this.entries)if(!ids.has(entry.row.meetingId))this.entries.delete(id);}
   defer(request?:ArchivedAttempt){if(request){const entry=this.entries.get(request.attempt.sessionId);if(entry===request.entry){entry.queue.defer(request.attempt);entry.fresh=false;}}else for(const entry of this.entries.values())entry.fresh=false;}
   pause(paused:boolean){
     if(paused&&!this.paused)for(const entry of this.entries.values())entry.fresh=false;
@@ -52,7 +51,7 @@ export class ArchivedInputController {
     for(const row of rows){
       let entry=this.entries.get(row.sessionId);
       if(row.issue==="paused"){if(entry){if(discovery)entry.seen=true;entry.fresh=false;entry.error=false;}continue;}
-      if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue; // Legacy: no new local/disk ledger.
+      if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue;
       if(!entry){
         if(this.entries.size===128)this.entries.delete(this.entries.keys().next().value!);
         entry={row,session:new ArchivedInputSession(row.sessionId),queue:new RecordingInputQueue(row.sessionId,this.recipientId,"main"),fresh:false,seen:true,error:false,watch:false};
@@ -60,10 +59,8 @@ export class ArchivedInputController {
       // LRU order follows actual page use, never the UUID's magnitude.
       this.entries.delete(row.sessionId);this.entries.set(row.sessionId,entry);if(discovery)entry.seen=true;
       if(entry.row.meetingId!==row.meetingId){entry.fresh=false;entry.error=true;continue;}
-      // An old API's absent field is unknown, not evidence that a previously
-      // reported final writer failure has been resolved.
       entry.watch=row.issue==="unavailable"||row.batch!==null&&row.batch.notices.length>0;
-      entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
+      entry.row=row;
       try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";if(accepted)this.readLog(row.sessionId,null);}
       catch(error){entry.fresh=false;entry.error=true;this.readLog(row.sessionId,error);}
     }
@@ -75,7 +72,7 @@ export class ArchivedInputController {
       for(const attempt of entry.queue.observe(raw,at))attempts.push({entry,meetingId:entry.row.meetingId,attempt});
       const queued=entry.queue.read(at),diagnostic=entry.session.diagnostics();
       views.push({meetingId:entry.row.meetingId,sessionId:entry.row.sessionId,title:entry.row.title,...queued,
-        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,deliveryUnavailable:entry.row.issue==="deliveryUnavailable",historySaveIssue:entry.row.historySaveIssue??null,
+        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,historySaveIssue:entry.row.historySaveIssue,
         checked:!this.paused&&entry.fresh&&!entry.error&&entry.row.issue===null,
         // Final persistence is independent of a failed notification queue.
         historySaveConfirmed:!this.paused&&entry.row.issue!=="paused"&&entry.row.historySaveIssue===null});

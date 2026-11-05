@@ -1,7 +1,7 @@
 import { modelLicenseSummaryFixture } from "./model-license-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult, bundledWhisperSource, bundledAsrSource, bundledWindowsSource } from "../src/model-download-state.ts";
+import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, assertDownloadCopyResult, bundledWhisperSource, bundledAsrSource, bundledWindowsSource } from "../src/model-download-state.ts";
 import { readFileSync } from "node:fs";
 import { placementLabel } from "../src/model-inspection-state.ts";
 const id = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", hash = "a".repeat(64);
@@ -101,11 +101,6 @@ for (const field of ["operation", "recipe", "manifest", "manifest-hash", "review
   else value.ready = true;
   await assert.rejects(assertDownloadReceipt(value, id, await review()));
 });
-test("progress ignores wrong operation/hash/size, regressions and malformed values; 100% is only a number", async () => {
-  const checked = await review(), progress = { operationId: id, recipeHash: checked.recipeHash, totalBytes: checked.downloadBytes, receivedBytes: checked.downloadBytes };
-  assert.equal(acceptDownloadProgress(progress, id, checked, 10), checked.downloadBytes);
-  for (const bad of [null, { ...progress, operationId: other }, { ...progress, recipeHash: hash }, { ...progress, totalBytes: checked.downloadBytes + 1 }, { ...progress, receivedBytes: checked.downloadBytes + 1 }, { ...progress, receivedBytes: 9 }]) assert.equal(acceptDownloadProgress(bad, id, checked, 10), null);
-});
 test("catalog is marker metadata only, keeps attention and rejects duplicates or fake support", () => {
   const entry = { operationId: id, recipeHash: hash, modelName: "fixture", modelVersion: "1", totalBytes: 33, state: "completion_recorded" };
   assert.equal(assertDownloadCatalog({ supported: true, unknownEntries: 1, entries: [entry] }).entries[0].state, "completion_recorded");
@@ -150,7 +145,6 @@ test("hybrid bundle recipe separates wire traffic and storage; strict review and
   assert.deepEqual(totals, { downloadBytes: 17, archiveBytes: 100, bundledBytes: 100 });
   const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 4, ...totals, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
   const checked = await assertDownloadReview(native);
-  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 17, totalBytes: 17 }, id, checked, 0), 17);
   for (const patch of [{ bundledBytes: 0 }, { downloadBytes: 117 }, { archiveBytes: 0 }, { recipeSchemaVersion: 2 }, { recipeSchemaVersion: "3" }, { ready: true }]) await assert.rejects(assertDownloadReview({ ...native, ...patch }));
   const body = await receipt(); body.recipeHash = checked.recipeHash; body.report.manifest = value.manifest;
   body.report.manifestHash = await downloadDigest(value.manifest);
@@ -178,8 +172,6 @@ test("archive transfer is deduplicated, while installed payload and archive stor
   assert.deepEqual(downloadByteTotals(value), { downloadBytes: 100, archiveBytes: 100 });
   const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 4, downloadBytes: 100, archiveBytes: 100, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
   const checked = await assertDownloadReview(native);
-  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 100, totalBytes: 100 }, id, checked, 0), 100);
-  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 33, totalBytes: 33 }, id, checked, 0), null);
   for (const patch of [{ recipeSchemaVersion: 1 }, { downloadBytes: 200 }, { archiveBytes: 0 }, { totalBytes: 100 }, { recipeSchemaVersion: undefined }]) await assert.rejects(assertDownloadReview({ ...native, ...patch }));
   const body = await receipt(); body.recipeHash = checked.recipeHash;
   assert.equal((await assertDownloadReceipt(body, id, checked)).ready, false);

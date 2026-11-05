@@ -111,6 +111,7 @@ impl Registry {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HistoricalRoot {
@@ -122,8 +123,8 @@ pub(crate) struct HistoricalRoot {
     pub restore_operations: usize,
     pub remaining_root_objects: usize,
 }
+#[cfg(test)]
 impl Storage {
-    #[allow(dead_code)] // Main-only settings API and historical-root UI follow.
     pub(crate) fn previous_storage_history(&self) -> Result<Vec<HistoricalRoot>, String> {
         let registry = self.scratch.as_ref().ok_or("端末内台帳がありません")?;
         registry

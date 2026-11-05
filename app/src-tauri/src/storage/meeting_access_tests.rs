@@ -85,7 +85,7 @@ fn scoped_deletion_removes_stale_recording_while_other_job_saves_and_finishes() 
                 .is_err());
             let foreign = db
                 .execute(
-                    "UPDATE meetings SET previous_analysis_id=?1 WHERE id=?2",
+                    "UPDATE meetings SET current_analysis_id=?1 WHERE id=?2",
                     params![stale_analysis, other],
                 )
                 .unwrap_err();
@@ -144,12 +144,12 @@ fn scoped_deletion_removes_stale_recording_while_other_job_saves_and_finishes() 
         );
         let published = writer.join().unwrap();
         storage
-            .finish_job(&keep_job.id, 2, "succeeded", None)
+            .finish_job(&keep_job.id, 2, "failed", Some("fixture-complete"))
             .unwrap();
         storage.release_meeting_deletion(&target).unwrap();
         assert!(storage.get_meeting(&target).unwrap().is_none());
         assert!(!audio.exists());
-        assert_eq!(storage.get_job(&keep_job.id).unwrap().state, "succeeded");
+        assert_eq!(storage.get_job(&keep_job.id).unwrap().state, "failed");
         assert_eq!(
             storage.load_current_analysis(&other).unwrap().unwrap().id,
             published

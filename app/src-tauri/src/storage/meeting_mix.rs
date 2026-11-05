@@ -2,17 +2,6 @@
 use super::transcription::{RecordedAudioPlan, TrackPlan};
 use super::*;
 
-pub(super) fn read(db: &Connection, meeting: &str) -> Result<Option<RecordedAudioPlan>, String> {
-    super::meeting_audio::read(db, meeting)
-}
-pub(super) fn read_historical(
-    db: &Connection,
-    meeting: &str,
-    history: &super::backup::DeletedAudioHistory,
-) -> Result<Option<RecordedAudioPlan>, String> {
-    history.verify_meeting(db, meeting)?;
-    super::meeting_audio::read_historical(db, meeting)
-}
 impl Storage {
     pub(crate) fn ensure_meeting_mix(
         &self,

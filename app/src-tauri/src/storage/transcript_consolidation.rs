@@ -14,31 +14,6 @@ pub(crate) struct Request {
     pub operation_id: String,
 }
 
-pub(crate) fn restore_request(
-    meeting: &str,
-    value: &serde_json::Value,
-    resolver: &impl crate::job_codec::Resolver,
-) -> Result<serde_json::Value, String> {
-    use crate::job_codec::ReferenceDomain as Domain;
-    let mut request: Request = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-    if request.meeting_id != meeting {
-        return Err("話者補完の要求会議が一致しません".into());
-    }
-    request.expected_content_hash = resolver.hash(
-        Domain::Analysis,
-        meeting,
-        &request.analysis_id,
-        &request.expected_content_hash,
-    )?;
-    request.analysis_id = resolver.id(Domain::Analysis, meeting, &request.analysis_id)?;
-    request.operation_id = resolver.id(Domain::Operation, meeting, &request.operation_id)?;
-    request.meeting_id = resolver.id(Domain::Meeting, meeting, meeting)?;
-    if let Some(draft) = &mut request.expected_draft {
-        draft.id = resolver.id(Domain::Draft, meeting, &draft.id)?;
-    }
-    serde_json::to_value(request).map_err(|e| e.to_string())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Reply {
@@ -53,14 +28,6 @@ pub(in crate::storage) struct Provenance {
     pub schema_version: u32,
     pub operation_id: String,
     pub source_draft: Option<DraftStamp>,
-    pub groups: Vec<SourceGroup>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(in crate::storage) struct SourceGroup {
-    pub lineage_id: String,
-    pub source_lineages: Vec<String>,
 }
 
 fn word_edge(c: char) -> bool {
@@ -167,12 +134,22 @@ pub(super) fn consolidate_copied_rows(
     groups: &[Vec<AnalysisUtterance>],
 ) -> Result<(), String> {
     let lineages = super::minutes_input::lineage_map(tx, "utterances", &source.id)?;
-    let mut provenance = Provenance {
+    let provenance = Provenance {
         schema_version: 1,
         operation_id: request.operation_id.clone(),
         source_draft: request.expected_draft.clone(),
-        groups: Vec::new(),
     };
+    let text: String = tx
+        .query_row(
+            "SELECT config_json FROM analysis_revisions WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut config: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut manual: std::collections::BTreeSet<String> =
+        serde_json::from_value(config["manualAssignmentLineages"].clone())
+            .map_err(|e| e.to_string())?;
     for group in groups {
         let originals = group
             .iter()
@@ -209,10 +186,13 @@ pub(super) fn consolidate_copied_rows(
             )
             .map_err(|e| e.to_string())?;
         }
-        provenance.groups.push(SourceGroup {
-            lineage_id: lineage,
-            source_lineages: originals,
-        });
+        let mut manually_assigned = false;
+        for original in originals {
+            manually_assigned |= manual.remove(&original);
+        }
+        if manually_assigned {
+            manual.insert(lineage);
+        }
     }
     let mut speaker_lineages = super::minutes_input::lineage_map(tx, "speakers", &source.id)?;
     for speaker in &payload.manual_speakers {
@@ -242,14 +222,7 @@ pub(super) fn consolidate_copied_rows(
         )
         .map_err(|e| e.to_string())?;
     }
-    let text: String = tx
-        .query_row(
-            "SELECT config_json FROM analysis_revisions WHERE id=?1",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let mut config: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    config["manualAssignmentLineages"] = serde_json::json!(manual);
     // This revision is public, not a fixed job input. The normal parent FK
     // keeps its source; an inputSnapshot would falsely require an input row.
     config
@@ -392,8 +365,12 @@ impl Storage {
             Some((request, &groups)),
         )?;
         copy_voice_matches(&tx, &source, &id)?;
-        tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1",[&request.meeting_id]).map_err(|e|e.to_string())?;
-        tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
+        tx.execute(
+            "DELETE FROM working_drafts WHERE meeting_id=?1 AND target_kind='transcript'",
+            [&request.meeting_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("UPDATE meetings SET current_analysis_id=?1,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
         let hash = super::revisions::analysis_content_hash(&tx, &id)?;
         let analysis =
             super::analysis::read_analysis_content(&tx, &request.meeting_id, &id, &hash)?;
@@ -625,7 +602,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .query_row(
-                    "SELECT active FROM working_drafts WHERE id=?1",
+                    "SELECT count(*) FROM working_drafts WHERE id=?1",
                     [&saved.id],
                     |r| r.get::<_, i64>(0)
                 )
@@ -676,12 +653,40 @@ mod tests {
         let (_root, s, r) = fixture();
         let before = s.load_current_analysis(&r.meeting_id).unwrap().unwrap();
         let speaker = &before.utterances[0].speaker_ids[0];
+        let person = Uuid::new_v4().to_string();
+        let sample = Uuid::new_v4().to_string();
+        let path = super::super::voice::audio::relative(&person, &sample).unwrap();
+        let (directory, leaf) = super::super::voice::audio::file(s.root(), &path, true).unwrap();
+        let mut wav = crate::audio::wave::header(4000).unwrap();
+        wav.extend([0; 8000]);
+        std::io::Write::write_all(&mut directory.create(&leaf).unwrap(), &wav).unwrap();
+        let clip_hash = format!("{:x}", Sha256::digest(&wav));
         {
             let db = s.connection.lock().unwrap();
-            db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)", [])
-                .unwrap();
-            db.execute("INSERT INTO voice_samples VALUES('sample','person',?1,?2,2,?3,?4,?5,'track',0,250000,0)",params!["a".repeat(64),crate::voice::EXTRACTOR,crate::voice::encode(&[1.,0.]).unwrap(),r.meeting_id,r.analysis_id]).unwrap();
-            db.execute("INSERT INTO voice_matches VALUES('match',?1,?2,?3,'person','登録者','confirmed',NULL,?4,'manual',0)",params![r.meeting_id,r.analysis_id,speaker,"a".repeat(64)]).unwrap();
+            db.execute(
+                "INSERT INTO voice_people VALUES(?1,'登録者',1,0)",
+                [&person],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO voice_samples VALUES(?1,?2,?3,?4,2,?5,?6,?7,'track',0,250000,0)",
+                params![
+                    sample,
+                    person,
+                    "a".repeat(64),
+                    crate::voice::EXTRACTOR,
+                    crate::voice::encode(&[1., 0.]).unwrap(),
+                    r.meeting_id,
+                    r.analysis_id
+                ],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO voice_sample_audio(id,relative_path,size_bytes,content_hash,frame_count,state)
+                 VALUES(?1,?2,?3,?4,4000,'ready')",
+                params![sample, path, wav.len() as i64, clip_hash],
+            ).unwrap();
+            db.execute("INSERT INTO voice_matches VALUES('match',?1,?2,?3,?4,'登録者','confirmed',NULL,?5,'manual',0)",params![r.meeting_id,r.analysis_id,speaker,person,"a".repeat(64)]).unwrap();
         }
         let next = s.consolidate_transcript(&r).unwrap().analysis;
         let people = s.voice_people().unwrap();
@@ -690,10 +695,10 @@ mod tests {
             Some(r.meeting_id.as_str())
         );
         let audio = s
-            .prepare_voice_sample_audio_cancellable("sample", &crate::test_support::never_cancelled)
+            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
             .unwrap();
         assert_eq!(audio.total_frames(), 4000); // 250 ms of the canonical 16 kHz WAV.
-        assert_eq!(s.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM voice_matches WHERE analysis_revision_id=?1 AND person_id='person' AND state='confirmed'",[&next.id],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(s.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM voice_matches WHERE analysis_revision_id=?1 AND person_id=?2 AND state='confirmed'",params![next.id,person],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
     #[test]
     fn consolidation_keeps_a_saved_speaker_merge_in_the_new_current_revision() {

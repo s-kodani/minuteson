@@ -29,7 +29,7 @@ test("playback fixture starts missing preferences with a valid schema and refuse
   const fixture:{uiPreferences?:unknown;emitUiPreferences?:()=>Promise<void>}={emitUiPreferences:async()=>{}};
   const page={evaluate:async(run:Function,arg:string)=>Function("window","theme",`return (${run.toString()})(theme);`)({monBrowserFixture:fixture},arg),waitForFunction:async()=>{}};
   await applyPlaybackFixtureTheme(page,"light");
-  assert.deepEqual(fixture.uiPreferences,{id:"ui_preferences",payload:{schemaVersion:1,theme:"light"},lockVersion:1});
+  assert.deepEqual(fixture.uiPreferences,{id:"ui_preferences",payload:{schemaVersion:1,theme:"light",colorTheme:"monochrome"},lockVersion:1});
   delete fixture.emitUiPreferences;
   await assert.rejects(()=>applyPlaybackFixtureTheme(page,"dark"),/playback fixture is required/);
 });

@@ -16,8 +16,8 @@ export interface RestorePreview {
   vocabularyAdded: number; vocabularyDeduplicated: number; vocabularyConflicts: string[];
 }
 export interface BackupReceipt {
-  archiveId: string; meetingCount: number; assetCount: number; omittedPcmCount: number;
-  omittedLogCount: number; deletedAudioMeetingCount: number; deletedAudioAssetCount: number; size: number; sha256: string;
+  archiveId: string; meetingCount: number; assetCount: number;
+  deletedAudioMeetingCount: number; deletedAudioAssetCount: number; size: number; sha256: string;
 }
 export interface RestoreReceipt {
   registry?: RegistryCounts;
@@ -48,13 +48,13 @@ export function assertDataJobs(value: unknown): asserts value is DataJob[] {
   }
 }
 export type DataAvailabilityReasonCode = "recording_active" | "import_active" | "operation_active" | "relocation_restart_required" | "meeting_deletion_pending";
-export interface DataAvailability { available: boolean; reason: string | null; reasonCode?: DataAvailabilityReasonCode | null; deletionAvailable?: boolean; deletionReason?: string | null; deletionReasonCode?: DataAvailabilityReasonCode | null }
+export interface DataAvailability { available: boolean; reason: string | null; reasonCode: DataAvailabilityReasonCode | null; deletionAvailable: boolean; deletionReason: string | null; deletionReasonCode: DataAvailabilityReasonCode | null }
 export function assertDataAvailability(value: DataAvailability): void {
   const codes = ["recording_active", "import_active", "operation_active", "relocation_restart_required", "meeting_deletion_pending"];
   if (!value || typeof value.available !== "boolean" || !(value.reason === null || typeof value.reason === "string") || value.available !== (value.reason === null)) throw Error("利用可能状態を確認できません。");
-  if (value.reasonCode !== undefined && !(value.reasonCode === null ? value.available : !value.available && codes.includes(value.reasonCode))) throw Error("利用可能状態の理由を確認できません。");
-  if (value.deletionAvailable !== undefined && (typeof value.deletionAvailable !== "boolean" || !(value.deletionReason === null || typeof value.deletionReason === "string") || value.deletionAvailable !== (value.deletionReason === null))) throw Error("削除の受付状態を確認できません。");
-  if (value.deletionReasonCode !== undefined && !(value.deletionReasonCode === null ? value.deletionAvailable === true : value.deletionAvailable === false && codes.includes(value.deletionReasonCode))) throw Error("削除の受付状態の理由を確認できません。");
+  if (!(value.reasonCode === null ? value.available : !value.available && codes.includes(value.reasonCode))) throw Error("利用可能状態の理由を確認できません。");
+  if ((typeof value.deletionAvailable !== "boolean" || !(value.deletionReason === null || typeof value.deletionReason === "string") || value.deletionAvailable !== (value.deletionReason === null))) throw Error("削除の受付状態を確認できません。");
+  if (!(value.deletionReasonCode === null ? value.deletionAvailable === true : value.deletionAvailable === false && codes.includes(value.deletionReasonCode))) throw Error("削除の受付状態の理由を確認できません。");
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -85,7 +85,7 @@ export function assertDataSnapshot(s: DataSnapshot): void {
   }
   if (s.backupReceipt !== null) {
     const r = s.backupReceipt;
-    if (!r || s.kind !== "backup" || !uuid.test(r.archiveId) || !/^[0-9a-f]{64}$/u.test(r.sha256) || ![r.meetingCount, r.assetCount, r.omittedPcmCount, r.omittedLogCount, r.deletedAudioMeetingCount, r.deletedAudioAssetCount, r.size].every(integer)
+    if (!r || s.kind !== "backup" || !uuid.test(r.archiveId) || !/^[0-9a-f]{64}$/u.test(r.sha256) || ![r.meetingCount, r.assetCount, r.deletedAudioMeetingCount, r.deletedAudioAssetCount, r.size].every(integer)
       || r.deletedAudioMeetingCount > r.meetingCount || (r.deletedAudioMeetingCount === 0 && r.deletedAudioAssetCount !== 0)) fail();
   }
   if (s.restoreReceipt !== null) {

@@ -34,7 +34,7 @@ test("recording save shows measured WAV frames and stays active until saving fin
 });
 
 const importing: ImportSnapshot = { revision: 2, token: "audio", phase: "copying", busy: true, recordingBlocked: false, fileName: "会議.wav", completed: 50, sourceBytes: 200, requiredBytes: 1000, availableBytes: 2000, info: { schemaVersion: 1, detectedFormat: "wav", codec: "pcm", sampleRate: 16000, channels: 1, frames: 100, durationUs: 6250 }, saved: null, errorMessage: null };
-const job: NotificationJob = { id: "job-a", meetingId: "meeting-a", meetingTitle: "会議A", kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), operationId: "operation", retryOfJobId: null, attempt: 1, outputMinutesId: null, createdAt: 10, updatedAt: 20 };
+const job: NotificationJob = { id: "job-a", meetingId: "meeting-a", meetingTitle: "会議A", kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), operationId: "operation", retryOfJobId: null, attempt: 1, createdAt: 10, updatedAt: 20 };
 
 test("percent handles unknown or invalid totals and never rounds unfinished work to 100", () => {
   assert.equal(progressPercent(0, 200), 0);

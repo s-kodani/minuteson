@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {checkedInputStatus,RecordingInputSession,microphoneLabel,systemLabel,type InputNotice} from "../src/recording-input-state.ts";
+import {checkedInputStatus,RecordingInputSession,inputLabel,type InputNotice} from "../src/recording-input-state.ts";
 import {InputLevelClock} from "../src/input-level-state.ts";
 
 const owner="735027d4-a03e-43d3-830a-21e767dfaf88";
@@ -52,8 +52,8 @@ test("paired input status remains independent and explicit",()=>{
   assert.equal(s.read(0).system.state,"unknown");assert.throws(()=>s.accept({...report(),revision:2},1));
   s.reset(owner);s.accept(report(),0);s.accept(issue("system"),1);
   assert.equal(s.read(1).microphone.state,"connected");assert.equal(s.read(1).system.state,"disconnected");
-  assert.match(systemLabel(s.read(1).system),/取得処理が停止/u);
-  assert.match(microphoneLabel({state:"unknown"}),/確認できません/u);
+  assert.match(inputLabel(s.read(1).system,"system"),/取得処理が停止/u);
+  assert.match(inputLabel({state:"unknown"},"microphone"),/確認できません/u);
 });
 test("sleep-related clock changes make both inputs stale without an audio claim",()=>{
   const clock=new InputLevelClock(100,100000),s=new RecordingInputSession();s.reset(owner);s.accept(report(),clock.read(100,100000));

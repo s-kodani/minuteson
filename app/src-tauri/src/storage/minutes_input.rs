@@ -580,11 +580,6 @@ pub(super) fn copy_snapshot_with_update(
         return Err("解析設定が不正です".into());
     }
     config["inputSnapshot"] = json!({"schemaVersion":1,"sourceAnalysisId":source.id,"sourceContentHash":source.content_hash,"sourceDraft":draft,"workingContentHash":working_hash,"meetingTitle":title,"meetingCreatedAt":created_at,"meetingStartedAtUtcMs":started_at});
-    if !payload.manual_speakers.is_empty() || !payload.speaker_merges.is_empty() {
-        // Source labels and inferred segments remain intact; only effective
-        // assignments change. Explicit provenance avoids false 1:1 lineage.
-        config["manualSpeakerOperations"] = json!({"schemaVersion":1,"added":payload.manual_speakers,"merges":payload.speaker_merges});
-    }
     let lineages = lineage_map(tx, "utterances", &source.id)?;
     if let Some(info) = config["speakerIdentification"].as_object_mut() {
         for u in source
@@ -605,16 +600,14 @@ pub(super) fn copy_snapshot_with_update(
     if !source_recognition.is_empty() {
         config["sourceRecognitionLineages"] = json!(source_recognition);
     }
-    if !payload.utterance_splits.is_empty() {
-        let previous = config
-            .get("manualUtteranceSplits")
-            .cloned()
-            .unwrap_or(json!([]));
-        let mut operations: Vec<Value> =
-            serde_json::from_value(previous).map_err(|e| e.to_string())?;
-        operations.push(json!({"sourceAnalysisId":source.id,"sourceContentHash":source.content_hash,"splits":payload.utterance_splits}));
-        config["manualUtteranceSplits"] = json!(operations);
-    }
+    let current_lineages: std::collections::BTreeSet<_> = source
+        .utterances
+        .iter()
+        .map(|utterance| lineages.get(&utterance.id).unwrap_or(&utterance.id))
+        .collect();
+    let mut manual_lineages = super::speaker_assignment_update::manual_lineages(tx, &source.id)?;
+    manual_lineages.retain(|lineage| current_lineages.contains(lineage));
+    config["manualAssignmentLineages"] = json!(manual_lineages);
     if config.to_string().len() > 2 * 1024 * 1024 {
         return Err("固定入力の由来情報が大きすぎます".into());
     }
@@ -639,21 +632,6 @@ pub(super) fn copy_snapshot_with_update(
         }
         speaker_ids.insert(&speaker.id, new_id);
     }
-    let mut manual: std::collections::HashSet<_> = payload
-        .utterances
-        .iter()
-        .map(|e| e.utterance_id.clone())
-        .collect();
-    if !payload.speaker_merges.is_empty() {
-        let merges = serde_json::to_string(&payload.speaker_merges).map_err(|e| e.to_string())?;
-        let mut query = tx.prepare("SELECT DISTINCT utterance_id FROM utterance_speakers WHERE analysis_revision_id=?1 AND speaker_id IN (SELECT json_extract(value,'$.source_id') FROM json_each(?2))").map_err(|e|e.to_string())?;
-        for row in query
-            .query_map(params![source.id, merges], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-        {
-            manual.insert(row.map_err(|e| e.to_string())?);
-        }
-    }
     let split_sources: HashMap<_, _> = payload
         .utterance_splits
         .iter()
@@ -666,7 +644,6 @@ pub(super) fn copy_snapshot_with_update(
     for (sequence, utterance) in source.utterances.iter().enumerate() {
         let new_id = Uuid::new_v4().to_string();
         let changed=if split_sources.contains_key(utterance.id.as_str()) {
-            manual.insert(utterance.id.clone());
             tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL)",params![new_id,source.meeting_id,id,utterance.track_id,utterance.id,sequence as i64,utterance.start_us,utterance.end_us,utterance.recognized_text,utterance.effective_text,utterance.attribution_state])
         } else {
             tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,?7,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,utterance.effective_text,utterance.attribution_state,utterance.id,source.id,sequence as i64])
@@ -678,7 +655,7 @@ pub(super) fn copy_snapshot_with_update(
             let new_speaker = speaker_ids
                 .get(old_speaker)
                 .ok_or("話者の対応付けが不正です")?;
-            if manual.contains(&utterance.id) {
+            if manual_lineages.contains(lineages.get(&utterance.id).unwrap_or(&utterance.id)) {
                 tx.execute("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES (?1,?2,?3,?4,'manual')", params![new_id,new_speaker,id,if index == 0 {"primary"} else {"overlap"}]).map_err(|e| e.to_string())?;
             } else {
                 tx.execute("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) SELECT ?1,?2,?3,role,assignment_source FROM utterance_speakers WHERE utterance_id = ?4 AND speaker_id = ?5 AND analysis_revision_id = ?6", params![new_id,new_speaker,id,utterance.id,old_speaker,source.id]).map_err(|e| e.to_string())?;

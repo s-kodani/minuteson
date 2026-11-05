@@ -137,8 +137,6 @@ pub fn request_recording_confirmation(
             return Ok(value);
         }
         let present = || -> Result<(), String> {
-            // Read-only help cannot cover a confirmation or steal its focus back.
-            crate::recorder_info::hide(app, false)?;
             let popup = app
                 .get_webview_window(LABEL)
                 .ok_or("録音確認ウィンドウがありません")?;
@@ -273,13 +271,11 @@ pub fn close_requested(app: &AppHandle) {
 
 pub fn hide_recorder(app: &AppHandle) -> Result<(), String> {
     // Visibility only: no recorder lock, state read, stop, save or decision.
-    // Even failed help dismissal must not trap the panel on screen.
     crate::recorder_panel::dismiss(app);
     let panel = app
         .get_webview_window("recorder")
         .ok_or("録音パネルがありません")?;
     crate::recorder_panel::hide(&panel)?;
-    let _ = crate::recorder_info::hide(app, false);
     if let Some(main) = app.get_webview_window("main") {
         if !main.is_visible().map_err(|e| e.to_string())? {
             main.show().map_err(|e| e.to_string())?;

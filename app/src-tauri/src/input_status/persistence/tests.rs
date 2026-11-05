@@ -6,88 +6,6 @@ fn report(revision: u64, requested: u64, committed: u64, state: &str) -> Value {
     json!({"schemaVersion":1,"ownerId":OWNER,"revision":revision,"persistence":{
         "requestedRevision":requested,"committedRevision":committed,"state":state,"closed":false}})
 }
-#[test]
-fn portable_final_diagnostics_preserve_results_without_exporting_native_error_paths() {
-    for state in ["confirmed", "pending", "failed", "invalid"] {
-        let mut persistence =
-            report(123, 3, if state == "confirmed" { 3 } else { 2 }, state)["persistence"].clone();
-        persistence["closed"] = json!(true);
-        let source = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
-            "inputEventJournalPersistence":persistence,
-            "inputEventJournalError":"cannot sync /Users/source/private/meeting or C:\\private\\meeting"});
-        let bytes = serde_json::to_vec(&source).unwrap();
-        let fields = portable_manifest_fields(&bytes).unwrap();
-        assert_eq!(fields["inputEventJournalPersistence"], persistence);
-        assert_eq!(fields.len(), 2);
-        let encoded = serde_json::to_string(&fields).unwrap();
-        assert!(!encoded.contains("/Users/source"));
-        assert!(!encoded.contains("private"));
-        let mut second = source.clone();
-        second.as_object_mut().unwrap().extend(fields.clone());
-        assert_eq!(
-            portable_manifest_fields(&serde_json::to_vec(&second).unwrap()).unwrap(),
-            fields
-        );
-        assert_eq!(
-            source["inputEventJournalError"],
-            "cannot sync /Users/source/private/meeting or C:\\private\\meeting"
-        );
-    }
-    assert!(portable_manifest_fields(br#"{"state":"saved"}"#).is_err());
-    let confirmed = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
-        "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":3,"state":"confirmed","closed":true}});
-    let fields = portable_manifest_fields(&serde_json::to_vec(&confirmed).unwrap()).unwrap();
-    assert_eq!(fields.len(), 1);
-    assert!(fields.get("inputEventJournalError").is_none());
-    assert!(portable_manifest_fields(
-        br#"{"state":"saved","inputEventJournalError":null,"inputEventJournalPersistence":null}"#
-    )
-    .is_err());
-    let error_only = json!({"schemaVersion":4,"inputDiagnosticsState":"unconfirmed","state":"failed","recordingOwnerId":OWNER,"inputEventJournalError":"native path"});
-    let fields = portable_manifest_fields(&serde_json::to_vec(&error_only).unwrap()).unwrap();
-    assert_eq!(fields.len(), 1);
-    assert!(fields.get("inputEventJournalPersistence").is_none());
-}
-
-#[test]
-fn portable_final_diagnostics_reject_open_invalid_foreign_or_duplicated_results() {
-    let good = json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,
-        "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":2,"state":"failed","closed":true}});
-    for (field, value) in [
-        ("state", json!("recording")),
-        ("recordingOwnerId", json!("foreign")),
-        ("recordingOwnerId", Value::Null),
-    ] {
-        let mut bad = good.clone();
-        bad[field] = value;
-        assert!(portable_manifest_fields(&serde_json::to_vec(&bad).unwrap()).is_err());
-    }
-    for (field, value) in [
-        ("requestedRevision", json!(0)),
-        ("committedRevision", json!(4)),
-        ("state", json!("confirmed")),
-        ("state", json!("saved")),
-        ("closed", json!(false)),
-        ("unexpected", json!(true)),
-    ] {
-        let mut bad = good.clone();
-        bad["inputEventJournalPersistence"][field] = value;
-        assert!(portable_manifest_fields(&serde_json::to_vec(&bad).unwrap()).is_err());
-    }
-    let original = serde_json::to_string(&good).unwrap();
-    for (before, after) in [
-        ("\"closed\":true", "\"closed\":false,\"closed\":true"),
-        (
-            "\"state\":\"saved\"",
-            "\"state\":\"failed\",\"state\":\"saved\"",
-        ),
-    ] {
-        assert!(portable_manifest_fields(original.replacen(before, after, 1).as_bytes()).is_err());
-    }
-    assert!(portable_manifest_fields(format!("{{\"state\":\"saved\",\"recordingOwnerId\":\"{OWNER}\",\"inputEventJournalError\":\"first\",\"inputEventJournalError\":null}}").as_bytes()).is_err());
-    assert!(portable_manifest_fields(b"{} trailing log").is_err());
-}
-
 fn write(dir: &std::path::Path, name: &str, value: &Value) {
     fs::write(dir.join(name), serde_json::to_vec(value).unwrap()).unwrap();
     fs::set_permissions(dir.join(name), fs::Permissions::from_mode(0o600)).unwrap();
@@ -262,28 +180,4 @@ fn swift_generated_input_journal_status_has_separate_writer_result_and_heartbeat
         report.persistence.committed_revision,
         history.report.revision
     );
-}
-
-#[test]
-fn interrupted_current_producer_has_no_final_stop_result_or_fabricated_closure() {
-    for state in ["preparing", "recording", "stopping"] {
-        let manifest = json!({"schemaVersion":4,"inputDiagnosticsState":"unavailable","state":state,"recordingOwnerId":OWNER});
-        let bytes = serde_json::to_vec(&manifest).unwrap();
-        assert!(HistoricalFinal::from_manifest(&bytes, OWNER)
-            .unwrap()
-            .is_none());
-        for (key, value) in [
-            ("recordingOwnerId", json!("foreign")),
-            ("inputDiagnosticsState", json!("reported")),
-            ("inputEventJournalError", json!("unconfirmed stop")),
-            ("schemaVersion", json!(3)),
-        ] {
-            let mut invalid = manifest.clone();
-            invalid[key] = value;
-            assert!(
-                HistoricalFinal::from_manifest(&serde_json::to_vec(&invalid).unwrap(), OWNER)
-                    .is_err()
-            );
-        }
-    }
 }

@@ -23,16 +23,6 @@ export function appShortcut(event: KeyInput): AppShortcut | null {
   return null;
 }
 
-export function nativeTextTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target.closest('textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return true;
-  const input = target.closest<HTMLInputElement>("input");
-  // A focused speaker checkbox is an assignment, not a native text editor.
-  return !!input && !["checkbox", "radio", "button", "submit", "reset", "image"].includes(input.type);
-}
-
-// Hidden info popovers are permanently mounted with role=dialog. Only an
-// actually open overlay takes priority over workspace shortcuts.
 export function overlayOpen(target?: Element): boolean {
   if (document.querySelector('[popover]:popover-open')) return true;
   const modal = document.querySelector('dialog[open]');

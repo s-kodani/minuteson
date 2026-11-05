@@ -12,13 +12,6 @@ pub(in crate::storage) mod database;
 #[cfg(any(unix, windows))]
 mod directory_scope;
 
-// Read-only native-image inspection; not a deletion or cutover capability.
-#[cfg(any(target_os = "macos", windows))]
-pub(in crate::storage) fn verify_known_history_schema(
-    db: &rusqlite::Connection,
-) -> Result<(), String> {
-    database::trusted_history_schema(db).map(|_| ())
-}
 pub(in crate::storage) mod fence;
 #[cfg(any(unix, windows))]
 mod files;

@@ -75,7 +75,7 @@ def prepare(args):
     original = msix.regular(ROOT if args.store_package else workspace, Path(args.store_package).absolute() if args.store_package else artifact)
     if sha(original) != build["package"]["sha256"]:
         raise ValueError("Unsigned Store original differs from frozen build evidence")
-    msix.verify_payload(original, build["identity"], build["files"], build.get("payloadVersion", 1))
+    msix.verify_payload(original, build["identity"], build["files"])
     if not re.fullmatch(r"[A-Za-z0-9 ._-]+", build["identity"]["displayName"]):
         raise ValueError("Unsafe package display name")
     destination = output_path(args.output)

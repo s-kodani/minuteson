@@ -1,11 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertModelDeletionPreview, assertModelDeletionPage, type ModelDeletionPreview, type ModelDeletionPage } from "../src/model-deletion-operation-state.ts";
+import { assertModelDeletionPreview, type ModelDeletionPreview } from "../src/model-deletion-operation-state.ts";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 const packageId = "11111111-1111-4111-8111-111111111111", operationId = "22222222-2222-4222-8222-222222222222";
 const preview = (): ModelDeletionPreview => ({ confirmationId: "33333333-3333-4333-8333-333333333333", operationId, packageId, reviewHash: "a".repeat(64), modelName: "合成モデル", modelVersion: "1", modelsRoot: "/synthetic/models", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 1, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: 10, profileReferences: 1, jobReferences: 0, activeJobs: 0, previousProcessedPaths: null, previousPathCount: null, priorDeletionCompleted: false, reservationRoots: [] });
 const snapshot = (p = preview()): DataSnapshot => ({ revision: 1, token: operationId, kind: "model_deletion", phase: "ready", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, audioDeletionPreview: null, audioDeletionReceipt: null, modelDeletionPreview: p, modelDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
-const page = (p = preview()): ModelDeletionPage => ({ confirmationId: p.confirmationId, offset: 0, total: 1, nextOffset: null, entries: [{ relativePath: `${p.packageId}/model.bin`, directory: false, registered: true, present: true, bytes: 10, sha256: "a".repeat(64), changed: false }] });
 test("selected model deletion requires bound confirmation and explicit unknown-file consent", () => {
   const s = snapshot(); assertDataSnapshot(s);
   assert.deepEqual(dataRequest(s, "publish"), { token: operationId, confirmationId: s.modelDeletionPreview!.confirmationId, action: "publish" });
@@ -15,13 +14,8 @@ test("selected model deletion requires bound confirmation and explicit unknown-f
   s.phase = "failed"; assert.throws(() => dataRequest(s, "delete_including_unregistered"));
   assert.equal(dataRequest(s, "refresh").action, "refresh");
 });
-test("model deletion pages reject stale confirmations, other copies and invalid file observations", () => {
-  const p = preview(), valid = page(p); assertModelDeletionPage(valid, p, 0);
-  for (const invalid of [{ ...valid, confirmationId: operationId }, { ...valid, total: 2 }, { ...valid, entries: [] }, { ...valid, nextOffset: 50 }, { ...valid, entries: [{ ...valid.entries[0], relativePath: `${operationId}/model.bin` }] }, { ...valid, entries: [{ ...valid.entries[0], relativePath: `${packageId}/../other` }] }, { ...valid, entries: [{ ...valid.entries[0], present: false }] }]) assert.throws(() => assertModelDeletionPage(invalid, p, 0));
-});
 test("partial deletion admits only the exact operation's reserved roots after fresh consent", () => {
   const p = preview(); Object.assign(p, { phase: "reconfirmation", pending: true, previousProcessedPaths: 1, previousPathCount: 2, reservationRoots: [`.mon-delete-model-${operationId}-g2-0`] });
-  const valid = page(p); valid.entries[0].relativePath = `${p.reservationRoots[0]}/model.bin`; assertModelDeletionPage(valid, p, 0);
   const invalid = structuredClone(p); invalid.reservationRoots = [`.mon-delete-model-${packageId}-0`]; assert.throws(() => assertModelDeletionPreview(invalid));
   invalid.reservationRoots = [`.mon-delete-model-${operationId}-g33-0`]; assert.throws(() => assertModelDeletionPreview(invalid));
   const s = snapshot(p); s.attentionRequired = true; s.phase = "attention"; s.retryAllowed = false;
@@ -51,7 +45,6 @@ test("native deletion results include the exact package root alongside reserved 
       reservationRoots: [`.mon-delete-model-${operationId}-0`, packageId],
       ...(phase === "reconfirmation" ? { previousProcessedPaths: 0, previousPathCount: 1 } : {}) });
     assertModelDeletionPreview(p);
-    assertModelDeletionPage(page(p), p, 0);
     for (const invalidRoots of [[operationId], [packageId, packageId], [`${packageId}/child`], [`.mon-delete-model-${packageId}-0`, packageId]]) {
       assert.throws(() => assertModelDeletionPreview({ ...p, reservationRoots: invalidRoots }));
     }

@@ -44,8 +44,7 @@ pub(super) fn saved_batch(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<SavedBatch>, String> {
     check_cancelled(cancelled)?;
-    if !uuid(batch) || verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len()
-    {
+    if !uuid(batch) || verify_database_schema(db).is_err() {
         return Err("復元バッチまたは保存先DB形式が不正です".into());
     }
     let row:Option<(String,String,String,i64,String,i64,Option<i64>)>=db.query_row("SELECT archive_id,archive_fingerprint,mapping_hash,mapping_count,state,created_at,published_at FROM restore_batches WHERE batch_id=?1",params![batch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(|e|e.to_string())?;
@@ -345,26 +344,6 @@ impl<'a, 'b> BatchPlan<'a, 'b> {
         check_cancelled(cancelled)?;
         Ok(BatchState::Prepared)
     }
-}
-
-#[cfg(test)]
-pub(in crate::storage) fn remove_restore_schema_for_test(db: &Connection) {
-    super::publication::journal::remove_schema_for_test(db);
-    // Downgrade only empty, test-owned current images into older fixtures.
-    // Never discard real provenance or a reservation to simulate migration.
-    for table in [
-        "restore_provenance",
-        "restore_identity_maps",
-        "restore_batches",
-    ] {
-        assert_eq!(
-            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-    }
-    db.execute_batch("DROP TABLE restore_provenance; DROP TABLE restore_identity_maps; DROP TABLE restore_batches; DELETE FROM schema_migrations WHERE version=21;").unwrap();
 }
 
 #[cfg(test)]

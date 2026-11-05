@@ -33,7 +33,6 @@ mod tests {
             for role in [
                 "main",
                 "recorder",
-                "recorder-info",
                 "recording-confirmation",
                 "startup-attention",
                 "unknown",
@@ -88,12 +87,7 @@ mod tests {
                     .is_some(),
                 "{command}"
             );
-            for label in [
-                "recorder",
-                "recorder-info",
-                "recording-confirmation",
-                "unknown",
-            ] {
+            for label in ["recorder", "recording-confirmation", "unknown"] {
                 assert!(
                     acl.resolve_access(command, label, label, &Origin::Local)
                         .is_none(),
@@ -125,12 +119,7 @@ mod tests {
                     .is_none(),
                 "{command}"
             );
-            for label in [
-                "recorder",
-                "recorder-info",
-                "recording-confirmation",
-                "unknown",
-            ] {
+            for label in ["recorder", "recording-confirmation", "unknown"] {
                 let allowed = label == "recorder" && command == "plugin:window|start_dragging";
                 assert_eq!(
                     acl.resolve_access(command, label, label, &Origin::Local)
@@ -149,7 +138,6 @@ mod tests {
             ("recorder", "request_recording_confirmation"),
             ("recorder", "get_recording_input_status"),
             ("recorder", "open_main_window"),
-            ("recorder-info", "close_recorder_info"),
             ("recording-confirmation", "decide_recording_confirmation"),
         ] {
             assert!(
@@ -161,12 +149,7 @@ mod tests {
         let remote = Origin::Remote {
             url: "https://example.invalid/".parse().unwrap(),
         };
-        for label in [
-            "main",
-            "recorder",
-            "recorder-info",
-            "recording-confirmation",
-        ] {
+        for label in ["main", "recorder", "recording-confirmation"] {
             assert!(acl
                 .resolve_access("get_ui_preferences", label, label, &Origin::Local)
                 .is_some());
@@ -180,13 +163,10 @@ mod tests {
                 .resolve_access("plugin:fs|write_file", label, label, &Origin::Local)
                 .is_none());
         }
-        assert!(acl
-            .resolve_access(
-                "decide_recording_confirmation",
-                "recorder-info",
-                "recorder-info",
-                &Origin::Local
-            )
-            .is_none());
+        for role in ["main", "recorder"] {
+            assert!(acl
+                .resolve_access("decide_recording_confirmation", role, role, &Origin::Local)
+                .is_none());
+        }
     }
 }

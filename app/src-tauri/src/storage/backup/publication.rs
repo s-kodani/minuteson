@@ -142,7 +142,7 @@ impl Storage {
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         let result = self.publish_restore_inner(sealed, ids, None, check)?;
-        if let Err(error) = self.preserve_voice_audio(None, check) {
+        if let Err(error) = self.prepare_preserved_voice_audio(None, check) {
             crate::internal_logs::report_error("voice_audio", &error);
         }
         Ok(result)
@@ -156,7 +156,7 @@ impl Storage {
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         let result = self.publish_restore_inner(sealed, ids, Some(confirmation), check)?;
-        if let Err(error) = self.preserve_voice_audio(None, check) {
+        if let Err(error) = self.prepare_preserved_voice_audio(None, check) {
             crate::internal_logs::report_error("voice_audio", &error);
         }
         Ok(result)
@@ -186,7 +186,7 @@ impl Storage {
         if !db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .map_err(|e| e.to_string())?
-            || schema(&db)? != schema(&portable::schema(MIGRATIONS.len())?)?
+            || schema(&db)? != schema(&portable::schema()?)?
         {
             return Err("保存先DBの表・索引・トリガーが信頼済み定義と一致しません".into());
         }
@@ -299,7 +299,6 @@ impl Storage {
                     check,
                 )?;
             }
-            super::exclusions::retain(&tx, ids, check)?;
             #[cfg(any(unix, windows))]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::verify_retained(

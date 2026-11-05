@@ -131,21 +131,17 @@ def build_whisper():
     dump((source/'LICENSE').read_bytes(),PACKAGE/'whisper/notices/whisper-MIT.txt')
 
 def upstream_engines():
-    for engine, release in [('llama', LLAMA_11960), ('llama11960', LLAMA_11960)]:
-        # Both compatibility paths contain only the fixed release. Never merge
-        # an older subtree restored by a cache into the actual installer payload.
-        destination = PACKAGE / engine
-        if destination.is_symlink():
-            raise ValueError('runtime subtree must not be a link')
-        if destination.exists():
-            shutil.rmtree(destination)
-        with zipfile.ZipFile(acquire(*release)) as archive:
-            for name in archive.namelist():
-                leaf=Path(name).name
-                if leaf in LLAMA_NATIVE_FILES or leaf=='LICENSE':
-                    if not leaf: continue
-                    rel='notices/llama-MIT.txt' if leaf=='LICENSE' else leaf
-                    dump(archive.read(name),PACKAGE/engine/rel)
+    destination = PACKAGE / 'llama'
+    if destination.is_symlink():
+        raise ValueError('runtime subtree must not be a link')
+    if destination.exists():
+        shutil.rmtree(destination)
+    with zipfile.ZipFile(acquire(*LLAMA_11960)) as archive:
+        for name in archive.namelist():
+            leaf = Path(name).name
+            if leaf in LLAMA_NATIVE_FILES or leaf == 'LICENSE':
+                relative = 'notices/llama-MIT.txt' if leaf == 'LICENSE' else leaf
+                dump(archive.read(name), destination / relative)
     with tarfile.open(acquire(*SHERPA)) as archive:
         for member in archive.getmembers():
             leaf=Path(member.name).name
@@ -176,20 +172,19 @@ def catalog(redist_files=None):
         if choice['recipe']['manifest']['engine'] not in ('llama.cpp','sherpa-onnx'):
             raise ValueError('unsupported shared model engine')
         choices.append(choice)
-    executables={'whisper':'whisper-cli.exe','llama':'llama-completion.exe','llama11960':'llama-completion.exe','sherpa':'sherpa-onnx-offline-speaker-diarization.exe'}
+    executables={'whisper':'whisper-cli.exe','llama':'llama-completion.exe','sherpa':'sherpa-onnx-offline-speaker-diarization.exe'}
     engine_ids={'whisper.cpp':'whisper','llama.cpp':'llama','sherpa-onnx':'sherpa'}
     # App-local VC runtime for upstream llama DLLs: do not depend on a developer
     # machine's global PATH or preinstalled redistributable.
     for name in VC_RUNTIME_FILES:
-        for engine in ('llama', 'llama11960'):
-            dump(redist_files[name],PACKAGE/engine/name)
+        dump(redist_files[name],PACKAGE/'llama'/name)
     # Sign before generating hashes: installed bytes must match the recipes.
     for engine in executables:
         for path in sorted((PACKAGE/engine).rglob('*')):
             if path.is_file() and path.suffix.lower() in ('.exe','.dll'):sign(path)
     def native_files(engine):
         paths=sorted(p for p in (PACKAGE/engine).rglob('*') if p.is_file())
-        if engine in ('llama', 'llama11960'):
+        if engine == 'llama':
             keep=LLAMA_NATIVE_FILES
             paths=[p for p in paths if p.name in keep or p.relative_to(PACKAGE/engine).parts[0]=='notices']
         return paths
@@ -202,14 +197,12 @@ def catalog(redist_files=None):
                     data=path.read_bytes();info=tarfile.TarInfo(path.relative_to(PACKAGE).as_posix());info.size=len(data);info.mode=0o600;info.mtime=0
                     archive.addfile(info,io.BytesIO(data))
     archive=dict(format='tar',expectedSize=(PACKAGE/'runtime.tar').stat().st_size,expectedHash=digest(PACKAGE/'runtime.tar'))
-    snapshots=[]
-    for engine,name in executables.items():
-        path=PACKAGE/engine/name
-        if not path.is_file(): raise ValueError(f'missing native engine {path}')
-        snapshots.append(dict(protocol=2,engine=engine,name=name,bytes=path.stat().st_size,sha256=digest(path)))
+    for engine, name in executables.items():
+        path = PACKAGE / engine / name
+        if not path.is_file():
+            raise ValueError(f'missing native engine {path}')
     for choice in choices:
         recipe=choice['recipe'];engine=engine_ids[recipe['manifest']['engine']]
-        if engine=='llama' and recipe['manifest']['engineVersion']=='b11960':engine='llama11960'
         native=[];sources=[]
         for path in native_files(engine):
             if not path.is_file():continue
@@ -220,7 +213,6 @@ def catalog(redist_files=None):
         existing=[(f,s) for f,s in zip(recipe['manifest']['files'],recipe['sources']) if f['relativePath'] not in {n['relativePath'] for n in native}]
         recipe['manifest']['files']=native+[f for f,s in existing];recipe['sources']=sources+[s for f,s in existing]
     (PACKAGE/'catalog.json').write_text(json.dumps(choices,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')
-    (PACKAGE/'runtime-index.json').write_text(json.dumps(snapshots,indent=2)+'\n',encoding='utf8',newline='\n')
 
 def build_embedding():
     helper=PACKAGE/'mon-speaker-embedding.exe'

@@ -41,7 +41,7 @@ mockIPC(async (command, args) => {
   if (command === "get_model_placements") return structuredClone(entries);
   if (command === "get_model_profiles") { if (data.failCatalog) throw Error("模擬構成再読込失敗"); return structuredClone(data.profiles); }
   if (command === "cancel_model_inspection") return null;
-  const preferenceEngine = { get_analysis_preferences: "whisper.cpp", get_diarization_preferences: "sherpa-onnx", get_minutes_preferences: "llama.cpp" }[command];
+  const preferenceEngine = { get_asr_preferences: "whisper.cpp", get_diarization_preferences: "sherpa-onnx", get_minutes_preferences: "llama.cpp" }[command];
   if (preferenceEngine) { if (data.failReadback) throw Error("模擬設定再読込失敗"); return { id: "fixture", ...structuredClone(data.preferences[preferenceEngine]) }; }
   if (command === "preview_model_profile_application") {
     const entry = entries.find(e => e.packageId === args.packageId), profile = data.profiles.find(p => p.name === args.profile);

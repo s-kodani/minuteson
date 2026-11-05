@@ -106,11 +106,6 @@ fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_
         assert_eq!(p.phase, "database_reconfirmation");
         assert_eq!(p.row_phase_committed, phase.rows_committed());
         assert!(p.reservation_roots.contains(&root));
-        let page = prepared.page(&p.confirmation_id, 0).unwrap();
-        assert!(page
-            .entries
-            .iter()
-            .any(|e| e.relative_path == format!("{root}/unknown") && !e.registered));
         assert!(prepared
             .execute(
                 &f.f.storage,

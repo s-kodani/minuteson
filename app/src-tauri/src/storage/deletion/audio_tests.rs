@@ -252,7 +252,6 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
     assert_eq!(preview.retained.utterances, 1);
     assert_eq!(preview.retained.drafts, 1);
     assert_eq!(preview.retained.jobs, 0);
-    assert_eq!(preview.retained.evidence_links, 0);
     assert!(f
         .storage
         .get_minutes_markdown(&f.meeting)
@@ -401,7 +400,7 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
 }
 
 #[test]
-fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded_copy() {
+fn audio_only_census_accounts_for_current_import_files_and_retains_unknown_leftovers() {
     let f = Fixture::new();
     // An independent import-source meeting; the external source is not in DB.
     let meeting = f.storage.create_meeting("IMPORT").unwrap().id;
@@ -412,14 +411,20 @@ fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded
         params![meeting],
     )
     .unwrap();
-    db.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,created_at,updated_at) VALUES(?1,?2,'failed','PRIVATE ORIGINAL NAME','m4a',1,1)",params![import,meeting]).unwrap();
+    db.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,created_at,updated_at) VALUES(?1,?2,'failed','PRIVATE ORIGINAL NAME','flac',1,1)",params![import,meeting]).unwrap();
     drop(db);
     let directory = f
         .storage
         .root()
         .join(format!("meetings/{meeting}/imports/{import}"));
     std::fs::create_dir_all(&directory).unwrap();
-    for leaf in ["original.m4a", "audio.flac", "decoded.caf", "manifest.json"] {
+    for leaf in [
+        "original.flac",
+        "audio.flac",
+        ".mon-flac-fixture.part",
+        "decoded.caf",
+        "manifest.json",
+    ] {
         std::fs::write(directory.join(leaf), b"PRIVATE IMPORT").unwrap();
     }
     let original = f
@@ -427,10 +432,10 @@ fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded
         .register_ready_meeting_asset(
             &meeting,
             &directory
-                .join("original.m4a")
+                .join("original.flac")
                 .strip_prefix(f.storage.root())
                 .unwrap(),
-            "audio/mp4",
+            "audio/flac",
         )
         .unwrap();
     f.storage
@@ -446,9 +451,10 @@ fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded
         .unwrap()
         .preview(&uuid::Uuid::new_v4().to_string())
         .unwrap();
-    assert_eq!(preview.audio_files, 3);
+    assert_eq!(preview.audio_files, 2);
+    assert_eq!(preview.unclassified_files, 2);
     assert_eq!(
-        entry(&preview, "original.m4a").disposition,
+        entry(&preview, "original.flac").disposition,
         Disposition::RegisteredAudio
     );
     assert_eq!(
@@ -459,6 +465,16 @@ fn audio_only_census_accounts_for_managed_import_original_conversion_and_decoded
         entry(&preview, "manifest.json").disposition,
         Disposition::Retain
     );
+    for unknown in ["audio.flac", ".mon-flac-fixture.part"] {
+        assert_eq!(
+            entry(&preview, unknown).disposition,
+            Disposition::Unclassified
+        );
+        assert_eq!(
+            std::fs::read(directory.join(unknown)).unwrap(),
+            b"PRIVATE IMPORT"
+        );
+    }
     assert!(!serde_json::to_string(&preview).unwrap().contains("PRIVATE"));
 }
 
@@ -515,7 +531,7 @@ fn native_raw_audio_census_uses_exact_names_and_session_membership_and_retains_e
         }
         f.file(&format!("audio/{}/raw-{lane}.json", f.session), None);
     }
-    for leaf in ["final-flac.json", ".final-flac.lock"] {
+    for leaf in ["partial-flac.json", ".final-flac.lock"] {
         f.file(&format!("audio/{}/{leaf}", f.session), None);
     }
     let unknown = [

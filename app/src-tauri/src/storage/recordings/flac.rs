@@ -1,7 +1,7 @@
 //! Interrupted-prefix recovery publication. Durable plans bind original evidence,
 //! output UUIDs and staging inodes; a DB rollback never removes raw audio.
 use super::*;
-use crate::audio::flac::{encode_segment_file_pending, PcmSource, SavedFlac};
+use crate::audio::flac::{encode_segment_file_pending, SavedFlac};
 use crate::audio_clock::ClockSegment;
 #[cfg(windows)]
 use crate::bootstrap::windows_io as libc;
@@ -90,33 +90,20 @@ pub(super) struct Publication {
     lock: File,
     lock_stamp: Stamp,
     plan_stamp: Stamp,
-    plan_name: &'static str,
     documents: Vec<(String, Stamp)>,
     tracks: Vec<Track>,
-    clock_reconciled: bool,
-    clock_originals: Vec<crate::audio::VerifiedAudio>,
     #[cfg(any(target_os = "macos", windows))]
     recovery_rebind: Option<relocation::RecoveryRebind>,
 }
-const PLAN: &str = "final-flac.json";
 const PARTIAL_PLAN: &str = "partial-flac.json";
 const LOCK: &str = ".final-flac.lock";
 
 /// Validate sealed capture evidence without producing an intermediate FLAC.
 /// The authoritative maps are used for the one final WAV instead.
 pub(super) fn canonical_maps(
-    storage: &Storage,
-    base: &Path,
     manifest: &CaptureManifest,
     prefixes: &[Prefix],
-) -> Result<
-    (
-        Vec<ClockSegment>,
-        Vec<ClockSegment>,
-        Vec<crate::audio::VerifiedAudio>,
-    ),
-    String,
-> {
+) -> Result<(Vec<ClockSegment>, Vec<ClockSegment>), String> {
     let active: Vec<_> = prefixes.iter().filter(|p| p.frames() > 0).collect();
     let origin = active
         .iter()
@@ -127,23 +114,17 @@ pub(super) fn canonical_maps(
         .ok_or("保存音声がありません")?;
     let mut mic = Vec::new();
     let mut system = Vec::new();
-    let mut originals = Vec::new();
     for prefix in active {
         let track = match prefix.lane() {
             crate::recording_segments::Lane::Microphone => &manifest.microphone,
             crate::recording_segments::Lane::System => &manifest.system,
         };
-        let (parts, original) = groups(
+        let parts = groups(
             prefix,
             origin,
             track,
             manifest.clock_mapping_source.as_deref() == Some("sealed_raw_v1"),
-            (manifest.backend == "wasapi" && manifest.clock_mapping_source.is_none())
-                .then_some((storage, base)),
         )?;
-        if let Some(original) = original {
-            originals.push(original);
-        }
         let target = match prefix.lane() {
             crate::recording_segments::Lane::Microphone => &mut mic,
             crate::recording_segments::Lane::System => &mut system,
@@ -158,7 +139,7 @@ pub(super) fn canonical_maps(
             frames += part.frames as i64;
         }
     }
-    Ok((mic, system, originals))
+    Ok((mic, system))
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -172,8 +153,7 @@ fn groups(
     origin: i64,
     track: &CaptureTrack,
     canonical: bool,
-    legacy_windows: Option<(&Storage, &Path)>,
-) -> Result<(Vec<FlacGroup>, Option<crate::audio::VerifiedAudio>), String> {
+) -> Result<Vec<FlacGroup>, String> {
     let groups = prefix.flac_groups(origin)?;
     if groups.is_empty() || groups.len() > 1024 {
         return Err("最終FLAC区間数が対応範囲外です".into());
@@ -193,22 +173,11 @@ fn groups(
     if frames != track.frames {
         return Err("原音声のフレーム数と録音manifestが一致しません".into());
     }
-    let checked = verify_maps(&maps, global.segments, track.sample_rate.unwrap() as u32);
+    verify_maps(&maps, global.segments, track.sample_rate.unwrap() as u32)?;
     if canonical && maps != global.segments {
         return Err("原音声と録音全体の共通時計対応が一致しません".into());
     }
-    let reconciled = match checked {
-        Ok(()) => None,
-        #[cfg(windows)]
-        Err(MapMismatch::Clock) if !canonical && legacy_windows.is_some() => {
-            let (storage, base) = legacy_windows.unwrap();
-            Some(verify_original_pcm(storage, base, prefix, track)?)
-        }
-        Err(error) => return Err(error.into()),
-    };
-    #[cfg(not(windows))]
-    let _ = legacy_windows;
-    Ok((groups, reconciled))
+    Ok(groups)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -228,50 +197,6 @@ impl From<MapMismatch> for String {
         }
         .into()
     }
-}
-
-/// Only legacy Windows interior affine fits may be reconciled. Before this
-/// point verify_maps has already required identical endpoints and exact gaps.
-/// Bind the two independently stored timelines to identical physical samples.
-#[cfg(windows)]
-fn verify_original_pcm(
-    storage: &Storage,
-    base: &Path,
-    prefix: &Prefix,
-    track: &CaptureTrack,
-) -> Result<crate::audio::VerifiedAudio, String> {
-    use crate::audio::VerifiedAudio;
-    let name = match prefix.lane() {
-        crate::recording_segments::Lane::Microphone => "microphone.caf",
-        crate::recording_segments::Lane::System => "system.caf",
-    };
-    let proof = storage.checked_capture_file(&base.join(name), Some(track))?;
-    let file = crate::windows_files::read(&storage.root.join(&proof.relative), false)?;
-    let mut original =
-        VerifiedAudio::open_cancellable(file, proof.size_bytes as u64, &proof.hash, &|| {
-            storage.data_write_blocked()
-        })?;
-    let cancelled = || storage.data_write_blocked();
-    let mut source = prefix.source(0, prefix.entries().len(), &cancelled)?;
-    if original.format.frames != source.format().frames
-        || original.format.sample_rate != source.format().sample_rate
-        || original.format.channels != source.format().channels
-    {
-        return Err("録音全体と原音声のPCM形式が一致しません".into());
-    }
-    let mut first = 0;
-    while first < prefix.frames() {
-        partial::check_cancel(&cancelled)?;
-        let count = (prefix.frames() - first).min(crate::audio::PREVIEW_FRAMES);
-        if original.read_raw_recording_frames(first, count)? != source.read_frames(first, count)? {
-            return Err("録音全体と原音声のPCM内容が一致しません".into());
-        }
-        first += count;
-    }
-    original.check_unchanged()?;
-    source.verify_unchanged()?;
-    prefix.verify_at(&storage.root.join(base), &cancelled)?;
-    Ok(original)
 }
 
 /// Both compressors describe the same physical source frames. Keep every
@@ -397,7 +322,6 @@ impl Publication {
         Self::prepare_groups(
             storage,
             base,
-            PARTIAL_PLAN,
             input_hash,
             &prefixes.iter().collect::<Vec<_>>(),
             all_groups,
@@ -410,7 +334,6 @@ impl Publication {
     fn prepare_groups(
         storage: &Storage,
         base: &Path,
-        plan_name: &'static str,
         input_hash: String,
         prefixes: &[&Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
@@ -432,7 +355,7 @@ impl Publication {
         }
         let lock_stamp = Stamp::read(&lock)?;
         lock_stamp.require(&root.required(LOCK, false)?)?;
-        if root.read_json(plan_name)?.is_none() {
+        if root.read_json(PARTIAL_PLAN)?.is_none() {
             let parent = Directory::open(root.path.parent().ok_or("録音管理先がありません")?)?;
             let mut tracks = Vec::new();
             for groups in &all_groups {
@@ -450,11 +373,11 @@ impl Publication {
                 recording_directory: root.identity.clone(),
                 tracks,
             };
-            root.json(plan_name, &plan, None)?;
+            root.json(PARTIAL_PLAN, &plan, None)?;
         }
         // Value and stamp must describe one exact immutable generation.
         let (plan_bytes, plan_stamp) = root
-            .read_json(plan_name)?
+            .read_json(PARTIAL_PLAN)?
             .ok_or("FLAC確定計画がありません")?;
         #[cfg(any(target_os = "macos", windows))]
         if let Some(proof) = &recovery_rebind {
@@ -462,7 +385,7 @@ impl Publication {
         }
         let mut plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
         #[cfg(any(target_os = "macos", windows))]
-        relocation::effective_plan(storage, &root.path, plan_name, &plan_bytes, &mut plan)?;
+        relocation::effective_plan(storage, &root.path, PARTIAL_PLAN, &plan_bytes, &mut plan)?;
         if plan.schema_version != 1
             || plan.input_hash != input_hash
             || plan.recording_directory != root.identity
@@ -500,82 +423,17 @@ impl Publication {
                 Some(jobs.len() as u64),
                 "files",
             );
-            if plan_name == PLAN {
-                let failed = std::sync::atomic::AtomicBool::new(false);
-                for batch in jobs.chunks(2) {
-                    partial::check_cancel(cancelled)?;
-                    let results = std::thread::scope(|scope| {
-                        let workers: Vec<_> = batch
-                            .iter()
-                            .map(|(id, group)| {
-                                let directory = &directory;
-                                let input_hash = &input_hash;
-                                let failed = &failed;
-                                let prefix = prefixes[lane];
-                                scope.spawn(move || {
-                                    let _measure = crate::operation_observation::Scope::enter(
-                                        "recording_chunk",
-                                        |_| {},
-                                    );
-                                    let stop = || {
-                                        failed.load(std::sync::atomic::Ordering::Acquire)
-                                            || storage.data_write_blocked()
-                                    };
-                                    let result = convert(
-                                        storage,
-                                        directory,
-                                        prefix,
-                                        group,
-                                        input_hash,
-                                        id.clone(),
-                                        &stop,
-                                    );
-                                    if result.is_err() {
-                                        failed.store(true, std::sync::atomic::Ordering::Release);
-                                    }
-                                    (result, crate::operation_observation::measurements())
-                                })
-                            })
-                            .collect();
-                        // Cancellation belongs to the parent callback, which
-                        // need not be Sync. Relay it to both scoped children.
-                        while workers.iter().any(|w| !w.is_finished()) {
-                            if cancelled() {
-                                failed.store(true, std::sync::atomic::Ordering::Release);
-                            }
-                            std::thread::park_timeout(std::time::Duration::from_millis(25));
-                        }
-                        workers
-                            .into_iter()
-                            .map(|w| {
-                                w.join().unwrap_or_else(|_| {
-                                    (Err("FLAC区間の保存処理が停止しました".into()), (0, 0))
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    });
-                    // All children are joined before returning any failure.
-                    for (result, (bytes, scans)) in results {
-                        crate::operation_observation::absorb(bytes, scans);
-                        chunks.push(result?);
-                        crate::operation_observation::advance(1);
-                    }
-                    lock_stamp.require(&root.required(LOCK, false)?)?;
-                    plan_stamp.require(&root.required(plan_name, false)?)?;
-                }
-            } else {
-                for (id, group) in jobs {
-                    partial::check_cancel(cancelled)?;
-                    chunks.push(convert(
-                        storage,
-                        &directory,
-                        prefixes[lane],
-                        group,
-                        &input_hash,
-                        id,
-                        cancelled,
-                    )?);
-                }
+            for (id, group) in jobs {
+                partial::check_cancel(cancelled)?;
+                chunks.push(convert(
+                    storage,
+                    &directory,
+                    prefixes[lane],
+                    group,
+                    &input_hash,
+                    id,
+                    cancelled,
+                )?);
             }
             prefixes[lane].verify_at(&root.path, cancelled)?;
             tracks.push(Track {
@@ -593,11 +451,8 @@ impl Publication {
             lock,
             lock_stamp,
             plan_stamp,
-            plan_name,
             documents: Vec::new(),
             tracks,
-            clock_reconciled: false,
-            clock_originals: Vec::new(),
             #[cfg(any(target_os = "macos", windows))]
             recovery_rebind,
         };
@@ -655,18 +510,13 @@ impl Publication {
         })
     }
     pub(super) fn verify(&self, storage: &Storage) -> Result<(), String> {
-        // Legacy reconciliation remains bound to the physical whole-track
-        // evidence until the final DB commit, not just the initial comparison.
-        for original in &self.clock_originals {
-            original.check_unchanged()?;
-        }
         storage.require_data_writable()?;
         storage.managed_anchor.verify()?;
         self.root.verify()?;
         self.lock_stamp.require(&self.lock)?;
         self.lock_stamp.require(&self.root.required(LOCK, false)?)?;
         self.plan_stamp
-            .require(&self.root.required(self.plan_name, false)?)?;
+            .require(&self.root.required(PARTIAL_PLAN, false)?)?;
         for (name, stamp) in &self.documents {
             stamp.require(&self.root.required(name, false)?)?;
         }
@@ -700,9 +550,6 @@ impl Publication {
         let mut processing: serde_json::Value =
             serde_json::from_str(config).map_err(|e| e.to_string())?;
         processing["clock_mapping_source"] = serde_json::json!("sealed_raw_v1");
-        if self.clock_reconciled {
-            processing["legacy_clock_reconciled"] = serde_json::json!(true);
-        }
         let config = processing.to_string();
         for track in &self.tracks {
             let audio = &track.chunks[0].audio;
@@ -732,21 +579,9 @@ impl Publication {
                     (
                         0,
                         track.chunks[0].maps[0].timeline_start_us,
-                        if self.plan_name == PARTIAL_PLAN {
-                            "partial_prefix_start_gap"
-                        } else {
-                            "capture_start_gap"
-                        },
+                        "partial_prefix_start_gap",
                     ),
-                    (
-                        previous.unwrap(),
-                        duration,
-                        if self.plan_name == PARTIAL_PLAN {
-                            "partial_prefix_end_gap"
-                        } else {
-                            "capture_stop_gap"
-                        },
-                    ),
+                    (previous.unwrap(), duration, "partial_prefix_end_gap"),
                 ] {
                     if start < end {
                         tx.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES(?1,?2,?3,?4,?5)",

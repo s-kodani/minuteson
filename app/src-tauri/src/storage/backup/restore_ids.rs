@@ -6,8 +6,6 @@ use super::*;
 use rusqlite::types::Value;
 use std::collections::BTreeMap;
 
-const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
-
 mod replay;
 
 pub(crate) enum BatchPreparation<'a> {
@@ -49,7 +47,6 @@ fn entity_table(table: &str, column: &str) -> Result<&'static str, String> {
     match (table, column) {
         (_, "meeting_id") => Ok("meetings"),
         (_, "analysis_revision_id") => Ok("analysis_revisions"),
-        (_, "minutes_revision_id") => Ok("minutes_revisions"),
         (_, "track_id") => Ok("audio_tracks"),
         ("analysis_input_snapshots", "analysis_id") => Ok("analysis_revisions"),
         ("audio_import_commits" | "audio_import_options", "import_id") => Ok("audio_imports"),
@@ -132,10 +129,7 @@ pub(super) fn owners_sql(table: &str) -> Result<String, String> {
         "voice_people" | "voice_samples" | "voice_sample_audio" | "voice_policies" => format!("SELECT rowid,NULL AS meeting_id FROM {table}"),
         "meetings" => "SELECT rowid,id FROM meetings".into(),
         "speakers" | "utterance_speakers" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
-        "minutes_items" | "evidence_links" => format!("SELECT c.rowid,m.meeting_id FROM {table} c JOIN minutes_revisions m ON m.id=c.minutes_revision_id"),
         "track_clock_segments" | "audio_gaps" => format!("SELECT c.rowid,t.meeting_id FROM {table} c JOIN audio_tracks t ON t.id=c.track_id"),
-        "edit_operations" => "SELECT c.rowid,d.meeting_id FROM edit_operations c JOIN working_drafts d ON d.id=c.draft_id".into(),
-        "transcript_edit_recovery" => "SELECT c.rowid,d.meeting_id FROM transcript_edit_recovery c JOIN working_drafts d ON d.id=c.draft_id".into(),
         "job_checkpoints" => "SELECT c.rowid,j.meeting_id FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id".into(),
         "diarization_manual_assignments" => "SELECT c.rowid,a.meeting_id FROM diarization_manual_assignments c JOIN analysis_revisions a ON a.id=c.analysis_id".into(),
         "audio_import_options" => "SELECT c.rowid,i.meeting_id FROM audio_import_options c JOIN audio_imports i ON i.id=c.import_id".into(),
@@ -165,46 +159,6 @@ impl<'a> RestoreIds<'a> {
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         Self::prepare_inner(archive, parent, batch, None, cancelled)
-    }
-
-    // Internal compatibility entry for tests exercising historical construction.
-    // It uses the same verified identity planner as user-facing restoration.
-    pub(in crate::storage::backup) fn prepare_historical(
-        archive: &'a VerifiedArchive,
-        parent: &Path,
-        batch: &str,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<Self, String> {
-        if archive.deleted_audio.is_empty() {
-            return Err("削除済み音声の履歴構築には検査済み履歴が必要です".into());
-        }
-        archive.verify_validation_database(cancelled)?;
-        archive
-            .deleted_audio
-            .verify_omissions(&archive.manifest.omitted_assets)?;
-        Self::prepare_inner(archive, parent, batch, None, cancelled)
-    }
-
-    pub(in crate::storage::backup) fn prepare_historical_for_batch(
-        archive: &'a VerifiedArchive,
-        parent: &Path,
-        batch: &str,
-        destination: &Connection,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<Self, String> {
-        if archive.deleted_audio.is_empty() {
-            return Err("削除済み音声の履歴再構築には検査済み履歴が必要です".into());
-        }
-        archive.verify_validation_database(cancelled)?;
-        archive
-            .deleted_audio
-            .verify_omissions(&archive.manifest.omitted_assets)?;
-        let ids = Self::prepare_inner(archive, parent, batch, Some(destination), cancelled)?;
-        ids.verify_saved_destination(destination, cancelled)?;
-        if super::ledger::saved_batch(destination, batch, archive, cancelled)? != ids.saved {
-            return Err("履歴再構築中に保存済み復元バッチが変更されています".into());
-        }
-        Ok(ids)
     }
 
     fn prepare_inner(
@@ -297,7 +251,6 @@ impl<'a> RestoreIds<'a> {
         plan.reserve(&plan.batch_id)?;
         plan.reserve(&plan.archive_id)?;
 
-        plan.verify_draft_history(cancelled)?;
         plan.order_dependencies(cancelled)?;
         // Reserve every relational identifier before minting any new one. IDs
         // equal to a title/body are not identifiers and are not string-replaced.
@@ -764,7 +717,6 @@ impl<'a> RestoreIds<'a> {
     fn order_dependencies(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         for (domain,edge_sql) in [
             ("analysis_revisions","SELECT id,parent_revision_id FROM analysis_revisions WHERE parent_revision_id IS NOT NULL"),
-            ("minutes_revisions","SELECT id,parent_revision_id FROM minutes_revisions WHERE parent_revision_id IS NOT NULL"),
             ("processing_jobs","SELECT id,retry_of_job_id FROM processing_jobs WHERE retry_of_job_id IS NOT NULL"),
             ("audio_tracks","SELECT derived_track_id,input_track_id FROM track_inputs"),
         ] {
@@ -821,227 +773,38 @@ impl Rule {
 }
 
 impl RestoreIds<'_> {
-    fn verify_draft_history(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
-        crate::storage::edit_recovery::verify_all(&self.source.database, cancelled)?;
-        let mut query=self.source.database.prepare("SELECT id,target_kind,payload_json,content_hash,schema_version FROM working_drafts ORDER BY id").map_err(|e|e.to_string())?;
-        let mut drafts = query.query([]).map_err(|e| e.to_string())?;
-        while let Some(draft) = drafts.next().map_err(|e| e.to_string())? {
-            check_cancelled(cancelled)?;
-            let id: String = draft.get(0).map_err(|e| e.to_string())?;
-            let kind: String = draft.get(1).map_err(|e| e.to_string())?;
-            let current: String = draft.get(2).map_err(|e| e.to_string())?;
-            let hash: String = draft.get(3).map_err(|e| e.to_string())?;
-            let schema: i64 = draft.get(4).map_err(|e| e.to_string())?;
-            if current.len() > MAX_DRAFT_BYTES {
-                return Err("復元下書きが容量上限を超えています".into());
-            }
-            let payload_schema = if kind == "transcript" {
-                let payload: TranscriptDraftPayload =
-                    serde_json::from_str(&current).map_err(|e| e.to_string())?;
-                if payload.schema_version != crate::current_formats::TRANSCRIPT_DRAFT {
-                    return Err("復元下書きの形式が不正です".into());
-                }
-                i64::from(payload.schema_version)
-            } else {
-                return Err("旧形式の議事録下書きには対応していません".into());
-            };
-            if payload_schema != schema || draft_hash(&kind, &current)? != hash {
-                return Err("復元下書きのハッシュ・形式が不正です".into());
-            }
-            let mut query=self.source.database.prepare("SELECT sequence,payload_json,inverse_json,before_hash,after_hash FROM edit_operations WHERE draft_id=?1 ORDER BY sequence").map_err(|e|e.to_string())?;
-            let mut edits = query.query(params![id]).map_err(|e| e.to_string())?;
-            let mut sequence = 0_i64;
-            let mut previous: Option<String> = None;
-            while let Some(edit) = edits.next().map_err(|e| e.to_string())? {
-                check_cancelled(cancelled)?;
-                let next: i64 = edit.get(0).map_err(|e| e.to_string())?;
-                let payload: String = edit.get(1).map_err(|e| e.to_string())?;
-                let inverse: String = edit.get(2).map_err(|e| e.to_string())?;
-                let before: String = edit.get(3).map_err(|e| e.to_string())?;
-                let after: String = edit.get(4).map_err(|e| e.to_string())?;
-                if payload.len() > MAX_DRAFT_BYTES
-                    || inverse.len() > MAX_DRAFT_BYTES
-                    || sequence.checked_add(1) != Some(next)
-                    || draft_hash(&kind, &payload)? != after
-                    || draft_hash(&kind, &inverse)? != before
-                    || previous.as_ref().is_some_and(|p| p != &before)
-                {
-                    return Err("復元編集履歴のハッシュ・つながりが不正です".into());
-                }
-                sequence = next;
-                previous = Some(after);
-            }
-            if previous.as_ref().is_some_and(|last| last != &hash) {
-                return Err("復元編集履歴と下書きが一致しません".into());
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn draft_json(
-        &self,
-        kind: &str,
-        meeting: &str,
-        text: &str,
-    ) -> Result<(String, String), String> {
-        if text.len() > MAX_DRAFT_BYTES {
-            return Err("復元下書きが容量上限を超えています".into());
-        }
-        let text = match kind {
-            "transcript" => {
-                let mut payload: TranscriptDraftPayload =
-                    serde_json::from_str(text).map_err(|e| e.to_string())?;
-                self.transcript(meeting, &mut payload)?;
-                serde_json::to_string(&payload).map_err(|e| e.to_string())?
-            }
-            "minutes" => return Err("旧形式の議事録下書きには対応していません".into()),
-            _ => return Err("未知の復元下書きです".into()),
-        };
-        if text.len() > MAX_DRAFT_BYTES {
-            return Err("再構成した下書きが容量上限を超えています".into());
-        }
-        let hash = draft_hash(kind, &text)?;
-        Ok((text, hash))
-    }
-
-    /// Rebuild drafts and their complete undo chain only. These rows cannot be
-    /// published before their base revisions and fixed inputs are reconstructed.
-    pub(super) fn draft_row(&self, table: &str, rowid: i64) -> Result<Vec<Value>, String> {
-        let sql=match table {
-            "working_drafts"=>"SELECT meeting_id,target_kind FROM working_drafts WHERE rowid=?1",
-            "edit_operations"=>"SELECT d.meeting_id,d.target_kind FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE e.rowid=?1",
-            "transcript_edit_recovery"=>"SELECT d.meeting_id,d.target_kind FROM transcript_edit_recovery e JOIN working_drafts d ON d.id=e.draft_id WHERE e.rowid=?1",
-            _=>return Err("復元下書き以外の行です".into()),
-        };
-        let (meeting, kind): (String, String) = self
-            .source
-            .database
-            .query_row(sql, params![rowid], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|e| e.to_string())?;
-        let columns = &self
-            .tables
-            .iter()
-            .find(|t| t.name == table)
-            .ok_or("復元下書き列がありません")?
-            .columns;
-        let mut row = self.relational_row(table, rowid)?;
-        let index = |name: &str| {
-            columns
-                .iter()
-                .position(|c| c.name == name)
-                .ok_or("復元下書き列がありません")
-        };
-        if table == "transcript_edit_recovery" {
-            let i = index("payload_json")?;
-            let Value::Text(text) = &row[i] else {
-                return Err("回復下書きの列型が不正です".into());
-            };
-            let mut payload: crate::storage::edit_recovery::Payload = serde_json::from_str(text)
-                .map_err(|e| format!("復元回復下書きのJSONが不正です: {e}"))?;
-            self.transcript(&meeting, &mut payload.base_payload)?;
-            for buffer in &mut payload.buffers {
-                buffer.utterance_id = self.get("utterances", &meeting, &buffer.utterance_id)?;
-                for speaker in &mut buffer.speaker_ids {
-                    *speaker = self.get("speakers", &meeting, speaker)?;
-                }
-                buffer.speaker_ids.sort();
-            }
-            payload
-                .buffers
-                .sort_by(|a, b| a.utterance_id.cmp(&b.utterance_id));
-            for buffer in &mut payload.name_buffers {
-                // Only the identity is remapped. Names and their original
-                // baseline can contain ID-looking text and must stay verbatim.
-                buffer.speaker_id = self.get("speakers", &meeting, &buffer.speaker_id)?;
-            }
-            payload
-                .name_buffers
-                .sort_by(|a, b| a.speaker_id.cmp(&b.speaker_id));
-            let baseline =
-                serde_json::to_string(&payload.base_payload).map_err(|e| e.to_string())?;
-            let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-            row[index("base_draft_content_hash")?] =
-                Value::Text(crate::storage::drafts::draft_hash(&baseline));
-            row[index("content_hash")?] = Value::Text(crate::storage::drafts::draft_hash(&json));
-            row[i] = Value::Text(json);
-            return Ok(row);
-        }
-        for (json, hash) in if table == "working_drafts" {
-            vec![("payload_json", "content_hash")]
-        } else {
-            vec![
-                ("payload_json", "after_hash"),
-                ("inverse_json", "before_hash"),
-            ]
-        } {
-            let i = index(json)?;
-            let text = match &row[i] {
-                Value::Text(t) => t,
-                _ => return Err("復元下書きの列型が不正です".into()),
-            };
-            let (text, digest) = self.draft_json(&kind, &meeting, text)?;
-            row[i] = Value::Text(text);
-            row[index(hash)?] = Value::Text(digest);
-        }
-        Ok(row)
-    }
-
     fn visit_documents(
         &self,
         db: &Connection,
         cancelled: &impl Fn() -> bool,
         phase: u8,
     ) -> Result<(), String> {
-        let mut documents = vec![
-            "SELECT meeting_id,target_kind,payload_json FROM working_drafts",
-            "SELECT d.meeting_id,d.target_kind,e.payload_json FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id",
-            "SELECT d.meeting_id,d.target_kind,e.inverse_json FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id",
-            "SELECT meeting_id,'minutes',generated_document_json FROM minutes_revisions",
-            "SELECT meeting_id,'minutes',effective_document_json FROM minutes_revisions",
-        ];
-        if self
-            .tables
-            .iter()
-            .any(|t| t.name == "transcript_edit_recovery")
-        {
-            documents.push("SELECT d.meeting_id,'transcript',json_extract(e.payload_json,'$.basePayload') FROM transcript_edit_recovery e JOIN working_drafts d ON d.id=e.draft_id");
-        }
-        for sql in documents {
-            let mut query = db.prepare(sql).map_err(|e| e.to_string())?;
-            let mut rows = query.query([]).map_err(|e| e.to_string())?;
-            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-                check_cancelled(cancelled)?;
-                let meeting: String = row.get(0).map_err(|e| e.to_string())?;
-                let kind: String = row.get(1).map_err(|e| e.to_string())?;
-                let text: String = row.get(2).map_err(|e| e.to_string())?;
-                if kind == "transcript" {
-                    let mut payload: TranscriptDraftPayload =
-                        serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                    if phase == 0 {
-                        for s in &payload.manual_speakers {
-                            self.reserve(&s.id)?;
-                        }
-                        for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
-                            self.reserve(&p.id)?;
-                        }
-                    } else if phase == 1 {
-                        for s in &payload.manual_speakers {
-                            self.manual_identity("speakers", "speaker_lineage", &meeting, &s.id)?;
-                        }
-                        for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
-                            self.manual_identity(
-                                "utterances",
-                                "utterance_lineage",
-                                &meeting,
-                                &p.id,
-                            )?;
-                        }
-                    } else {
-                        self.transcript(&meeting, &mut payload)?;
-                    }
-                } else {
-                    return Err("旧形式の議事録文書には対応していません".into());
+        let mut query = db
+            .prepare("SELECT meeting_id,payload_json FROM working_drafts")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            check_cancelled(cancelled)?;
+            let meeting: String = row.get(0).map_err(|e| e.to_string())?;
+            let text: String = row.get(1).map_err(|e| e.to_string())?;
+            let mut payload: TranscriptDraftPayload =
+                serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            if phase == 0 {
+                for s in &payload.manual_speakers {
+                    self.reserve(&s.id)?;
                 }
+                for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+                    self.reserve(&p.id)?;
+                }
+            } else if phase == 1 {
+                for s in &payload.manual_speakers {
+                    self.manual_identity("speakers", "speaker_lineage", &meeting, &s.id)?;
+                }
+                for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+                    self.manual_identity("utterances", "utterance_lineage", &meeting, &p.id)?;
+                }
+            } else {
+                self.transcript(&meeting, &mut payload)?;
             }
         }
         Ok(())
@@ -1100,14 +863,6 @@ impl RestoreIds<'_> {
             }
         }
         Ok(())
-    }
-}
-
-fn draft_hash(kind: &str, text: &str) -> Result<String, String> {
-    match kind {
-        "transcript" => Ok(super::super::drafts::draft_hash(text)),
-        "minutes" => Err("旧形式の議事録下書きには対応していません".into()),
-        _ => Err("未知の復元下書きです".into()),
     }
 }
 

@@ -23,9 +23,9 @@ async (page,capturePath=path=>path)=>{
     const logs=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="record_input_diagnostic_log"));
     check(logs.some(c=>c.args.stage==="live-journal"&&c.args.message),"silent failure stopped being logged");
     await page.evaluate(()=>{const f=window.closeFixture;f.failJournal=false;f.archived.failRead=false;
-      const row=f.newArchivedRow({count:0,title:"自動再確認",historySaveIssue:"unconfirmed",deliveryUnavailable:true});row.unavailable=true;f.archived.rows=[row];return f.recordChanged({phase:"idle"});});
+      const row=f.newArchivedRow({count:0,title:"自動再確認",historySaveIssue:"unconfirmed"});row.unavailable=true;f.archived.rows=[row];return f.recordChanged({phase:"idle"});});
     await page.waitForTimeout(1200);await quiet();
-    await page.evaluate(()=>{const f=window.closeFixture;const row=f.archived.rows[0];row.unavailable=false;row.deliveryUnavailable=false;row.historySaveIssue=null;row.revision++;return f.recordChanged({phase:"idle"});});
+    await page.evaluate(()=>{const f=window.closeFixture;const row=f.archived.rows[0];row.unavailable=false;row.historySaveIssue=null;row.revision++;return f.recordChanged({phase:"idle"});});
     await page.waitForTimeout(1200);await quiet();await open();
     check(await rows().count()===0,"automatic recovery added a resolved history row");
     check(!(await history().innerText()).includes("解消済み"),"resolved label survived");

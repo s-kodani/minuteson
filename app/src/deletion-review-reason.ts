@@ -1,11 +1,12 @@
 import type { DataOperation } from "./data-operation";
 import type { DataAvailability } from "./data-operation-state";
 
-/** Older native builds only report the general data-operation admission. */
 export function deletionAvailability(value: DataAvailability | null) {
-  return value?.deletionAvailable === undefined
-    ? { available: !!value?.available, reason: value?.reason ?? null, ...(value?.reasonCode !== undefined ? { reasonCode: value.reasonCode } : {}) }
-    : { available: value.deletionAvailable, reason: value.deletionReason ?? null, ...(value.deletionReasonCode !== undefined ? { reasonCode: value.deletionReasonCode } : {}) };
+  return {
+    available: value?.deletionAvailable ?? false,
+    reason: value?.deletionReason ?? null,
+    reasonCode: value?.deletionReasonCode ?? null,
+  };
 }
 
 /** Only an explicit native restart code can admit the restricted recovery read.

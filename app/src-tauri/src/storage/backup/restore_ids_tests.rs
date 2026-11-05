@@ -1,7 +1,6 @@
 use super::*;
 use crate::storage::draft_splits::{SplitPart, UtteranceSplit};
 use crate::storage::drafts::{ManualSpeaker, UtteranceEdit};
-use serde_json::json;
 use std::cell::Cell;
 
 pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) -> String {
@@ -65,9 +64,9 @@ fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
 
 #[test]
 fn relational_rules_cover_every_identifier_and_fk_in_the_trusted_schema() {
-    let db = portable::schema(MIGRATIONS.len()).unwrap();
+    let db = portable::schema().unwrap();
     let tables = portable::tables(&db).unwrap();
-    assert_eq!(tables.len(), 40);
+    assert_eq!(tables.len(), portable::TABLES.len());
     for table in &tables {
         let bindings = rules(&db, table).unwrap();
         for column in &table.columns {
@@ -121,7 +120,7 @@ fn all_relational_ids_are_new_and_scoped_while_sources_and_live_data_stay_unchan
         .unwrap();
     assert_eq!(accidental_old, 0);
     // This tests relational coherence, not runnable restored JSON/hash state.
-    let projected = portable::schema(MIGRATIONS.len()).unwrap();
+    let projected = portable::schema().unwrap();
     let triggers: Vec<String> = projected
         .prepare("SELECT name FROM sqlite_schema WHERE type='trigger'")
         .unwrap()

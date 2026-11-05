@@ -164,6 +164,18 @@ impl VerifiedAudio {
         Ok(audio)
     }
 
+    pub(crate) fn require_caf(&mut self) -> Result<(), String> {
+        self.file.rewind().map_err(|e| e.to_string())?;
+        let mut magic = [0; 4];
+        self.file
+            .read_exact(&mut magic)
+            .map_err(|e| e.to_string())?;
+        if &magic != b"caff" {
+            return Err("復号した音声がCAF形式ではありません".into());
+        }
+        self.check_unchanged()
+    }
+
     pub(crate) fn check_unchanged(&self) -> Result<(), String> {
         let metadata: Metadata =
             crate::native_fs::metadata(&self.file).map_err(|e| e.to_string())?;

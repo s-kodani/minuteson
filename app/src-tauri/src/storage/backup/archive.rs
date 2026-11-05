@@ -24,15 +24,11 @@ enum HashBasis {
 #[serde(rename_all = "snake_case")]
 enum Transform {
     Identity,
-    PortableJson,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum OmittedReason {
-    RecreatablePcm,
-    NativeLog,
     SourceAudioDeleted,
-    SupersededAudio,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,8 +132,6 @@ pub(crate) struct BackupReceipt {
     pub archive_id: String,
     pub meeting_count: usize,
     pub asset_count: usize,
-    pub omitted_pcm_count: usize,
-    pub omitted_log_count: usize,
     pub deleted_audio_meeting_count: usize,
     pub deleted_audio_asset_count: usize,
     pub size: u64,
@@ -234,7 +228,7 @@ impl Snapshot<'_> {
         deleted_audio::verify(&logical, &deleted_audio, &omitted, cancelled)?;
         let manifest = Manifest {
             format_version: crate::current_formats::BACKUP,
-            schema_version: MIGRATIONS.len(),
+            schema_version: SCHEMA_VERSION,
             archive_id: Uuid::new_v4().to_string(),
             created_at: now_ms()?,
             encryption: Encryption::None,
@@ -288,8 +282,6 @@ impl Snapshot<'_> {
             archive_id: verified.manifest.archive_id.clone(),
             meeting_count: verified.manifest.meetings.len(),
             asset_count: verified.assets.len(),
-            omitted_pcm_count: 0,
-            omitted_log_count: 0,
             deleted_audio_meeting_count: verified.manifest.deleted_audio.len(),
             deleted_audio_asset_count: verified.manifest.omitted_assets.len(),
             size: required,
@@ -363,7 +355,7 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if m.format_version != crate::current_formats::BACKUP || m.schema_version != MIGRATIONS.len() {
+    if m.format_version != crate::current_formats::BACKUP || m.schema_version != SCHEMA_VERSION {
         return Err(
             "このバックアップ形式には対応していません。新しい形式で作成してください".into(),
         );
@@ -407,40 +399,34 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
                 || e.meeting_id.is_some()
                 || e.source_size.is_some()
                 || e.source_sha256.is_some()
-                || e.transform != Transform::Identity
             {
                 return Err("バックアップDB記録が不正です".into());
             }
-        } else if e.transform != Transform::Identity
-            || !key(&e.path, "assets/")
+        } else if !key(&e.path, "assets/")
             || e.asset_id
                 .as_deref()
                 .is_none_or(|id| !identifier(id) || !ids.insert(id))
             || e.meeting_id
                 .as_ref()
-                .map_or(m.schema_version < 38, |id| !meetings.contains(id))
+                .is_some_and(|id| !meetings.contains(id))
             || e.source_size.is_none()
             || e.source_sha256
                 .as_deref()
                 .is_none_or(|s| !portable::valid_hash(s))
-            || (e.transform == Transform::Identity
-                && (e.source_size != Some(e.size) || e.source_sha256.as_deref() != Some(&e.sha256)))
+            || e.source_size != Some(e.size)
+            || e.source_sha256.as_deref() != Some(&e.sha256)
         {
             return Err("バックアップ管理ファイルの由来が不正です".into());
         }
     }
     for e in &m.omitted_assets {
-        if e.reason != OmittedReason::SourceAudioDeleted
-            || !identifier(&e.asset_id)
+        if !identifier(&e.asset_id)
             || !ids.insert(&e.asset_id)
             || !meetings.contains(&e.meeting_id)
             || !key(&e.path, "omitted/")
             || !paths.insert(&e.path)
             || !portable::valid_hash(&e.source_sha256)
-            || (e.reason == OmittedReason::SourceAudioDeleted
-                && !deleted_meetings.contains(&e.meeting_id))
-            || (e.reason == OmittedReason::RecreatablePcm
-                && deleted_meetings.contains(&e.meeting_id))
+            || !deleted_meetings.contains(&e.meeting_id)
         {
             return Err("除外ファイルの由来が不正です".into());
         }
@@ -631,33 +617,13 @@ fn validate_inventory(
                 return Err("管理ファイルmanifestとDBが一致しません".into());
             }
         } else if let Some(e) = omitted.get(&id) {
-            let referenced: bool = db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM audio_chunks WHERE file_asset_id=?1) OR EXISTS(SELECT 1 FROM audio_imports WHERE original_asset_id=?1 OR converted_asset_id=?1) OR EXISTS(SELECT 1 FROM audio_import_commits WHERE manifest_asset_id=?1)",
-                    params![id],
-                    |r| r.get(0),
-                )
-                .map_err(|e| e.to_string())?;
             if e.meeting_id != meeting
                 || e.path != path
                 || e.source_size != size as u64
                 || e.source_sha256 != hash
                 || state != "missing"
-                || (referenced
-                    && !matches!(
-                        e.reason,
-                        OmittedReason::SourceAudioDeleted | OmittedReason::SupersededAudio
-                    ))
-                || match e.reason {
-                    OmittedReason::RecreatablePcm => media != "audio/wav",
-                    OmittedReason::NativeLog => media != "text/plain",
-                    OmittedReason::SupersededAudio => {
-                        !super::super::meeting_audio::superseded_asset(db, &id)?
-                    }
-                    OmittedReason::SourceAudioDeleted => {
-                        !deleted.contains(&meeting) || !deleted_audio::audio_media(&media)
-                    }
-                }
+                || !deleted.contains(&meeting)
+                || !deleted_audio::audio_media(&media)
             {
                 return Err("除外ファイルの参照が不正です".into());
             }
@@ -666,7 +632,7 @@ fn validate_inventory(
         }
         count += 1;
     }
-    if m.schema_version >= 38 {
+    {
         let mut q=db.prepare("SELECT id,relative_path,size_bytes,content_hash,frame_count,state FROM voice_sample_audio").map_err(|e|e.to_string())?;
         let mut rows = q.query([]).map_err(|e| e.to_string())?;
         while let Some(r) = rows.next().map_err(|e| e.to_string())? {

@@ -3,7 +3,7 @@ type: "ADR"
 title: "ADR 0012 起動時の案内と明示操作の分離"
 description: "共通の案内一覧と既読・延期を管理し、更新は既存の機能境界で確認して実行する。"
 tags: ["startup", "ui", "models", "notifications"]
-status: "stable"
+status: "deprecated"
 sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/b6dd21f68cfffab0480023177f8a0c7f1e00d689/app/src-tauri/src/startup_notices.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/fc3a59e518e3af8225977474f32736f34bf71b06/app/src-tauri/src/storage/startup_notices.rs"
@@ -12,6 +12,8 @@ sources:
 ---
 
 # ADR 0012 起動時の案内と明示操作の分離
+
+公開前の版では、モデルの操作を[設定画面](../spec/models.md)に集約しました。
 
 ## 背景
 

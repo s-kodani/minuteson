@@ -1,17 +1,10 @@
 use super::*;
-use crate::storage::{initialize_database, Storage, MIGRATIONS};
+use crate::storage::{initialize_database, Storage};
 
-fn database(version: usize) -> Connection {
-    let db = Connection::open_in_memory().unwrap();
-    db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
-    for (number, sql) in &MIGRATIONS[..version] {
-        db.execute_batch(sql).unwrap();
-        db.execute(
-            "INSERT INTO schema_migrations VALUES(?1,?2,1)",
-            params![number, digest(sql.as_bytes())],
-        )
-        .unwrap();
-    }
+fn database() -> Connection {
+    let mut db = Connection::open_in_memory().unwrap();
+    db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    initialize_database(&mut db).unwrap();
     db
 }
 
@@ -21,8 +14,7 @@ fn empty_scope() -> Scope {
         version: 1,
         meeting_id: uuid::Uuid::new_v4().to_string(),
         schema_hash: known.hash.clone(),
-        tables: known
-            .targets
+        tables: TARGETS
             .iter()
             .map(|(name, _)| Table {
                 name: (*name).into(),
@@ -35,94 +27,8 @@ fn empty_scope() -> Scope {
 }
 
 #[test]
-fn history_schema_requires_current_live_db_and_only_the_known_bridge_can_initialize_old_data() {
-    for version in 20..=MIGRATIONS.len() {
-        let mut db = database(version);
-        let scope = empty_scope();
-        let original = scope.encode().unwrap();
-        let before = schema(&db).unwrap();
-        let current = version == MIGRATIONS.len();
-        assert_eq!(scope.validate_format(&db).is_ok(), current);
-        assert_eq!(
-            verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).is_ok(),
-            current
-        );
-        assert_eq!(trusted_history_schema(&db).is_ok(), current);
-        assert_eq!(trusted_schema(&db).is_ok(), current);
-        assert_eq!(
-            initialize_database(&mut db).is_ok(),
-            current || matches!(version, 34 | 35 | 36 | 37)
-        );
-        if matches!(version, 34 | 35 | 36 | 37) {
-            assert_eq!(schema(&db).unwrap(), current_schema().unwrap().objects);
-        } else {
-            assert_eq!(schema(&db).unwrap(), before);
-        }
-        if !current {
-            continue;
-        }
-        scope.validate_format(&db).unwrap();
-        verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
-        assert_eq!(scope.encode().unwrap(), original);
-        assert_eq!(
-            scope.validate_current(&db).is_ok(),
-            version == MIGRATIONS.len()
-        );
-        let tx = db.transaction().unwrap();
-        assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
-        // A current empty synthetic scope also refuses the claimed meeting row
-        // count; no older scope can reach the first UPDATE/DELETE at all.
-    }
-}
-
-#[test]
-fn previous_schema_receipts_are_readable_but_never_current_deletion_consent() {
-    for (version, expected_missing) in [
-        (
-            34,
-            vec![
-                "post_analysis_intents",
-                "audio_upgrade_progress",
-                "meeting_audio_commits",
-            ],
-        ),
-        (35, vec!["post_analysis_intents"]),
-        (36, vec![]),
-        (37, vec![]),
-    ] {
-        let previous = database(version);
-        let objects = schema(&previous).unwrap();
-        let hash = digest(&serde_json::to_vec(&objects).unwrap());
-        let known = saved_schema(current_schema().unwrap(), &hash).unwrap();
-        assert_eq!(known.version, version);
-        let missing = TARGETS
-            .iter()
-            .filter(|(name, _)| !known.targets.iter().any(|(kept, _)| kept == name))
-            .map(|(name, _)| *name)
-            .collect::<Vec<_>>();
-        assert_eq!(missing, expected_missing);
-        let mut scope = empty_scope();
-        scope.schema_hash = hash;
-        scope
-            .tables
-            .retain(|t| known.targets.iter().any(|(name, _)| *name == t.name));
-        let original = scope.encode().unwrap();
-        let mut db = database(MIGRATIONS.len());
-        scope.validate_format(&db).unwrap();
-        verify_rows_absent(&db, &scope, &crate::test_support::never_cancelled).unwrap();
-        assert!(scope.validate_current(&db).unwrap_err().contains("旧版"));
-        let tx = db.transaction().unwrap();
-        assert!(erase_rows(&tx, &scope, &crate::test_support::never_cancelled).is_err());
-        tx.rollback().unwrap();
-        assert_eq!(scope.encode().unwrap(), original);
-        scope.schema_hash = "a".repeat(64);
-        assert!(scope.validate_format(&db).is_err());
-    }
-}
-
-#[test]
 fn history_schema_rejects_unknown_backward_or_truncated_scope_despite_rehashed_values() {
-    let db = database(MIGRATIONS.len());
+    let db = database();
     for change in 0..5 {
         let mut scope = empty_scope();
         match change {
@@ -140,13 +46,12 @@ fn history_schema_rejects_unknown_backward_or_truncated_scope_despite_rehashed_v
         }
         assert!(scope.validate_format(&db).is_err());
     }
-    assert!(empty_scope().validate_format(&database(27)).is_err());
 }
 
 #[test]
 fn history_schema_never_trusts_matching_version_with_changed_structure_or_disabled_guards() {
     for change in 0..5 {
-        let db = database(MIGRATIONS.len());
+        let db = database();
         match change {
             0 => db
                 .execute_batch("CREATE TABLE unknown_scope(body TEXT)")
@@ -160,20 +65,16 @@ fn history_schema_never_trusts_matching_version_with_changed_structure_or_disabl
                     .unwrap();
             }
             _ => {
-                db.execute(
-                    "UPDATE schema_migrations SET checksum=?1 WHERE version=27",
-                    ["a".repeat(64)],
-                )
-                .unwrap();
+                db.execute("UPDATE schema_migrations SET checksum=?1", ["a".repeat(64)])
+                    .unwrap();
             }
         }
-        assert!(trusted_history_schema(&db).is_err());
+        assert!(trusted_schema(&db).is_err());
         assert!(empty_scope().validate_format(&db).is_err());
     }
-    let db = database(MIGRATIONS.len());
-    db.execute_batch("DELETE FROM schema_migrations WHERE version=28")
-        .unwrap();
-    assert!(trusted_history_schema(&db).is_err());
+    let db = database();
+    db.execute_batch("DELETE FROM schema_migrations").unwrap();
+    assert!(trusted_schema(&db).is_err());
 }
 
 #[test]
@@ -209,30 +110,26 @@ fn history_scope_absence_checks_new_rows_without_authorizing_their_deletion() {
 
 #[test]
 fn history_schema_refuses_fk_corruption_and_any_unknown_temp_object() {
-    let db = database(MIGRATIONS.len());
+    let db = database();
     db.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO vocabulary_scopes VALUES('meeting:00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',0,1); PRAGMA foreign_keys=ON;").unwrap();
-    assert!(trusted_history_schema(&db).is_err());
-    let db = database(MIGRATIONS.len());
+    assert!(trusted_schema(&db).is_err());
+    let db = database();
     db.execute_batch("CREATE TEMP TABLE unknown_attention(id TEXT)")
         .unwrap();
-    assert!(trusted_history_schema(&db).is_err());
+    assert!(trusted_schema(&db).is_err());
 }
 
 #[test]
 #[cfg(unix)]
 fn audio_use_refuses_a_missing_journal_in_old_and_current_databases() {
     let meeting = uuid::Uuid::new_v4().to_string();
-    for version in [20, 21, MIGRATIONS.len()] {
-        let db = database(version);
-        if version == MIGRATIONS.len() {
-            db.execute_batch("DROP TABLE maintenance_operations")
-                .unwrap();
-        }
-        let before = schema(&db).unwrap();
-        let error =
-            crate::storage::deletion::audio::intent::removal::completion::deleted(&db, &meeting)
-                .unwrap_err();
-        assert!(error.contains("音声削除台帳が欠落"));
-        assert_eq!(schema(&db).unwrap(), before);
-    }
+    let db = database();
+    db.execute_batch("DROP TABLE maintenance_operations")
+        .unwrap();
+    let before = schema(&db).unwrap();
+    let error =
+        crate::storage::deletion::audio::intent::removal::completion::deleted(&db, &meeting)
+            .unwrap_err();
+    assert!(error.contains("音声削除台帳が欠落"));
+    assert_eq!(schema(&db).unwrap(), before);
 }

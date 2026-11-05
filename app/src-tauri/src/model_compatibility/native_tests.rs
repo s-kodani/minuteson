@@ -39,14 +39,13 @@ fn real_sherpa_package_passes_preparation_and_profile_application() {
         &|| false,
     )
     .unwrap();
-    let preview = crate::model_application::preview_with_sensitivity(
+    let preview = crate::model_application::preview_with_vad(
         &storage,
         &models,
         crate::storage::model_profiles::ProfileName::Standard,
         &package,
         &inspected.review_hash,
         &operation,
-        None,
         None,
         None,
         None,

@@ -2,20 +2,6 @@ use super::*;
 use crate::audio_import::ImportOptions;
 use serde_json::{json, Value};
 
-// Local database migration fixtures only, never a backup reader or writer.
-pub(in crate::storage::backup) fn migration_database(db: Connection, version: usize) -> Connection {
-    db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
-    for &(version, sql) in &MIGRATIONS[..version] {
-        db.execute_batch(sql).unwrap();
-        db.execute(
-            "INSERT INTO schema_migrations VALUES(?1,?2,0)",
-            params![version, format!("{:x}", Sha256::digest(sql.as_bytes()))],
-        )
-        .unwrap();
-    }
-    db
-}
-
 pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
     meeting_source(storage, operation, false)
 }
@@ -132,11 +118,11 @@ fn current_contents_roundtrip_has_one_baseline_and_no_jobs_or_edits() {
     let (path, _) = write(&storage, out.path());
     let archive = verified(&path, out.path());
     assert_eq!(archive.manifest.format_version, 8);
+    assert_eq!(archive.manifest.schema_version, SCHEMA_VERSION);
     for table in [
         "processing_jobs",
         "job_checkpoints",
         "working_drafts",
-        "edit_operations",
         "model_packages",
         "model_profiles",
         "export_records",
@@ -210,9 +196,15 @@ fn format8_reader_rejects_corruption_truncation_extra_bytes_and_old_versions() {
         assert!(read(&mut File::open(bad).unwrap(), out.path(), &|| false).is_err());
     }
     let archive = verified(&path, out.path());
-    for old in [5, 6, 7] {
+    for (format, schema) in [
+        (5, SCHEMA_VERSION),
+        (6, SCHEMA_VERSION),
+        (7, SCHEMA_VERSION),
+        (8, 38),
+    ] {
         let mut manifest = archive.manifest.clone();
-        manifest.format_version = old;
+        manifest.format_version = format;
+        manifest.schema_version = schema;
         let bad = out.path().join("old.monbackup");
         pack(&bad, &manifest, &payloads(&archive));
         assert!(read(&mut File::open(bad).unwrap(), out.path(), &|| false)

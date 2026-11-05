@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, type ModelApplicationPreview, type ModelProfileComponent, type ModelProfileView } from "../src/model-profile-state.ts";
+import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, type ModelApplicationPreview, type ModelProfileComponent, type ModelProfileView } from "../src/model-profile-state.ts";
 import type { ModelPlacementEntry } from "../src/model-inspection-state.ts";
 
 const packageId = "11111111-1111-4111-8111-111111111111", checkId = "22222222-2222-4222-8222-222222222222", operationId = "33333333-3333-4333-8333-333333333333";
@@ -26,15 +26,6 @@ test("catalog validation rejects duplicate profiles, missing components, wrong r
   assert.doesNotThrow(() => assertProfileCatalog([applied, { ...empty, name: "high_accuracy" }]));
   for (const views of [[empty], [empty, empty], [{ ...empty, configurationComplete: true }, { ...empty, name: "high_accuracy" }], [{ ...applied, components: [] }, { ...empty, name: "high_accuracy" }], [{ ...applied, components: [component, component] }, { ...empty, name: "high_accuracy" }], [{ ...applied, components: [{ ...component, roles: ["llm"] }] }, { ...empty, name: "high_accuracy" }]]) {
     assert.throws(() => assertProfileCatalog(views as ModelProfileView[]));
-  }
-});
-test("partial and complete configuration labels remain distinct from runtime preparation and expose stale flags", () => {
-  assert.match(profileConfigurationLabel(empty), /未選択/);
-  assert.match(profileConfigurationLabel(applied), /一部/);
-  const complete: ModelProfileView = { ...applied, configurationComplete: true, components: [component, { ...component, engine: "sherpa-onnx", roles: ["segmentation", "speaker_embedding"] }, { ...component, engine: "llama.cpp", roles: ["llm"] }] };
-  assert.match(profileConfigurationLabel(complete), /実行準備・品質は別途確認/);
-  for (const flag of ["settingsMatch", "compatibilityCurrent"]) {
-    assert.match(profileConfigurationLabel({ ...complete, configurationComplete: false, components: complete.components.map((c, i) => i === 0 ? { ...c, [flag]: false } : c) }), /不一致/);
   }
 });
 test("review binds selected profile package check and head without replacing prior numeric or GPU conditions", () => {
@@ -74,9 +65,6 @@ test("readback checks the selected actual preferences and never substitutes sett
   assert.throws(() => assertAppliedPreferences({ ...value, lockVersion: 5 }, preview));
   assert.throws(() => assertAppliedPreferences({ ...value, payload: { standard: before.settings, highAccuracy: after.settings } }, preview));
   assert.throws(() => assertAppliedPreferences({ ...value, payload: { ...value.payload, standard: { ...after.settings, threads: 1 } } }, preview));
-  assert.equal(preferenceCommand("whisper.cpp"), "get_asr_preferences");
-  assert.equal(preferenceCommand("sherpa-onnx"), "get_diarization_preferences");
-  assert.equal(preferenceCommand("llama.cpp"), "get_minutes_preferences");
 });
 test("CPU tuning requires the explicit requested thread count and cannot change model files or diarization conditions", () => {
   const settings = { executablePath: "/app/models/sherpa", segmentationModelPath: "/app/models/seg.onnx", embeddingModelPath: "/app/models/emb.onnx", runtimeLibraryPaths: ["/app/models/lib.dylib"], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };

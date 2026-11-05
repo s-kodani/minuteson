@@ -6,7 +6,7 @@ import {verifiedJobOutput,JobNotificationTracker,type NotificationJob} from '../
 test('completion settings retain exact increments and reject invalid values',()=>{
   assert.equal(matchingThreshold('0.80'),800);assert.throws(()=>matchingThreshold('0.801'));
 });
-const job:NotificationJob={id:'j',kind:'speaker_completion',meetingId:'m',meetingTitle:'会議',operationId:'op',inputHash:'a'.repeat(64),specHash:'b'.repeat(64),createdAt:1,updatedAt:2,state:'running',completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,retryOfJobId:null,attempt:1};
+const job:NotificationJob={id:'j',kind:'speaker_completion',meetingId:'m',meetingTitle:'会議',operationId:'op',inputHash:'a'.repeat(64),specHash:'b'.repeat(64),createdAt:1,updatedAt:2,state:'running',completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,pauseReason:null,retryOfJobId:null,attempt:1};
 test('completion notifications require their exact persisted receipt including zero-change runs',()=>{
   const tracker=new JobNotificationTracker(0);tracker.ingest([job]);
   const done={...job,state:'succeeded',completedUnits:1,updatedAt:3};tracker.ingest([done]);

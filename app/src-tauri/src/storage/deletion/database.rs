@@ -13,36 +13,18 @@ const MAX_MANIFEST: usize = 65_536;
 // Order is dependency order, except the three self-referential trees below.
 pub(in crate::storage) const TARGETS: &[(&str, &str)] = &[
     ("post_analysis_intents", "meeting_id=?1"),
-    ("audio_upgrade_progress", "meeting_id=?1"),
     ("meeting_audio_commits", "meeting_id=?1"),
     ("voice_matches", "meeting_id=?1"),
     ("analysis_flows", "meeting_id=?1"),
-    (
-        "transcript_edit_recovery",
-        "draft_id IN (SELECT id FROM working_drafts WHERE meeting_id=?1)",
-    ),
-    (
-        "edit_operations",
-        "draft_id IN (SELECT id FROM working_drafts WHERE meeting_id=?1)",
-    ),
     ("working_drafts", "meeting_id=?1"),
     ("export_records", "meeting_id=?1"),
     ("minutes_markdown", "meeting_id=?1"),
-    (
-        "evidence_links",
-        "minutes_revision_id IN (SELECT id FROM minutes_revisions WHERE meeting_id=?1)",
-    ),
-    (
-        "minutes_items",
-        "minutes_revision_id IN (SELECT id FROM minutes_revisions WHERE meeting_id=?1)",
-    ),
     ("vocabulary_snapshots", "meeting_id=?1"),
     (
         "job_checkpoints",
         "job_id IN (SELECT id FROM processing_jobs WHERE meeting_id=?1)",
     ),
     ("processing_jobs", "meeting_id=?1"),
-    ("minutes_revisions", "meeting_id=?1"),
     (
         "diarization_manual_assignments",
         "analysis_id IN (SELECT id FROM analysis_revisions WHERE meeting_id=?1)",
@@ -76,9 +58,7 @@ pub(in crate::storage) const TARGETS: &[(&str, &str)] = &[
     ),
     ("audio_import_commits", "meeting_id=?1"),
     ("audio_imports", "meeting_id=?1"),
-    ("recording_input_delivery", "meeting_id=?1"),
     ("recording_sessions", "meeting_id=?1"),
-    ("restore_omitted_assets", "meeting_id=?1"),
     ("file_assets", "meeting_id=?1"),
     (
         "vocabulary_entries",
@@ -116,7 +96,7 @@ pub(super) fn audio_tables(
     if !uuid(meeting) {
         return Err("音声履歴の会議IDが不正です".into());
     }
-    trusted_history_schema(db)?;
+    trusted_schema(db)?;
     [
         ("audio_chunks", "meeting_id=?1"),
         ("audio_tracks", "meeting_id=?1"),
@@ -149,10 +129,8 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String, String)>, Stri
 }
 type Schema = Vec<(String, String, String, String)>;
 struct KnownSchema {
-    version: usize,
     objects: Schema,
     hash: String,
-    targets: Vec<(&'static str, &'static str)>,
 }
 fn current_schema() -> Result<&'static KnownSchema, String> {
     // Only repository-owned current SQL is cached, never a live connection's
@@ -160,14 +138,11 @@ fn current_schema() -> Result<&'static KnownSchema, String> {
     static EXPECTED: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
     EXPECTED
         .get_or_init(|| {
-            let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-            expected.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e| e.to_string())?;
-            for (_, sql) in crate::storage::MIGRATIONS {
-                expected.execute_batch(sql).map_err(|e| e.to_string())?;
-            }
+            let mut expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            crate::storage::initialize_database(&mut expected).map_err(|e| e.to_string())?;
             let objects = schema(&expected)?;
             let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
-            Ok(KnownSchema { version: crate::storage::MIGRATIONS.len(), objects, hash, targets: TARGETS.to_vec() })
+            Ok(KnownSchema { objects, hash })
         })
         .as_ref()
         .map_err(Clone::clone)
@@ -175,41 +150,11 @@ fn current_schema() -> Result<&'static KnownSchema, String> {
 pub(in crate::storage) fn trusted_schema(db: &Connection) -> Result<String, String> {
     Ok(inspect_schema(db)?.hash.clone())
 }
-// The live DB must be current. Saved receipts may retain the recognized
-// pre-migration schema; that historical consent cannot erase current rows.
-pub(super) fn trusted_history_schema(db: &Connection) -> Result<String, String> {
-    trusted_schema(db)
-}
 pub(super) fn verify_history_schema_hash(db: &Connection, hash: &str) -> Result<(), String> {
-    history_schema(db, hash).map(|_| ())
-}
-fn history_schema(db: &Connection, hash: &str) -> Result<&'static KnownSchema, String> {
-    let actual = inspect_schema(db)?;
-    saved_schema(actual, hash)
-}
-fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static KnownSchema, String> {
-    if actual.hash == hash {
-        Ok(actual)
-    } else {
-        static PREVIOUS: std::sync::OnceLock<Result<Vec<KnownSchema>, String>> =
-            std::sync::OnceLock::new();
-        let previous=PREVIOUS.get_or_init(|| {
-            let mut known=Vec::new();
-            for version in [34,35,36,37] {
-                let db=Connection::open_in_memory().map_err(|e|e.to_string())?;
-                db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
-                for (_,sql) in crate::storage::MIGRATIONS.iter().take(version) {db.execute_batch(sql).map_err(|e|e.to_string())?;}
-                let objects=schema(&db)?;let hash=digest(&serde_json::to_vec(&objects).map_err(|e|e.to_string())?);
-                let targets=TARGETS.iter().copied().filter(|(name,_)|objects.iter().any(|(kind,table,_,_)|kind=="table" && table==name)).collect();
-                known.push(KnownSchema{version,objects,hash,targets});
-            }
-            Ok(known)
-        }).as_ref().map_err(Clone::clone)?;
-        previous
-            .iter()
-            .find(|s| s.hash == hash)
-            .ok_or_else(|| "削除履歴のDB定義が現行形式・既知の旧形式と一致しません".into())
+    if inspect_schema(db)?.hash != hash {
+        return Err("削除履歴のDB定義が現行形式と一致しません".into());
     }
+    Ok(())
 }
 fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
     #[cfg(any(unix, windows))]
@@ -223,10 +168,7 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
     {
         return Err("削除対象DBに未対応の一時オブジェクトがあります".into());
     }
-    let version = crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?;
-    if version != crate::storage::MIGRATIONS.len() {
-        return Err("削除対象DBが現行形式ではありません".into());
-    }
+    crate::storage::verify_database_schema(db).map_err(|e| e.to_string())?;
     let expected = current_schema()?;
     let actual = schema(db)?;
     if actual != expected.objects {
@@ -256,7 +198,7 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
 }
 
 pub(super) fn stopped(db: &Connection) -> Result<(), String> {
-    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if active {
         Err("録音・解析・取り込み・準備・書き出しの停止完了後に削除を確認してください".into())
     } else {
@@ -279,7 +221,7 @@ fn stopped_for_meeting(db: &Connection, meeting: &str) -> Result<(), String> {
 // workers); all other active SQL work and unfinished CPU checks still block.
 #[cfg(any(unix, windows))]
 pub(super) fn stopped_for_model_consent(db: &Connection) -> Result<(), String> {
-    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_compatibility_checks WHERE state='preparing')", [], |r|r.get(0)).map_err(|e|e.to_string())?;
+    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_compatibility_checks WHERE state='preparing')", [], |r|r.get(0)).map_err(|e|e.to_string())?;
     if active {
         Err(
             "録音・解析・取り込み・互換性確認・書き出しの停止完了後にモデル削除を確認してください"
@@ -388,7 +330,7 @@ pub(super) fn detached_maintenance_hash(
     ids: &[String],
     check: &impl Fn() -> bool,
 ) -> Result<String, String> {
-    trusted_history_schema(db)?;
+    trusted_schema(db)?;
     if !uuid(meeting) || ids.len() > 1024 {
         return Err("保持する保守履歴の範囲が不正です".into());
     }
@@ -584,41 +526,23 @@ impl Scope {
     pub(super) fn validate_format(&self, db: &Connection) -> Result<(), String> {
         self.validate_schema(db).map(|_| ())
     }
-    fn validate_schema(&self, db: &Connection) -> Result<&'static KnownSchema, String> {
+    fn validate_schema(&self, db: &Connection) -> Result<(), String> {
         let valid_hash = |s: &str| {
             s.len() == 64
                 && s.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         };
-        let actual = inspect_schema(db)?;
-        let known = saved_schema(actual, &self.schema_hash)?;
+        verify_history_schema_hash(db, &self.schema_hash)?;
         if self.version != 1
             || !uuid(&self.meeting_id)
             || !valid_hash(&self.maintenance_hash)
-            || self.tables.len() != known.targets.len()
-            || self
-                .tables
-                .iter()
-                .zip(&known.targets)
-                .any(|(t, (name, _))| {
-                    t.name != *name || t.rows > MAX_ROWS || !valid_hash(&t.sha256)
-                })
+            || self.tables.len() != TARGETS.len()
+            || self.tables.iter().zip(TARGETS).any(|(t, (name, _))| {
+                t.name != *name || t.rows > MAX_ROWS || !valid_hash(&t.sha256)
+            })
             || self.tables.last().is_none_or(|t| t.rows != 1)
         {
             return Err("削除の確認対象が既知の形式と一致しません".into());
-        }
-        Ok(actual)
-    }
-    fn validate_current(&self, db: &Connection) -> Result<(), String> {
-        let actual = self.validate_schema(db)?;
-        if actual.version != crate::storage::MIGRATIONS.len()
-            || self.schema_hash != actual.hash
-            || self.tables.len() != TARGETS.len()
-        {
-            return Err(
-                "旧版の削除要求は現在のDB行削除に使用できません。現在の対象を再確認してください"
-                    .into(),
-            );
         }
         Ok(())
     }
@@ -687,7 +611,7 @@ pub(super) fn erase_rows(
     if tx.is_autocommit() {
         return Err("DB行削除には同じ接続の確定トランザクションが必要です".into());
     }
-    expected.validate_current(tx)?;
+    expected.validate_schema(tx)?;
     let db = tx;
     cancel(check)?;
     // Keep this enabled on the connection even if cancellation rolls back.
@@ -696,15 +620,16 @@ pub(super) fn erase_rows(
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .map_err(|e| e.to_string())?;
     let triggers = Triggers(db);
-    tx.execute("UPDATE meetings SET current_analysis_id=NULL,previous_analysis_id=NULL,current_minutes_id=NULL,previous_minutes_id=NULL WHERE id=?1", params![expected.meeting_id]).map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE meetings SET current_analysis_id=NULL WHERE id=?1",
+        params![expected.meeting_id],
+    )
+    .map_err(|e| e.to_string())?;
     let mut erased = 0;
     for ((name, predicate), table) in TARGETS.iter().zip(&expected.tables) {
         cancel(check)?;
         let mut count = 0;
-        if matches!(
-            *name,
-            "processing_jobs" | "analysis_revisions" | "minutes_revisions"
-        ) {
+        if matches!(*name, "processing_jobs" | "analysis_revisions") {
             let parent = if *name == "processing_jobs" {
                 "retry_of_job_id"
             } else {
@@ -772,10 +697,8 @@ pub(super) fn verify_rows_absent(
     expected: &Scope,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let actual = expected.validate_schema(db)?;
-    // Inspect every live target, including newly added tables. The old receipt
-    // can prove historical absence, never authorize removing these new rows.
-    for (name, predicate) in &actual.targets {
+    expected.validate_schema(db)?;
+    for (name, predicate) in TARGETS {
         cancel(check)?;
         let exists: bool = db
             .query_row(

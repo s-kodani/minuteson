@@ -50,7 +50,7 @@ test("a preview is never shown as completed backup and uncertain publication nev
 test("valid receipt is terminal, not a busy partial publication", () => {
   const s: DataSnapshot = { ...ready(), kind: "backup", phase: "completed", retryAllowed: false, restorePreview: null,
     backupPreview: { confirmationId: id(2), destination: "/outside/test.monbackup", replacesExisting: false },
-    backupReceipt: { archiveId: id(4), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 128, sha256: "a".repeat(64) } };
+    backupReceipt: { archiveId: id(4), meetingCount: 1, assetCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 128, sha256: "a".repeat(64) } };
   assert.doesNotThrow(() => assertDataSnapshot(s));
   assert.throws(() => assertDataSnapshot({ ...s, busy: true }));
   assert.throws(() => assertDataSnapshot({ ...s, attentionRequired: true }));
@@ -58,7 +58,7 @@ test("valid receipt is terminal, not a busy partial publication", () => {
 
 test("deleted source counts are explicit and cannot be confused with recreatable PCM", () => {
   const base: DataSnapshot = { ...ready(), kind: "backup", phase: "completed", retryAllowed: false, restorePreview: null,
-    backupReceipt: { archiveId: id(4), meetingCount: 2, assetCount: 3, omittedPcmCount: 0, omittedLogCount: 1, deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4, size: 1024, sha256: "a".repeat(64) } };
+    backupReceipt: { archiveId: id(4), meetingCount: 2, assetCount: 3, deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4, size: 1024, sha256: "a".repeat(64) } };
   assert.doesNotThrow(() => assertDataSnapshot(base));
   for (const change of [{ deletedAudioMeetingCount: -1 }, { deletedAudioMeetingCount: 3 }, { deletedAudioMeetingCount: 0 }, { deletedAudioAssetCount: 1.5 }, { deletedAudioAssetCount: undefined }]) {
     assert.throws(() => assertDataSnapshot({ ...base, backupReceipt: { ...base.backupReceipt!, ...change } }));

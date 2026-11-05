@@ -14,7 +14,7 @@ async page => {
       const f = window.closeFixture;
       f.archived.rows = Array.from({ length: 18 }, (_, i) => f.newArchivedRow({
         title: `保存された会議${i + 1}の長い通知履歴を確認するための日本語タイトル`,
-        both: true, loss: 12, historySaveIssue: "failed", deliveryUnavailable: true,
+        count: 0, both: true, loss: 12, historySaveIssue: "failed",
       }));
       f.recordChanged({ phase: "idle" });
       return window.dataFixture.meetings[0].title;
@@ -53,7 +53,7 @@ async page => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.evaluate(() => {
       const f=window.closeFixture;
-      f.archived.rows=[f.newArchivedRow({ title:"通知履歴の表示確認", loss:12, deliveryUnavailable:true })];
+      f.archived.rows=[f.newArchivedRow({ title:"通知履歴の表示確認", count:0, loss:12 })];
       f.recordChanged({phase:"idle"});
       document.documentElement.dataset.theme="light";
     });

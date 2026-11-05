@@ -7,7 +7,7 @@ pub(super) fn operation_key(archive: &str, meeting: &str) -> String {
 
 #[cfg(any(unix, windows))]
 use super::{
-    archive, check_cancelled, ledger, restore_fixed::workspace::seal::SealedWorkspace,
+    check_cancelled, ledger, restore_fixed::workspace::seal::SealedWorkspace,
     restore_ids::RestoreIds,
 };
 #[cfg(any(unix, windows))]
@@ -52,9 +52,7 @@ impl Seed {
             let target = ids.get("meetings", "", source_meeting)?;
             let mut assets = std::collections::BTreeSet::new();
             for asset in &source.manifest.omitted_assets {
-                if asset.meeting_id != source_meeting
-                    || asset.reason != archive::OmittedReason::SourceAudioDeleted
-                {
+                if asset.meeting_id != source_meeting {
                     continue;
                 }
                 let id = ids.get("file_assets", source_meeting, &asset.asset_id)?;

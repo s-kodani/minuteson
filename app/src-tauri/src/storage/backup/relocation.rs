@@ -723,13 +723,6 @@ impl NativeSnapshot<'_> {
 
 // Content verification only: placement also needs its durable ownership proofs,
 // bootstrap binding and a held/rechecked source fence. Not a cutover capability.
-pub(crate) fn verify_placed_image(
-    root: &Path,
-    expected: &Manifest,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
-    verify_placed_image_with_controls(root, expected, cancelled, &[])
-}
 pub(crate) fn verify_placed_image_with_controls(
     root: &Path,
     expected: &Manifest,

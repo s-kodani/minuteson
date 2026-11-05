@@ -148,7 +148,6 @@ pub(in crate::storage) fn fixture() -> (tempfile::TempDir, Storage, String, JobS
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     };
     let plan = Plan {
         resident_runtime: crate::local_engine::resident::prepare(s.root(), "sherpa").unwrap(),

@@ -11,7 +11,7 @@ pub(crate) enum Stage {
     Directories,
     StorageSelection,
     StorageAdmission,
-    AudioMigration,
+    AudioRecovery,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,16 +73,7 @@ pub(crate) struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<Recovery>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    migration: Option<AudioMigration>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     reset: Option<crate::startup_reset::Availability>,
-}
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AudioMigration {
-    completed: usize,
-    total: usize,
-    meeting_id: String,
 }
 pub(crate) struct Startup(Mutex<Report>);
 impl Default for Startup {
@@ -99,7 +90,6 @@ impl Default for Startup {
             phase: Phase::Starting,
             failure: None,
             recovery: None,
-            migration: None,
             reset: None,
         }))
     }
@@ -107,26 +97,6 @@ impl Default for Startup {
 impl Startup {
     pub(crate) fn ready_for_work(&self) -> bool {
         self.snapshot().is_ok_and(|s| s.phase == Phase::Ready)
-    }
-    pub(crate) fn migration_progress(
-        &self,
-        completed: usize,
-        total: usize,
-        meeting: &str,
-    ) -> Result<(), String> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| "起動診断のロックを取得できません")?;
-        if state.phase != Phase::Starting || completed > total {
-            return Err("音声移行の進捗が不正です".into());
-        }
-        state.migration = Some(AudioMigration {
-            completed,
-            total,
-            meeting_id: meeting.to_owned(),
-        });
-        Ok(())
     }
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn set_recovery(&self, recovery: Option<Recovery>) -> Result<(), String> {
@@ -228,17 +198,15 @@ impl Startup {
                         | "get_current_analysis"
                         | "get_transcript_draft"
                         | "get_minutes_markdown"
-                        | "get_analysis_versions"
+                        | "get_minutes_source"
                         | "get_meeting_audio_summary"
                         | "get_data_operation"
                         | "get_data_operation_availability"
                         | "get_deletion_items"
                         | "get_meeting_deletion_availability"
-                        | "get_deletion_paths"
                         | "get_audio_deletion_items"
                         | "get_audio_deletion_paths"
                         | "get_model_deletion_items"
-                        | "get_model_deletion_paths"
                         | "get_audio_import"
                         | "get_recording_snapshot"
                         | "get_capture_test_snapshot"
@@ -250,7 +218,6 @@ impl Startup {
                         | "get_analysis_preparations"
                         | "get_meeting_analysis_audio"
                         | "get_ui_preferences"
-                        | "get_analysis_preferences"
                         | "get_asr_preferences"
                         | "get_asr_backends"
                         | "get_diarization_preferences"
@@ -307,7 +274,7 @@ pub(crate) fn show(app: &tauri::AppHandle) {
     if let Ok(mut report) = app.state::<Startup>().0.lock() {
         report.reset = Some(availability);
     }
-    for label in ["recorder", "recorder-info", "recording-confirmation"] {
+    for label in ["recorder", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
             if label == "recorder" {
                 let _ = crate::recorder_panel::hide(&window);
@@ -363,12 +330,7 @@ mod tests {
             ))
             .unwrap();
         assert!(startup.admit_command("main", "retry_startup").is_ok());
-        for label in [
-            "recorder",
-            "recorder-info",
-            "recording-confirmation",
-            "unknown",
-        ] {
+        for label in ["recorder", "recording-confirmation", "unknown"] {
             assert!(startup.admit_command(label, "retry_startup").is_err());
         }
         for command in ["start_recording", "list_meetings", "finish_main_close"] {
@@ -399,7 +361,6 @@ mod tests {
         for command in [
             "start_recording",
             "start_data_operation",
-            "start_analysis_flow",
             "rename_meeting",
             "save_minutes_markdown",
             "start_capture_test",
@@ -411,20 +372,13 @@ mod tests {
     #[test]
     fn starting_and_blocked_reject_every_normal_operation_and_never_reset() {
         let s = Startup::default();
-        for label in [
-            "main",
-            "recorder",
-            "recorder-info",
-            "recording-confirmation",
-            "unknown",
-        ] {
+        for label in ["main", "recorder", "recording-confirmation", "unknown"] {
             for command in [
                 "create_meeting",
                 "start_recording",
                 "stop_recording",
                 "start_data_operation",
                 "get_recording_snapshot",
-                "show_recorder_info",
                 "unknown",
             ] {
                 assert!(s.admit_command(label, command).is_err());
@@ -445,12 +399,7 @@ mod tests {
         assert_eq!(s.snapshot().unwrap(), before);
         assert!(s.admit_command("main", "get_startup_report").is_ok());
         assert!(s.admit_command("main", "quit_blocked_startup").is_ok());
-        for label in [
-            "recorder",
-            "recorder-info",
-            "recording-confirmation",
-            "unknown",
-        ] {
+        for label in ["recorder", "recording-confirmation", "unknown"] {
             assert!(s.admit_command(label, "quit_blocked_startup").is_err());
             assert!(s.admit_command(label, "get_startup_report").is_err());
         }

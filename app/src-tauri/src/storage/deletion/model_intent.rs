@@ -126,6 +126,10 @@ impl Prepared {
         self.header.include_unregistered
     }
     fn validate(&self, db: &Connection) -> Result<(), String> {
+        #[cfg(not(test))]
+        if !self.snapshot.directory_scope {
+            return Err("モデルの削除記録は現行のフォルダー確認形式が必要です".into());
+        }
         let h = &self.header;
         self.snapshot.validate()?;
         super::super::database::verify_history_schema_hash(db, &h.schema_hash)?;
@@ -166,18 +170,6 @@ impl Prepared {
         }
         Ok(())
     }
-    pub(in crate::storage::deletion) fn verify_current_schema(
-        &self,
-        db: &Connection,
-    ) -> Result<(), String> {
-        if self.header.schema_hash != super::super::database::trusted_schema(db)? {
-            return Err(
-                "旧版のモデル削除要求は現在の削除開始に使用できません。対象を再確認してください"
-                    .into(),
-            );
-        }
-        Ok(())
-    }
     fn verify_anchor(&self, storage: &Storage) -> Result<(), String> {
         if storage.retired.load(Ordering::Acquire)
             || storage.maintenance.load(Ordering::Acquire)
@@ -208,7 +200,6 @@ impl Prepared {
             self.snapshot.directory_scope,
         )?;
         let db = crate::operation_observation::lock(&storage.connection)?;
-        self.verify_current_schema(&db)?;
         self.verify_saved(&db)?;
         super::super::database::stopped_for_model_consent(&db)?;
         if self.kept
@@ -377,6 +368,7 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn prepare(
     storage: &Storage,
     root: &Path,

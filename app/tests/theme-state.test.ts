@@ -5,8 +5,8 @@ import { assertUiPreferences, resolveTheme, ThemeController, type ThemePreferenc
 const snapshot = (theme: ThemePreference = "system", lockVersion = 0, colorTheme: ColorTheme = "monochrome") => ({ id: "ui_preferences" as const, payload: { schemaVersion: 1 as const, theme, colorTheme }, lockVersion });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
-test("missing color defaults to monochrome without changing saved brightness; invalid colors fail closed", () => {
-  assert.deepEqual(assertUiPreferences({ ...snapshot("dark", 2), payload: { schemaVersion: 1, theme: "dark" } }), snapshot("dark", 2));
+test("missing and invalid colors fail closed", () => {
+  assert.throws(() => assertUiPreferences({ ...snapshot("dark", 2), payload: { schemaVersion: 1, theme: "dark" } }));
   for (const colorTheme of [null, "blue", "", true, {}, 1]) assert.throws(() => assertUiPreferences({ ...snapshot(), payload: { ...snapshot().payload, colorTheme } }));
   assert.throws(() => assertUiPreferences(snapshot("system", 0, "purple")));
 });
@@ -157,21 +157,4 @@ test("lost theme acknowledgement notifies a read-confirmed result once and never
   assert.equal(notice.level, "info"); assert.match(notice.message, /確認しました/);
   await c.refresh(); assert.equal(c.getSnapshot().notice, notice);
   c.clearNotice(notice.id); await c.refresh(); assert.equal(c.getSnapshot().notice, null); assert.equal(writes, 1);
-});
-
-test("failed theme save and failed reload never notify success or discard an error on dismissal", async () => {
-  let readFails = false;
-  const c = new ThemeController({ read: async () => { if (readFails) throw Error("offline"); return snapshot(); }, save: async () => { throw Error("disk full"); } });
-  await c.refresh(); await c.change("dark"); c.clearNotice(1);
-  assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().pendingTheme, "dark"); assert.match(c.getSnapshot().error, /disk full/);
-  readFails = true; await c.reload(); assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().uncertain, true);
-  readFails = false; await c.reload(); assert.equal(c.getSnapshot().notice?.level, "info");
-});
-
-test("an older explicit reload cannot announce a newer in-flight theme save as read-confirmed", async () => {
-  const read = deferred<unknown>(), save = deferred<unknown>(); let reads = 0;
-  const c = new ThemeController({ read: () => ++reads === 1 ? Promise.resolve(snapshot()) : read.promise, save: () => save.promise });
-  await c.refresh(); const reload = c.reload(); const writing = c.change("dark");
-  read.resolve(snapshot()); await reload; assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().busy, true);
-  save.resolve(snapshot("dark", 1)); await writing; assert.equal(c.getSnapshot().notice?.level, "success");
 });

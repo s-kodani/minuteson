@@ -301,45 +301,7 @@ impl Registry {
         let expected_schema = schema(&expected)?;
         let mut db =
             Connection::open(&path).map_err(|e| format!("一時領域台帳を開けません: {e:?}"))?;
-        let version: i64 = db
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        // Inspect existing SQL before changing its journaling settings. Even an
-        // empty file without a saved root proof is not adopted as ours.
-        #[cfg(windows)]
-        if !new && version == 2 {
-            let old = Connection::open_in_memory().map_err(|e| e.to_string())?;
-            old.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-            old.execute_batch(review::SCHEMA)
-                .map_err(|e| e.to_string())?;
-            let actual = schema(&db)?;
-            if actual != schema(&old)? && actual != expected_schema {
-                return Err(
-                    "旧Windows一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into(),
-                );
-            }
-            let (proof, digest): (String, String) = db
-                .query_row("SELECT proof,hash FROM metadata WHERE id=1", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
-                .map_err(|e| e.to_string())?;
-            if proof.len() > 1024
-                || hash(proof.as_bytes()) != digest
-                || serde_json::from_str::<Identity>(&proof).map_err(|e| e.to_string())?
-                    != root_identity
-            {
-                return Err(
-                    "旧Windows一時領域台帳の親証拠が一致しません。既存ファイルを保持します".into(),
-                );
-            }
-            let tx = db.transaction().map_err(|e| e.to_string())?;
-            if actual != expected_schema {
-                history_schema(&tx)?;
-            }
-            tx.pragma_update(None, "user_version", local_version())
-                .map_err(|e| e.to_string())?;
-            tx.commit().map_err(|e| e.to_string())?;
-        }
+        // Check ownership and exact schema before changing journal settings.
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;

@@ -6,7 +6,7 @@ const operation="00000000-0000-4000-8000-000000000002";
 const document:MarkdownDocument={meetingId:"meeting",operationId:"00000000-0000-4000-8000-000000000001",markdown:"# 人間\r\n",lockVersion:1,contentHash:"a".repeat(64),updatedAt:0};
 async function receipt(request:MarkdownExportRequest,text=document.markdown):Promise<MarkdownExportRecord>{
   const bytes=new TextEncoder().encode(text),hash=await crypto.subtle.digest("SHA-256",bytes);
-  return {id:request.operationId,meetingId:request.meetingId,minutesRevisionId:null,exportedContentHash:request.expected.contentHash,
+  return {id:request.operationId,meetingId:request.meetingId,exportedContentHash:request.expected.contentHash,
     outputContentHash:Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,"0")).join(""),outputSizeBytes:bytes.length,
     destinationPath:"/synthetic/example.md",state:"succeeded",errorMessage:null,createdAt:0,exportedAt:1};
 }
@@ -47,7 +47,7 @@ test("confirmed stopped unrecorded conflict can explicitly export a newer saved 
 test("foreign, malformed, wrong bytes and prematurely successful receipts stay unresolved",async()=>{
   const mutations=[(r:MarkdownExportRecord)=>r.meetingId="other",(r:MarkdownExportRecord)=>r.id=crypto.randomUUID(),
     (r:MarkdownExportRecord)=>r.outputSizeBytes++, (r:MarkdownExportRecord)=>r.outputContentHash="b".repeat(64),
-    (r:MarkdownExportRecord)=>r.minutesRevisionId="old" as never,(r:MarkdownExportRecord)=>r.exportedAt=null];
+    (r:MarkdownExportRecord)=>r.exportedAt=null];
   for(const mutate of mutations){const c=new MarkdownExportController("meeting",async request=>{const r=await receipt(request);mutate(r);return r;},async()=>({active:false,record:null}),()=>operation);
     await assert.rejects(c.begin(document));assert.equal(c.snapshot().needsCheck,true);
   }

@@ -307,47 +307,6 @@ fn deletion_changed_scope_requires_new_review_and_rejects_old_confirmation() {
     f.unaffected();
 }
 #[test]
-fn deletion_path_pages_are_bounded_metadata_and_reject_stale_or_unaligned_offsets() {
-    let f = Fixture::new();
-    for n in 0..105 {
-        std::fs::write(
-            f.audio.parent().unwrap().join(format!("unknown-{n:03}")),
-            b"PRIVATE BODY",
-        )
-        .unwrap();
-    }
-    let p = f.prepared();
-    let id = &p.preview.confirmation_id;
-    let first = p.page(id, 0).unwrap();
-    assert_eq!(first.entries.len(), 50);
-    assert_eq!(first.next_offset, Some(50));
-    let directories: Vec<_> = first
-        .entries
-        .iter()
-        .filter(|entry| entry.directory)
-        .collect();
-    assert!(!directories.is_empty());
-    assert!(directories.iter().all(|entry| entry.bytes.is_none()
-        && !entry.registered
-        && !entry.changed
-        && !entry.missing));
-    let audio = first
-        .entries
-        .iter()
-        .find(|entry| entry.relative_path.ends_with("/source.flac"))
-        .unwrap();
-    assert_eq!(audio.bytes, Some(6));
-    assert!(audio.registered && !audio.missing && !audio.changed);
-    assert_eq!(p.page(id, 50).unwrap().entries.len(), 50);
-    assert!(p.page(id, 100).unwrap().entries.len() < 50);
-    assert!(p.page("wrong", 0).is_err());
-    assert!(p.page(id, 1).is_err());
-    assert!(p.page(id, 150).is_err());
-    assert!(!serde_json::to_string(&first)
-        .unwrap()
-        .contains("PRIVATE BODY"));
-}
-#[test]
 fn deletion_cancel_before_confirmation_persists_nothing() {
     let f = Fixture::new();
     let mut p = f.prepared();

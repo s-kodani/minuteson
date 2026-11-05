@@ -609,6 +609,7 @@ fn bootstrap_uninitialized_legacy_empty_database_is_not_silently_populated_with_
     let f = Fixture::new();
     tree_file(&f.legacy, "meetings.sqlite3", b"");
     assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+    assert!(Bootstrap::open_for_reset(&f.config, &f.legacy).is_err());
     assert_eq!(
         std::fs::metadata(f.legacy.join("meetings.sqlite3"))
             .unwrap()

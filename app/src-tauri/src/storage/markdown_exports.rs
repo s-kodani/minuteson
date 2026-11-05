@@ -72,7 +72,7 @@ impl Storage {
             .query_row(
                 &format!("SELECT {COLUMNS},request_hash FROM export_records WHERE id=?1"),
                 [&request.operation_id],
-                |r| Ok((record(r)?, r.get(11)?)),
+                |r| Ok((record(r)?, r.get("request_hash")?)),
             )
             .optional()
             .map_err(|e| e.to_string())?;
@@ -150,7 +150,7 @@ impl Storage {
                 return Err("保存ダイアログ表示中に議事録内容が変わりました".into());
             }
             let now = now_ms()?;
-            tx.execute("INSERT INTO export_records(id,meeting_id,minutes_revision_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,format,destination_path,state,created_at,updated_at) VALUES(?1,?2,NULL,?3,?4,?5,?6,'markdown',?7,'writing',?8,?8)",
+            tx.execute("INSERT INTO export_records(id,meeting_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,format,destination_path,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'markdown',?7,'writing',?8,?8)",
                 params![request.operation_id,request.meeting_id,request.hash()?,document.content_hash,prepared.output_hash,document.markdown.len() as i64,record_path,now]).map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }

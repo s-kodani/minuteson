@@ -15,10 +15,6 @@ export class Admissions {
     const startedAtMs=Date.now();this.starts.set(meetingId,startedAtMs);this.flowStarts.set(operationId,startedAtMs);
     this.items.set(meetingId,{meetingId,meetingTitle,operationId,startedAtMs,phase:"accepting",completed:null,total:null,sequence:0});this.publish();return operationId;
   }
-  bind(meetingId:string,expectedOperation:string,flowId:string){
-    const p=this.items.get(meetingId);if(!p || p.operationId!==expectedOperation)return expectedOperation;
-    p.operationId=flowId;this.flowStarts.set(flowId,p.startedAtMs);this.publish();return flowId;
-  }
   end(meetingId:string,operationId?:string){const p=this.items.get(meetingId);if(p && (!operationId || p.operationId===operationId)){p.phase="waiting";p.acceptedAtMs=Date.now();this.publish();}}
   clear(meetingId:string,operationId?:string){if(operationId && this.items.get(meetingId)?.operationId!==operationId)return;this.items.delete(meetingId);this.publish();}
   observePreparations(rows:AnalysisPreparation[],readStartedAt:number){

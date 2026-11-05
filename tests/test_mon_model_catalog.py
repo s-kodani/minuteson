@@ -24,7 +24,7 @@ class ModelCatalogTests(unittest.TestCase):
             root = Path(temporary)
             package = root / 'package'
             executables = {'whisper': 'whisper-cli.exe', 'sherpa': 'sherpa-onnx-offline-speaker-diarization.exe',
-                           'llama': 'llama-completion.exe', 'llama11960': 'llama-completion.exe'}
+                           'llama': 'llama-completion.exe'}
             for engine, name in executables.items():
                 (package / engine).mkdir(parents=True)
                 (package / engine / name).write_bytes(engine.encode())
@@ -43,7 +43,7 @@ class ModelCatalogTests(unittest.TestCase):
             for choice in llms:
                 manifest = choice['recipe']['manifest']
                 self.assertEqual(manifest['engineVersion'], 'b11960')
-                engine = 'llama11960'
+                engine = 'llama'
                 executable = next(f for f in manifest['files'] if f['role'] == 'executable')
                 self.assertEqual(executable['expectedHash'], hashlib.sha256(engine.encode()).hexdigest())
                 source = next(s for s in choice['recipe']['sources'] if s['relativePath'] == executable['relativePath'])

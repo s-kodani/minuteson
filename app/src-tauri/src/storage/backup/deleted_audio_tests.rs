@@ -57,7 +57,7 @@ fn write(storage: &Storage, output: &Path) -> (VerifiedArchive, BackupReceipt) {
     .unwrap();
     (archive, receipt)
 }
-fn pack(path: &Path, manifest: &Manifest, payloads: &[Vec<u8>]) {
+fn pack(path: &Path, manifest: &Value, payloads: &[Vec<u8>]) {
     let bytes = serde_json::to_vec(manifest).unwrap();
     let mut file = File::create(path).unwrap();
     file.write_all(MAGIC).unwrap();
@@ -85,11 +85,9 @@ fn historical_plan(
     a: &VerifiedArchive,
     meeting: &str,
 ) -> Result<crate::storage::transcription::RecordedAudioPlan, String> {
-    crate::storage::transcription::read_historical_audio_plan(
-        &a.database,
-        meeting,
-        &a.deleted_audio,
-    )
+    a.deleted_audio.verify_meeting(&a.database, meeting)?;
+    crate::storage::meeting_audio::read_historical(&a.database, meeting)?
+        .ok_or("共通WAVの履歴がありません".into())
 }
 
 fn change_logical(a: &VerifiedArchive, sql: &str, meeting: &str) {
@@ -261,21 +259,16 @@ fn deleted_audio_rehashed_manifest_cannot_change_reason_scope_version_or_fingerp
             "logReason" => value["omittedAssets"][0]["reason"] = json!("native_log"),
             _ => unreachable!(),
         }
-        match serde_json::from_value::<Manifest>(value) {
-            Ok(manifest) => {
-                pack(&path, &manifest, &data);
-                assert!(
-                    read(
-                        &mut File::open(&path).unwrap(),
-                        output.path(),
-                        &crate::test_support::never_cancelled
-                    )
-                    .is_err(),
-                    "{attack}"
-                );
-            }
-            Err(_) => assert!(matches!(attack, "reason" | "nativePermission")),
-        }
+        pack(&path, &value, &data);
+        assert!(
+            read(
+                &mut File::open(&path).unwrap(),
+                output.path(),
+                &crate::test_support::never_cancelled
+            )
+            .is_err(),
+            "{attack}"
+        );
     }
 }
 

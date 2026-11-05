@@ -170,36 +170,6 @@ pub(super) fn read_audio_plan(
         .ok_or("共通WAVの保存が完了していません".into())
 }
 
-/// Restore-only metadata, not playable input or permission to enqueue work.
-/// The capability has no public constructor and rechecks all audio row proofs
-/// before reading. Missing flags or an untrusted manifest alone do not suffice.
-pub(super) fn read_historical_audio_plan(
-    transaction: &Connection,
-    meeting_id: &str,
-    history: &super::backup::DeletedAudioHistory,
-) -> Result<RecordedAudioPlan, String> {
-    history.verify_meeting(transaction, meeting_id)?;
-    super::meeting_audio::read_historical(transaction, meeting_id)?
-        .ok_or("共通WAVの履歴がありません".into())
-}
-
-pub(super) fn read_analysis_audio_plan(
-    db: &Connection,
-    meeting: &str,
-    historical: Option<&super::backup::DeletedAudioHistory>,
-) -> Result<RecordedAudioPlan, String> {
-    let mixed = if let Some(history) = historical {
-        super::meeting_mix::read_historical(db, meeting, history)?
-    } else {
-        super::deletion::audio::require_source(db, meeting)?;
-        super::meeting_mix::read(db, meeting)?
-    };
-    if let Some(plan) = mixed {
-        return Ok(plan);
-    }
-    Err("共通WAVの保存・移行が完了していません".into())
-}
-
 /// An interrupted session is playable only after the explicit, atomic prefix
 /// recovery commit. Every native track must carry the same recovery receipt;
 /// one marked track must not authorize another unconfirmed input. This gate

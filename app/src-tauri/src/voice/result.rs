@@ -10,7 +10,6 @@ pub(crate) fn validate_notification(
         || job.completed_units != 1
         || job.total_units != Some(1)
         || job.output_analysis_id.is_some()
-        || job.output_minutes_id.is_some()
     {
         return Err("声の処理の完了記録が一致しません".into());
     }
@@ -23,12 +22,13 @@ mod tests {
     use serde_json::json;
     #[test]
     fn voice_summary_accepts_only_completed_single_unit_without_published_revision() {
-        let mut job:JobSnapshot=serde_json::from_value(json!({
+        let mut job: JobSnapshot = serde_json::from_value(json!({
             "id":"job","meetingId":"meeting","kind":"voice_matching","state":"succeeded",
             "operationId":"operation","inputHash":"input","specHash":"spec",
             "completedUnits":1,"totalUnits":1,"errorCode":null,"createdAt":1,"updatedAt":1,
-            "outputAnalysisId":null,"outputMinutesId":null,"pauseReason":null,"retryOfJobId":null,"attempt":1
-        })).unwrap();
+            "outputAnalysisId":null,"pauseReason":null,"retryOfJobId":null,"attempt":1
+        }))
+        .unwrap();
         assert!(validate_notification(&job, Some(&json!({"voiceResult":true}))).is_ok());
         for receipt in [
             json!({"voiceResult":false}),

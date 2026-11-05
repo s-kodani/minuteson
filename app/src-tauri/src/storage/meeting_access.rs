@@ -200,7 +200,7 @@ impl Storage {
             .collect()
     }
     pub(crate) fn reserve_meeting_deletion(&self, meeting: &str) -> Result<(), String> {
-        self.preserve_voice_audio(Some(meeting), &|| false)?;
+        self.prepare_preserved_voice_audio(Some(meeting), &|| false)?;
         let _voice = self.lock_voice_audio()?;
         self.require_data_writable()?;
         let db = self

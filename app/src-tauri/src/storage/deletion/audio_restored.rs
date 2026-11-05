@@ -120,7 +120,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<Header, String> {
         cancel(check)?;
-        database::trusted_history_schema(db)?;
+        database::trusted_schema(db)?;
         let (meeting,kind,state,batch,json,hash,consent,progress,error,created,updated):
             (Option<String>,String,String,Option<String>,Option<String>,String,Option<i64>,Option<String>,Option<String>,i64,i64) = db.query_row(
             "SELECT meeting_id,kind,state,restore_batch_id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,target_hash,consent_at,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1",

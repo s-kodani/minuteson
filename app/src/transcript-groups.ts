@@ -27,8 +27,3 @@ export function groupTranscriptRows(all: readonly Utterance[], shown: readonly U
   }
   return groups;
 }
-
-// Japanese fragments join directly; retain word boundaries in Latin text.
-export function transcriptFragmentSeparator(previous: string, next: string): string {
-  return /[\p{Script=Latin}\p{N}]$/u.test(previous) && /^[\p{Script=Latin}\p{N}]/u.test(next) ? " " : "";
-}

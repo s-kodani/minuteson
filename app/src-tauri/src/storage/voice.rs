@@ -27,7 +27,6 @@ pub(crate) struct SampleView {
     pub source_available: bool,
     pub audio_available: bool,
     pub audio_storage_state: String,
-    pub audio_storage_error: Option<String>,
     pub start_us: i64,
     pub end_us: i64,
     pub created_at: i64,
@@ -99,13 +98,12 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
         return Err("登録した人物が上限を超えています".into());
     }
     for person in &mut people {
-        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at,coalesce(a.state,'pending'),a.error_message FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE person_id=?1 ORDER BY s.created_at,s.id").map_err(|e|e.to_string())?;
+        let mut q=db.prepare("SELECT s.id,s.model_hash,s.extractor_version,s.source_meeting_id,EXISTS(SELECT 1 FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id JOIN file_assets f ON f.id=c.file_asset_id WHERE a.meeting_id=s.source_meeting_id AND a.phase='cleaned' AND f.state='ready'),s.start_us,s.end_us,s.created_at,a.state FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE person_id=?1 ORDER BY s.created_at,s.id").map_err(|e|e.to_string())?;
         person.samples = q
             .query_map([&person.id], |r| {
                 let state: String = r.get(8)?;
                 let source_available: bool = r.get(4)?;
-                let audio_available =
-                    state == "ready" || (state != "unavailable" && source_available);
+                let audio_available = state == "ready";
                 Ok(SampleView {
                     id: r.get(0)?,
                     model_hash: r.get(1)?,
@@ -117,7 +115,6 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
                     created_at: r.get(7)?,
                     audio_available,
                     audio_storage_state: state,
-                    audio_storage_error: r.get(9)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -365,39 +362,7 @@ impl Storage {
         sample_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<crate::playback::PreparedAudio, String> {
-        if let Some(audio) = self.saved_voice_playback(sample_id, cancelled)? {
-            return Ok(audio);
-        }
-        let resolve = || -> Result<(String, String, i64, i64), String> {
-            if cancelled() {
-                return Err("音声の再生準備を取り消しました".into());
-            }
-            let db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            let source: Option<(Option<String>, Option<String>, i64, i64)> = db.query_row(
-                "SELECT s.source_meeting_id,s.source_track_id,s.start_us,s.end_us FROM voice_samples s JOIN voice_people p ON p.id=s.person_id WHERE s.id=?1",
-                [sample_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
-            ).optional().map_err(|e| e.to_string())?;
-            let (meeting, track, start, end) = source.ok_or("登録した声が見つかりません")?;
-            Ok((
-                meeting.ok_or("登録元の音声がありません")?,
-                track.ok_or("登録元の音声トラックがありません")?,
-                start,
-                end,
-            ))
-        };
-        // Resolve the saved sample, never a caller-supplied path, track or range.
-        // It remains playable after its original analysis is replaced.
-        let before = resolve()?;
-        let audio = self.prepare_preview_track_audio_cancellable(
-            &before.0, &before.1, before.2, before.3, cancelled,
-        )?;
-        if resolve()? != before {
-            return Err("音声準備中に登録した声の参照先が変更されました".into());
-        }
-        Ok(audio)
+        self.saved_voice_playback(sample_id, cancelled)
     }
 
     pub(crate) fn voice_people(&self) -> Result<Vec<Person>, String> {
@@ -493,9 +458,6 @@ impl Storage {
     }
     pub(crate) fn start_voice(&self, request: Start) -> Result<JobSnapshot, String> {
         self.start_voice_observed(request, false, None)
-    }
-    pub(crate) fn start_automatic_voice(&self, request: Start) -> Result<JobSnapshot, String> {
-        self.start_voice_observed(request, true, None)
     }
     pub(crate) fn start_automatic_voice_intent(
         &self,
@@ -997,7 +959,7 @@ fn apply_names(
         let payload = TranscriptDraftPayload::default();
         let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
         let hash = drafts::draft_hash(&json);
-        tx.execute("INSERT INTO working_drafts(id,meeting_id,target_kind,base_analysis_id,schema_version,payload_json,content_hash,lock_version,active,created_at,updated_at) VALUES(?1,?2,'transcript',?3,4,?4,?5,0,1,?6,?6)",params![id,meeting,analysis,json,hash,now_ms()?]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO working_drafts(id,meeting_id,target_kind,base_analysis_id,schema_version,payload_json,content_hash,lock_version,created_at,updated_at) VALUES(?1,?2,'transcript',?3,4,?4,?5,0,?6,?6)",params![id,meeting,analysis,json,hash,now_ms()?]).map_err(|e|e.to_string())?;
         drafts::load_draft(tx, meeting)?.ok_or("下書きがありません")?
     };
     for (speaker, name) in names {
@@ -1257,7 +1219,6 @@ pub(in crate::storage) mod tests {
             window_shift_milli: 100,
             min_duration_on_ms: 0,
             min_duration_off_ms: 0,
-            speech_sensitivity_milli: 0,
         };
         let plan = Plan {
             resident_runtime: crate::local_engine::resident::prepare(s.root(), "sherpa").unwrap(),
@@ -1327,19 +1288,25 @@ pub(in crate::storage) mod tests {
     }
     pub(in crate::storage) fn seed_person(s: &Storage, m: &str) -> String {
         let person = Uuid::new_v4().to_string();
+        let sample = Uuid::new_v4().to_string();
         let db = s.connection.lock().unwrap();
         db.execute("INSERT INTO voice_people VALUES(?1,'田中',1,0)", [&person])
             .unwrap();
         db.execute(
             "INSERT INTO voice_samples VALUES(?1,?2,?3,?4,2,?5,?6,NULL,'track',0,1000000,0)",
             params![
-                Uuid::new_v4().to_string(),
+                sample,
                 person,
                 "a".repeat(64),
                 voice::EXTRACTOR,
                 voice::encode(&[1., 0.]).unwrap(),
                 m
             ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO voice_sample_audio(id,state) VALUES(?1,'unavailable')",
+            [&sample],
         )
         .unwrap();
         person
@@ -1448,79 +1415,9 @@ pub(in crate::storage) mod tests {
     }
 
     #[test]
-    fn voice_sample_playback_reads_only_the_registered_track_interval() {
-        let (_root, s, m, _speaker) = fixture();
-        seed_person(&s, &m);
-        let sample = s.voice_people().unwrap()[0].samples[0].id.clone();
-        s.connection.lock().unwrap().execute(
-            "UPDATE voice_samples SET start_us=250000,end_us=750000,source_analysis_id='retired-analysis' WHERE id=?1", [&sample],
-        ).unwrap();
-        let before = s.voice_people().unwrap();
-        let mut audio = s
-            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
-            .unwrap();
-        assert_eq!(
-            (audio.start_us, audio.end_us, audio.total_frames()),
-            (250000, 750000, 8000)
-        );
-        assert_eq!(audio.track_kind, "processed");
-        let pcm = audio.read_pcm(0, 8000).unwrap();
-        let values: Vec<_> = pcm
-            .chunks_exact(4)
-            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-            .collect();
-        assert!(values[..4000].iter().all(|v| *v == 0.25));
-        assert!(values[4000..].iter().all(|v| *v == -0.5));
-        assert_eq!(
-            serde_json::to_value(s.voice_people().unwrap()).unwrap(),
-            serde_json::to_value(before).unwrap()
-        );
-    }
-
-    #[test]
-    fn voice_sample_playback_rejects_deleted_sources_and_cancelled_or_unknown_samples() {
-        let (_root, s, m, _speaker) = fixture();
-        seed_person(&s, &m);
-        let sample = s.voice_people().unwrap()[0].samples[0].id.clone();
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(
-                "unknown",
-                &crate::test_support::never_cancelled
-            )
-            .is_err());
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(&sample, &|| true)
-            .err()
-            .unwrap()
-            .contains("取り消"));
-        s.connection
-            .lock()
-            .unwrap()
-            .execute("UPDATE file_assets SET state='missing'", [])
-            .unwrap();
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
-            .is_err());
-        s.connection
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE voice_samples SET source_meeting_id=NULL,source_track_id=NULL",
-                [],
-            )
-            .unwrap();
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
-            .err()
-            .unwrap()
-            .contains("登録元"));
-        assert_eq!(s.voice_people().unwrap()[0].samples.len(), 1);
-    }
-
-    #[test]
     fn voice_sample_playback_rechecks_registration_after_preparing_audio() {
-        let (_root, s, m, _speaker) = fixture();
-        seed_person(&s, &m);
+        let (_root, s, m, speaker) = fixture();
+        register(&s, &m, &speaker);
         let sample = s.voice_people().unwrap()[0].samples[0].id.clone();
         let checks = std::cell::Cell::new(0);
         let error = s
@@ -1538,46 +1435,6 @@ pub(in crate::storage) mod tests {
             .err()
             .unwrap();
         assert!(error.contains("登録した声"), "{error}");
-    }
-
-    #[test]
-    fn voice_sample_playback_rejects_foreign_tracks_and_changed_physical_audio() {
-        let (root, s, m, _speaker) = fixture();
-        seed_person(&s, &m);
-        let sample = s.voice_people().unwrap()[0].samples[0].id.clone();
-        let other = s.create_meeting("別の会議").unwrap();
-        s.connection
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE voice_samples SET source_meeting_id=?1 WHERE id=?2",
-                params![other.id, sample],
-            )
-            .unwrap();
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
-            .is_err());
-        s.connection
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE voice_samples SET source_meeting_id=?1 WHERE id=?2",
-                params![m, sample],
-            )
-            .unwrap();
-        let path = root
-            .path()
-            .join("meetings")
-            .join(m)
-            .join("audio/meeting.wav");
-        let mut bytes = std::fs::read(&path).unwrap();
-        *bytes.last_mut().unwrap() ^= 1;
-        std::fs::write(path, bytes).unwrap();
-        assert!(s
-            .prepare_voice_sample_audio_cancellable(&sample, &crate::test_support::never_cancelled)
-            .err()
-            .unwrap()
-            .contains("ハッシュ"));
     }
 
     #[test]

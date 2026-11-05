@@ -6,7 +6,7 @@ export type { JobKind } from "./generated/contracts";
 export interface NotificationJob extends AnalysisJob {
   analysisOperation?:{id:string;startedAtMs:number}|null;
   kind: JobKind; meetingId: string; meetingTitle: string; operationId: string; inputHash: string;
-  createdAt: number; updatedAt: number; outputMinutesId: string | null;
+  createdAt: number; updatedAt: number;
 }
 export interface JobNotice {
   job: NotificationJob; topic: "result" | "issue"; message: string;
@@ -19,7 +19,7 @@ export const jobFailureDetail = (code: string | null) => code === "transcription
 export const jobGroup = (job: NotificationJob) => JSON.stringify([job.meetingId, job.kind]);
 const active = new Set(["queued", "running", "pausing", "paused", "interrupted"]);
 const states = new Set([...active, "succeeded", "failed", "cancelled"]);
-const output = (job: NotificationJob) => job.kind === "minutes_generation" ? job.outputMinutesId : job.outputAnalysisId;
+const output = (job: NotificationJob) => job.outputAnalysisId;
 const identity = (job: NotificationJob) => JSON.stringify([job.meetingId, job.kind, job.operationId, job.inputHash, job.specHash, job.createdAt, job.attempt, job.retryOfJobId]);
 const transition = (job: NotificationJob) => JSON.stringify([job.state, job.pauseReason, job.errorCode, output(job)]);
 const notice = (job: NotificationJob, message: string, level: ToastLevel = "info", topic: JobNotice["topic"] = "result"): JobNotice => ({
@@ -37,15 +37,15 @@ export function verifiedJobOutput(job: NotificationJob, value: unknown): Verifie
     || !proof || typeof proof.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(proof.contentHash)
     || !["candidate", "committed", "markdown", "superseded", "voice", "completion"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
   if (proof.publicationState==="completion") {
-    if(job.kind!=="speaker_completion"||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash||!Array.isArray(proof.warnings)||proof.warnings.some(v=>typeof v!=="string")) throw Error("話者補完の完了記録が一致しません。");
+    if(job.kind!=="speaker_completion"||job.outputAnalysisId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash||!Array.isArray(proof.warnings)||proof.warnings.some(v=>typeof v!=="string")) throw Error("話者補完の完了記録が一致しません。");
     return "completion";
   }
   if (proof.publicationState==="voice") {
-    if (!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash) throw Error("声の処理の完了記録が一致しません。");
+    if (!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.completedUnits!==1||job.totalUnits!==1||proof.contentHash!==job.specHash) throw Error("声の処理の完了記録が一致しません。");
     return "voice";
   }
   const plain=proof.publicationState === "markdown" || proof.publicationState === "superseded";
-  if (plain ? job.kind !== "minutes_generation" || job.outputMinutesId !== null || job.outputAnalysisId !== null
+  if (plain ? job.kind !== "minutes_generation" || job.outputAnalysisId !== null
     || job.completedUnits < 1 || job.totalUnits !== job.completedUnits : !output(job)) throw Error("ジョブと保存結果の形式が一致しません。成功通知を保留しています。");
   return proof.publicationState as VerifiedJobPublication;
 }
@@ -61,7 +61,7 @@ export function assertNotificationJobs(value: unknown): asserts value is Notific
       || !Number.isSafeInteger(job.createdAt) || job.createdAt < 0 || !Number.isSafeInteger(job.updatedAt) || job.updatedAt < job.createdAt
       || !Number.isSafeInteger(job.attempt) || job.attempt < 1 || !Number.isSafeInteger(job.completedUnits) || job.completedUnits < 0
       || job.totalUnits !== null && (!Number.isSafeInteger(job.totalUnits) || job.totalUnits < job.completedUnits)
-      || ![job.outputAnalysisId, job.outputMinutesId, job.retryOfJobId, job.errorCode, job.pauseReason].every(v => v === null || typeof v === "string" && !!v)) throw Error("解析通知の状態を照合できません。");
+      || ![job.outputAnalysisId, job.retryOfJobId, job.errorCode, job.pauseReason].every(v => v === null || typeof v === "string" && !!v)) throw Error("解析通知の状態を照合できません。");
     ids.add(job.id);
   }
 }
@@ -121,11 +121,11 @@ export class JobNotificationTracker {
       this.pending.delete(job.id);return notice(job,"が完了しました","success");
     }
     if(publication==="voice") {
-      if(!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.outputMinutesId!==null||job.completedUnits!==1||job.totalUnits!==1)throw Error("声の処理の完了状態が不正です。");
+      if(!["voice_registration","voice_matching"].includes(job.kind)||job.outputAnalysisId!==null||job.completedUnits!==1||job.totalUnits!==1)throw Error("声の処理の完了状態が不正です。");
       this.pending.delete(job.id);return notice(job,"が完了しました","success");
     }
     const plain=publication==="markdown"||publication==="superseded";
-    if (plain ? job.kind!=="minutes_generation"||job.outputMinutesId!==null||job.outputAnalysisId!==null||job.completedUnits<1||job.totalUnits!==job.completedUnits : !output(job)) throw Error("保存結果の版・形式が不正です。成功通知を保留しています。");
+    if (plain ? job.kind!=="minutes_generation"||job.outputAnalysisId!==null||job.completedUnits<1||job.totalUnits!==job.completedUnits : !output(job)) throw Error("保存結果の版・形式が不正です。成功通知を保留しています。");
     this.pending.delete(job.id);
     if(publication==="superseded")return null; // Later human edits are current.
     if(publication==="markdown") {

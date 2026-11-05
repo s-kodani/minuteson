@@ -17,7 +17,6 @@ export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSch
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded"; placement?: { packageId: string; state: "pending" | "committed" } }[] };
-export type DownloadProgress = { operationId: string; recipeHash: string; receivedBytes: number; totalBytes: number };
 export type ModelTokenLimits = { maxInputTokens: number; maxOutputTokens: number; maxContextTokens: number; tokenizer: "utf8_byte_bpe" | "gguf" };
 export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview; tokenLimits: ModelTokenLimits | null; licenseSummary: ModelLicenseSummary };
 function fail(): never { throw Error("取得の定義・操作・応答が一致しません。同じ操作の結果を確認してください。"); }
@@ -213,14 +212,6 @@ export function assertDownloadLifetime(value: unknown): { active: boolean; cance
   const result = object(value);
   if (typeof result.active !== "boolean" || typeof result.cancelled !== "boolean") fail();
   return { active: result.active, cancelled: result.cancelled };
-}
-export function acceptDownloadProgress(value: unknown, operationId: string, review: DownloadReview, previous: number): number | null {
-  try {
-    const progress = object(value);
-    if (progress.operationId !== operationId || progress.recipeHash !== review.recipeHash || progress.totalBytes !== downloadTransferBytes(review)) return null;
-    const received = size(progress.receivedBytes, downloadTransferBytes(review));
-    return received >= previous ? received : null;
-  } catch { return null; }
 }
 export function assertDownloadCopyResult(value: unknown, packageId: string, reviewHash: string, totalBytes: number): { active: boolean; cancelled: boolean; receipt: ModelPlacementReceipt | null } {
   const result = object(value), lifetime = assertDownloadLifetime(value);

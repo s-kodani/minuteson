@@ -78,26 +78,9 @@ pub(in crate::storage) fn pending_configured(
             .collect::<Vec<_>>(),
     );
     std::fs::write(base.join("decoded.caf"), &caf).unwrap();
-    let mut verified = VerifiedAudio::open(
-        File::open(base.join("decoded.caf")).unwrap(),
-        caf.len() as u64,
-        &format!("{:x}", Sha256::digest(&caf)),
-    )
-    .unwrap();
-    let audio = crate::audio::flac::write_segment(
-        &mut verified,
-        0,
-        64000,
-        &base.join("audio.flac"),
-        &crate::test_support::never_cancelled,
-        &|_| {},
-    )
-    .unwrap();
-    drop(verified);
-    std::fs::remove_file(base.join("decoded.caf")).unwrap();
     let manifest = ImportManifest {
-        schema_version: 1,
-        audio_format: None,
+        schema_version: 2,
+        audio_format: Some("caf".into()),
         meeting_id: import.meeting_id.clone(),
         import_id: import.id.clone(),
         original_file_name: import.original_file_name.clone(),
@@ -107,8 +90,8 @@ pub(in crate::storage) fn pending_configured(
             sha256: source.sha256,
         },
         audio: FileEvidence {
-            size: audio.size,
-            sha256: audio.sha256,
+            size: caf.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(&caf)),
         },
     };
     std::fs::write(
@@ -236,7 +219,7 @@ fn import_finalization_and_recovery_cancel_keep_complete_evidence_for_retry() {
         .is_err());
     assert_eq!(s.audio_import(&before.id).unwrap().state, "converting");
     assert_eq!(count(&s, "file_assets", &before.meeting_id), 0);
-    assert!(base.join("audio.flac").is_file());
+    assert!(base.join("decoded.caf").is_file());
     assert!(base.join("manifest.json").is_file());
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();
@@ -279,7 +262,7 @@ fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff(
                 .lifecycle,
             "draft"
         );
-        assert!(base.join("audio.flac").is_file());
+        assert!(base.join("decoded.caf").is_file());
         assert!(base.join("original.wav").is_file());
     }
 }
@@ -316,7 +299,7 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
     assert!(s.cleanup_audio_import(&snapshot.id).is_err());
     assert!(s.fail_audio_import(&snapshot.id, "failed", "bad").is_err());
     assert!(!base.join("original.wav").exists());
-    assert!(!base.join("audio.flac").exists());
+    assert!(!base.join("decoded.caf").exists());
     s.verify_canonical_audio(&saved.meeting_id, &|| false)
         .unwrap();
     assert!(s
@@ -407,7 +390,7 @@ fn import_db_failure_rolls_back_assets_track_lifecycle_and_handoff_then_recovers
 
 #[test]
 fn recovery_rejects_corrupt_complete_evidence_and_preserves_audio() {
-    for name in ["manifest.json", "original.wav", "audio.flac"] {
+    for name in ["manifest.json", "original.wav", "decoded.caf"] {
         let root = tempfile::tempdir().unwrap();
         let s = Storage::open(root.path().into()).unwrap();
         let (snapshot, base, _) = pending(&s, name);
@@ -427,6 +410,50 @@ fn recovery_rejects_corrupt_complete_evidence_and_preserves_audio() {
 }
 
 #[test]
+fn import_rejects_flac_relabelled_as_decoded_caf_with_matching_hash_and_geometry() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (snapshot, base, mut manifest) = pending(&storage, "wrong-container");
+    let decoded = base.join("decoded.caf");
+    let mut audio = VerifiedAudio::open(
+        File::open(&decoded).unwrap(),
+        manifest.audio.size,
+        &manifest.audio.sha256,
+    )
+    .unwrap();
+    let replacement = base.join("replacement.flac");
+    let saved = crate::audio::flac::write_segment(
+        &mut audio,
+        0,
+        manifest.info.frames,
+        &replacement,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap();
+    drop(audio);
+    std::fs::remove_file(&decoded).unwrap();
+    std::fs::rename(&replacement, &decoded).unwrap();
+    manifest.audio = FileEvidence {
+        size: saved.size,
+        sha256: saved.sha256,
+    };
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    std::fs::write(base.join("manifest.json"), &manifest_bytes).unwrap();
+
+    let error = storage.finalize_audio_import(&snapshot.id).unwrap_err();
+    assert!(error.contains("CAF形式ではありません"), "{error}");
+    assert_eq!(storage.audio_import(&snapshot.id).unwrap(), snapshot);
+    assert_eq!(count(&storage, "file_assets", &snapshot.meeting_id), 0);
+    assert_eq!(count(&storage, "audio_tracks", &snapshot.meeting_id), 0);
+    assert_eq!(
+        std::fs::read(base.join("manifest.json")).unwrap(),
+        manifest_bytes
+    );
+    assert!(decoded.is_file());
+}
+
+#[test]
 fn incomplete_import_cleanup_is_scoped_and_unknown_files_are_retained() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
@@ -441,10 +468,14 @@ fn incomplete_import_cleanup_is_scoped_and_unknown_files_are_retained() {
     let (snapshot, base, _) = pending(&s, "unknown");
     s.fail_audio_import(&snapshot.id, "failed", "error")
         .unwrap();
-    std::fs::write(base.join("user-file"), b"retain").unwrap();
-    assert!(s.cleanup_audio_import(&snapshot.id).is_err());
-    assert_eq!(std::fs::read(base.join("user-file")).unwrap(), b"retain");
-    assert!(base.join("original.wav").exists());
+    for unknown in ["user-file", "audio.flac", ".mon-flac-fixture.part"] {
+        let path = base.join(unknown);
+        std::fs::write(&path, b"retain").unwrap();
+        assert!(s.cleanup_audio_import(&snapshot.id).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"retain");
+        assert!(base.join("original.wav").exists());
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[test]
@@ -827,35 +858,12 @@ fn initial_import_rejects_out_of_range_speaker_counts_before_saving() {
     );
 }
 
-fn pending_pcm(s: &Storage, operation: &str) -> (ImportSnapshot, PathBuf, ImportManifest) {
-    let (snapshot, base, mut manifest) = pending(s, operation);
-    let pcm = (0..64000)
-        .flat_map(|_| [0.25_f32, -0.5_f32])
-        .flat_map(|v| v.to_le_bytes())
-        .collect::<Vec<_>>();
-    let caf = caf_fixture(16000, 2, 3, 32, 4, &pcm);
-    std::fs::write(base.join("decoded.caf"), &caf).unwrap();
-    std::fs::remove_file(base.join("audio.flac")).unwrap();
-    manifest.schema_version = 2;
-    manifest.audio_format = Some("caf".into());
-    manifest.audio = FileEvidence {
-        size: caf.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&caf)),
-    };
-    std::fs::write(
-        base.join("manifest.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
-    (snapshot, base, manifest)
-}
-
 #[test]
 fn pcm_import_recovers_without_flac_and_roundtrips_canonical_wav_backup() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let s = Storage::open(root.join("source")).unwrap();
-    let (snapshot, base, _) = pending_pcm(&s, "pcm-recovery");
+    let (snapshot, base, _) = pending(&s, "pcm-recovery");
     assert!(s
         .finalize_audio_import_cancellable(&snapshot.id, &|| true)
         .is_err());
@@ -907,7 +915,7 @@ fn pcm_import_rejects_ambiguous_or_changed_staging_before_commit() {
     for changed_bytes in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let s = Storage::open(temp.path().join("data")).unwrap();
-        let (snapshot, base, mut manifest) = pending_pcm(&s, "bad-pcm");
+        let (snapshot, base, mut manifest) = pending(&s, "bad-pcm");
         if changed_bytes {
             std::fs::write(base.join("decoded.caf"), b"broken").unwrap();
         } else {

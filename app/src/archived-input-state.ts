@@ -2,7 +2,7 @@ import {checkedHistoricalInputNotice,validInputOwner,type InputKind,type InputNo
 
 export type ArchivedInputBatch={schemaVersion:1;ownerId:string;revision:number;notices:InputNotice[];noticeLoss:NoticeLoss;historyIssue:null|"missing"|"invalid"};
 export type HistorySaveIssue=null|"failed"|"invalid"|"unconfirmed"|"unavailable";
-export type ArchivedInputRow={meetingId:string;sessionId:string;title:string;batch:ArchivedInputBatch|null;issue:null|"unavailable"|"deliveryUnavailable"|"paused";historySaveIssue:HistorySaveIssue};
+export type ArchivedInputRow={meetingId:string;sessionId:string;title:string;batch:ArchivedInputBatch|null;issue:null|"unavailable"|"paused";historySaveIssue:HistorySaveIssue};
 export type ArchivedInputPage={schemaVersion:3;recordings:ArchivedInputRow[];nextCursor:string|null};
 export type ArchivedInputTarget={meetingId:string;sessionId:string};
 export type ArchivedInputRows={schemaVersion:1;recordings:ArchivedInputRow[];missingSessionIds:string[]};
@@ -48,13 +48,10 @@ export function checkedArchivedInputPage(value:unknown,after:string|null):Archiv
     const r=object(value,["meetingId","sessionId","title","batch","issue","historySaveIssue"]);
     if(![null,"failed","invalid","unconfirmed","unavailable"].includes(r.historySaveIssue as null))throw Error("停止時の履歴保存診断が不正です。");
     if(!validInputOwner(r.meetingId)||!validInputOwner(r.sessionId)||prior!==null&&String(r.sessionId)<=prior||
-      typeof r.title!=="string"||Array.from(r.title).length>120||![null,"unavailable","deliveryUnavailable","paused"].includes(r.issue as null)||r.batch!==null&&r.issue==="unavailable")throw Error("保存後通知一覧の会議・録音または診断が不正です。");
+      typeof r.title!=="string"||Array.from(r.title).length>120||![null,"unavailable","paused"].includes(r.issue as null)||r.batch!==null&&r.issue==="unavailable")throw Error("保存後通知一覧の会議・録音または診断が不正です。");
     if(r.issue==="paused"&&(r.batch!==null||r.historySaveIssue!==null))throw Error("一時停止中の通知に確定結果があります。");
     prior=r.sessionId as string;
     const batch=r.batch===null?null:checkedArchivedInputBatch(r.batch,r.sessionId as string);
-    // Immutable imported retention can provide diagnosis, but never a notice
-    // or a receipt until a writable destination delivery store is available.
-    if(r.issue==="deliveryUnavailable"&&(batch===null||batch.notices.length!==0))throw Error("未接続の復元通知に受付可能な通知があります。");
     return {meetingId:r.meetingId as string,sessionId:r.sessionId as string,title:r.title,batch,issue:r.issue as ArchivedInputRow["issue"],historySaveIssue:r.historySaveIssue as HistorySaveIssue};
   });
   if(p.nextCursor!==null&&(recordings.length!==32||p.nextCursor!==recordings.at(-1)?.sessionId))throw Error("保存後通知一覧の末尾と続き位置が一致しません。");
@@ -92,10 +89,7 @@ export class ArchivedInputSession {
 }
 
 export function unpackNoticeReply(value:unknown):{paused:boolean;value:unknown}{
-  if(value&&typeof value==="object"&&Object.hasOwn(value,"paused")){
-    const v=object(value,["paused","value"]);
-    if(typeof v.paused!=="boolean"||v.paused!==(v.value===null))throw Error("通知履歴の一時停止応答が不正です。");
-    return {paused:v.paused,value:v.value};
-  }
-  return {paused:false,value}; // Older native responses still undergo the existing exact page/receipt checks.
+  const v=object(value,["paused","value"]);
+  if(typeof v.paused!=="boolean"||v.paused!==(v.value===null))throw Error("通知履歴の一時停止応答が不正です。");
+  return {paused:v.paused,value:v.value};
 }

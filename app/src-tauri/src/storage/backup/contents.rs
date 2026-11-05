@@ -53,6 +53,7 @@ struct MeetingContents {
     manifest: Asset,
     audio: Option<Audio>,
     transcript: Option<AnalysisView>,
+    manual_assignment_lineages: Vec<String>,
     segments: Vec<Segment>,
     markdown: Option<String>,
     vocabulary: Vec<VocabularyEntry>,
@@ -155,11 +156,23 @@ impl Contents {
             let (started_at, duration, current): (Option<i64>, i64, Option<String>) = db.query_row(
                 "SELECT started_at_utc_ms,duration_us,current_analysis_id FROM meetings WHERE id=?1", [&meeting.id],
                 |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
-            let transcript = if current.is_some() {
+            let (transcript, manual_assignment_lineages) = if let Some(current) = current {
                 let tx = db.unchecked_transaction().map_err(err)?;
-                Some(super::super::voice::working(&tx, &meeting.id)?.0)
+                let transcript = super::super::voice::working(&tx, &meeting.id)?.0;
+                let manual =
+                    super::super::speaker_assignment_update::manual_lineages(&tx, &current)?;
+                let lineages =
+                    super::super::minutes_input::lineage_map(&tx, "utterances", &current)?;
+                let mut markers: Vec<_> = transcript
+                    .utterances
+                    .iter()
+                    .filter(|u| manual.contains(lineages.get(&u.id).unwrap_or(&u.id)))
+                    .map(|u| u.id.clone())
+                    .collect();
+                markers.sort_unstable();
+                (Some(transcript), markers)
             } else {
-                None
+                (None, Vec::new())
             };
             let is_deleted = deleted.contains_meeting(&meeting.id);
             let plan = if is_deleted {
@@ -267,6 +280,7 @@ impl Contents {
                 manifest,
                 audio,
                 transcript,
+                manual_assignment_lineages,
                 segments,
                 markdown,
                 vocabulary,
@@ -442,7 +456,7 @@ impl Contents {
             }
         }
         private_file(path)?.sync_all().map_err(err)?;
-        let mut db = portable::initialize(Connection::open(path).map_err(err)?, MIGRATIONS.len())?;
+        let mut db = portable::initialize(Connection::open(path).map_err(err)?)?;
         db.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
             .map_err(err)?;
         let tx = db.transaction().map_err(err)?;
@@ -549,11 +563,11 @@ impl Contents {
             )?;
             if has_source {
                 if source == "recording" {
-                    tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at,audio_policy) VALUES(?1,?2,'saved','system','{}',?3,?4,?5,?4,?6,?6,'single_wav_v1')",params![source_id,mid,operation,m.duration,m.manifest.hash,m.meeting.created_at]).map_err(err)?;
+                    tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) VALUES(?1,?2,'saved','system','{}',?3,?4,?5,?4,?6,?6)",params![source_id,mid,operation,m.duration,m.manifest.hash,m.meeting.created_at]).map_err(err)?;
                 } else if source == "audio_import" {
                     let a = m.audio.as_ref();
                     let aid = a.map(|a| get("file_assets", &a.asset.id)).transpose()?;
-                    tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,original_asset_id,converted_asset_id,created_at,updated_at,audio_policy) VALUES(?1,?2,'ready','backup.wav','wav',?3,?4,?4,?5,?5,'single_wav_v1')",params![source_id,mid,m.duration,aid,m.meeting.created_at]).map_err(err)?;
+                    tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,original_asset_id,converted_asset_id,created_at,updated_at) VALUES(?1,?2,'ready','backup.wav','wav',?3,?4,?4,?5,?5)",params![source_id,mid,m.duration,aid,m.meeting.created_at]).map_err(err)?;
                     if let Some(a) = a {
                         let info = crate::audio_import::AudioInfo {
                             schema_version: 1,
@@ -622,6 +636,24 @@ impl Contents {
                         .collect::<Result<Vec<_>, _>>()?,
                 )
                 .map_err(err)?;
+                let utterance_ids: BTreeSet<_> =
+                    t.utterances.iter().map(|u| u.id.as_str()).collect();
+                if m.manual_assignment_lineages
+                    .windows(2)
+                    .any(|w| w[0] >= w[1])
+                    || m.manual_assignment_lineages
+                        .iter()
+                        .any(|id| !utterance_ids.contains(id.as_str()))
+                {
+                    return Err("バックアップの手動話者割り当てが不正です".into());
+                }
+                let mut manual = m
+                    .manual_assignment_lineages
+                    .iter()
+                    .map(|id| get("utterance_lineage", id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                manual.sort_unstable();
+                config["manualAssignmentLineages"] = serde_json::to_value(manual).map_err(err)?;
                 let mut identifications = serde_json::Map::new();
                 for u in &t.utterances {
                     if let Some(info) = &u.speaker_identification {
@@ -653,7 +685,7 @@ impl Contents {
                         return Err("発言の話者が重複しています".into());
                     }
                     for (i, s) in u.speaker_ids.iter().enumerate() {
-                        tx.execute("INSERT INTO utterance_speakers(utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES(?1,?2,?3,?4,'manual')",params![uid,get("speakers",s)?,analysis,if i==0{"primary"}else{"overlap"}]).map_err(err)?;
+                        tx.execute("INSERT INTO utterance_speakers(utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES(?1,?2,?3,?4,?5)",params![uid,get("speakers",s)?,analysis,if i==0{"primary"}else{"overlap"},if m.manual_assignment_lineages.binary_search(&u.id).is_ok(){"manual"}else{"inferred"}]).map_err(err)?;
                     }
                 }
                 let hash = super::super::revisions::analysis_content_hash(&tx, &analysis)?;
@@ -669,7 +701,10 @@ impl Contents {
                     }
                     tx.execute("INSERT INTO voice_matches(id,meeting_id,analysis_revision_id,speaker_id,person_id,name_snapshot,state,similarity,model_hash,policy_version,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![get("voice_matches",&v.id)?,mid,analysis,get("speakers",&v.speaker)?,v.person.as_deref().map(|p|identity("voice_people","",p)).transpose()?,v.name,v.state,v.similarity,v.model,v.policy,v.created_at]).map_err(err)?;
                 }
-            } else if !m.matches.is_empty() || !m.segments.is_empty() {
+            } else if !m.matches.is_empty()
+                || !m.segments.is_empty()
+                || !m.manual_assignment_lineages.is_empty()
+            {
                 return Err("人物対応・音声区間の文字起こしがありません".into());
             }
             write_book(&tx, Some((old, &mid)), &m.vocabulary, identity)?;

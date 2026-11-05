@@ -1,12 +1,10 @@
 //! Typed fixed-data reconstruction. Results stay in private restore staging;
 //! this module does not publish meetings or make missing engines available.
+#[cfg(test)]
 use super::restore_ids::RestoreIds;
 use super::*;
 use crate::audio_import::ImportOptions;
-use crate::storage::draft_splits::UtteranceSplit;
-use crate::storage::drafts::{ManualSpeaker, SpeakerMerge};
 use crate::storage::vocabulary::VocabularySnapshot;
-use serde::Deserialize;
 use serde_json::Value;
 
 pub(in crate::storage::backup) mod workspace;
@@ -53,20 +51,13 @@ pub(super) fn visit_definitions(
                 for entry in options.meeting_vocabulary {visit(Definition{domain:"vocabulary_entries",meeting:meeting.clone(),old:entry.id,lineage:None})?;}
             }
             if kind=="config" {
-                if let Some(operations)=value.get("manualSpeakerOperations") {
-                    let operations:ManualSpeakerOperations=serde_json::from_value(operations.clone()).map_err(|e|e.to_string())?;
-                    if operations.schema_version!=1 {return Err("手動話者の由来版が不正です".into());}
-                    for speaker in operations.added {visit(Definition{domain:"speakers",meeting:meeting.clone(),old:speaker.id,lineage:Some("speaker_lineage")})?;}
-                }
-                if let Some(splits)=value.get("manualUtteranceSplits") {
-                    let operations:Vec<SplitOperation>=serde_json::from_value(splits.clone()).map_err(|e|e.to_string())?;
-                    for part in operations.into_iter().flat_map(|o|o.splits).flat_map(|s|s.parts) {
-                        visit(Definition{domain:"utterances",meeting:meeting.clone(),old:part.id,lineage:Some("utterance_lineage")})?;
+                for key in ["sourceRecognitionLineages", "manualAssignmentLineages"] {
+                    if let Some(lineages) = value.get(key) {
+                        let lineages: Vec<String> = serde_json::from_value(lineages.clone()).map_err(|e| e.to_string())?;
+                        for old in lineages {
+                            visit(Definition { domain: "utterance_lineage", meeting: meeting.clone(), old, lineage: None })?;
+                        }
                     }
-                }
-                if let Some(lineages)=value.get("sourceRecognitionLineages") {
-                    let lineages:Vec<String>=serde_json::from_value(lineages.clone()).map_err(|e|e.to_string())?;
-                    for old in lineages {visit(Definition{domain:"utterance_lineage",meeting:meeting.clone(),old,lineage:None})?;}
                 }
             }
         }
@@ -89,19 +80,4 @@ impl<'p, 's> FixedData<'p, 's> {
         ids.source().verify_validation_database(cancelled)?;
         Ok(Self { ids })
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ManualSpeakerOperations {
-    schema_version: u32,
-    added: Vec<ManualSpeaker>,
-    merges: Vec<SpeakerMerge>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SplitOperation {
-    source_analysis_id: String,
-    source_content_hash: String,
-    splits: Vec<UtteranceSplit>,
 }

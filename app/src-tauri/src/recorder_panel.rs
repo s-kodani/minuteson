@@ -206,7 +206,6 @@ pub(crate) fn synchronize(app: &AppHandle) -> Result<(), String> {
         // recording must not leave an always-on-top panel behind.
         if panel.is_visible().unwrap_or(true) {
             hide(&panel)?;
-            let _ = crate::recorder_info::hide(app, false);
         }
     } else if !panel.is_visible().map_err(|error| error.to_string())? {
         show(&panel)?;

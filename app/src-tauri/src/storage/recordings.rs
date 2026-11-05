@@ -211,7 +211,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let mut statement = db.prepare(
-            "SELECT r.id, r.meeting_id, m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('saved','interrupted','failed') AND (?1 IS NULL OR r.id > ?1) ORDER BY r.id LIMIT 33"
+            "SELECT r.id, r.meeting_id, m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('saved','interrupted','failed') AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings' AND p.entity_key=r.meeting_id) AND (?1 IS NULL OR r.id > ?1) ORDER BY r.id LIMIT 33"
         ).map_err(|e|e.to_string())?;
         let mut rows = statement
             .query_map(params![after], |row| {
@@ -251,7 +251,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let row = db.query_row(
-            "SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND r.state IN ('saved','interrupted','failed')",
+            "SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND r.state IN ('saved','interrupted','failed') AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings' AND p.entity_key=r.meeting_id)",
             params![owner,meeting], |r| Ok(ClosedInputRecording {
                 session_id:r.get(0)?, meeting_id:r.get(1)?, title:r.get::<_,String>(2)?.chars().take(120).collect(),
             }),
@@ -268,10 +268,8 @@ impl Storage {
         meeting: &str,
         owner: &str,
     ) -> Result<File, String> {
-        if self.closed_input_snapshot(meeting, owner)?.is_some() {
-            // A restored audio asset directory is not a native producer owner
-            // or permission to create/read a companion delivery ledger there.
-            return Err("復元された録音の通知は元録音の管理先へ書き込めません".into());
+        if self.closed_input_recording(meeting, owner)?.is_none() {
+            return Err("保存後通知の対象が見つからないか録音が終了していません".into());
         }
         let directory = crate::input_levels::open_capture_directory(
             &self
@@ -285,51 +283,6 @@ impl Storage {
         Ok(directory)
     }
 
-    /// NULL alone selects the native producer route. A present immutable
-    /// snapshot (including diagnostic-only or invalid content) may NEVER fall
-    /// back to guessed companion paths. Binding comes from the closed DB row,
-    /// not from IDs supplied inside the snapshot itself.
-    pub(crate) fn closed_input_snapshot(
-        &self,
-        meeting: &str,
-        owner: &str,
-    ) -> Result<Option<crate::input_status::queue::PortableInputSnapshot>, String> {
-        self.verify_closed_input_storage()?;
-        if !crate::input_levels::valid_owner(meeting) || !crate::input_levels::valid_owner(owner) {
-            return Err("保存後通知の会議または録音IDが不正です".into());
-        }
-        let db = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
-        // Bound the original UTF-8 bytes before allocating them, even if a
-        // damaged database has bypassed its normal column CHECK constraint.
-        let row: Option<(String, String, Option<i64>, Option<String>)> = db
-            .query_row(
-                "SELECT meeting_id,state,length(CAST(input_history_snapshot_json AS BLOB)),CASE WHEN length(CAST(input_history_snapshot_json AS BLOB)) <= ?2 THEN input_history_snapshot_json ELSE NULL END FROM recording_sessions WHERE id=?1",
-                params![owner, backup::input_snapshots::MAX_BYTES as i64],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let (actual_meeting, state, size, text) = row.ok_or("録音セッションが見つかりません")?;
-        if actual_meeting != meeting
-            || !matches!(state.as_str(), "saved" | "interrupted" | "failed")
-        {
-            return Err("保存後通知の対象が変更されたか録音が終了していません".into());
-        }
-        let result = match (size, text) {
-            (None, None) => None,
-            (Some(size), Some(text)) if size > 0 => {
-                Some(backup::input_snapshots::Bound::decode(&text, meeting, owner)?.into_snapshot())
-            }
-            _ => return Err("入力履歴スナップショットの容量が不正です".into()),
-        };
-        drop(db);
-        self.verify_closed_input_storage()?;
-        Ok(result)
-    }
-
     /// Read one DB-owned recording's retained producer suffix. No discovery,
     /// mutation, receipt adoption, telemetry freshening or audio replay.
     #[cfg(test)]
@@ -338,15 +291,8 @@ impl Storage {
         meeting_id: &str,
         session_id: &str,
     ) -> Result<crate::input_status::journal::Retained, String> {
-        let result = match self.closed_input_snapshot(meeting_id, session_id)? {
-            Some(snapshot) => snapshot
-                .retained_history()?
-                .ok_or("この復元録音には保存済みの取得履歴がありません")?,
-            None => {
-                let directory = self.closed_input_directory(meeting_id, session_id)?;
-                crate::input_status::journal::Reader::pin_at(&directory)?.read(session_id)?
-            }
-        };
+        let directory = self.closed_input_directory(meeting_id, session_id)?;
+        let result = crate::input_status::journal::Reader::pin_at(&directory)?.read(session_id)?;
         self.verify_closed_input_storage()?;
         Ok(result)
     }
@@ -748,18 +694,15 @@ impl Storage {
             None
         };
         #[cfg(any(unix, windows))]
-        let clock_originals = if let Some(prefixes) = &raw_prefixes {
-            let (mic, system, originals) = flac::canonical_maps(self, &base, &manifest, prefixes)?;
+        if let Some(prefixes) = &raw_prefixes {
+            let (mic, system) = flac::canonical_maps(&manifest, prefixes)?;
             if !mic_unreceived {
                 manifest.microphone.clock_segments = Some(mic);
             }
             if !unreceived {
                 manifest.system.clock_segments = Some(system);
             }
-            originals
-        } else {
-            Vec::new()
-        };
+        }
         let capture_clock = manifest.validated_capture_clock()?;
         let mic_timeline = if mic_unreceived {
             clock::CaptureTimeline {
@@ -950,8 +893,6 @@ impl Storage {
         self.read_capture_manifest(&manifest_file)?;
         transaction.commit().map_err(|error| error.to_string())?;
         drop(connection);
-        #[cfg(any(unix, windows))]
-        drop(clock_originals);
         self.publish_single_wav(&session.meeting_id, &|| false, &|completed, total| {
             crate::operation_observation::report("mixing_audio", completed, total, "frames");
         })?;

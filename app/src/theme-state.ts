@@ -14,10 +14,8 @@ export function resolveTheme(preference: ThemePreference, osDark: boolean): Reso
 export function assertUiPreferences(value: unknown): UiPreferencesSnapshot {
   const v = value as UiPreferencesSnapshot;
   if (!v || typeof v !== "object" || Array.isArray(v) || Object.keys(v).sort().join() !== "id,lockVersion,payload" || v.id !== "ui_preferences" || !Number.isSafeInteger(v.lockVersion) || v.lockVersion < 0 || !v.payload || typeof v.payload !== "object" || Array.isArray(v.payload) || !isTheme(v.payload.theme)) throw Error("表示設定の応答が不正です");
-  const keys = Object.keys(v.payload).sort().join();
-  let payload: UiPreferencesPayload;
-  if (v.payload.schemaVersion === 1 && (keys === "schemaVersion,theme" || keys === "colorTheme,schemaVersion,theme" && isColorTheme(v.payload.colorTheme))) payload = { schemaVersion:1,theme:v.payload.theme,colorTheme:v.payload.colorTheme ?? "monochrome" };
-  else throw Error("表示設定の応答が不正です");
+  if (Object.keys(v.payload).sort().join() !== "colorTheme,schemaVersion,theme" || v.payload.schemaVersion !== 1 || !isColorTheme(v.payload.colorTheme)) throw Error("表示設定の応答が不正です");
+  const payload = { schemaVersion: 1 as const, theme: v.payload.theme, colorTheme: v.payload.colorTheme };
   if (v.lockVersion === 0 && (payload.theme !== "system" || payload.colorTheme !== "monochrome")) throw Error("未保存の表示設定が不正です");
   return { id:"ui_preferences",lockVersion:v.lockVersion,payload };
 }
@@ -80,14 +78,6 @@ export class ThemeController {
       } finally { this.reading = null; }
     })();
     return this.reading;
-  };
-  reload = async () => {
-    if (this.value.busy) return;
-    const generation = this.generation;
-    this.pendingChanges = null;
-    this.update({ pendingTheme: null, pendingPreferences:null, status: "", notice: null });
-    await this.refresh();
-    if (generation === this.generation && !this.value.busy && !this.value.uncertain && this.value.snapshot) this.notify("保存済みの表示設定を再読込しました。", "info");
   };
   change = async (theme: ThemePreference): Promise<void> => {
     if (!isTheme(theme)) throw Error("テーマが不正です");

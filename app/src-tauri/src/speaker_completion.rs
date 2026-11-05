@@ -8,7 +8,6 @@ use crate::voice::{self, Window};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-pub(crate) mod restore;
 pub(crate) mod result;
 
 pub(crate) const ALGORITHM: &str = "missing_turn_body_only_v3";

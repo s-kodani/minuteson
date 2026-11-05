@@ -89,7 +89,7 @@ async (page, capturePath, { approveModelLicense }) => {
   await page.getByRole("button", { name: "会議A", exact: true }).waitFor();
   await page.evaluate(async () => {
     const f = window.monBrowserFixture;
-    const job = { id: crypto.randomUUID(), meetingId: "meeting-0", meetingTitle: "会議A", operationId: crypto.randomUUID(), kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, outputMinutesId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), retryOfJobId: null, attempt: 1, createdAt: Date.now() - 320000, updatedAt: Date.now() };
+    const job = { id: crypto.randomUUID(), meetingId: "meeting-0", meetingTitle: "会議A", operationId: crypto.randomUUID(), kind: "transcription", state: "running", completedUnits: 1, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), retryOfJobId: null, attempt: 1, createdAt: Date.now() - 320000, updatedAt: Date.now() };
     f.jobs = [job]; f.notificationJobs = [job];
     f.analysisFlow = { id: crypto.randomUUID(), meetingId: "meeting-0", stage: "transcription", lockVersion: 1, transcriptionJob: job, diarizationJob: null, errorMessage: null };
     await f.emitNotification();

@@ -19,8 +19,7 @@ impl Fixture {
         if !overlap {
             crate::native_fs::private_directories(&config, false).unwrap();
         }
-        // A pre-bootstrap legacy image is rejected before Storage admission.
-        let root = if overlap || cfg!(windows) {
+        let root = if cfg!(windows) {
             data.clone()
         } else {
             data.join("data")
@@ -95,7 +94,7 @@ impl Fixture {
     }
 }
 #[test]
-fn legacy_reset_with_and_without_archive_excludes_model_payloads_even_with_overlapping_roots() {
+fn explicit_reset_with_and_without_archive_excludes_model_payloads_even_with_overlapping_roots() {
     for overlap in [false, true] {
         for archive in [false, true] {
             let f = Fixture::new(overlap);
@@ -256,7 +255,7 @@ fn registered_rejected_schema_resets_settings_and_keeps_the_selected_root() {
     drop(storage);
     drop(b);
     let db = rusqlite::Connection::open(root.join(DB)).unwrap();
-    db.execute_batch("DELETE FROM schema_migrations WHERE version>33")
+    db.execute_batch("UPDATE schema_migrations SET version=38,checksum='prerelease'")
         .unwrap();
     drop(db);
     assert!(crate::startup_attention::admit_storage(&config, &data).is_err());

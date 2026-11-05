@@ -228,7 +228,6 @@ impl Storage {
             || completed_units < 1
             || job.completed_units != completed_units
             || job.total_units != Some(completed_units)
-            || job.output_minutes_id.is_some()
         {
             return Err("議事録生成の状態・完了位置が一致しません".into());
         }

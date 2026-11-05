@@ -22,4 +22,3 @@ pub(crate) fn absolute(path: &str) -> String {
 }
 
 // Fixture construction only; no product retry entry point.
-pub(crate) mod model_retry;

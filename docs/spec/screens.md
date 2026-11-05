@@ -106,8 +106,6 @@ flowchart TB
 flowchart LR
     main["メインウィンドウ"] -.->|"録音中・非アクティブ"| panel["録音ミニパネル<br/>recorder"]
     panel -.->|"メインを開く"| main
-    panel -->|"説明を開く"| info["録音説明<br/>recorder-info"]
-    info -->|"閉じる"| panel
     panel -->|"停止・準備中止"| confirm["録音終了確認<br/>recording-confirmation"]
     main -.->|"録音を終了"| confirm
     confirm -->|"取消"| panel

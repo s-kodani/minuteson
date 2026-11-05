@@ -50,7 +50,7 @@ test("legacy draft edits, adoption and version restoration are deleted from nati
   const revisions=readFileSync(new URL("storage/revisions.rs",root),"utf8");
   assert.doesNotMatch(revisions,/fn (?:commit_minutes_candidate|commit_minutes_inner|restore_previous_minutes|restore_minutes_inner)\b|struct CommittedMinutes\b/);
   // ASR revision publication is a separate, still required operation.
-  assert.match(revisions,/fn commit_analysis_inner\(/);
+  assert.match(revisions,/fn analysis_content_hash\(/);
   const modules=readFileSync(new URL("storage.rs",root),"utf8");
   assert.match(modules,/#\[cfg\(test\)\]\r?\npub\(crate\) mod current_minutes_fixture;/);
   assert.doesNotMatch(modules,/mod minutes_ui;|MinutesAdoptRequest|MinutesVersionState|CommittedMinutes/);

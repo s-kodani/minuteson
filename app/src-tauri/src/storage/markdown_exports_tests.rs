@@ -45,19 +45,16 @@ fn exact_human_bytes_empty_unicode_html_and_interval_have_no_added_metadata() {
         );
         assert_eq!(record.exported_content_hash, before.content_hash);
         assert_eq!(record.state, "succeeded");
-        assert!(record.minutes_revision_id.is_none());
         assert_eq!(s.get_minutes_markdown(&r.meeting_id).unwrap(), Some(before));
         let db = s.connection.lock().unwrap();
-        for table in [
-            "minutes_revisions",
-            "working_drafts",
-            "edit_operations",
-            "minutes_items",
-        ] {
+        for table in ["minutes_revisions", "edit_operations", "minutes_items"] {
             assert_eq!(
-                db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
+                db.query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
                 0
             );
         }

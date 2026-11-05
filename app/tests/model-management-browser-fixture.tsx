@@ -26,7 +26,7 @@ const snap = () => structuredClone(state);
 f.managementSnapshot = snap;
 mockIPC(async (command, args: any) => {
   if (command === "get_data_operation") return snap();
-  if (command === "get_data_operation_availability") return { available: !state.busy, reason: state.busy ? "モデル削除中" : null };
+  if (command === "get_data_operation_availability") return { available: !state.busy, reason: state.busy ? "モデル削除中" : null, reasonCode: state.busy ? "operation_active" : null, deletionAvailable: !state.busy, deletionReason: state.busy ? "モデル削除中" : null, deletionReasonCode: state.busy ? "operation_active" : null };
   if (command === "get_deletion_items") return { ...empty, deletingMeetingIds: [] };
   if (command === "get_audio_deletion_items") return empty;
   if (command === "get_model_deletion_items") return { ...empty, writeBlocked: pending, reason: pending ? "モデル削除が未完了です" : null, items: pending ? [{ operationId: state.modelDeletionPreview.operationId, state: "installing", packageId: state.modelDeletionPreview.packageId, modelName: state.modelDeletionPreview.modelName, reviewAllowed: true, errorMessage: null }] : [] };
@@ -52,10 +52,6 @@ mockIPC(async (command, args: any) => {
     }
     if (f.deletionMode === "lostReview") { f.deletionMode = "normal"; throw Error("模擬の確認応答喪失"); }
     return snap();
-  }
-  if (command === "get_model_deletion_paths") {
-    const p = state.modelDeletionPreview;
-    return { confirmationId: f.deletionMode === "stalePage" ? crypto.randomUUID() : args.confirmationId, offset: args.offset, total: 1, nextOffset: null, entries: [{ relativePath: `${p.packageId}/model.bin`, directory: false, registered: true, present: true, bytes: p.bytes, sha256: "a".repeat(64), changed: false }] };
   }
   if (command === "cancel_data_operation" && f.deletionMode === "delayReview" && state.busy) { state = { ...state, revision: state.revision + 1, phase: "cancelling" }; return snap(); }
   if (command === "cancel_data_operation" && f.deletionMode === "finishOnStop" && state.busy) return f.finishDeletion();

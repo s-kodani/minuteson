@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Manager};
 
 pub(crate) fn configure(app: &AppHandle) -> Result<(), String> {
-    for label in ["recorder", "recorder-info", "recording-confirmation"] {
+    for label in ["recorder", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
             round(&window)?;
         }

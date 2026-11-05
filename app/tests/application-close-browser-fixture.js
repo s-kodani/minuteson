@@ -19,7 +19,7 @@ const archivedSeed=sessionStorage.getItem("MON_ARCHIVED_INPUT_FIXTURE");sessionS
 const f = window.closeFixture = {
   notificationHistory:()=>toasts.getHistorySnapshot(),
   recording, importing, vocabulary: {}, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
-  uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
+  uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system", colorTheme:"monochrome"}},
   failFlush: false, flushDelay: 0, flushes: 0, mutateDuringFlush: null,
   startLost: false, startBeforeCommitFailure:false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
   captureInputs:{schemaVersion:1,microphonePermission:"notDetermined",selectedMicrophoneUID:null,devices:[{uid:"built-in",name:"内蔵マイク",isDefault:true},{uid:"usb-123",name:"ヘッドセットのマイク",isDefault:false}]},
@@ -47,7 +47,7 @@ const f = window.closeFixture = {
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
   finishImport: saved => f.importChanged({ busy: false, phase: saved ? "saved" : "cancelled", saved: saved ? { id: crypto.randomUUID(), meetingId: data.meetings[0].id, state: "saved" } : null }),
-  finishData: published => data.changed({ busy: false, phase: published ? "completed" : "cancelled", retryAllowed: false, backupPreview: null, backupReceipt: published ? { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 1024, sha256: "a".repeat(64) } : null }),
+  finishData: published => data.changed({ busy: false, phase: published ? "completed" : "cancelled", retryAllowed: false, backupPreview: null, backupReceipt: published ? { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 1024, sha256: "a".repeat(64) } : null }),
 };
 if(queueSeed){const {meetings,...queueState}=JSON.parse(queueSeed);Object.assign(f,queueState);data.meetings=meetings;}
 if(archivedSeed){const seed=JSON.parse(archivedSeed);data.meetings=seed.meetings;f.archived.rows=reopenArchived(seed.rows);}
@@ -68,9 +68,9 @@ registerPendingEdits(async () => {
 });
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: clone(args) });
-  if(command==="get_archived_recording_input_notices")return archivedPage(f,args);
-  if(command==="get_archived_recording_input_notice_rows")return archivedRows(f,args);
-  if(command==="acknowledge_archived_recording_input_notice")return archivedAction(f,args.request);
+  if(command==="get_archived_recording_input_notices")return {paused:false,value:await archivedPage(f,args)};
+  if(command==="get_archived_recording_input_notice_rows")return {paused:false,value:await archivedRows(f,args)};
+  if(command==="acknowledge_archived_recording_input_notice")return {paused:false,value:await archivedAction(f,args.request)};
   if(command==="get_meeting_analysis_audio"&&f.archived.rows.some(row=>row.meetingId===args.meetingId))return {tracks:[]};
   if(command==="get_ui_preferences")return clone(f.uiPreferences);
   if(command==="save_ui_preferences"){
@@ -261,7 +261,7 @@ mockIPC(async (command, args) => {
   if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft", "get_minutes_markdown"].includes(command)) return null;
   if (["get_analysis_jobs", "get_ready_analysis_flows", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_publication_status") return null;
-  if (["get_analysis_versions", "get_minutes_versions"].includes(command)) return { meetingLockVersion: data.meetings[0].lockVersion, currentId: null, previousId: null, draft: null, versions: [] };
+  if (command === "get_minutes_source") return { meetingLockVersion: data.meetings[0].lockVersion, currentId: null, contentHash: null, draft: null };
   if(command==="save_vocabulary_book"&&args.meetingId!=null){
     const book=f.vocabulary[args.meetingId]??{id:`meeting:${args.meetingId}`,payload:[],lockVersion:0};
     if(f.failVocabulary||book.lockVersion!==args.expectedLockVersion||!validVocabulary(args.payload))throw Error("模擬用語保存失敗");

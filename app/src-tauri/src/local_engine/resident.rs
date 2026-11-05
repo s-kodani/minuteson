@@ -66,13 +66,6 @@ impl Scope {
             }
             if let Some(snapshot) = snapshot {
                 snapshot.validate()?;
-                #[cfg(windows)]
-                if snapshot.protocol == 2 {
-                    // Native Windows CLI binaries use the same frozen inputs
-                    // and Job Object teardown; they do not speak resident v1.
-                    snapshot.resolve(root)?;
-                    return Ok(Self);
-                }
                 *cell.borrow_mut() = Some(Job {
                     root: root.to_owned(),
                     snapshot: snapshot.clone(),
@@ -403,7 +396,7 @@ pub(crate) fn synthetic_enabled() -> bool {
 }
 
 /// A separate metadata-only session. It cannot change the job's cached model,
-/// context, placement or protocol state, including when guarding an old job.
+/// context, placement or protocol state.
 pub(crate) struct Estimator {
     worker: Option<Worker>,
     root: PathBuf,
@@ -417,9 +410,7 @@ impl Estimator {
         let root = JOB
             .with(|cell| cell.borrow().as_ref().map(|j| j.root.clone()))
             .unwrap_or(directory.path().canonicalize().map_err(|e| e.to_string())?);
-        // Old jobs keep their frozen inference worker. Their admission guard
-        // uses the current bundled estimator, never an unsupported old opcode.
-        let snapshot = match snapshot.filter(|s| s.protocol == 1) {
+        let snapshot = match snapshot {
             Some(snapshot) => snapshot.clone(),
             None => prepare(&root, "llama")?.ok_or("メモリ見積もりワーカーがありません")?,
         };

@@ -172,15 +172,6 @@ fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fe
             .unwrap()
             .to_string()]
     );
-    let page = p.page(&preview.confirmation_id, 0).unwrap();
-    assert!(page
-        .entries
-        .iter()
-        .any(|e| e.relative_path.ends_with("/unknown") && !e.registered));
-    assert!(page
-        .entries
-        .iter()
-        .all(|e| !e.relative_path.contains(&f.other)));
     let done = p
         .execute(
             &storage,

@@ -3,8 +3,6 @@
 //! No model bytes, installed state, CPU probe, device, or current-head mutation.
 use super::*;
 
-pub(in crate::storage) mod history;
-
 const MAX_RECORDS: i64 = 65_536;
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -37,11 +35,6 @@ enum Configuration {
         window_shift_milli: u32,
         min_duration_on_ms: u32,
         min_duration_off_ms: u32,
-        #[serde(
-            default,
-            skip_serializing_if = "crate::diarization::sensitivity::is_standard"
-        )]
-        speech_sensitivity_milli: i32,
     },
     #[serde(rename = "llama.cpp", rename_all = "camelCase")]
     Llama {
@@ -68,7 +61,6 @@ impl Configuration {
                 window_shift_milli: s.window_shift_milli,
                 min_duration_on_ms: s.min_duration_on_ms,
                 min_duration_off_ms: s.min_duration_off_ms,
-                speech_sensitivity_milli: s.speech_sensitivity_milli,
             },
             Settings::Llama(s) => Self::Llama {
                 threads: s.threads,
@@ -135,14 +127,12 @@ impl Configuration {
                 window_shift_milli,
                 min_duration_on_ms,
                 min_duration_off_ms,
-                speech_sensitivity_milli,
             } => Settings::Sherpa(diarization_preferences::DiarizationEnginePreferences {
                 threads,
                 cluster_threshold_milli,
                 window_shift_milli,
                 min_duration_on_ms,
                 min_duration_off_ms,
-                speech_sensitivity_milli,
                 ..Default::default()
             }),
             Self::Llama {
@@ -239,34 +229,6 @@ pub(in crate::storage) struct Catalog {
     preferences: Vec<Preferences>,
 }
 impl Catalog {
-    pub(in crate::storage) fn file_references(
-        &self,
-    ) -> Result<Vec<super::super::model_metadata::ModelFileMetadata>, String> {
-        self.packages
-            .iter()
-            .flat_map(|p| &p.files)
-            .map(|file| {
-                let reference = super::super::model_metadata::ModelFileMetadata {
-                    name: Path::new(&file.relative_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .ok_or("モデルの履歴名が不正です")?
-                        .into(),
-                    size: file.actual_size,
-                    sha256: file.actual_hash.clone(),
-                    role: match file.role {
-                        Role::Executable => "executable",
-                        Role::Asr | Role::Llm => "model",
-                        Role::Vad => "vadModel",
-                        _ => "artifact",
-                    }
-                    .into(),
-                };
-                reference.validate()?;
-                Ok(reference)
-            })
-            .collect()
-    }
     pub(in crate::storage) fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
             || self.packages.len() > MAX_RECORDS as usize
@@ -366,8 +328,6 @@ pub(in crate::storage) fn export(
             return Err("持ち運び用モデル構成が件数上限を超えています".into());
         }
     }
-    // File references are explicit metadata, separate from managed packages.
-    super::super::model_metadata::retained_files(db)?;
     let rows = db
         .prepare("SELECT id,source_type FROM model_packages ORDER BY id")
         .map_err(|e| e.to_string())?

@@ -24,23 +24,6 @@ pub(crate) struct Snapshot {
 }
 impl Snapshot {
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.protocol == 2 {
-            let name = match self.engine.as_str() {
-                "whisper" => "whisper-cli.exe",
-                "llama" => "llama-completion.exe",
-                "sherpa" => "sherpa-onnx-offline-speaker-diarization.exe",
-                _ => return Err("未知のWindows推論エンジンです".into()),
-            };
-            if self.name != name
-                || self.gpu.is_some()
-                || self.bytes == 0
-                || self.bytes > 128 * 1024 * 1024
-                || !crate::model_download_ipc::hash(&self.sha256)
-            {
-                return Err("Windows推論ランタイムの固定情報が不正です".into());
-            }
-            return Ok(());
-        }
         let asr_binary = crate::transcription::asr::worker_binary(&self.engine).map(|n| {
             if cfg!(windows) {
                 format!("{n}.exe")
@@ -129,19 +112,6 @@ impl Snapshot {
         Ok(())
     }
     pub(crate) fn resolve(&self, root: &Path) -> Result<Fingerprint, String> {
-        #[cfg(windows)]
-        if self.protocol == 2 {
-            self.validate()?;
-            let proof = Fingerprint {
-                path: crate::windows_runtime::resources()?
-                    .join(&self.engine)
-                    .join(&self.name),
-                size: self.bytes,
-                sha256: self.sha256.clone(),
-            };
-            proof.verify(&|| false).map_err(|error| format!("このジョブが記録したWindows実行環境を利用できません。実行条件は変更していません。現在のモデル設定で新しく実行してください: {error}"))?;
-            return Ok(proof);
-        }
         self.resolve_from(root, || Ok(resources()?.join(&self.name)))
     }
     fn resolve_from(
@@ -212,7 +182,7 @@ impl Snapshot {
 mod portable_metadata_tests {
     use super::*;
     #[test]
-    fn cross_platform_worker_metadata_preserves_windows_gpu_and_legacy_protocol_two() {
+    fn cross_platform_worker_metadata_preserves_windows_gpu_and_rejects_protocol_two() {
         for engine in ["whisper", "llama", "sherpa"] {
             let mut saved = Snapshot {
                 protocol: 1,
@@ -235,18 +205,6 @@ mod portable_metadata_tests {
             }
             saved.gpu = None;
             saved.protocol = 2;
-            saved.name = match engine {
-                "whisper" => "whisper-cli.exe",
-                "llama" => "llama-completion.exe",
-                _ => "sherpa-onnx-offline-speaker-diarization.exe",
-            }
-            .into();
-            saved.validate().unwrap();
-            saved.gpu = Some(Accelerated {
-                name: "mon-llama-vulkan-worker.exe".into(),
-                bytes: 2048,
-                sha256: "b".repeat(64),
-            });
             assert!(saved.validate().is_err());
         }
     }
@@ -373,8 +331,7 @@ fn prepare_bundled(root: &Path, engine: &str, bundle: &Path) -> Result<Snapshot,
     Ok(snapshot)
 }
 
-// Preserve the initial execution mode on lost admission responses, including
-// historical operations that predate resident workers.
+// Reuse the frozen worker on lost admission responses.
 pub(crate) fn prepare_job(
     storage: &crate::storage::Storage,
     meeting: &str,

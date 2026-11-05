@@ -47,7 +47,7 @@ fn ui_preferences_color_is_independent_persisted_and_version_bound() {
 }
 
 #[test]
-fn ui_preferences_absent_color_defaults_without_rewriting_or_accepting_invalid_color() {
+fn ui_preferences_rejects_absent_or_invalid_color_without_rewriting() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let json = r#"{"schemaVersion":1,"theme":"dark"}"#;
@@ -61,10 +61,7 @@ fn ui_preferences_absent_color_defaults_without_rewriting_or_accepting_invalid_c
         )
         .unwrap();
     let before = rows(&storage);
-    assert_eq!(
-        storage.ui_preferences().unwrap().payload,
-        payload(Theme::Dark)
-    );
+    assert!(storage.ui_preferences().is_err());
     assert_eq!(rows(&storage), before);
     for color in ["null", "\"blue\"", "true", "1"] {
         let json = format!(r#"{{"schemaVersion":1,"theme":"dark","colorTheme":{color}}}"#);

@@ -110,7 +110,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
   }
   if (command === "get_model_placements") return structuredClone(f.entries);
   if (command === "get_model_profiles") return structuredClone(f.profiles);
-  if (["get_analysis_preferences", "get_asr_preferences"].includes(command)) return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
+  if (command === "get_asr_preferences") return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
   if (command === "get_diarization_preferences") {
     if (f.mode === "threadReadFailure") throw Error("模擬CPU設定読込失敗");
     return { lockVersion: f.preferenceVersions["sherpa-onnx"], payload: { standard: structuredClone(f.settingsByEngine["sherpa-onnx"]), highAccuracy: structuredClone(f.settingsByEngine["sherpa-onnx"]) } };

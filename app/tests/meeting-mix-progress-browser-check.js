@@ -46,7 +46,7 @@ async page => {
     const f=window.monBrowserFixture;
     f.analysisPreparations=[];
     const now=Date.now();
-    const job={analysisOperation:{id:f.operationId,startedAtMs:f.admissionStarted},id:crypto.randomUUID(),meetingId:'meeting-0',meetingTitle:'会議A',operationId:f.operationId,kind:'diarization',state:'running',completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,specHash:'a'.repeat(64),inputHash:'b'.repeat(64),retryOfJobId:null,attempt:1,createdAt:now,updatedAt:now};
+    const job={analysisOperation:{id:f.operationId,startedAtMs:f.admissionStarted},id:crypto.randomUUID(),meetingId:'meeting-0',meetingTitle:'会議A',operationId:f.operationId,kind:'diarization',state:'running',completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,pauseReason:null,specHash:'a'.repeat(64),inputHash:'b'.repeat(64),retryOfJobId:null,attempt:1,createdAt:now,updatedAt:now};
     f.jobs=f.notificationJobs=[job];
     f.progressEvent={jobId:job.id,specHash:job.specHash,attempt:1,unitIndex:0,invocationOrder:1,sequence:1,engineBasisPoints:6000,finishing:false};
     await f.emitNotification();await f.emitDiarizationRuntime(f.progressEvent);

@@ -37,16 +37,14 @@ pub(super) fn verify_temp_schema(db: &Connection) -> Result<(), String> {
         [const { std::sync::OnceLock::new() }; 4];
     let expected = EXPECTED[usize::from(has_attention) + 2 * usize::from(has_guard)]
         .get_or_init(|| -> Result<TempSchema, String> {
-            let reference = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            let mut reference = Connection::open_in_memory().map_err(|e| e.to_string())?;
             if has_attention {
                 reference
                     .execute_batch(CREATE_ATTENTION)
                     .map_err(|e| e.to_string())?;
             }
             if has_guard {
-                for (_, sql) in crate::storage::MIGRATIONS {
-                    reference.execute_batch(sql).map_err(|e| e.to_string())?;
-                }
+                crate::storage::initialize_database(&mut reference).map_err(|e| e.to_string())?;
                 super::super::meeting_access::install(&reference)?;
             }
             temp_schema(&reference)
@@ -348,7 +346,3 @@ pub(super) fn resolve(
 #[cfg(all(test, unix))]
 #[path = "startup_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "startup_migration_tests.rs"]
-mod migration_tests;

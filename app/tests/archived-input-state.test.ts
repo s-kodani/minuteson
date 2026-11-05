@@ -28,16 +28,13 @@ test("recovery needs a valid read; final save confirmation is independent of a n
   c.pause(false);c.acceptPage(page([row({...batch([]),historyIssue:"invalid"})]),null,4);
   assert.equal(c.paint(4).views[0].checked,false);assert(errors.some(error=>error instanceof Error));
 });
-test("version 3 separates readable imported diagnosis from unavailable delivery without transferred claims",()=>{
-  const diagnostic={...row(batch([],1)),issue:"deliveryUnavailable" as const,historySaveIssue:"failed" as const};
+test("archived recordings can report a save failure and lost notices with no pending notices",()=>{
+  const diagnostic={...row(batch([],1)),historySaveIssue:"failed" as const};
   diagnostic.batch!.noticeLoss={microphone:2,system:2};
   const value={schemaVersion:3,recordings:[diagnostic],nextCursor:null};
   assert.deepEqual(checkedArchivedInputPage(value,null),value);
   for(const schemaVersion of [1,2])assert.throws(()=>checkedArchivedInputPage({...value,schemaVersion},null));
   for(const invalid of [
-    {...diagnostic,batch:null},
-    {...diagnostic,batch:batch()},
-    {...diagnostic,batch:batch([notice(1,1,recipient,true)])},
     {...diagnostic,batch:{...diagnostic.batch!,ownerId:meeting}},
     {...diagnostic,issue:"unavailable"},
     {...diagnostic,issue:"confirmed"},
@@ -47,7 +44,7 @@ test("version 3 separates readable imported diagnosis from unavailable delivery 
   for(const at of [0,100,2000,6000]){
     const {views,attempts}=c.paint(at);
     assert.deepEqual(attempts,[]);assert.deepEqual(views[0].notices,[]);
-    assert.equal(views[0].unavailable,false);assert.equal(views[0].deliveryUnavailable,true);
+    assert.equal(views[0].unavailable,false);
     assert.equal(views[0].historySaveIssue,"failed");
     assert.deepEqual(views[0].loss,{microphone:2,system:2});
     c.rendered(owner,notice().id,1,at);c.dismiss(owner,"microphone");
@@ -58,18 +55,15 @@ test("version 3 separates readable imported diagnosis from unavailable delivery 
   c.failedRead();
   const state=c.paint(6003);
   assert.equal(state.views[0].unavailable,true);
-  assert.equal(state.views[0].deliveryUnavailable,true);
   assert.deepEqual(state.views[0].loss,{microphone:2,system:2});
   assert.equal(state.views[0].historySaveIssue,"failed");
 });
-test("native version 3 delivery still receives normally and diagnostic-only imports do not suppress it",()=>{
+test("a recording with diagnostics and no notices does not suppress delivery from other recordings",()=>{
   const native={...row(),historySaveIssue:null};
-  const restored={...row(batch([])),sessionId:id(2),batch:{...batch([]),ownerId:id(2),noticeLoss:{microphone:2,system:0}},issue:"deliveryUnavailable" as const,historySaveIssue:"unconfirmed" as const};
-  const c=create();c.acceptPage({schemaVersion:3,recordings:[native,restored],nextCursor:null},null,0);
+  const diagnosticOnly={...row(batch([])),sessionId:id(2),batch:{...batch([]),ownerId:id(2),noticeLoss:{microphone:2,system:0}},historySaveIssue:"unconfirmed" as const};
+  const c=create();c.acceptPage({schemaVersion:3,recordings:[native,diagnosticOnly],nextCursor:null},null,0);
   const state=c.paint(0);
   assert.equal(state.attempts.length,1);assert.equal(state.attempts[0].attempt.sessionId,owner);
-  assert.equal(state.views[0].deliveryUnavailable,false);
-  assert.equal(state.views[1].deliveryUnavailable,true);
   assert.deepEqual(state.views[1].notices,[]);assert.equal(state.views[1].historySaveIssue,"unconfirmed");
   assert.equal(c.complete(state.attempts[0],receipt(state.attempts[0]),1),true);
 });
@@ -151,10 +145,10 @@ test("row failure does not suppress another recording or discard its retained di
 });
 test("paged traversal wraps and only a complete successful traversal removes absent rows",()=>{
   const c=create();c.acceptPage(page(),null,0);c.paint(0);
-  const legacy=Array.from({length:32},(_,i)=>({...row(null),sessionId:id(i+2)}));
-  c.acceptPage(page(legacy,id(33)),null,1);assert.equal(c.after(),id(33));assert.equal(c.paint(1).views.length,1);
+  const empty=Array.from({length:32},(_,i)=>({...row(null),sessionId:id(i+2)}));
+  c.acceptPage(page(empty,id(33)),null,1);assert.equal(c.after(),id(33));assert.equal(c.paint(1).views.length,1);
   assert.throws(()=>c.acceptPage(page(),null,2));c.failedRead();assert.equal(c.paint(2).views.length,1);
-  c.acceptPage(page(legacy,id(33)),null,3);c.acceptPage(page([]),id(33),4);assert.equal(c.after(),null);assert.equal(c.paint(4).views.length,0);
+  c.acceptPage(page(empty,id(33)),null,3);c.acceptPage(page([]),id(33),4);assert.equal(c.after(),null);assert.equal(c.paint(4).views.length,0);
   // A newly closed random UUID behind the old cursor is collected next cycle.
   c.acceptPage(page(),null,5);assert.equal(c.paint(5).views.length,1);
 });
@@ -176,7 +170,7 @@ test("render callbacks cannot discard a due renewal or mutate a stale generation
   assert.deepEqual(attempts.map(a=>a.attempt.action).sort(),["receive","render"]);
   c.failedRead();c.rendered(owner,receive.attempt.noticeId,1,1001);assert.deepEqual(c.paint(1001).attempts,[]);
 });
-test("legacy rows do not make a local owner; invalid same-owner rebinding stays unavailable",()=>{
+test("rows without diagnostics or a batch do not make a local owner; invalid same-owner rebinding stays unavailable",()=>{
   const c=create();c.acceptPage(page([row(null)]),null,0);assert.equal(c.paint(0).views.length,0);
   c.acceptPage(page(),null,1);c.paint(1);c.acceptPage(page([{...row(),meetingId:id(998)}]),null,2);
   assert.equal(c.paint(2).views[0].unavailable,true);assert.deepEqual(c.paint(2).views[0].notices,[]);
@@ -200,6 +194,6 @@ test("paused meetings retain diagnostics and unrelated meetings remain available
   assert.equal(c.paint(10).views[0].reception.microphone,"none");
   c.acceptPage(page([{...row(null),issue:"paused"}]),null,20);
   const view=c.paint(20).views[0];assert.equal(view.loss.microphone,3);assert.equal(view.unavailable,false);assert.equal(view.notices.length,0);
-  c.retainMeetings(new Set());assert.equal(c.complete(request,receipt(request),30),false);assert.equal(c.paint(30).views.length,0);
+  c.removeMeetings(new Set([request.meetingId]));assert.equal(c.complete(request,receipt(request),30),false);assert.equal(c.paint(30).views.length,0);
   assert.throws(()=>checkedArchivedInputPage(page([{...row(data),issue:"paused"}]),null));
 });

@@ -445,18 +445,20 @@ fn backup_omits_input_delivery_history_while_owned_moves_keep_native_companions(
         })
         .unwrap()
         .clone();
-    let imported_owner = storage
+    let imported_owner: String = crate::storage::with_test_database(storage, |db| {
+        db.query_row(
+            "SELECT id FROM recording_sessions WHERE meeting_id=?1",
+            [&imported],
+            |row| row.get(0),
+        )
+        .unwrap()
+    });
+    assert!(storage
         .closed_input_recordings(None)
         .unwrap()
         .0
-        .into_iter()
-        .find(|r| r.meeting_id == imported)
-        .unwrap()
-        .session_id;
-    assert!(storage
-        .closed_input_snapshot(&imported, &imported_owner)
-        .unwrap()
-        .is_none());
+        .iter()
+        .all(|row| row.meeting_id != imported));
     assert!(storage
         .closed_input_directory(&imported, &imported_owner)
         .is_err());
@@ -475,7 +477,7 @@ fn backup_omits_input_delivery_history_while_owned_moves_keep_native_companions(
     }
     storage.recording_input_history(&meeting, &owner).unwrap();
     assert!(storage
-        .closed_input_snapshot(&imported, &imported_owner)
+        .closed_input_recording(&imported, &imported_owner)
         .unwrap()
         .is_none());
     let next = f._base.path().join("current-contents-next");
@@ -491,7 +493,7 @@ fn backup_omits_input_delivery_history_while_owned_moves_keep_native_companions(
     assert_eq!(storage.root(), next);
     storage.recording_input_history(&meeting, &owner).unwrap();
     assert!(storage
-        .closed_input_snapshot(&imported, &imported_owner)
+        .closed_input_recording(&imported, &imported_owner)
         .unwrap()
         .is_none());
     assert!(storage

@@ -36,7 +36,7 @@ impl Storage {
         let tx = db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
-        let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions a JOIN meetings m ON m.id=a.meeting_id WHERE a.id=?1 AND a.meeting_id=?2 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))))",params![request.analysis_id,request.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM analysis_revisions a JOIN meetings m ON m.id=a.meeting_id WHERE a.id=?1 AND a.meeting_id=?2 AND (a.publication_state='committed' AND a.id=m.current_analysis_id))",params![request.analysis_id,request.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if !visible {
             return Err("この解析版は分割音声の参照対象ではありません".into());
         }
@@ -256,7 +256,11 @@ mod tests {
                     }
                     if !cancel && checks.get() == 4 {
                         storage
-                            .undo_last_transcript_edit(&draft.id, saved.lock_version)
+                            .save_transcript_draft(
+                                &draft.id,
+                                saved.lock_version,
+                                draft.payload.clone(),
+                            )
                             .unwrap();
                     }
                     guard.cancelled()
@@ -405,7 +409,7 @@ mod tests {
         invalid.expected_content_hash = "0".repeat(64);
         assert!(storage.prepare_draft_utterance_audio(&invalid).is_err());
         let undone = storage
-            .undo_last_transcript_edit(&draft.id, saved.lock_version)
+            .save_transcript_draft(&draft.id, saved.lock_version, draft.payload.clone())
             .unwrap();
         assert_eq!(undone.content_hash, draft.content_hash);
         assert!(storage.prepare_draft_utterance_audio(&request).is_err());
@@ -458,7 +462,7 @@ mod tests {
                 count.set(count.get() + 1);
                 if mutate && count.get() == 3 {
                     storage
-                        .undo_last_transcript_edit(&draft.id, saved.lock_version)
+                        .save_transcript_draft(&draft.id, saved.lock_version, draft.payload.clone())
                         .unwrap();
                 }
                 false

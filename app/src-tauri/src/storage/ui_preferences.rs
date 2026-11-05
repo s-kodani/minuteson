@@ -32,7 +32,6 @@ pub(crate) enum UiPreferences {
     V1 {
         schema_version: u8,
         theme: Theme,
-        #[serde(default)]
         color_theme: ColorTheme,
     },
 }

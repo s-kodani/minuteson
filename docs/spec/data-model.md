@@ -19,9 +19,9 @@ sources:
 
 # データモデルとER図
 
-DB schema 38の主要テーブルを領域別に示します。テーブル・列は物理名で、PKは主キー、FKは外部キー、UKは一意制約です。関連線は実際の外部キーに基づき、`||`は1、`o|`／`|o`は0または1、`o{`は0以上を表します。実線は親のキーを子の主キーに含む識別関連、点線は非識別関連です。
+DB schema 39の主要テーブルを領域別に示します。テーブル・列は物理名で、PKは主キー、FKは外部キー、UKは一意制約です。関連線は実際の外部キーに基づき、`||`は1、`o|`／`|o`は0または1、`o{`は0以上を表します。実線は親のキーを子の主キーに含む識別関連、点線は非識別関連です。
 
-列は代表項目に絞り、複合外部キーの会議ID・解析版IDの照合、CHECK制約、索引、トリガー、補助台帳は省略しています。完全な定義は[マイグレーション](../../app/src-tauri/src/migrations/)を参照してください。ファイルの所有・保存・復旧の動作は[保存仕様](storage.md)が正本です。
+列は代表項目に絞り、複合外部キーの会議ID・解析版IDの照合、CHECK制約、索引、トリガー、補助台帳は省略しています。完全な定義は[初期化SQL](../../app/src-tauri/src/schema.sql)を参照してください。ファイルの所有・保存・復旧の動作は[保存仕様](storage.md)が正本です。
 
 ## 会議と音声資産
 
@@ -91,7 +91,6 @@ erDiagram
     speakers ||--o{ utterance_speakers : "speaker_id"
     meetings ||..o{ working_drafts : "meeting_id"
     analysis_revisions |o..o{ working_drafts : "base_analysis_id"
-    working_drafts ||..o{ edit_operations : "draft_id"
     meetings ||--o| minutes_markdown : "meeting_id"
 
     meetings {
@@ -129,12 +128,6 @@ erDiagram
         TEXT target_kind
         INTEGER lock_version
     }
-    edit_operations {
-        TEXT id PK
-        TEXT draft_id FK
-        INTEGER sequence
-        TEXT operation_kind
-    }
     minutes_markdown {
         TEXT meeting_id PK,FK
         TEXT markdown
@@ -144,9 +137,9 @@ erDiagram
     }
 ```
 
-解析版は発言と話者を保持し、`utterance_speakers`で一つの発言に複数話者を割り当てます。会議の`current_analysis_id`が現在版を指し、手動編集中の内容は`working_drafts`と`edit_operations`で管理します。発言は元のトラックも参照します。
+解析版は発言と話者を保持し、`utterance_speakers`で一つの発言に複数話者を割り当てます。会議の`current_analysis_id`が現在版を指し、手動編集中の内容は`working_drafts`に会議ごとに1件保存します。発言は元のトラックも参照します。
 
-現在の議事録の正本は会議ごとに最大1件の`minutes_markdown`です。DBには過去の構造化形式の`minutes_revisions`・`minutes_items`・`evidence_links`も残りますが、現行UIの議事録版復元や根拠管理を表すものではありません。[議事録仕様](minutes.md)を参照してください。
+現在の議事録の正本は会議ごとに最大1件の`minutes_markdown`です。[議事録仕様](minutes.md)を参照してください。
 
 ## ジョブと後続処理の意図
 
@@ -253,4 +246,4 @@ erDiagram
 
 用語のスコープは`global`と会議別です。共通スコープだけは`meeting_id`を持たず、各会議には最大1件のスコープを作ります。実行時に固定する辞書内容は別の`vocabulary_snapshots`に保持します。
 
-モデルパッケージ・端末設定・復元・削除の台帳など、図で省略した領域は[モデル仕様](models.md)・[保存仕様](storage.md)とマイグレーションを参照してください。
+モデルパッケージ・端末設定・復元・削除の台帳など、図で省略した領域は[モデル仕様](models.md)・[保存仕様](storage.md)と[初期化SQL](../../app/src-tauri/src/schema.sql)を参照してください。

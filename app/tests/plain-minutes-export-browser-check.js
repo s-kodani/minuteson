@@ -19,7 +19,7 @@ async (page,capturePath) => {
   await button(normal).click();await dialog().getByRole("button",{name:"保存して続ける",exact:true}).click();
   await page.waitForFunction(()=>Object.keys(window.__mon.exportRecords).length===1);
   check(await calls("save_minutes_markdown")===1,"export saved implicitly or multiple times");
-  check(await page.evaluate(()=>{const r=Object.values(window.__mon.exportRecords)[0];return r.exportedContentHash===window.__mon.plain.m1.contentHash&&r.minutesRevisionId===null&&r.state==="succeeded";}),"export used obsolete revision or wrong body");
+  check(await page.evaluate(()=>{const r=Object.values(window.__mon.exportRecords)[0];return r.exportedContentHash===window.__mon.plain.m1.contentHash&&r.state==="succeeded";}),"export used obsolete revision or wrong body");
   results.push("unsaved export requires explicit save/discard/cancel; accepted save exports the current plain body without structured revisions");
   await page.evaluate(()=>window.__mon.exportMode="lost");await button(normal).click();await button(recover).waitFor();
   const lostCount=await calls("export_plain_minutes_markdown");

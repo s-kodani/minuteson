@@ -94,10 +94,6 @@ export class RecordingInputSession{
     return {microphone:this.snapshot.microphone,system:this.snapshot.system??{state:"unknown"},notices:this.snapshot.notices.map(n=>({...n,delivery:{...n.delivery,leaseAgeMs:n.delivery.leaseAgeMs===null?null:Math.min(Number.MAX_SAFE_INTEGER,n.delivery.leaseAgeMs+at-this.at)}}))};
   }
 }
-export function microphoneLabel(m:VisibleInput):string{
-  return inputLabel(m,"microphone");
-}
-export function systemLabel(m:VisibleInput):string{return inputLabel(m,"system");}
 export function inputLabel(m:VisibleInput,input:InputKind):string{
   const label={unknown:"状態を確認できません",stale:"状態の更新を確認できません",connected:"接続済み",disconnected:"切断されました",reconnecting:"再取得中",unavailable:"再取得できません",stopped:"取得を停止しました"}[m.state];
   if(!("reason" in m)||!m.reason)return label;

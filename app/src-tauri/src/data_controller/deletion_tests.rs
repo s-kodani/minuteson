@@ -305,15 +305,6 @@ fn deletion_controller_uses_owned_confirmation_and_replays_success_after_late_ca
     let mut bad = request.clone();
     bad.confirmation_id = "wrong".into();
     assert!(f.controller.begin_request(bad).is_err());
-    assert!(f.controller.deletion_page("wrong", 0).is_err());
-    assert_eq!(
-        f.controller
-            .deletion_page(&request.confirmation_id, 0)
-            .unwrap()
-            .entries
-            .len(),
-        1
-    );
     let (work, cancel, started) = f
         .controller
         .begin_request(request.clone())

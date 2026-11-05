@@ -76,7 +76,3 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
     <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error && state.pendingPreferences ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
   </>;
 }
-export function ThemeReadNotice() {
-  // ThemeNotifications (main) and the recorder relay own error presentation.
-  return null;
-}

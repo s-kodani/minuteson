@@ -20,6 +20,7 @@ pub(super) struct Policy {
     pub prefix_reuse: bool,
     pub evidence_hash: String,
 }
+#[cfg(test)]
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Evidence {
@@ -39,10 +40,12 @@ struct Evidence {
     cpu_qualified: bool,
     metal_qualified: bool,
 }
+#[cfg(test)]
 fn median(mut a: [u64; 3]) -> u64 {
     a.sort_unstable();
     a[1]
 }
+#[cfg(test)]
 pub(super) fn select(
     engine: &LlamaConfig,
     runtime: Option<&resident::Snapshot>,
@@ -124,6 +127,7 @@ impl Policy {
         Ok(())
     }
 }
+#[cfg(test)]
 impl Evidence {
     fn accepted(&self) -> bool {
         self.cpu_qualified

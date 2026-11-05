@@ -136,7 +136,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         super::deletion::audio::require_source(&db, meeting)?;
-        read(&db, meeting)?.ok_or("会議音声の移行・保存が完了していません".into())
+        read(&db, meeting)?.ok_or("会議音声の保存が完了していません".into())
     }
     pub(crate) fn verify_canonical_audio(
         &self,
@@ -156,28 +156,5 @@ impl Storage {
             return Err("会議音声の保存記録が変更されました".into());
         }
         Ok(plan)
-    }
-}
-
-impl Storage {
-    pub(crate) fn pending_analysis_target(
-        &self,
-        flow: &str,
-    ) -> Result<Option<super::analysis_flows::regeneration::Target>, String> {
-        let db = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
-        let text: Option<String> = db
-            .query_row(
-                "SELECT initial_replacement_json FROM analysis_flows WHERE id=?1",
-                [flow],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?
-            .flatten();
-        text.map(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
-            .transpose()
     }
 }

@@ -5,7 +5,7 @@ async page => {
   await page.getByRole("button",{name:"会議A",exact:true}).waitFor();
   await page.evaluate(async()=>{
     const f=window.monBrowserFixture, now=Date.now();
-    const job={id:crypto.randomUUID(),meetingId:"meeting-0",meetingTitle:"会議A",operationId:crypto.randomUUID(),kind:"minutes_generation",state:"running",completedUnits:2,totalUnits:10,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,specHash:"a".repeat(64),inputHash:"b".repeat(64),retryOfJobId:null,attempt:1,createdAt:now,updatedAt:now};
+    const job={id:crypto.randomUUID(),meetingId:"meeting-0",meetingTitle:"会議A",operationId:crypto.randomUUID(),kind:"minutes_generation",state:"running",completedUnits:2,totalUnits:10,errorCode:null,outputAnalysisId:null,pauseReason:null,specHash:"a".repeat(64),inputHash:"b".repeat(64),retryOfJobId:null,attempt:1,createdAt:now,updatedAt:now};
     f.jobs=[job];f.notificationJobs=[job];await f.emitNotification();
     f.gpuEvent={jobId:job.id,specHash:job.specHash,attempt:1,unitIndex:2,invocation:crypto.randomUUID(),invocationOrder:1,startedAtUtcMs:now,sequence:1,phase:"input",backend:"metal",merge:false,elapsedMs:12000};
     await f.emitMinutesRuntime(f.gpuEvent);

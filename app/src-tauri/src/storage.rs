@@ -12,7 +12,6 @@ mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
 // Backup snapshot/archive core; additive restore and controller integration follow.
-mod audio_cleanup_upgrade;
 mod audio_publication;
 #[allow(dead_code)]
 pub(crate) mod backup;
@@ -26,7 +25,6 @@ mod diarization;
 mod diarization_preferences;
 mod draft_splits;
 mod drafts;
-pub(crate) mod edit_recovery;
 mod exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
@@ -34,7 +32,6 @@ pub(crate) mod imports;
 #[cfg(test)]
 mod initialization_tests;
 mod jobs;
-pub(crate) mod legacy_audio_migration;
 pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 pub(crate) mod markdown_generation_tests;
@@ -61,9 +58,7 @@ mod publication_files;
 pub(crate) mod read_cache;
 mod recording_preparation;
 pub(crate) mod recordings;
-mod restored_input;
 mod revisions;
-mod schema_upgrade;
 pub(crate) mod speaker_assignment_update;
 pub(crate) mod speaker_completion;
 pub(crate) mod transcript_consolidation;
@@ -74,7 +69,6 @@ mod windows_tests;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
-mod startup_notices;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub(crate) mod voice;
@@ -83,16 +77,12 @@ pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
 pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
 pub(crate) use analysis::{SpeakerInput, SpeakerSegmentInput};
-#[cfg(test)]
-pub(crate) use analysis_ui::AdoptRequest;
-pub(crate) use analysis_ui::{DraftStamp, VersionState};
+pub(crate) use analysis_ui::{DraftStamp, MinutesSource};
 pub(crate) use diarization::DiarizationInput;
 pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPreferencesSnapshot};
 pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::ExportRecord;
-#[cfg(test)]
-pub(crate) use jobs::retry_source_permitted;
 pub(crate) use jobs::{
     ExecutionProgress, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
@@ -112,44 +102,8 @@ pub(crate) use vocabulary::{
     VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
 };
 
-const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
-const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
-const MIGRATION_3: &str = include_str!("migrations/0003_revisions.sql");
-const MIGRATION_4: &str = include_str!("migrations/0004_audio.sql");
-const MIGRATION_5: &str = include_str!("migrations/0005_content.sql");
-const MIGRATION_6: &str = include_str!("migrations/0006_drafts.sql");
-const MIGRATION_7: &str = include_str!("migrations/0007_jobs.sql");
-const MIGRATION_8: &str = include_str!("migrations/0008_recording_guards.sql");
-const MIGRATION_9: &str = include_str!("migrations/0009_job_results.sql");
-const MIGRATION_10: &str = include_str!("migrations/0010_draft_history.sql");
-const MIGRATION_11: &str = include_str!("migrations/0011_app_settings.sql");
-const MIGRATION_12: &str = include_str!("migrations/0012_job_retry.sql");
-const MIGRATION_13: &str = include_str!("migrations/0013_minutes_inputs.sql");
-const MIGRATION_14: &str = include_str!("migrations/0014_minutes_results.sql");
-const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
-const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
-const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
-const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
-const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
-const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
-const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
-const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.sql");
-const MIGRATION_23: &str = include_str!("migrations/0023_model_metadata.sql");
-const MIGRATION_24: &str = include_str!("migrations/0024_model_compatibility.sql");
-const MIGRATION_25: &str = include_str!("migrations/0025_model_profile_applications.sql");
-const MIGRATION_26: &str = include_str!("migrations/0026_job_model_rebinding.sql");
-const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.sql");
-const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
-const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
-const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
-const MIGRATION_34: &str = include_str!("migrations/0034_current_formats.sql");
-const MIGRATION_35: &str = include_str!("migrations/0035_single_meeting_audio.sql");
-const MIGRATION_36: &str = include_str!("migrations/0036_post_analysis_intents.sql");
-const MIGRATION_38: &str = include_str!("migrations/0038_voice_audio.sql");
-const MIGRATION_37: &str = include_str!("migrations/0037_pcm_audio_import.sql");
-const MIGRATION_33: &str = include_str!("migrations/0033_speaker_completion.sql");
-const MIGRATION_32: &str = include_str!("migrations/0032_voice_identity.sql");
-const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
+pub(crate) const SCHEMA_VERSION: usize = 39;
+const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -179,7 +133,7 @@ pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
     meeting_owners: meeting_access::Owners,
-    restored_inputs: Mutex<restored_input::Registry>,
+
     pub(crate) feature_vectors: Mutex<crate::speaker_features::Cache>,
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     post_analysis_drain: Mutex<()>,
@@ -464,8 +418,31 @@ impl Storage {
         if recovery.is_some() {
             flags.remove(rusqlite::OpenFlags::SQLITE_OPEN_CREATE);
         }
-        let mut connection = Connection::open_with_flags(root.join("meetings.sqlite3"), flags)?;
+        // An existing rollback journal may require writing the database just to read
+        // it. Preserve those files and diagnose before opening the connection.
+        match crate::native_fs::symlink_metadata(root.join("meetings.sqlite3-journal")) {
+            // Explicit reset has already moved the old files and owns the
+            // empty sidecar it reserved for the new database.
+            Ok(metadata) if resetting && metadata.is_file() && metadata.len() == 0 => {}
+            Ok(_) => {
+                return Err(
+                    "会議DBの未確認のジャーナルを検出しました。元のデータを保持しています".into(),
+                )
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let database = root.join("meetings.sqlite3");
+        if !resetting {
+            check_database_without_wal(&root, &database)?;
+        }
+        let mut connection = Connection::open_with_flags(
+            &database,
+            flags | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        use rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE;
+        connection.set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
         // Set EXCLUSIVE before *any* access to an existing WAL database so
         // SQLite keeps the wal-index on the heap rather than mmap'ing -shm.
         // Switching after journal_mode has read the DB is too late on reopen.
@@ -474,6 +451,7 @@ impl Storage {
         // Refuse old/unknown databases before journal-mode changes, recovery
         // writes, temporary registries or filesystem cleanup can begin.
         empty_or_current_database(&connection)?;
+        connection.set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)?;
         let mut recovery_hold = false;
         #[cfg(any(target_os = "macos", windows))]
         if let Some(admission) = recovery {
@@ -567,7 +545,7 @@ impl Storage {
             root,
             connection: Mutex::new(connection),
             meeting_owners: Default::default(),
-            restored_inputs: Mutex::new(restored_input::Registry::default()),
+
             feature_vectors: Mutex::default(),
             execution_progress: Mutex::default(),
             post_analysis_drain: Mutex::default(),
@@ -870,110 +848,118 @@ impl Storage {
     }
 }
 
+fn check_database_without_wal(root: &Path, database: &Path) -> Result<(), Box<dyn Error>> {
+    use rusqlite::OpenFlags;
+
+    let exists = |path: &Path| match crate::native_fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    let wal = root.join("meetings.sqlite3-wal");
+    let Some(metadata) = exists(database)? else {
+        return Ok(());
+    };
+    if metadata.len() == 0 || exists(&wal)?.is_some() {
+        return Ok(());
+    }
+    // A read-write connection creates an empty sidecar when the main file's
+    // header selects WAL mode. Use an immutable read only when no WAL exists.
+    #[cfg(any(unix, windows))]
+    let anchor = {
+        let mut anchor =
+            deletion::fs::RootAnchor::bind(deletion::fs::RootAnchor::directory(root)?)?;
+        anchor.seal_controls()?;
+        anchor
+    };
+    if exists(&wal)?.is_some() || exists(&root.join("meetings.sqlite3-journal"))?.is_some() {
+        return Err("会議DBの確認中に制御ファイルが変更されました".into());
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_URI
+        | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+    #[cfg(windows)]
+    let connection = {
+        // Keep the canonical verbatim prefix when passing the path to SQLite.
+        let encoded = database
+            .to_str()
+            .ok_or("会議DBの確認用パスを作成できません")?
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>();
+        Connection::open_with_flags_and_vfs(
+            format!("file:{encoded}?immutable=1"),
+            flags,
+            "win32-longpath",
+        )?
+    };
+    #[cfg(not(windows))]
+    let connection = {
+        let mut uri = tauri::Url::from_file_path(database)
+            .map_err(|_| "会議DBの確認用パスを作成できません")?;
+        uri.set_query(Some("immutable=1"));
+        Connection::open_with_flags(uri.as_str(), flags)?
+    };
+    let admission = empty_or_current_database(&connection);
+    drop(connection);
+    #[cfg(any(unix, windows))]
+    anchor.verify()?;
+    admission.map(|_| ())
+}
+
 fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Error>> {
     let empty: bool = connection.query_row(
         "SELECT NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
         [],
         |row| row.get(0),
     )?;
-    if empty {
-        return Ok(true);
+    if !empty {
+        verify_database_schema(connection)?;
     }
-    let version = verify_migration_history(connection)?;
-    if version != MIGRATIONS.len() && !schema_upgrade::admits(version) {
-        return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
-    }
-    Ok(false)
+    Ok(empty)
 }
 
-fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
+pub(crate) fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        schema_upgrade::upgrade(connection)?;
         return Ok(());
     }
-    // These trusted SQL definitions construct a NEW current database only.
-    // No missing suffix is applied to an existing database. Initialization is
-    // atomic, including its schema history, and may be retried after rollback.
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if !empty_or_current_database(&transaction)? {
         return Ok(());
     }
-    transaction.execute_batch(
-        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    transaction.execute_batch(SCHEMA_SQL)?;
+    transaction.execute(
+        "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
+        params![SCHEMA_VERSION as i64, schema_checksum(), now_ms()?],
     )?;
-    for &(version, sql) in MIGRATIONS {
-        transaction
-            .execute_batch(sql)
-            .map_err(|error| format!("新規DBの初期化（段階{version}）に失敗しました: {error}"))?;
-        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
-        transaction.execute(
-            "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
-            params![version, digest, now_ms()?],
-        )?;
-    }
     transaction.commit()?;
     Ok(())
 }
 
-const MIGRATIONS: &[(i64, &str)] = &[
-    (1, MIGRATION_1),
-    (2, MIGRATION_2),
-    (3, MIGRATION_3),
-    (4, MIGRATION_4),
-    (5, MIGRATION_5),
-    (6, MIGRATION_6),
-    (7, MIGRATION_7),
-    (8, MIGRATION_8),
-    (9, MIGRATION_9),
-    (10, MIGRATION_10),
-    (11, MIGRATION_11),
-    (12, MIGRATION_12),
-    (13, MIGRATION_13),
-    (14, MIGRATION_14),
-    (15, MIGRATION_15),
-    (16, MIGRATION_16),
-    (17, MIGRATION_17),
-    (18, MIGRATION_18),
-    (19, MIGRATION_19),
-    (20, MIGRATION_20),
-    (21, MIGRATION_21),
-    (22, MIGRATION_22),
-    (23, MIGRATION_23),
-    (24, MIGRATION_24),
-    (25, MIGRATION_25),
-    (26, MIGRATION_26),
-    (27, MIGRATION_27),
-    (28, MIGRATION_28),
-    (29, MIGRATION_29),
-    (30, MIGRATION_30),
-    (31, MIGRATION_31),
-    (32, MIGRATION_32),
-    (33, MIGRATION_33),
-    (34, MIGRATION_34),
-    (35, MIGRATION_35),
-    (36, MIGRATION_36),
-    (37, MIGRATION_37),
-    (38, MIGRATION_38),
-];
+fn schema_checksum() -> &'static str {
+    static CHECKSUM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CHECKSUM.get_or_init(|| format!("{:x}", Sha256::digest(SCHEMA_SQL.as_bytes())))
+}
 
-fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {
-    let known: Vec<(i64, String)> = {
-        let mut query = connection
-            .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")?;
-        let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect::<Result<_, _>>()?
+pub(crate) fn verify_database_schema(connection: &Connection) -> Result<(), Box<dyn Error>> {
+    let unsupported = "非対応の会議DB形式です。元のデータを保持しています";
+    let mut query = connection
+        .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version DESC LIMIT 2")
+        .map_err(|error| format!("{unsupported}: {error}"))?;
+    let mut rows = query.query([])?;
+    let Some(row) = rows.next()? else {
+        return Err(unsupported.into());
     };
-    for (index, (version, checksum)) in known.iter().enumerate() {
-        let Some((expected_version, sql)) = MIGRATIONS.get(index) else {
-            return Err(format!("unsupported migration {version}").into());
-        };
-        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
-        if version != expected_version || checksum != &digest {
-            return Err(format!("unsupported or changed migration {version}").into());
-        }
+    let version: i64 = row.get(0)?;
+    let checksum: String = row.get(1)?;
+    if version != SCHEMA_VERSION as i64 || checksum != schema_checksum() || rows.next()?.is_some() {
+        return Err(format!(
+            "{unsupported}（記録された形式版: {version}、対応形式版: {SCHEMA_VERSION}）"
+        )
+        .into());
     }
-    Ok(known.len())
+    Ok(())
 }
 
 fn hash_file(path: &Path) -> Result<(i64, String), String> {
@@ -1185,10 +1171,7 @@ mod tests {
             .connection
             .lock()
             .unwrap()
-            .execute(
-                "UPDATE schema_migrations SET checksum = 'changed' WHERE version = 1",
-                [],
-            )
+            .execute("UPDATE schema_migrations SET checksum = 'changed'", [])
             .unwrap();
         drop(storage);
         assert!(Storage::open(temp.path().to_owned()).is_err());
@@ -1339,84 +1322,6 @@ mod tests {
     }
 
     #[test]
-    fn minutes_input_hash_and_head_are_checked() {
-        let temp = tempfile::tempdir().unwrap();
-        let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let meeting = storage.create_meeting("minutes").unwrap();
-        let db = storage.connection.lock().unwrap();
-        let analysis_id = Uuid::new_v4().to_string();
-        let minutes_id = Uuid::new_v4().to_string();
-        let content_hash = "b".repeat(64);
-        db.execute(
-            "INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES (?1, ?2, 1, 'engine', 'candidate', ?3, '{}', '{}', ?4, 1, 0)",
-            params![analysis_id, meeting.id, "a".repeat(64), content_hash],
-        ).unwrap();
-        let insert_minutes = "INSERT INTO minutes_revisions (id, meeting_id, input_analysis_id, revision_no, publication_state, generated_document_json, effective_document_json, document_schema_version, input_content_hash, content_hash, model_snapshot_json, template_version, created_at) VALUES (?1, ?2, ?3, 1, 'candidate', '{}', '{}', 1, ?4, ?5, '{}', 'v1', 0)";
-        assert!(db
-            .execute(
-                insert_minutes,
-                params![
-                    minutes_id,
-                    meeting.id,
-                    analysis_id,
-                    content_hash,
-                    "d".repeat(64)
-                ]
-            )
-            .is_err());
-        db.execute(
-            "UPDATE analysis_revisions SET publication_state = 'committed' WHERE id = ?1",
-            params![analysis_id],
-        )
-        .unwrap();
-        assert!(db
-            .execute(
-                insert_minutes,
-                params![
-                    minutes_id,
-                    meeting.id,
-                    analysis_id,
-                    "c".repeat(64),
-                    "d".repeat(64)
-                ]
-            )
-            .is_err());
-        db.execute(
-            insert_minutes,
-            params![
-                minutes_id,
-                meeting.id,
-                analysis_id,
-                content_hash,
-                "d".repeat(64)
-            ],
-        )
-        .unwrap();
-        assert!(db
-            .execute(
-                "UPDATE meetings SET current_minutes_id = ?1 WHERE id = ?2",
-                params![minutes_id, meeting.id]
-            )
-            .is_err());
-        db.execute(
-            "UPDATE minutes_revisions SET publication_state = 'committed' WHERE id = ?1",
-            params![minutes_id],
-        )
-        .unwrap();
-        db.execute(
-            "UPDATE meetings SET current_minutes_id = ?1 WHERE id = ?2",
-            params![minutes_id, meeting.id],
-        )
-        .unwrap();
-        assert!(db
-            .execute(
-                "UPDATE minutes_revisions SET effective_document_json = '{}' WHERE id = ?1",
-                params![minutes_id]
-            )
-            .is_err());
-    }
-
-    #[test]
     fn recording_tracks_and_chunks_cannot_cross_meetings() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
@@ -1486,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_and_evidence_references_are_version_scoped_and_frozen() {
+    fn transcript_references_are_version_scoped_and_frozen() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         let meeting = storage.create_meeting("content").unwrap();
@@ -1519,32 +1424,5 @@ mod tests {
             )
             .is_err());
         assert!(db.execute("INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, input_scope, identification_state, created_at) VALUES ('late', 'analysis-1', 'late', '後付け', 'all', 'unknown', 0)", []).is_err());
-        db.execute("INSERT INTO minutes_revisions (id, meeting_id, input_analysis_id, revision_no, publication_state, generated_document_json, effective_document_json, document_schema_version, input_content_hash, content_hash, model_snapshot_json, template_version, created_at) VALUES ('minutes-1', ?1, 'analysis-1', 1, 'candidate', '{}', '{}', 1, ?2, ?3, '{}', 'v1', 0)", params![meeting.id, "b".repeat(64), "d".repeat(64)]).unwrap();
-        let insert_item = "INSERT INTO minutes_items (id, minutes_revision_id, analysis_revision_id, kind, order_no, body, source_type) VALUES ('item-1', 'minutes-1', ?1, 'decision', 0, '決定', 'generated')";
-        assert!(db.execute(insert_item, params!["analysis-2"]).is_err());
-        db.execute(insert_item, params!["analysis-1"]).unwrap();
-        let insert_evidence = "INSERT INTO evidence_links (id, minutes_revision_id, minutes_item_id, analysis_revision_id, utterance_id, start_us, end_us, source_type, verification_state) VALUES ('evidence-1', 'minutes-1', 'item-1', 'analysis-1', 'utterance-1', ?1, ?2, 'generated', 'unverified')";
-        assert!(db.execute(insert_evidence, params![0, 1000]).is_err());
-        db.execute(insert_evidence, params![100, 1000]).unwrap();
-        db.execute(
-            "UPDATE minutes_revisions SET publication_state = 'committed' WHERE id = 'minutes-1'",
-            [],
-        )
-        .unwrap();
-        assert!(db
-            .execute(
-                "UPDATE minutes_items SET body = '改変' WHERE id = 'item-1'",
-                []
-            )
-            .is_err());
-        assert!(db
-            .execute("DELETE FROM evidence_links WHERE id = 'evidence-1'", [])
-            .is_err());
-        let problems: i64 = db
-            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(problems, 0);
     }
 }

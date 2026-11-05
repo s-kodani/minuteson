@@ -2,14 +2,14 @@
 const clone=value=>structuredClone(value);
 const valid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
 export const archivedFixture=()=>({rows:[],failRead:false,holdRead:false,reads:[],hold:{receive:false,render:false,close:false},lost:{receive:false,render:false,close:false},replies:[]});
-export function newArchivedRow(data,{sessionId=crypto.randomUUID(),title="保存済み会議",count=1,both=false,legacy=false,issue=null,loss=0,historySaveIssue=null,deliveryUnavailable=false}={}){
+export function newArchivedRow(data,{sessionId=crypto.randomUUID(),title="保存済み会議",count=1,both=false,noJournal=false,issue=null,loss=0,historySaveIssue=null}={}){
   const meetingId=crypto.randomUUID();data.meetings.push({id:meetingId,title,lifecycle:"recorded",createdAt:Date.now(),updatedAt:Date.now(),lockVersion:0});
   const events=input=>Array.from({length:count*2},(_,i)=>{
     const sequence=i+1,interruptions=Math.ceil(sequence/2),kind=sequence%2?"interrupted":"recovered";
     return {id:`${sessionId}:${input}:${interruptions}:${kind}`,input,target:"main",kind,interruptions,recipientId:null,claimedAt:null,
       delivery:{sequence,generation:1,leaseAgeMs:null,rendered:false,receiveId:null,status:{state:sequence%2?"disconnected":"connected",sourceEpoch:Math.floor(sequence/2)+1,interruptions,reason:sequence%2?(input==="microphone"?"device_disconnected":"stream_stopped"):null}}};
   });
-  return {meetingId,sessionId,title,revision:1,lanes:{microphone:events("microphone"),system:both?events("system"):[]},closed:{},loss:{microphone:loss,system:both?loss:0},historyIssue:issue,unavailable:false,legacy,historySaveIssue,deliveryUnavailable};
+  return {meetingId,sessionId,title,revision:1,lanes:{microphone:events("microphone"),system:both?events("system"):[]},closed:{},loss:{microphone:loss,system:both?loss:0},historyIssue:issue,unavailable:false,noJournal,historySaveIssue};
 }
 function project(head){const {claimedAt,...n}=head;return {...clone(n),delivery:{...clone(n.delivery),leaseAgeMs:claimedAt===null?null:Math.max(0,Date.now()-claimedAt)}};}
 function expire(row){for(const lane of Object.values(row.lanes))while(lane.length){const h=lane[0];if(h.claimedAt===null||Date.now()-h.claimedAt<5000)break;
@@ -19,7 +19,7 @@ export function reopenArchived(rows){for(const row of rows){row.closed={};for(co
   while(lane[0]?.delivery.rendered)lane.shift();if(lane.length){lane[0].delivery.generation++;lane[0].recipientId=null;lane[0].claimedAt=null;lane[0].delivery.receiveId=null;}
 }row.revision++;}return rows;}
 function projectRow(row){expire(row);return {meetingId:row.meetingId,sessionId:row.sessionId,title:row.title,
-  batch:row.legacy||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:row.deliveryUnavailable?[]:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":row.deliveryUnavailable?"deliveryUnavailable":null,historySaveIssue:row.historySaveIssue??null};}
+  batch:row.noJournal||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":null,historySaveIssue:row.historySaveIssue??null};}
 export async function archivedRows(f,{targets}){
   const state=f.archived;
   if(!Array.isArray(targets)||targets.length<1||targets.length>32||new Set(targets.map(t=>t.sessionId)).size!==targets.length||targets.some(t=>!valid(t.meetingId)||!valid(t.sessionId)))throw Error("模擬対象不正");
@@ -41,7 +41,7 @@ export async function archivedAction(f,args){
   const state=f.archived,action=args.action;
   if(state.hold[action])await new Promise(resolve=>state.replies.push({action,resolve}));
   const row=state.rows.find(r=>r.sessionId===args.sessionId&&r.meetingId===args.meetingId);
-  if(!row||row.unavailable||row.deliveryUnavailable||state.failRead||!valid(args.recipientId)||new URLSearchParams(location.search).get("window"))throw Error("模擬保存後通知所有不正");
+  if(!row||row.unavailable||state.failRead||!valid(args.recipientId)||new URLSearchParams(location.search).get("window"))throw Error("模擬保存後通知所有不正");
   expire(row);const prior=row.closed[args.noticeId];if(action!=="receive"&&prior?.recipientId===args.recipientId&&prior.delivery.generation===args.generation)return clone(prior);
   const lane=Object.values(row.lanes).find(l=>l[0]?.id===args.noticeId),head=lane?.[0];
   if(!head||head.delivery.generation!==args.generation)throw Error("模擬保存後通知の世代変更");

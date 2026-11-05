@@ -125,7 +125,6 @@ pub(in crate::storage::backup) fn all_rows(db: &Connection) -> Vec<Vec<Vec<Value
         .iter()
         .chain(["app_settings", "restore_batches", "restore_identity_maps"].iter())
         .chain(crate::storage::model_metadata::TABLES.iter())
-        .chain(["restore_omitted_assets", "model_catalog_history"].iter())
         .map(|table| dump(db, table))
         .collect()
 }
@@ -385,7 +384,7 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
 
 #[test]
 fn restore_append_capability_denies_update_delete_ddl_and_restores_triggers_on_error() {
-    let db = portable::schema(MIGRATIONS.len()).unwrap();
+    let db = portable::schema().unwrap();
     {
         let _guard = AppendOnly::begin(&db).unwrap();
         for sql in [
@@ -404,7 +403,7 @@ fn restore_append_capability_denies_update_delete_ddl_and_restores_triggers_on_e
         .unwrap());
     assert_eq!(
         schema(&db).unwrap(),
-        schema(&portable::schema(MIGRATIONS.len()).unwrap()).unwrap()
+        schema(&portable::schema().unwrap()).unwrap()
     );
 }
 

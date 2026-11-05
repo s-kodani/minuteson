@@ -16,110 +16,6 @@ struct Fixture {
     file: PathBuf,
 }
 
-#[test]
-fn edit_recovery_review_remains_read_only_under_pending_deletion_and_cold_start() {
-    use crate::storage::drafts::ManualSpeaker;
-    use crate::storage::edit_recovery::{
-        review::DiscardRequest, NameBuffer, SaveRequest, TextBuffer,
-    };
-    for with_names in [false, true] {
-        let f = Fixture::new();
-        let (meeting, base, utterance) = crate::storage::playback::tests::fixture(&f.storage);
-        let mut draft = f.storage.create_transcript_draft(&meeting, &base).unwrap();
-        let mut names = vec![];
-        if with_names {
-            let id = format!("manual:{}", uuid::Uuid::new_v4());
-            let mut payload = draft.payload.clone();
-            payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
-            payload.manual_speakers.push(ManualSpeaker {
-                id: id.clone(),
-                label: "保持する話者".into(),
-            });
-            draft = f
-                .storage
-                .save_transcript_draft(&draft.id, draft.lock_version, payload)
-                .unwrap();
-            names.push(NameBuffer {
-                speaker_id: id,
-                name: None,
-                had_override: false,
-                value: "保持する未確定名".into(),
-            });
-        }
-        let request = SaveRequest {
-            meeting_id: meeting.clone(),
-            draft_id: draft.id.clone(),
-            base_analysis_id: base.clone(),
-            operation_id: uuid::Uuid::new_v4().to_string(),
-            expected_draft_lock_version: draft.lock_version,
-            expected_recovery_lock_version: 0,
-            name_buffers: names,
-            buffers: vec![TextBuffer {
-                utterance_id: utterance,
-                text: "発言".into(),
-                speaker_ids: vec![],
-                had_override: false,
-                value: "保持する未確定入力".into(),
-            }],
-        };
-        let record = f
-            .storage
-            .save_transcript_edit_recovery(request.clone())
-            .unwrap();
-        let discard = DiscardRequest {
-            meeting_id: meeting.clone(),
-            draft_id: draft.id.clone(),
-            base_analysis_id: base.clone(),
-            operation_id: uuid::Uuid::new_v4().to_string(),
-            expected_draft_lock_version: draft.lock_version,
-            expected_draft_content_hash: draft.content_hash.clone(),
-            expected_recovery_lock_version: record.lock_version,
-            expected_recovery_content_hash: record.content_hash.clone(),
-        };
-        let prepared = f.prepare();
-        assert!(f.storage.data_write_blocked());
-        assert!(f
-            .storage
-            .discard_transcript_edit_recovery(discard.clone())
-            .is_err());
-        assert!(f
-            .storage
-            .save_transcript_edit_recovery(request.clone())
-            .is_err());
-        let page = f
-            .storage
-            .list_transcript_edit_recoveries(&meeting, None)
-            .unwrap();
-        assert_eq!(page.items[0].content_hash, record.content_hash);
-        assert_eq!(page.items[0].buffer_count, if with_names { 2 } else { 1 });
-        drop(prepared);
-        drop(f.storage);
-        let storage = Storage::open(f.base.path().join("root")).unwrap();
-        assert!(storage.data_write_blocked());
-        assert!(storage.discard_transcript_edit_recovery(discard).is_err());
-        assert!(storage.save_transcript_edit_recovery(request).is_err());
-        assert_eq!(
-            storage
-                .list_transcript_edit_recoveries(&meeting, None)
-                .unwrap()
-                .items[0]
-                .content_hash,
-            record.content_hash
-        );
-        assert_eq!(
-            storage.load_transcript_draft(&meeting).unwrap().unwrap(),
-            draft
-        );
-        assert_eq!(
-            storage
-                .transcript_edit_recovery(&meeting, &draft.id, &base)
-                .unwrap()
-                .unwrap()
-                .payload,
-            record.payload
-        );
-    }
-}
 impl Fixture {
     fn new() -> Self {
         Self::at(tempfile::tempdir().unwrap())
@@ -687,20 +583,16 @@ fn deletion_fence_unknown_pending_manifest_still_blocks_startup_writes_without_a
 
 #[test]
 fn deletion_fence_pending_older_database_is_not_migrated_or_recovered() {
-    use sha2::{Digest, Sha256};
     let base = tempfile::tempdir().unwrap();
     let root = base.path().join("root");
     std::fs::create_dir(&root).unwrap();
-    let db = Connection::open(root.join("meetings.sqlite3")).unwrap();
-    db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at INTEGER NOT NULL);").unwrap();
-    for (version, sql) in crate::storage::MIGRATIONS.iter().take(22) {
-        db.execute_batch(sql).unwrap();
-        db.execute(
-            "INSERT INTO schema_migrations VALUES(?1,?2,0)",
-            params![version, format!("{:x}", Sha256::digest(sql.as_bytes()))],
-        )
-        .unwrap();
-    }
+    let mut db = Connection::open(root.join("meetings.sqlite3")).unwrap();
+    crate::storage::initialize_database(&mut db).unwrap();
+    db.execute(
+        "UPDATE schema_migrations SET version=38,checksum='prerelease'",
+        [],
+    )
+    .unwrap();
     let meeting = uuid::Uuid::new_v4().to_string();
     db.execute("INSERT INTO meetings(id,title,lifecycle,created_at,updated_at) VALUES(?1,'KEEP OLD DATA','draft',1,1)",params![meeting]).unwrap();
     db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_meeting','prepared','{}',?3,1,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(),meeting,"a".repeat(64)]).unwrap();
@@ -709,13 +601,13 @@ fn deletion_fence_pending_older_database_is_not_migrated_or_recovered() {
         .err()
         .unwrap()
         .to_string()
-        .contains("非対応の旧DB形式"));
+        .contains("非対応の会議DB形式"));
     let db = Connection::open(root.join("meetings.sqlite3")).unwrap();
     assert_eq!(
-        db.query_row("SELECT count(*) FROM schema_migrations", [], |r| r
+        db.query_row("SELECT version FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        22
+        38
     );
     assert_eq!(
         db.query_row("SELECT title FROM meetings", [], |r| r.get::<_, String>(0))

@@ -175,7 +175,7 @@ fn persisted_ids_replay_after_closing_source_destination_and_private_registry() 
 #[test]
 fn published_batch_is_terminal_even_when_its_meetings_have_been_deleted() {
     let f = fixture_with_archive();
-    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut db = portable::schema().unwrap();
     reserve(&f, &mut db);
     // Ledger policy only: publication itself is a later atomic operation.
     db.execute(
@@ -213,7 +213,7 @@ fn published_batch_is_terminal_even_when_its_meetings_have_been_deleted() {
 #[test]
 fn explicit_new_batch_uses_distinct_ids_and_reserves_other_pending_batches() {
     let f = fixture_with_archive();
-    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut db = portable::schema().unwrap();
     let first = reserve(&f, &mut db);
     let batch = Uuid::new_v4().to_string();
     let ids = pending(RestoreIds::prepare_for_batch(
@@ -269,7 +269,7 @@ fn replay_rejects_missing_or_changed_maps_even_if_corruption_rehashes_the_header
         "source-id",
         "wrong-alias",
     ] {
-        let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+        let mut db = portable::schema().unwrap();
         let original = reserve(&f, &mut db);
         // Simulate corruption only in an owned destination fixture, not source.
         db.execute_batch("DROP TRIGGER restore_map_fixed; DROP TRIGGER restore_map_retained; DROP TRIGGER restore_batch_fixed;").unwrap();
@@ -352,7 +352,7 @@ fn replay_rejects_live_destination_id_collision_and_archive_fingerprint_change()
 fn replay_checks_digest_count_and_orphan_header_before_assigning_ids() {
     let f = fixture_with_archive();
     for change in ["sha", "count", "huge-count", "header"] {
-        let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+        let mut db = portable::schema().unwrap();
         reserve(&f, &mut db);
         db.execute_batch("DROP TRIGGER restore_batch_fixed; DROP TRIGGER restore_batch_retained; PRAGMA foreign_keys=OFF;").unwrap();
         match change {
@@ -389,7 +389,7 @@ fn replay_checks_digest_count_and_orphan_header_before_assigning_ids() {
 #[test]
 fn replay_cancellation_preserves_reservation_and_cleans_only_owned_registry() {
     let f = fixture_with_archive();
-    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut db = portable::schema().unwrap();
     let original = reserve(&f, &mut db);
     let before = std::fs::read_dir(f.output.path()).unwrap().count();
     let calls = Cell::new(0);
@@ -418,7 +418,7 @@ fn replay_cancellation_preserves_reservation_and_cleans_only_owned_registry() {
 #[test]
 fn replay_rechecks_destination_maps_if_changed_while_source_is_being_inspected() {
     let f = fixture_with_archive();
-    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut db = portable::schema().unwrap();
     reserve(&f, &mut db);
     let calls = Cell::new(0);
     drop(pending(RestoreIds::prepare_for_batch(
@@ -483,7 +483,7 @@ fn replay_rejects_collision_with_a_destination_manual_speaker_existing_only_in_j
 #[test]
 fn published_replay_validates_maps_and_prepared_state_changed_during_replay_is_rejected() {
     let f = fixture_with_archive();
-    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut db = portable::schema().unwrap();
     reserve(&f, &mut db);
     let calls = Cell::new(0);
     drop(pending(RestoreIds::prepare_for_batch(

@@ -10,10 +10,7 @@ pub(crate) fn configure(config: &mut tauri::Config) {
         main.decorations = false;
     }
     for window in &mut config.app.windows {
-        if matches!(
-            window.label.as_str(),
-            "recorder" | "recorder-info" | "recording-confirmation"
-        ) {
+        if matches!(window.label.as_str(), "recorder" | "recording-confirmation") {
             // Tao's undecorated shadows add a non-client frame and invisible
             // resize insets. Floating cards already paint their own borders.
             window.decorations = false;
@@ -41,7 +38,7 @@ mod tests {
                 }
                 if matches!(
                     expected.label.as_str(),
-                    "recorder" | "recorder-info" | "recording-confirmation"
+                    "recorder" | "recording-confirmation"
                 ) {
                     expected.decorations = false;
                     expected.shadow = false;

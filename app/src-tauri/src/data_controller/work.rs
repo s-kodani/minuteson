@@ -76,8 +76,6 @@ impl Admission {
         };
         app.state::<crate::input_status::archived::ArchivedInputs>()
             .evict(Some(meeting))?;
-        app.state::<Storage>()
-            .evict_restored_input_cache(Some(meeting))?;
         Ok(admission)
     }
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
@@ -203,7 +201,6 @@ impl Admission {
         {
             app.state::<crate::input_status::archived::ArchivedInputs>()
                 .evict(None)?;
-            app.state::<Storage>().evict_restored_input_cache(None)?;
         }
         Ok(admission)
     }

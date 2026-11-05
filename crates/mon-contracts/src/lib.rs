@@ -66,7 +66,7 @@ impl JobKind {
 }
 wire_enum!(JobState { Queued => "queued", Running => "running", Pausing => "pausing", Paused => "paused", Succeeded => "succeeded", Failed => "failed", Cancelled => "cancelled", Interrupted => "interrupted" });
 wire_enum!(PauseReason { User => "user", Recording => "recording", Exit => "exit" });
-wire_enum!(WindowRole { Main => "main", Recorder => "recorder", RecorderInfo => "recorder-info", RecordingConfirmation => "recording-confirmation", StartupAttention => "startup-attention" });
+wire_enum!(WindowRole { Main => "main", Recorder => "recorder", RecordingConfirmation => "recording-confirmation", StartupAttention => "startup-attention" });
 wire_enum!(Platform { Macos => "macos", Windows => "windows", Other => "other" });
 wire_enum!(RetryDisposition { NotStarted => "not_started", Reconcile => "reconcile", Retry => "retry", Never => "never" });
 

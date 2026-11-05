@@ -246,7 +246,6 @@ fn run(
                     window_shift_milli: 500,
                     min_duration_on_ms: 300,
                     min_duration_off_ms: 500,
-                    speech_sensitivity_milli: 0,
                 },
             );
             crate::diarization::sherpa::run_standalone_track(

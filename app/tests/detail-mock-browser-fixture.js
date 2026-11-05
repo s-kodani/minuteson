@@ -34,7 +34,7 @@ if (new URLSearchParams(location.search).get("view") === "minutes") {
     const themeLabel=document.createElement("label"); themeLabel.textContent="別ウィンドウのテーマ（合成） ";
     const theme=document.createElement("select"); theme.setAttribute("aria-label","別ウィンドウのテーマ（合成）");
     for(const [value,label] of [["","未変更"],["light","ライト"],["dark","ダーク"]]) { const option=document.createElement("option");option.value=value;option.textContent=label;theme.append(option); }
-    theme.onchange=()=>{if(theme.value){const f=window.monBrowserFixture;f.uiPreferences??={id:"ui_preferences",payload:{schemaVersion:1,theme:"system"},lockVersion:0};f.uiPreferences.payload.theme=theme.value;f.uiPreferences.lockVersion++;void f.emitUiPreferences();}};
+    theme.onchange=()=>{if(theme.value){const f=window.monBrowserFixture;f.uiPreferences??={id:"ui_preferences",payload:{schemaVersion:1,theme:"system", colorTheme:"monochrome"},lockVersion:0};f.uiPreferences.payload.theme=theme.value;f.uiPreferences.lockVersion++;void f.emitUiPreferences();}};
     themeLabel.append(theme);controls.append(themeLabel);
     const audioLabel=document.createElement("label");audioLabel.textContent="全体音声の応答（合成） ";
     const audioMode=document.createElement("select");audioMode.setAttribute("aria-label","全体音声の応答（合成）");

@@ -40,8 +40,8 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
     def test_fixed_archives_replace_entire_engine_subtrees_and_filter_installer_dlls(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);package=root/'package';archive=root/'llama.zip';sherpa=root/'sherpa.tar'
-            for engine in ('llama','llama11960'):
-                (package/engine).mkdir(parents=True);(package/engine/'obsolete.dll').write_bytes(b'old vulnerable runtime')
+            (package/'llama').mkdir(parents=True)
+            (package/'llama/obsolete.dll').write_bytes(b'old vulnerable runtime')
             with zipfile.ZipFile(archive,'w') as z:
                 for name in ('llama-completion.exe','ggml-base.dll','ggml-rpc.dll','rpc-server.exe','LICENSE'):
                     z.writestr(name,b'fixed '+name.encode())
@@ -52,9 +52,8 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
                 return archive if '/llama.cpp/' in url else sherpa
             with patch.object(runtime,'PACKAGE',package),patch.object(runtime,'acquire',side_effect=acquire):
                 runtime.upstream_engines()
-            for engine in ('llama','llama11960'):
-                self.assertEqual({p.relative_to(package/engine).as_posix() for p in (package/engine).rglob('*') if p.is_file()},{'llama-completion.exe','ggml-base.dll','notices/llama-MIT.txt'})
-                self.assertEqual((package/engine/'llama-completion.exe').read_bytes(),b'fixed llama-completion.exe')
+            self.assertEqual({p.relative_to(package/'llama').as_posix() for p in (package/'llama').rglob('*') if p.is_file()},{'llama-completion.exe','ggml-base.dll','notices/llama-MIT.txt'})
+            self.assertEqual((package/'llama/llama-completion.exe').read_bytes(),b'fixed llama-completion.exe')
 
     def test_failure_in_new_staging_preserves_published_package(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -171,10 +170,9 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
     def test_read_failure_does_not_partially_replace_existing_package(self):
         crt = self.redist()
         package = self.root / 'package'
-        for engine in ('llama', 'llama11960'):
-            (package / engine).mkdir(parents=True)
-            for name in runtime.VC_RUNTIME_FILES:
-                (package / engine / name).write_bytes(b'previous DLL')
+        (package / 'llama').mkdir(parents=True)
+        for name in runtime.VC_RUNTIME_FILES:
+            (package / 'llama' / name).write_bytes(b'previous DLL')
         (package / 'runtime.tar').write_bytes(b'previous archive')
         before = {p.relative_to(package): p.read_bytes() for p in package.rglob('*') if p.is_file()}
         read = Path.read_bytes
@@ -190,22 +188,23 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
         after = {p.relative_to(package): p.read_bytes() for p in package.rglob('*') if p.is_file()}
         self.assertEqual(after, before)
 
-    def test_catalog_keeps_every_required_dll_in_both_llama_packages_and_hashes(self):
+    def test_catalog_keeps_every_required_dll_and_hash(self):
         crt = self.redist()
         payload = {name: (crt / name).read_bytes() for name in runtime.VC_RUNTIME_FILES}
         package = self.root / 'package'
         executables = {'whisper': 'whisper-cli.exe', 'llama': 'llama-completion.exe',
-                       'llama11960': 'llama-completion.exe', 'sherpa': 'sherpa-onnx-offline-speaker-diarization.exe'}
+                       'sherpa': 'sherpa-onnx-offline-speaker-diarization.exe'}
         for engine, name in executables.items():
             (package / engine).mkdir(parents=True)
             (package / engine / name).write_bytes(engine.encode())
         with patch.object(runtime, 'PACKAGE', package), patch.object(runtime, 'sign'):
             runtime.catalog(payload)
         with tarfile.open(package / 'runtime.tar') as archive:
-            for engine in ('llama', 'llama11960'):
-                for name, data in payload.items():
-                    self.assertEqual((package / engine / name).read_bytes(), data)
-                    self.assertEqual(archive.extractfile(engine + '/' + name).read(), data)
+            for name, data in payload.items():
+                self.assertEqual((package / 'llama' / name).read_bytes(), data)
+                self.assertEqual(archive.extractfile('llama/' + name).read(), data)
+            self.assertFalse(any(name.startswith('llama11960/') for name in archive.getnames()))
+        self.assertFalse((package / 'runtime-index.json').exists())
         choices = json.loads((package / 'catalog.json').read_text(encoding='utf8'))
         for choice in choices:
             manifest = choice['recipe']['manifest']

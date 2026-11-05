@@ -2032,10 +2032,10 @@ return errors === 0;
 }
 
 export const validateWindowEnvironment = validate31;
-const schema40 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"Capabilities":{"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"},"Platform":{"enum":["macos","windows","other"],"type":"string"},"WindowRole":{"enum":["main","recorder","recorder-info","recording-confirmation","startup-attention"],"type":"string"}},"properties":{"capabilities":{"$ref":"#/definitions/Capabilities"},"platform":{"$ref":"#/definitions/Platform"},"productName":{"type":"string"},"role":{"$ref":"#/definitions/WindowRole"},"schemaVersion":{"minimum":0,"type":"integer","maximum":4294967295}},"required":["capabilities","platform","productName","role","schemaVersion"],"title":"WindowEnvironment","type":"object","$id":"WindowEnvironment"};
+const schema40 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"Capabilities":{"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"},"Platform":{"enum":["macos","windows","other"],"type":"string"},"WindowRole":{"enum":["main","recorder","recording-confirmation","startup-attention"],"type":"string"}},"properties":{"capabilities":{"$ref":"#/definitions/Capabilities"},"platform":{"$ref":"#/definitions/Platform"},"productName":{"type":"string"},"role":{"$ref":"#/definitions/WindowRole"},"schemaVersion":{"minimum":0,"type":"integer","maximum":4294967295}},"required":["capabilities","platform","productName","role","schemaVersion"],"title":"WindowEnvironment","type":"object","$id":"WindowEnvironment"};
 const schema41 = {"additionalProperties":false,"properties":{"voiceIdentity":{"type":"boolean"}},"required":["voiceIdentity"],"type":"object"};
 const schema42 = {"enum":["macos","windows","other"],"type":"string"};
-const schema43 = {"enum":["main","recorder","recorder-info","recording-confirmation","startup-attention"],"type":"string"};
+const schema43 = {"enum":["main","recorder","recording-confirmation","startup-attention"],"type":"string"};
 
 function validate31(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){
 /*# sourceURL="WindowEnvironment" */;
@@ -2135,7 +2135,7 @@ if(typeof data4 !== "string"){
 validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
-if(!(((((data4 === "main") || (data4 === "recorder")) || (data4 === "recorder-info")) || (data4 === "recording-confirmation")) || (data4 === "startup-attention"))){
+if(!((((data4 === "main") || (data4 === "recorder")) || (data4 === "recording-confirmation")) || (data4 === "startup-attention"))){
 validate31.errors = [{instancePath:instancePath+"/role",schemaPath:"#/definitions/WindowRole/enum",keyword:"enum",params:{allowedValues: schema43.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }

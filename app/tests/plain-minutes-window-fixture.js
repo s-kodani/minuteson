@@ -11,7 +11,7 @@ export async function installPlainMinutesWindowFixture(page) {
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", sourceType:"recording", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
     window.__mon = data;
-    data.ui = { id:"ui_preferences", payload:{ schemaVersion:1, theme:"system" }, lockVersion:0 };
+    data.ui = { id:"ui_preferences", payload:{ schemaVersion:1, theme:"system", colorTheme:"monochrome" }, lockVersion:0 };
     // Synthetic other-window commit: preserve v2 reading fields, then exercise
     // the real provider's event/read path, never assign DOM colors directly.
     data.changeThemeFromOtherWindow = theme => {
@@ -28,7 +28,6 @@ export async function installPlainMinutesWindowFixture(page) {
         data.calls.push({cmd,args:copy(args)});
         if(cmd==="get_window_environment") return {schemaVersion:1,productName:"MinutesOn",role:"main",platform:"macos",capabilities:{voiceIdentity:true}};
         if(cmd==="get_startup_report") return {schemaVersion:1,phase:"ready",failure:null};
-        if(cmd==="get_startup_notices") return [];
         if(cmd==="get_recorder_operation_notices") {
           const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");
           return dataIdleRead(cmd);
@@ -44,7 +43,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
-        if (cmd === "get_archived_recording_input_notices") return {schemaVersion:3,recordings:[],nextCursor:null};
+        if (cmd === "get_archived_recording_input_notices") return {paused:false,value:{schemaVersion:3,recordings:[],nextCursor:null}};
         if (["get_voice_matching_preferences","get_speaker_completion_preferences"].includes(cmd)) return {id:cmd==="get_voice_matching_preferences"?"voice_matching":"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
         if (cmd === "get_ui_preferences") return copy(data.ui);
         if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(cmd)) return null;
@@ -54,7 +53,7 @@ export async function installPlainMinutesWindowFixture(page) {
           return copy(data.ui);
         }
         if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
-        if (cmd === "get_data_operation_availability") return { available: true, reason: null };
+        if (cmd === "get_data_operation_availability") return { available: true, reason: null, reasonCode: null, deletionAvailable: true, deletionReason: null, deletionReasonCode: null };
         if (cmd === "list_restored_meeting_ids") return [];
         if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName:null, saved: null, errorMessage: null };
         if (cmd === "get_analysis_flow") return null;
@@ -62,13 +61,13 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return (await import("/tests/transcript-draft-fixture.js")).stampFixtureDraft(data.td); }
-        if (["get_analysis_preferences","get_asr_preferences"].includes(cmd)) return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
+        if (cmd === "get_asr_preferences") return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
         if (cmd === "get_meeting_analysis_audio") return {tracks:[]};
         if (cmd === "get_diarization_preferences") {const engine={executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:800,windowShiftMilli:500,minDurationOnMs:0,minDurationOffMs:0};return {id:"sherpa_profiles",lockVersion:0,payload:{standard:copy(engine),highAccuracy:copy(engine)}};}
         if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
         if (cmd === "get_minutes_preferences") return copy(data.pref);
         if (cmd === "save_minutes_preferences") { if(data.failPreferences)throw Error("模擬議事録設定保存失敗");if (data.pref.lockVersion!==args.expectedLockVersion) throw Error("stale preferences"); data.pref.payload=copy(args.payload); data.pref.lockVersion++; return copy(data.pref); }
-        if (cmd === "get_analysis_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",previousId:null,draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion},versions:args.meetingId === "m2" ? [] : [{id:"analysis",revisionNo:1,contentHash:"source-hash",publicationState:"committed",utteranceCount:1,createdAt:0,profile:{},config:{}}]};
+        if (cmd === "get_minutes_source") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",contentHash:args.meetingId === "m2" ? null : "source-hash",draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion}};
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if(cmd==="prepare_meeting_playback"){
           const {meetingId,mode}=args.request;

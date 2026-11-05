@@ -180,8 +180,8 @@ impl Root {
             return Err("会議DBが確認中に差し替えられています".into());
         }
         // SQLite treats a zero-byte file as a new database. Reject it BEFORE
-        // Storage opens it, not after migrations have created empty tables.
-        // Header checks are not a replacement for SQLite integrity/migrations.
+        // Storage opens it, not after initialization has created empty tables.
+        // Header checks are not a replacement for SQLite integrity or schema admission.
         let mut header = [0u8; 100];
         file.read_exact(&mut header)
             .map_err(|e| format!("登録済みDBのヘッダーを読めません。新しいDBにしません: {e}"))?;
@@ -505,23 +505,14 @@ impl Bootstrap {
                 }
                 #[cfg(not(windows))]
                 {
-                    // No adoption or conversion of pre-bootstrap data. An
-                    // unregistered object must not be mistaken for a fresh install.
-                    let legacy = match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
-                        Ok(_) if !resetting => return Err("旧形式の会議保存先は非対応です。初期開発の旧データを整理してから起動してください。自動移行は行いません".into()),
-                        Ok(m) if regular(&m, false) => true,
-                        Ok(_) => return Err("旧DBの実体・リンクを確認できません。初期化先を推測しません".into()),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                        Err(e) => return Err(e.to_string()),
-                    };
-                    (
-                        if legacy {
-                            app_data.to_owned()
-                        } else {
-                            app_data.join("data")
-                        },
-                        Origin::Default,
-                    )
+                    // An unregistered top-level database is outside the current
+                    // meeting root. Refuse startup and reset without changing it.
+                    match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
+                        Ok(_) => return Err("現在の会議保存先とは別の場所に会議DBがあります。元のデータを保持しています。保存先を確認してください".into()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.to_string()),
+                    }
+                    (app_data.join("data"), Origin::Default)
                 }
             }
         };
@@ -553,7 +544,7 @@ impl Bootstrap {
             .get_mut()
             .map_err(|_| "起動設定ロックを取得できません")?
             .loaded = loaded;
-        // Before Storage::open can migrate/recover/write the selected root.
+        // Before Storage::open can recover or write the selected root.
         if !resetting {
             result.admit_activation()?;
         }
@@ -615,8 +606,7 @@ impl Bootstrap {
         }
         let doc: Document = serde_json::from_slice(&bytes)
             .map_err(|e| format!("起動設定が不正です。空DBへ切り替えません: {e}"))?;
-        if !matches!(doc.schema_version, 2 | 3)
-            || (doc.schema_version == 2 && doc.record.recovery.is_some())
+        if doc.schema_version != 3
             || (doc.record.origin == Origin::Relocated && doc.record.activation.is_none())
             || !sha(&doc.sha256)
             || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
