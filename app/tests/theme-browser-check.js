@@ -93,7 +93,11 @@ async(page,capturePath)=>{
   await page.evaluate(()=>window.themeFixture.mode="success");await settings().getByRole("button",{name:"テーマの保存を再試行",exact:true}).click();await waitTheme("dark");
   results.push("failed save preserves selection and confirmed colors; hints do not write; explicit retry resolves");
   await page.evaluate(()=>window.themeFixture.mode="lost");const before=await count();await select().selectOption("light");await waitTheme("light");check(await count()===before+1,"lost acknowledgement duplicated save");
-  await page.evaluate(()=>window.themeFixture.mode="lostUnreadable");await select().selectOption("dark");await issue().filter({hasText:"保存結果を確認できません"}).waitFor();check(await select().isDisabled(),"unknown commit allows another save");
+  await page.evaluate(()=>window.themeFixture.mode="lostUnreadable");await select().selectOption("dark");
+  const confirmResult = page.locator(".toast-host").getByRole("button", {name:"表示設定の結果を確認", exact:true});
+  await confirmResult.waitFor();
+  check(await confirmResult.isEnabled(), "unknown commit offers no way to check the result");
+  check(await select().isDisabled() && await color().isDisabled(), "unknown commit allows another save");
   const unknown=await count();await page.evaluate(()=>window.themeFixture.readFail=false);
   await waitTheme("dark");check(await count()===unknown,"authoritative polling resaved unknown commit");
   results.push("lost and unknown acknowledgements recover by readback, without duplicate writes");
