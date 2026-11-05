@@ -181,10 +181,13 @@ class DesktopWorkflowTests(unittest.TestCase):
     def expression(value, context):
         """Evaluate the small boolean subset used by the native step guards."""
         value = value.removeprefix("${{ ").removesuffix(" }}")
-        value = re.sub(r"\b(?:inputs|github|runner|env|steps|matrix)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
+        value = re.sub(r"\b(?:inputs|github|runner|env|steps|matrix|needs)(?:\.[A-Za-z_][A-Za-z_0-9-]*)+",
                        lambda match: repr(context[match[0]]), value)
         value = value.replace("&&", " and ").replace("||", " or ")
-        return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
+        value = re.sub(r"!(?!=)", " not ", value).strip()
+        return eval(value, {"__builtins__": {}}, {"always": lambda: True,
+                    "success": lambda: context.get("success()", True),
+                    "cancelled": lambda: context.get("cancelled()", False)})
 
     def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False,
                      skip_windows_msix=False, workflow="Desktop platform validation"):
@@ -381,6 +384,7 @@ class DesktopWorkflowTests(unittest.TestCase):
             "output/windows-store-work/*/build.json",
             "output/windows-qa-work/*-build.json",
             "output/rust-tests/benchmark-${{ runner.os }}.json",
+            "output/rust-tests/rust-audit-${{ runner.os }}.json",
             "output/rust-tests/cargo-timings/**/*.html",
         }
         for job, definition in self.workflow["jobs"].items():
@@ -454,20 +458,22 @@ class DesktopWorkflowTests(unittest.TestCase):
     def test_manual_benchmarks_are_separate_from_normal_validation(self):
         dispatch = self.events['workflow_dispatch']['inputs']
         self.assertEqual(dispatch['benchmark_mode']['default'], 'none')
-        self.assertEqual(dispatch['benchmark_mode']['options'], ['none', 'cache', 'rust'])
+        self.assertEqual(dispatch['benchmark_mode']['options'], ['none', 'cache', 'rust', 'sequence'])
         self.assertIn('effective Rust settings audit', dispatch['benchmark_mode']['description'])
         benchmark = self.workflow['jobs']['benchmark']
         self.assertEqual(benchmark['strategy']['matrix']['os'], ['macos-15', 'windows-2022'])
         self.assertFalse(benchmark['strategy']['fail-fast'])
         self.assertEqual(benchmark['timeout-minutes'], 180)
-        for mode in ('', 'none', 'cache', 'rust'):
-            context = {'inputs.benchmark_mode': mode, 'github.event_name': 'workflow_dispatch'}
+        for mode in ('', 'none', 'cache', 'rust', 'sequence'):
+            context = {'inputs.benchmark_mode': mode, 'github.event_name': 'workflow_dispatch',
+                       'needs.benchmark_admission.result': 'success',
+                       'needs.full_validation.result': 'success' if mode == 'sequence' else 'skipped'}
             ordinary = mode in ('', 'none')
             for name in ('changes', 'python', 'gate'):
                 with self.subTest(mode=mode, job=name):
                     self.assertEqual(bool(self.expression(self.workflow['jobs'][name]['if'], context)), ordinary)
             self.assertEqual(bool(self.expression(benchmark['if'], context)), not ordinary)
-        self.assertFalse(self.expression(benchmark['if'], {'inputs.benchmark_mode': 'cache', 'github.event_name': 'pull_request'}))
+        self.assertFalse(self.expression(benchmark['if'], {**context, 'inputs.benchmark_mode': 'cache', 'github.event_name': 'pull_request'}))
         for name in ('native', 'browser'):
             self.assertEqual(self.workflow['jobs'][name]['needs'], 'changes')
 
@@ -476,7 +482,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         checkouts = [(index, step) for index, step in enumerate(steps) if step.get('uses', '').startswith('actions/checkout@')]
         self.assertEqual(len(checkouts), 2)
         self.assertEqual(checkouts[0][1]['with']['ref'], '${{ github.sha }}')
-        self.assertEqual(checkouts[1][1]['with']['ref'], '${{ inputs.benchmark_source_sha }}')
+        self.assertEqual(checkouts[1][1]['with']['ref'], '${{ needs.benchmark_admission.outputs.source_sha }}')
         self.assertTrue(all(step['with']['persist-credentials'] is False for _, step in checkouts))
         preserve = next(index for index, step in enumerate(steps) if step.get('name') == 'Validate inputs and preserve standalone harness')
         self.assertLess(checkouts[0][0], preserve)
@@ -509,6 +515,102 @@ class DesktopWorkflowTests(unittest.TestCase):
             self.assertEqual(copied.read_bytes(), source.read_bytes())
             self.assertEqual(environment_file.read_text(), 'MON_CI_BENCHMARK_TOOL=' + str(copied) + '\n')
 
+    def test_benchmark_source_is_admitted_before_the_frozen_reusable_workflow_can_run(self):
+        jobs = self.workflow['jobs']
+        admission = jobs['benchmark_admission']
+        self.assertEqual(admission['outputs'], {
+            'source_sha': '${{ steps.validate.outputs.source_sha }}',
+            'effective_mode': '${{ steps.validate.outputs.effective_mode }}',
+        })
+        step = next(s for s in admission['steps'] if s.get('id') == 'validate')
+        script = '\n'.join(step['run'].splitlines()[1:-1])
+        frozen = '86952a9e04e8d4d6b5ae1b0f7844e889ff5006cb'
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'outputs'
+            for mode, source in [('cache', ''), ('rust', 'abc1234'), ('cache', 'g' * 40),
+                                 ('sequence', SHA), ('invalid', frozen)]:
+                with self.subTest(mode=mode, source=source), patch.dict(os.environ, {
+                    'MON_REQUESTED_MODE': mode, 'MON_REQUESTED_SOURCE_SHA': source, 'GITHUB_OUTPUT': str(output),
+                }):
+                    with self.assertRaises(SystemExit):
+                        exec(compile(script, 'benchmark-admission', 'exec'), {})
+                    self.assertFalse(output.exists())
+            for mode, source, effective in [('cache', SHA, 'cache'), ('rust', SHA, 'rust'), ('sequence', frozen, 'cache')]:
+                with self.subTest(mode=mode), patch.dict(os.environ, {
+                    'MON_REQUESTED_MODE': mode, 'MON_REQUESTED_SOURCE_SHA': source, 'GITHUB_OUTPUT': str(output),
+                }):
+                    exec(compile(script, 'benchmark-admission', 'exec'), {})
+                    self.assertEqual(output.read_text(), f'source_sha={source}\neffective_mode={effective}\n')
+                    output.unlink()
+        full = jobs['full_validation']
+        self.assertEqual(full['needs'], 'benchmark_admission')
+        self.assertEqual(full['uses'], f's-kodani/minuteson/.github/workflows/desktop-platform-build.yml@{frozen}')
+        self.assertEqual(full['with'], {'source_ref': '${{ needs.benchmark_admission.outputs.source_sha }}', 'full': True})
+        self.assertNotIn('secrets', full)
+        self.assertNotIn('permissions', full)
+        self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
+        for mode, result, allowed in [('sequence', 'success', True), ('sequence', 'failure', False),
+                                      ('cache', 'success', False), ('rust', 'success', False)]:
+            self.assertEqual(bool(self.expression(full['if'], {
+                'inputs.benchmark_mode': mode, 'needs.benchmark_admission.result': result,
+            })), allowed)
+
+    def test_sequence_waits_for_full_success_and_direct_modes_allow_only_a_skipped_full(self):
+        benchmark = self.workflow['jobs']['benchmark']
+        self.assertEqual(set(benchmark['needs']), {'benchmark_admission', 'full_validation'})
+        context = {'github.event_name': 'workflow_dispatch'}
+        for mode in ('cache', 'rust', 'sequence'):
+            for admission in ('success', 'failure', 'cancelled', 'skipped'):
+                for full in ('success', 'failure', 'cancelled', 'skipped'):
+                    for cancelled in (False, True):
+                        expected = not cancelled and admission == 'success' and full == ('success' if mode == 'sequence' else 'skipped')
+                        with self.subTest(mode=mode, admission=admission, full=full, cancelled=cancelled):
+                            self.assertEqual(bool(self.expression(benchmark['if'], {
+                                **context, 'inputs.benchmark_mode': mode, 'needs.benchmark_admission.result': admission,
+                                'needs.full_validation.result': full, 'cancelled()': cancelled,
+                            })), expected)
+        self.assertEqual(benchmark['env']['MON_BENCHMARK_MODE'], '${{ needs.benchmark_admission.outputs.effective_mode }}')
+        self.assertEqual(benchmark['env']['MON_BENCHMARK_SOURCE_SHA'], '${{ needs.benchmark_admission.outputs.source_sha }}')
+        steps = benchmark['steps']
+        measurement = next(i for i, s in enumerate(steps) if s.get('name') == 'Measure native caches or audit effective Rust settings at the pinned source')
+        audit = next(i for i, s in enumerate(steps) if s.get('name') == 'Audit effective Rust settings after successful cache measurements')
+        upload = next(i for i, s in enumerate(steps) if s.get('uses', '').startswith('actions/upload-artifact@'))
+        self.assertLess(measurement, audit)
+        self.assertLess(audit, upload)
+        self.assertIn('--mode rust --report output/rust-tests/rust-audit-${{ runner.os }}.json', steps[audit]['run'])
+        for mode, succeeded, expected in [('sequence', True, True), ('sequence', False, False), ('cache', True, False), ('rust', True, False)]:
+            self.assertEqual(bool(self.expression(steps[audit]['if'], {'inputs.benchmark_mode': mode, 'success()': succeeded})), expected)
+
+    def test_benchmark_job_summary_preserves_source_and_harness_provenance_without_raw_errors(self):
+        step = next(s for s in self.workflow['jobs']['benchmark']['steps'] if s.get('name') == 'Summarize benchmark reports')
+        self.assertEqual(step['if'], 'always()')
+        script = '\n'.join(step['run'].splitlines()[1:-1])
+        with tempfile.TemporaryDirectory() as temporary, chdir(temporary):
+            reports = Path('output/rust-tests')
+            reports.mkdir(parents=True)
+            summary = Path(temporary) / 'summary'
+            common = {'sourceSha': SHA, 'workflowSha': '2' * 40, 'completed': True,
+                      'sourceUnchanged': True, 'exitCode': 0, 'totalSeconds': 123.4567}
+            (reports / 'benchmark-Windows.json').write_text(json.dumps({**common, 'mode': 'cache',
+                'error': 'never-copy-private-output', 'cache': {'actionsCacheHit': None,
+                'trials': [{'status': 'success', 'totalSeconds': 42.1234}, {'status': 'running', 'totalSeconds': None}],
+                'summary': {'coldSeconds': 42.1234, 'warmMedianSeconds': 10.5}}}))
+            (reports / 'rust-audit-Windows.json').write_text(json.dumps({**common, 'mode': 'rust', 'rust': {'status': 'redundant'}}))
+            with patch.dict(os.environ, {'RUNNER_OS': 'Windows', 'GITHUB_STEP_SUMMARY': str(summary)}):
+                exec(compile(script, 'benchmark-summary', 'exec'), {})
+            text = summary.read_text()
+            for expected in (SHA, '2' * 40, '42.123', '10.5', 'redundant', 'running', 'actualActionsCacheHit=null', 'retained fixed downloads'):
+                self.assertIn(expected, text)
+            self.assertEqual(text.count('Measurement source SHA'), 2)
+            self.assertNotIn('never-copy-private-output', text)
+            self.assertNotIn('None', text)
+            for path in reports.iterdir():
+                path.unlink()
+            summary.unlink()
+            with patch.dict(os.environ, {'RUNNER_OS': 'Windows', 'GITHUB_STEP_SUMMARY': str(summary)}):
+                exec(compile(script, 'benchmark-summary', 'exec'), {})
+            self.assertFalse(summary.exists())
+
     def test_benchmark_never_saves_native_or_dependency_caches_and_uploads_only_reports(self):
         benchmark = self.workflow['jobs']['benchmark']
         self.assertEqual(benchmark['env']['MON_SAVE_CI_CACHE'], 'false')
@@ -523,10 +625,11 @@ class DesktopWorkflowTests(unittest.TestCase):
                 self.assertEqual(step['if'], 'always()')
                 self.assertEqual(set(step['with']['path'].splitlines()), {
                     'output/rust-tests/benchmark-${{ runner.os }}.json',
+                    'output/rust-tests/rust-audit-${{ runner.os }}.json',
                     'output/rust-tests/cargo-timings/**/*.html',
                 })
         frontend = next(step for step in benchmark['steps'] if step.get('name') == 'Install pinned frontend dependencies')
-        self.assertEqual(frontend['if'], "inputs.benchmark_mode == 'cache'")
+        self.assertEqual(frontend['if'], "env.MON_BENCHMARK_MODE == 'cache'")
 
 
 class SecurityPolicyTests(unittest.TestCase):

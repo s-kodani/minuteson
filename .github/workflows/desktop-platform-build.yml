@@ -9,12 +9,12 @@ on:
         options: [full, quick]
         default: full
       benchmark_mode:
-        description: 'Manual cache measurements or effective Rust settings audit; ordinary validation uses none'
+        description: 'Sequence full validation, cache measurements and effective Rust settings audit, or run direct checks'
         type: choice
-        options: [none, cache, rust]
+        options: [none, cache, rust, sequence]
         default: none
       benchmark_source_sha:
-        description: 'Full source commit SHA to measure or audit when benchmark_mode is cache or rust'
+        description: 'Full source commit SHA to validate, measure or audit when benchmark_mode is not none'
         type: string
         default: ''
   workflow_call:
@@ -461,8 +461,43 @@ jobs:
           path: output/rust-tests/
           if-no-files-found: warn
           retention-days: 7
-  benchmark:
+  benchmark_admission:
     if: github.event_name == 'workflow_dispatch' && inputs.benchmark_mode != '' && inputs.benchmark_mode != 'none'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.validate.outputs.source_sha }}
+      effective_mode: ${{ steps.validate.outputs.effective_mode }}
+    steps:
+      - name: Admit the immutable benchmark source and mode
+        id: validate
+        env:
+          MON_REQUESTED_MODE: ${{ inputs.benchmark_mode }}
+          MON_REQUESTED_SOURCE_SHA: ${{ inputs.benchmark_source_sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          mode, source = os.environ['MON_REQUESTED_MODE'], os.environ['MON_REQUESTED_SOURCE_SHA']
+          if mode not in ('cache', 'rust', 'sequence'):
+              raise SystemExit('Unknown benchmark mode')
+          if not re.fullmatch(r'[0-9a-f]{40}', source):
+              raise SystemExit('A full lowercase 40-character source SHA is required for benchmarks')
+          if mode == 'sequence' and source != '86952a9e04e8d4d6b5ae1b0f7844e889ff5006cb':
+              raise SystemExit('The validation sequence is frozen to source 86952a9e04e8d4d6b5ae1b0f7844e889ff5006cb')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf8') as output:
+              output.write('source_sha=' + source + '\n')
+              output.write('effective_mode=' + ('cache' if mode == 'sequence' else mode) + '\n')
+          PY
+  full_validation:
+    needs: benchmark_admission
+    if: inputs.benchmark_mode == 'sequence' && needs.benchmark_admission.result == 'success'
+    uses: s-kodani/minuteson/.github/workflows/desktop-platform-build.yml@86952a9e04e8d4d6b5ae1b0f7844e889ff5006cb
+    with:
+      source_ref: ${{ needs.benchmark_admission.outputs.source_sha }}
+      full: true
+  benchmark:
+    needs: [benchmark_admission, full_validation]
+    if: always() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.benchmark_admission.result == 'success' && ((inputs.benchmark_mode == 'sequence' && needs.full_validation.result == 'success') || ((inputs.benchmark_mode == 'cache' || inputs.benchmark_mode == 'rust') && needs.full_validation.result == 'skipped'))
     strategy:
       fail-fast: false
       matrix:
@@ -472,8 +507,8 @@ jobs:
     env:
       PYTHONUTF8: '1'
       MON_SAVE_CI_CACHE: 'false'
-      MON_BENCHMARK_MODE: ${{ inputs.benchmark_mode }}
-      MON_BENCHMARK_SOURCE_SHA: ${{ inputs.benchmark_source_sha }}
+      MON_BENCHMARK_MODE: ${{ needs.benchmark_admission.outputs.effective_mode }}
+      MON_BENCHMARK_SOURCE_SHA: ${{ needs.benchmark_admission.outputs.source_sha }}
     steps:
       - name: Check out measurement harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -498,7 +533,7 @@ jobs:
       - name: Check out pinned measurement source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.benchmark_source_sha }}
+          ref: ${{ needs.benchmark_admission.outputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -514,16 +549,16 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> app/src-tauri/target
-          key: ${{ inputs.benchmark_mode == 'cache' && 'full' || '' }}
+          key: ${{ env.MON_BENCHMARK_MODE == 'cache' && 'full' || '' }}
           save-if: 'false'
       - name: Restore legacy Rust dependencies on a full-cache miss
-        if: inputs.benchmark_mode == 'cache' && steps.benchmark_rust_cache.outputs.cache-hit != 'true'
+        if: env.MON_BENCHMARK_MODE == 'cache' && steps.benchmark_rust_cache.outputs.cache-hit != 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: . -> app/src-tauri/target
           save-if: 'false'
       - name: Select Swift 6.2 for native cache measurements
-        if: inputs.benchmark_mode == 'cache' && runner.os == 'macOS'
+        if: env.MON_BENCHMARK_MODE == 'cache' && runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -538,10 +573,10 @@ jobs:
           test -n "$selected"
           DEVELOPER_DIR="$selected" /usr/bin/swift --version
       - name: Install pinned frontend dependencies
-        if: inputs.benchmark_mode == 'cache'
+        if: env.MON_BENCHMARK_MODE == 'cache'
         run: npm ci --prefix app
       - name: Fetch locked notice metadata for Windows resource preparation
-        if: inputs.benchmark_mode == 'cache' && runner.os == 'Windows'
+        if: env.MON_BENCHMARK_MODE == 'cache' && runner.os == 'Windows'
         run: cargo fetch --manifest-path app/src-tauri/Cargo.toml --locked
       - name: Measure native caches or audit effective Rust settings at the pinned source
         shell: bash
@@ -549,6 +584,57 @@ jobs:
           MON_CI_RUST_CACHE_HIT: ${{ steps.benchmark_rust_cache.outputs.cache-hit }}
         run: |
           python "$MON_CI_BENCHMARK_TOOL" --root "$GITHUB_WORKSPACE" --source-sha "$MON_BENCHMARK_SOURCE_SHA" --mode "$MON_BENCHMARK_MODE" --report output/rust-tests/benchmark-${{ runner.os }}.json
+      - name: Audit effective Rust settings after successful cache measurements
+        if: success() && inputs.benchmark_mode == 'sequence'
+        shell: bash
+        env:
+          MON_CI_RUST_CACHE_HIT: ${{ steps.benchmark_rust_cache.outputs.cache-hit }}
+        run: |
+          python "$MON_CI_BENCHMARK_TOOL" --root "$GITHUB_WORKSPACE" --source-sha "$MON_BENCHMARK_SOURCE_SHA" --mode rust --report output/rust-tests/rust-audit-${{ runner.os }}.json
+      - name: Summarize benchmark reports
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, math, os, re
+          from pathlib import Path
+          def sha(value):
+              return value if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{40}', value) else 'unavailable'
+          def number(value):
+              return str(round(value, 3)) if type(value) in (int, float) and math.isfinite(value) else 'unavailable'
+          def status(value):
+              return value if value in ('success', 'failure', 'running', 'redundant', 'inconclusive') else 'unavailable'
+          lines = []
+          for prefix in ('benchmark', 'rust-audit'):
+              path = Path('output/rust-tests') / (prefix + '-' + os.environ['RUNNER_OS'] + '.json')
+              if not path.is_file():
+                  continue
+              try:
+                  report = json.loads(path.read_text(encoding='utf8'))
+              except (OSError, ValueError):
+                  lines.append('- Report status: unreadable')
+                  continue
+              lines += ['### ' + ('Rust settings audit' if report.get('mode') == 'rust' else 'Native measurements'),
+                        '- Measurement source SHA: `' + sha(report.get('sourceSha')) + '`',
+                        '- Workflow harness SHA: `' + sha(report.get('workflowSha')) + '`',
+                        '- Completed: ' + str(report.get('completed') is True).lower(),
+                        '- Source unchanged: ' + str(report.get('sourceUnchanged') is True).lower(),
+                        '- Exit code: ' + number(report.get('exitCode')),
+                        '- Total seconds: ' + number(report.get('totalSeconds'))]
+              cache = report.get('cache', {})
+              for index, row in enumerate(cache.get('trials', [])):
+                  lines.append('- Cache trial ' + str(index) + ': ' + status(row.get('status')) + '; total seconds: ' + number(row.get('totalSeconds')))
+              for key in ('coldSeconds', 'warmMedianSeconds', 'warmMinimumSeconds', 'warmMaximumSeconds'):
+                  if key in cache.get('summary', {}):
+                      lines.append('- ' + key + ': ' + number(cache['summary'][key]))
+              if cache:
+                  lines.append('- Combined preparation reuse includes retained fixed downloads and dependency effects; actualActionsCacheHit=null. This does not measure the Actions cache service or isolate compilation-cache gains.')
+              if 'rust' in report:
+                  lines.append('- Rust settings audit status: ' + status(report['rust'].get('status')))
+          if lines:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf8') as summary:
+                  summary.write('\n'.join(lines) + '\n')
+          PY
       - name: Upload benchmark JSON and Cargo timing HTML
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -556,6 +642,7 @@ jobs:
           name: native-benchmark-${{ inputs.benchmark_mode }}-${{ runner.os }}
           path: |
             output/rust-tests/benchmark-${{ runner.os }}.json
+            output/rust-tests/rust-audit-${{ runner.os }}.json
             output/rust-tests/cargo-timings/**/*.html
           if-no-files-found: warn
           retention-days: 7
