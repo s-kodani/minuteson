@@ -62,7 +62,7 @@ async (page,capturePath=path=>path)=>{
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"saved"}));await state("inactive");const stopped=await calls("get_recording_input_history_status");await page.waitForTimeout(650);
     check(await calls("get_recording_input_history_status")===stopped&&await diagnostic().count()===0&&await toast().count()===0,"terminal owner retained live diagnostic/poll");
     results.push("late replies cannot cross recording owners; terminal recording stops live diagnostics and polling");
-    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"停止時の保存診断",legacy:true,historySaveIssue:"unconfirmed"})];return f.recordChanged({phase:"idle"});});
+    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"停止時の保存診断",noJournal:true,historySaveIssue:"unconfirmed"})];return f.recordChanged({phase:"idle"});});
     await page.getByRole('button',{name:'通知一覧',exact:true}).click();
     const history=()=>page.getByRole('dialog',{name:'通知一覧',exact:true});
     const archived=()=>history().locator('.toast-card').filter({hasText:'停止時の保存診断'});
