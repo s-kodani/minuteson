@@ -92,17 +92,28 @@ test("unconfirmed save cannot be retried until a fresh read succeeds", async () 
   let readFails = false; let writes = 0; let saveFails = true;
   const c = new ThemeController({ read: async () => { if (readFails) throw Error("read offline"); return snapshot(); }, save: async () => { writes++; if (saveFails) throw Error("uncertain save"); return snapshot("dark", 1); } });
   await c.refresh(); readFails = true; await c.change("dark"); assert.equal(c.getSnapshot().uncertain, true);
-  await c.change("dark"); assert.equal(writes, 1); assert.equal(c.getSnapshot().pendingTheme, "dark");
+  await c.retry(); assert.equal(writes, 1); assert.equal(c.getSnapshot().pendingTheme, "dark");
   readFails = false; await c.refresh(); assert.equal(c.getSnapshot().uncertain, false); assert.equal(writes, 1);
-  saveFails = false; await c.change("dark"); assert.equal(writes, 2); assert.equal(c.getSnapshot().snapshot?.payload.theme, "dark");
+  assert.deepEqual(c.getSnapshot().snapshot, snapshot());
+  assert.equal(c.getSnapshot().pendingTheme, "dark");
+  assert.equal(c.getSnapshot().notice, null);
+  assert.match(c.getSnapshot().error, /保存済みの表示設定が選択内容と一致しません/);
+  saveFails = false; await c.retry(); assert.equal(writes, 2); assert.equal(c.getSnapshot().snapshot?.payload.theme, "dark");
 });
 
 test("a later authoritative read settles an unknown committed theme without another save", async () => {
-  let stored = snapshot(); let unavailable = false; let writes = 0;
-  const c = new ThemeController({ read: async () => { if (unavailable) throw Error("read offline"); return stored; }, save: async () => { writes++; stored = snapshot("dark", 1); unavailable = true; throw Error("lost committed reply"); } });
+  let stored = snapshot(); let readError = ""; let writes = 0;
+  const c = new ThemeController({ read: async () => { if (readError) throw Error(readError); return stored; }, save: async () => { writes++; stored = snapshot("dark", 1); readError = "read offline"; throw Error("lost committed reply"); } });
   await c.refresh(); await c.change("dark");
+  const saveError = c.getSnapshot().error;
+  assert.match(saveError, /保存結果を確認できません/);
+  readError = "read still offline";
+  await c.refresh(); await c.refresh();
+  assert.equal(c.getSnapshot().error, saveError);
   assert.equal(c.getSnapshot().uncertain, true); assert.equal(c.getSnapshot().pendingTheme, "dark");
-  unavailable = false; await c.refresh(); await c.refresh();
+  assert.deepEqual(c.getSnapshot().snapshot, snapshot());
+  assert.equal(c.getSnapshot().notice, null);
+  readError = ""; await c.refresh(); await c.refresh();
   assert.equal(writes, 1); assert.deepEqual(c.getSnapshot().snapshot, stored);
   assert.equal(c.getSnapshot().uncertain, false); assert.equal(c.getSnapshot().pendingTheme, null);
   assert.equal(c.getSnapshot().error, ""); assert.match(c.getSnapshot().status, /確認しました/);

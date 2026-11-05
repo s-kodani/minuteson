@@ -41,6 +41,9 @@ export class ThemeController {
   private requestedMatches(payload: UiPreferencesPayload) {
     return this.value.pendingPreferences !== null && samePreferences(payload, this.value.pendingPreferences);
   }
+  private markSaveUnconfirmed(cause: unknown) {
+    this.update({ uncertain: true, error: `保存結果を確認できません。再読込するまで再保存しません: ${String(cause)}`, status: "未確認の選択を保持しています。" });
+  }
   private accept(snapshot: UiPreferencesSnapshot) {
     const current = this.value.snapshot;
     if (current && snapshot.lockVersion < current.lockVersion) throw Error("古い表示設定の応答を採用しません");
@@ -55,15 +58,25 @@ export class ThemeController {
       try {
         const snapshot = assertUiPreferences(await this.bridge.read());
         if (generation !== this.generation) return;
+        const wasUncertain = this.value.uncertain;
         this.accept(snapshot);
-        if (this.value.pendingPreferences && this.requestedMatches(snapshot.payload)) {
+        if (this.requestedMatches(snapshot.payload)) {
           this.pendingChanges = null;
           this.update({ pendingTheme: null, pendingPreferences:null, error: "", status: "保存済みの表示設定を確認しました。" });
           this.notify("保存済みの表示設定を確認しました。", "info");
+        } else if (this.value.pendingPreferences === null) {
+          this.update({ error: "" });
+        } else if (wasUncertain) {
+          this.update({ error: "保存済みの表示設定が選択内容と一致しません。保存を再試行できます。", status: "選択を保持しています。" });
         }
-        else if (this.value.pendingPreferences === null) this.update({ error: "" });
       } catch (error) {
-        if (generation === this.generation) this.update({ uncertain: true, error: `表示設定を確認できません: ${String(error)}` });
+        if (generation !== this.generation) return;
+        if (this.value.pendingPreferences) {
+          // Keep the original save notice while confirmation remains unavailable.
+          if (!this.value.uncertain) this.markSaveUnconfirmed(error);
+        } else {
+          this.update({ uncertain: true, error: `表示設定を確認できません: ${String(error)}` });
+        }
       } finally { this.reading = null; }
     })();
     return this.reading;
@@ -113,7 +126,7 @@ export class ThemeController {
         }
         else this.update({ error: `表示設定を保存できませんでした: ${String(error)}`, status: "選択を保持しています。保存済み設定を確認してから再試行できます。" });
       } catch (readError) {
-        this.update({ uncertain: true, error: `保存結果を確認できません。再読込するまで再保存しません: ${String(readError)}`, status: "未確認の選択を保持しています。" });
+        this.markSaveUnconfirmed(readError);
       }
     } finally { this.update({ busy: false }); }
   };
