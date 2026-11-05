@@ -7,7 +7,7 @@ async (page, capturePath, { approveModelLicense }) =>{
   await page.goto('http://127.0.0.1:1420/tests/model-download-browser.html?official=1');
   await field('文字起こし').waitFor();
   const options=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_official_model_options'));
-  const selections=[['文字起こし',options.find(o=>o.id==='whisper-synthetic-tiny')],['話者分離',options.find(o=>o.review.manifest.engine==='sherpa-onnx')],['議事録生成',options.find(o=>o.review.manifest.engine==='llama.cpp')]];
+  const selections=[['文字起こし',options.find(o=>o.id==='whisper-synthetic-medium')],['話者分離',options.find(o=>o.review.manifest.engine==='sherpa-onnx')],['議事録生成',options.find(o=>o.review.manifest.engine==='llama.cpp')]];
   for(const [label,option] of selections){
     await field(label).selectOption('official:'+option.id);
     await row(label).getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
@@ -75,7 +75,7 @@ async (page, capturePath, { approveModelLicense }) =>{
   await row('文字起こし').getByRole('button',{name:'使用中',exact:true}).waitFor();
   check(await calls('start_model_download')===before&&await calls('apply_model_profile_application')===appliedBefore+1,'explicit reuse did not reapply its checked package');
   results.push('stale profile compatibility is not marked in-use; explicit reuse reapplies the existing checked package');
-  await field('文字起こし').selectOption('official:whisper-synthetic-base');
+  await field('文字起こし').selectOption('official:whisper-synthetic-large-v3');
   await row('文字起こし').getByRole('button',{name:'ダウンロードして使用',exact:true}).waitFor();
   check(await calls('start_model_download')===before,'selecting an uninstalled model started work');
   results.push('another uninstalled selection remains a download choice without automatic execution');

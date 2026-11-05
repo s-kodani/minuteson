@@ -250,7 +250,7 @@ class RuntimeTests(unittest.TestCase):
         resources = config["bundle"]["resources"]
         self.assertEqual(resources["../../.cache/whisper-metal-runtime/package/whisper-runtime.tar"], "asr-runtime/whisper-runtime.tar")
         self.assertEqual(resources["../../.cache/whisper-metal-runtime/package/runtime-index.json"], "asr-runtime/runtime-index.json")
-        self.assertFalse(any("ggml-tiny" in path or "compile-" in path for path in resources))
+        self.assertFalse(any("ggml-" in path or "compile-" in path for path in resources))
         self.assertIn("mon_whisper_runtime.py", (runtime.REPOSITORY / "app/build-macos.sh").read_text())
 
     def test_source_transport_parent_enforces_capacity_without_content_length(self):

@@ -5,8 +5,6 @@ import { canReviewApplication, type ModelProfileComponent, type ModelProfileView
 export const isAsrEngine = (engine: string) => engine === "whisper.cpp" || engine === "asr";
 const matchesSlot = (engine: string, slot: string) => slot === "asr" ? isAsrEngine(engine) : engine === slot;
 const modelRoles = new Set(["llm", "asr", "asr_asset", "vad", "segmentation", "speaker_embedding"]);
-const retiredRecipes = new Set(["36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"]);
-export const isRetiredModel = (entry: ModelPlacementEntry) => entry.download != null && retiredRecipes.has(entry.download.recipeHash);
 function identity(engine: string, files: { role: string; size: number; sha256: string }[], backendId?: string): string | null {
   if (engine === "asr" && !backendId) return null;
   const models = files.filter(file => modelRoles.has(file.role) && !(engine === "whisper.cpp" && file.role === "vad"));
@@ -83,7 +81,7 @@ export function modelChoiceAction(choice: ModelChoice | undefined, entries: Mode
   return installed.length ? "update_runtime" : "download";
 }
 export function modelChoices(engine: string, entries: ModelPlacementEntry[], options: OfficialModelOption[], profiles: ModelProfileView[]): ModelChoice[] {
-  const groups = installedModelGroups(entries.filter(entry => !isRetiredModel(entry)), profiles);
+  const groups = installedModelGroups(entries, profiles);
   const official = options.filter(option => matchesSlot(option.review.manifest.engine, engine));
   const result: ModelChoice[] = official.map(option => {
     const matching = groups.flatMap(group => group.entries).filter(entry => matchesOfficialModel(entry, option));

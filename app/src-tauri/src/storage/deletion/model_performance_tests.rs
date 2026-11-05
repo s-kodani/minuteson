@@ -256,9 +256,12 @@ fn seed_private_model_qa() {
         .unwrap_or(150000);
     assert!(bytes <= 2 * 1024 * 1024 * 1024);
     let mut state = serde_json::Map::new();
-    for (index, key) in ["windows-whisper-194-tiny", "windows-whisper-194-base"]
-        .into_iter()
-        .enumerate()
+    for (index, key) in [
+        "windows-whisper-194-medium",
+        "windows-whisper-194-large-v3-turbo",
+    ]
+    .into_iter()
+    .enumerate()
     {
         let mut file = std::fs::File::create(f.source.join("weights/model.bin")).unwrap();
         let block = vec![b'm'; 1024 * 1024];

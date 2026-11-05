@@ -347,7 +347,6 @@ fn prepare_bundled(root: &Path, engine: &str, bundle: &Path) -> Result<Snapshot,
         return Err("推論ランタイムの定義が上限を超えています".into());
     }
     let snapshots: Vec<Snapshot> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    // Several ASR adapters can use the same worker (ReazonSpeech and Haas).
     // Validate the complete set of worker engines, independently of model count.
     let mut engines = ["llama", "sherpa"]
         .into_iter()
@@ -547,20 +546,10 @@ mod bundled_runtime_tests {
     }
 
     #[test]
-    fn bundled_runtime_prepares_shared_asr_worker_through_production_admission() {
+    fn bundled_runtime_prepares_transducer_worker_through_production_admission() {
         let root = tempfile::tempdir().unwrap();
         let root = root.path().canonicalize().unwrap();
         let (bundle, snapshots) = bundle_fixture(&root);
-        assert_eq!(
-            crate::transcription::asr::find(crate::transcription::asr::TRANSDUCER)
-                .unwrap()
-                .descriptor()
-                .worker,
-            crate::transcription::asr::find(crate::transcription::asr::NEMO_TDT)
-                .unwrap()
-                .descriptor()
-                .worker
-        );
         for expected in snapshots {
             let actual = prepare_bundled(&root, &expected.engine, &bundle).unwrap();
             assert_eq!(actual, expected);

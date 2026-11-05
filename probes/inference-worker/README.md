@@ -52,7 +52,7 @@ identity, protocol and cancellation checks. The opt-in
 `tests/test_mon_inference_runtime_native.py` compares three requests (speech,
 silence, speech, or distinct JSON requests) against single-shot engines. It also
 covers VAD state and Metal reuse, including the automatic trial's transition
-from 256 requested layers to the actual count for both Qwen 2.5 and Qwen3.
+from 256 requested layers to the actual count for Qwen 3.
 Its environment variables are documented at the
 top of that file. Use only synthetic audio, matching pinned engine versions,
 and `/usr/bin/time -l` in an environment allowing its resource queries. The test

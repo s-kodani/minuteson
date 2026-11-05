@@ -1,6 +1,6 @@
-"""Opt-in macOS CPU smoke tests for the three additional minutes models.
+"""Opt-in macOS CPU smoke tests for Gemma 4 minutes generation.
 
-MON_MINUTES_MODEL_DIR contains gemma.gguf, phi.gguf and lfm.gguf.
+MON_MINUTES_MODEL_DIR contains gemma.gguf.
 MON_RESIDENT_RUNTIME points to the built worker package. Only synthetic text
 is used; no application settings or user meetings are opened.
 """
@@ -93,13 +93,6 @@ class MinutesModelsNative(unittest.TestCase):
 
     def test_gemma(self):
         self.check_model('gemma', ['--temp', '1.0', '--top-p', '0.95', '--top-k', '64', '--min-p', '0'])
-
-    def test_phi(self):
-        self.check_model('phi', ['--temp', '0'])
-
-    def test_lfm(self):
-        self.check_model('lfm', ['--temp', '0.1', '--top-k', '50', '--repeat-penalty', '1.1'])
-
 
 if __name__ == '__main__':
     unittest.main()

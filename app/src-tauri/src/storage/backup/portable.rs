@@ -549,7 +549,7 @@ mod asr_tests {
                 role: "model".into(),
             },
             FileReference {
-                name: "encoder.data".into(),
+                name: "decoder.onnx".into(),
                 size: 20,
                 sha256: "b".repeat(64),
                 role: "artifact".into(),
@@ -562,7 +562,7 @@ mod asr_tests {
             },
         ];
         let result = json!({"schemaVersion":1,"backendId":"test-asr","models":{
-            "model":r"C:\private\models\encoder.onnx", "data":"/private/models/encoder.data", "tokens":"/private/models/tokens.txt"},
+            "model":r"C:\private\models\encoder.onnx", "decoder":"/private/models/decoder.onnx", "tokens":"/private/models/tokens.txt"},
             "segments":[{"startUs":0,"endUs":100,"text":"/private/meeting は本文なので保持"}]});
         let portable: Value = serde_json::from_slice(
             &portable_json_with_metadata(
@@ -576,11 +576,11 @@ mod asr_tests {
         .unwrap();
         assert_eq!(
             portable["models"],
-            json!({"model":"encoder.onnx","data":"encoder.data","tokens":"tokens.txt"})
+            json!({"model":"encoder.onnx","decoder":"decoder.onnx","tokens":"tokens.txt"})
         );
         assert_eq!(portable["segments"], result["segments"]);
         let mut logical = portable.clone();
-        for (slot, index) in [("model", 0), ("data", 1), ("tokens", 2)] {
+        for (slot, index) in [("model", 0), ("decoder", 1), ("tokens", 2)] {
             logical["models"][slot] = json!(format!("mon-unavailable:{}", metadata[index].sha256));
         }
         let again: Value = serde_json::from_slice(

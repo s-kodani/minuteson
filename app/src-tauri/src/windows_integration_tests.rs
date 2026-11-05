@@ -318,10 +318,10 @@ fn windows_real_model_body_deletion_keeps_history_and_other_packages() {
     assert!(root.ends_with("windows-parity/model-validation"));
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("model-state.json")).unwrap()).unwrap();
-    let id = state["windows-whisper-194-tiny"]["package"]
+    let id = state["windows-whisper-194-medium"]["package"]
         .as_str()
         .unwrap();
-    let other = state["windows-whisper-194-base"]["package"]
+    let other = state["windows-whisper-194-large-v3-turbo"]["package"]
         .as_str()
         .unwrap();
     let storage = Storage::open_with_models(root.join("data"), root.join("models")).unwrap();
@@ -1067,19 +1067,15 @@ fn windows_capture_stop_restores_current_audio_without_capture_history() {
 fn windows_bundled_model_catalog_is_complete_and_target_bound() {
     let root = crate::windows_runtime::resources().unwrap();
     let options = crate::model_official_catalog::options_windows(&root).unwrap();
-    assert_eq!(options.len(), 20);
+    assert_eq!(options.len(), 12);
     if let Some(path) = std::env::var_os("MON_WINDOWS_MODEL_OPTIONS") {
         // Feed the exact IPC shape and Rust digests to the production TS reader.
         fs::write(path, serde_json::to_vec(&options).unwrap()).unwrap();
     }
     let bytes = crate::windows_runtime::catalog(&root).unwrap();
     let choices: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(choices.len(), 20);
-    assert!(choices
-        .iter()
-        .any(|choice| choice["recipe"]["manifest"]["backend"]["id"]
-            == crate::transcription::asr::NEMO_TDT));
-    let mut engines = std::collections::BTreeSet::new();
+    assert_eq!(choices.len(), 12);
+    let mut engines = std::collections::BTreeMap::new();
     for choice in choices {
         let recipe =
             Recipe::parse(serde_json::to_vec(&choice["recipe"]).unwrap().as_slice()).unwrap();
@@ -1089,14 +1085,33 @@ fn windows_bundled_model_catalog_is_complete_and_target_bound() {
             recipe.manifest.target,
             crate::model_inspection::Target::WindowsX86_64
         );
-        engines.insert(
-            choice["recipe"]["manifest"]["engine"]
-                .as_str()
-                .unwrap()
-                .to_owned(),
-        );
+        if recipe.manifest.engine == crate::model_inspection::Engine::Asr {
+            assert_eq!(
+                recipe.manifest.backend.as_ref().unwrap().id,
+                crate::transcription::asr::TRANSDUCER
+            );
+        }
+        *engines
+            .entry(
+                choice["recipe"]["manifest"]["engine"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+            .or_insert(0) += 1;
     }
-    assert_eq!(engines.len(), 4);
+    assert_eq!(
+        engines,
+        [
+            ("asr", 2),
+            ("llama.cpp", 5),
+            ("sherpa-onnx", 2),
+            ("whisper.cpp", 3)
+        ]
+        .into_iter()
+        .map(|(engine, count)| (engine.to_owned(), count))
+        .collect()
+    );
 }
 
 #[test]
@@ -1128,10 +1143,10 @@ fn windows_real_models_download_place_check_and_apply() {
         choices.iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
     } else {
         vec![
-            "windows-whisper-194-tiny",
-            "windows-whisper-194-base",
+            "windows-whisper-194-medium",
+            "windows-whisper-194-large-v3-turbo",
             "windows-sherpa-1138-pyannote3-eres2net-base",
-            "windows-llama-b11533-qwen25-15b-q4km",
+            "windows-llama-b11533-qwen3-4b-q4km",
         ]
     };
     for id in ids {

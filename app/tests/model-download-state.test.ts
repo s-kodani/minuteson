@@ -19,24 +19,17 @@ test("recipe canonical struct order and optional null bind regardless of input p
   assert.equal(JSON.stringify(parseDownloadDefinition(JSON.stringify(recipe))), JSON.stringify(recipe));
 });
 
-test("bundled ASR assets must be declared by their backend on either platform", () => {
+test("ReazonSpeech model assets are separate from the bundled runtime on either platform", () => {
   const definitions = JSON.parse(readFileSync(new URL("../model-catalog/asr-transducer.json", import.meta.url), "utf8"));
-  const haas = definitions.find((option: any) => option.id === "haas-ja-v1.0-onnx-quantized").recipe;
+  const reazon = definitions.find((option: any) => option.id === "reazonspeech-k2-v2-fp32").recipe;
+  assert.equal(canonicalRecipe(reazon).manifest.backend?.id, "sherpa-onnx-transducer");
   for (const [target, url] of [["macos_aarch64", bundledAsrSource], ["windows_x86_64", bundledWindowsSource]]) {
-    const value = structuredClone(haas);
+    const value = structuredClone(reazon);
     value.manifest.target = target;
-    const asset = value.sources.find((source: any) => source.relativePath === value.manifest.backend.files.bpeVocab);
+    const asset = value.sources.find((source: any) => source.relativePath === value.manifest.backend.files.tokens);
     asset.url = url;
-    assert.equal(canonicalRecipe(value).manifest.backend?.files.bpeVocab, "models/bpe.vocab");
-    const unreferenced = structuredClone(value);
-    delete unreferenced.manifest.backend.files.bpeVocab;
-    assert.throws(() => canonicalRecipe(unreferenced), "unreferenced bundled ASR asset");
-    const unrelatedEngine = structuredClone(value);
-    unrelatedEngine.manifest.engine = "llama.cpp";
-    assert.throws(() => canonicalRecipe(unrelatedEngine), "ASR asset attached to a non-ASR engine");
-    const missingArchive = structuredClone(value);
-    delete missingArchive.sources.find((source: any) => source.relativePath === "models/bpe.vocab").archive;
-    assert.throws(() => canonicalRecipe(missingArchive), "bundled ASR asset without an archive");
+    asset.archive = { format: "tar", expectedSize: 10240, expectedHash: hash, memberPath: "models/tokens.txt" };
+    assert.throws(() => canonicalRecipe(value));
   }
 });
 
@@ -216,46 +209,29 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 11);
-  const withAdditionalAsrChoices = [...native, ...native.slice(0, 8).map((option, i) => ({ ...option, id: `extra-${i}` }))];
-  assert.equal((await assertOfficialModelOptions(withAdditionalAsrChoices)).length, 19);
+  assert.equal(options.length, 7);
+  const extraChoices = [...native, ...native.map((option, i) => ({ ...option, id: `extra-${i}` }))];
+  assert.equal((await assertOfficialModelOptions(extraChoices)).length, 14);
   await assert.rejects(assertOfficialModelOptions(Array.from({ length: 33 }, (_, i) => ({ ...native[0], id: `extra-${i}` }))));
-  const additions = options.filter(o => o.id.startsWith("llama-b11960-"));
-  assert.deepEqual(additions.map(o => o.label), ["Gemma 4 E4B IT · Q4_K_M", "Phi-4-mini-instruct · Q4_K_M", "LFM3-1.7B · Q4_K_M"]);
-  for (const option of additions) {
-    assert.equal(option.tokenLimits?.tokenizer, "gguf");
-    assert.equal(option.tokenLimits?.maxOutputTokens, 32768);
-    assert.equal(option.tokenLimits?.maxContextTokens, option.id.includes("lfm3") ? 262144 : 131072);
-    assert.equal(option.review.manifest.engineVersion, "b11960");
-    assert.equal(option.review.manifest.quantization, "Q4_K_M");
-    assert.equal(option.review.manifest.files.filter(f => f.role === "notice").length, 2);
-    assert.equal(option.review.ready, false);
-  }
-  const invalidTokenizer = structuredClone(native);
-  invalidTokenizer.at(-1).tokenLimits.tokenizer = "unknown";
-  await assert.rejects(assertOfficialModelOptions(invalidTokenizer));
-  assert.equal(options[0].review.manifest.engine, "llama.cpp");
-  assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
-  assert.equal(options[1].tokenLimits, null);
-  assert.equal(options[0].review.manifest.files.filter(f => f.role === "notice").length, 2);
-  assert.equal(options[0].review.downloadBytes, 1_133_797_153);
-  assert.equal(options[0].review.recipeHash, "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083");
-  assert.equal(options[1].review.manifest.engine, "sherpa-onnx");
-  assert.equal(options[1].review.manifest.files.filter(f => f.role === "notice").length, 5);
-  assert.equal(options[1].review.downloadBytes, 65_153_215);
-  assert.equal(options[1].review.archiveBytes, 25_210_612);
-  assert.equal(options[1].review.totalBytes, 78_117_057);
-  assert.equal(options[1].review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
-  assert.deepEqual(options.slice(2, 4).map(o => o.review.recipeHash), [
-    "c22378addb7bfa61fa5cb4c1856d64b263d5c82923dc556ab7a9bef348f70106",
-    "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96",
-  ]);
-  for (const option of options.filter(o => o.review.manifest.engine === "llama.cpp" && o.id.includes("qwen25-"))) {
-    assert.deepEqual(option.tokenLimits, options[0].tokenLimits);
-    assert.match(option.label, /Qwen.*Q[48]/);
-  }
-  assert.equal(options[3].tokenLimits, null);
-  const qwen3 = options[4];
+  const gemma = options.find(o => o.id === "llama-b11960-gemma4-e4b-it-q4km")!;
+  assert.equal(gemma.label, "Gemma 4 E4B IT · Q4_K_M");
+  assert.deepEqual(gemma.tokenLimits, { maxInputTokens: 131072, maxOutputTokens: 32768, maxContextTokens: 131072, tokenizer: "gguf" });
+  assert.equal(gemma.review.manifest.engineVersion, "b11960");
+  assert.equal(gemma.review.manifest.quantization, "Q4_K_M");
+  assert.equal(gemma.review.manifest.files.filter(f => f.role === "notice").length, 2);
+  assert.equal(gemma.review.ready, false);
+
+  const sherpa = options.find(o => o.id === "sherpa-1138-pyannote3-eres2net-base")!;
+  assert.equal(sherpa.tokenLimits, null);
+  assert.equal(sherpa.review.manifest.files.filter(f => f.role === "notice").length, 5);
+  assert.equal(sherpa.review.downloadBytes, 65_153_215);
+  assert.equal(sherpa.review.archiveBytes, 25_210_612);
+  assert.equal(sherpa.review.totalBytes, 78_117_057);
+  assert.equal(sherpa.review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
+  const int8 = options.find(o => o.id === "sherpa-1138-pyannote3-int8-eres2net-base")!;
+  assert.equal(int8.tokenLimits, null);
+  assert.equal(int8.review.recipeHash, "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96");
+  const qwen3 = options.find(o => o.id === "llama-b11533-qwen3-8b-q4km")!;
   assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
   assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });
   assert.equal(qwen3.review.recipeHash, "d985b93ece8e0c10e87af2a2a7342be13f22a4bba729c7f8ffb44fd306b597ee");
@@ -281,15 +257,17 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     const source = option.review.sources.find(f => f.relativePath === file.relativePath)!;
     assert.match(source.url!, new RegExp(`^https://huggingface.co/unsloth/Qwen3\\.5-${size}-GGUF/resolve/[0-9a-f]{40}/`));
   }
-  assert.equal(options[3].review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
+  assert.equal(int8.review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
     "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d");
-  await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));
-  await assert.rejects(assertOfficialModelOptions([{ ...native[0], definition: JSON.stringify(recipe) }]));
-  await assert.rejects(assertOfficialModelOptions([{ ...native[0], review: { ...native[0].review, ready: true } }]));
-  for (const patch of [null, { maxInputTokens: 0 }, { maxOutputTokens: 32769 }, { maxContextTokens: 0 },
-    { maxInputTokens: 32769 }, { maxOutputTokens: 1.5 }, { maxInputTokens: "32768" }, { tokenizer: "unknown" }, { extra: 1 }]) {
-    const tokenLimits = patch === null ? null : { ...native[0].tokenLimits, ...patch };
-    await assert.rejects(assertOfficialModelOptions([{ ...native[0], tokenLimits }]));
+  const qwenNative = native.find(option => option.id === qwen3_4b.id);
+  const sherpaNative = native.find(option => option.id === sherpa.id);
+  await assert.rejects(assertOfficialModelOptions([qwenNative, qwenNative]));
+  await assert.rejects(assertOfficialModelOptions([{ ...qwenNative, definition: JSON.stringify(recipe) }]));
+  await assert.rejects(assertOfficialModelOptions([{ ...qwenNative, review: { ...qwenNative.review, ready: true } }]));
+  for (const patch of [null, { maxInputTokens: 0 }, { maxOutputTokens: 40961 }, { maxContextTokens: 0 },
+    { maxInputTokens: 40961 }, { maxOutputTokens: 1.5 }, { maxInputTokens: "40960" }, { tokenizer: "unknown" }, { extra: 1 }]) {
+    const tokenLimits = patch === null ? null : { ...qwenNative.tokenLimits, ...patch };
+    await assert.rejects(assertOfficialModelOptions([{ ...qwenNative, tokenLimits }]));
   }
-  await assert.rejects(assertOfficialModelOptions([{ ...native[1], tokenLimits: native[0].tokenLimits }]));
+  await assert.rejects(assertOfficialModelOptions([{ ...sherpaNative, tokenLimits: qwenNative.tokenLimits }]));
 });

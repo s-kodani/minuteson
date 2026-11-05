@@ -14,7 +14,8 @@ const options: OfficialModelOption[] = await Promise.all(catalog.map(async (choi
     recipeHash: await downloadDigest(recipe), packageReviewHash: await packageReviewHash(recipe.manifest), ...downloadByteTotals(recipe), totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0),
     installed: false, ready: false, publisherAuthenticity: "not_verified" } };
 }));
-function entry(option = options[0], packageId = "installed"): ModelPlacementEntry {
+const qwen = options.find(option => option.id === "llama-b11533-qwen3-4b-q4km")!;
+function entry(option = qwen, packageId = "installed"): ModelPlacementEntry {
   const manifest = option.review.manifest;
   return { packageId, engine: manifest.engine, engineVersion: manifest.engineVersion, modelName: manifest.modelName,
     modelVersion: manifest.modelVersion, quantization: manifest.quantization, totalBytes: option.review.totalBytes,
@@ -33,15 +34,15 @@ test("downloaded choice retains its value and exact label without a second insta
   const installed = entry();
   const after = modelChoices("llama.cpp", [installed], options, profile(installed.packageId));
   assert.deepEqual(after.map(c => [c.value, c.label]), before.map(c => [c.value, c.label]));
-  assert.equal(after[0].entry, installed);
-  assert.equal(modelDisplayName(installed, options), options[0].label);
-  assert.equal(installed.modelName, "Qwen2.5-1.5B-Instruct");
+  assert.equal(after.find(choice => choice.option === qwen)?.entry, installed);
+  assert.equal(modelDisplayName(installed, options), qwen.label);
+  assert.equal(installed.modelName, "Qwen3-4B");
 });
 test("older transport recipes reuse exact package bytes and display the catalog name", () => {
   const installed = entry(); installed.download!.recipeHash = "b".repeat(64);
-  assert.equal(matchesOfficialModel(installed, options[0]), true);
-  assert.equal(modelChoices("llama.cpp", [installed], options, [])[0].entry, installed);
-  assert.equal(modelDisplayName(installed, options), options[0].label);
+  assert.equal(matchesOfficialModel(installed, qwen), true);
+  assert.equal(modelChoices("llama.cpp", [installed], options, []).find(choice => choice.option === qwen)?.entry, installed);
+  assert.equal(modelDisplayName(installed, options), qwen.label);
 });
 
 test("minutes models also prepare changed executables instead of reusing weights alone", async () => {
@@ -56,7 +57,7 @@ test("minutes models also prepare changed executables instead of reusing weights
   assert.equal(choice.entry, undefined); assert.equal(modelChoiceAction(choice, [installed], used), "update_runtime");
 });
 test("Whisper keeps its model name but prepares the current engine instead of reusing a CPU-only recipe", () => {
-  const option = structuredClone(options[0]);
+  const option = structuredClone(qwen);
   option.review.manifest.engine = "whisper.cpp";
   for (const file of option.review.manifest.files) if (file.role === "llm") file.role = "asr";
   const current = entry(option, "metal"), old = entry(option, "cpu");
@@ -74,11 +75,11 @@ test("Whisper keeps its model name but prepares the current engine instead of re
   assert.equal(modelDisplayName(old, [option]), option.label);
 });
 test("duplicate packages collapse and preserve the package currently selected by the profile", () => {
-  const current = entry(options[0], "current"), newer = entry(options[0], "newer");
+  const current = entry(qwen, "current"), newer = entry(qwen, "newer");
   const choices = modelChoices("llama.cpp", [newer, current], options, profile("current"));
-  assert.equal(choices.length, 9);
-  assert.equal(choices[0].entry?.packageId, "current");
-  assert.deepEqual(choices[0].packageIds, ["newer", "current"]);
+  assert.equal(choices.length, 5);
+  assert.equal(choices.find(choice => choice.option === qwen)?.entry?.packageId, "current");
+  assert.deepEqual(choices.find(choice => choice.option === qwen)?.packageIds, ["newer", "current"]);
   assert.equal(installedModelGroups([newer, current], profile("current")).length, 1);
   assert.equal(installedModelGroups([newer, current], profile("current"))[0].entry.packageId, "current");
 });
@@ -93,20 +94,20 @@ test("all model families, sizes and quantizations remain independent even if sto
 test("removed and unfinished packages do not hide the official download choice", () => {
   for (const patch of [{ bodyRemoved: true }, { placementRecorded: false }]) {
     const choices = modelChoices("llama.cpp", [{ ...entry(), ...patch }], options, []);
-    assert.equal(choices[0].entry, undefined);
-    assert.equal(choices.length, 9);
+    assert.equal(choices.find(choice => choice.option === qwen)?.entry, undefined);
+    assert.equal(choices.length, 5);
   }
 });
 test("matching bytes never make an unchecked manual executable reusable", () => {
   const manual = { ...entry(), sourceType: "manual_import" as const, download: null };
   const choices = modelChoices("llama.cpp", [manual], options, []);
-  assert.equal(choices.length, 9);
-  assert.equal(choices[0].entry, undefined);
+  assert.equal(choices.length, 5);
+  assert.equal(choices.find(choice => choice.option === qwen)?.entry, undefined);
 });
 test("unknown imported model keeps its own name and quantization", () => {
   const other = { ...entry(), modelFiles: [{ role: "llm", size: 10, sha256: "f".repeat(64) }], modelName: "Local model", download: null, sourceType: "manual_import" as const };
   assert.equal(modelDisplayName(other, options), "Local model · Q4_K_M");
-  assert.equal(modelChoices("llama.cpp", [other], options, []).length, 10);
+  assert.equal(modelChoices("llama.cpp", [other], options, []).length, 6);
 });
 
 test("Sherpa keeps model identity but reacquires the package with the voice C API", () => {
@@ -182,7 +183,7 @@ function checkedSelection(option: OfficialModelOption) {
   return { installed, used, profiles };
 }
 function whisperWithVad(): OfficialModelOption {
-  const option = structuredClone(options[0]);
+  const option = structuredClone(qwen);
   option.review.manifest.engine = "whisper.cpp";
   for (const file of option.review.manifest.files) if (file.role === "llm") file.role = "asr";
   option.review.manifest.files.push({ relativePath: "models/vad.bin", role: "vad", expectedSize: 123, expectedHash: "e".repeat(64) });
@@ -190,7 +191,7 @@ function whisperWithVad(): OfficialModelOption {
 }
 
 test("rebuilding a shared runtime archive does not turn applied checked models into downloads or VAD upgrades", () => {
-  for (const option of [whisperWithVad(), options.find(o => o.review.manifest.engine === "sherpa-onnx")!, options[0]]) {
+  for (const option of [whisperWithVad(), options.find(o => o.review.manifest.engine === "sherpa-onnx")!, qwen]) {
     const { installed, used, profiles } = checkedSelection(option);
     const choice = modelChoices(installed.engine, [installed], [option], profiles)[0];
     assert.equal(modelChoiceAction(choice, [installed], used), "in_use");

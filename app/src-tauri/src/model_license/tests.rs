@@ -9,6 +9,12 @@ fn fixed() -> Vec<PackageManifest> {
     .map(|c| serde_json::from_value(c["recipe"]["manifest"].clone()).unwrap())
     .collect()
 }
+fn qwen() -> PackageManifest {
+    fixed()
+        .into_iter()
+        .find(|manifest| manifest.model_name == "Qwen3-4B")
+        .unwrap()
+}
 #[test]
 fn every_fixed_model_has_offline_terms_bound_to_actual_weight_identity() {
     for manifest in fixed() {
@@ -35,20 +41,18 @@ fn every_fixed_model_has_offline_terms_bound_to_actual_weight_identity() {
     }
 }
 #[test]
-fn all_six_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_changes() {
-    let network: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../model-catalog/whisper-small-network.json"
-    ))
-    .unwrap();
+fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_changes() {
+    let network: serde_json::Value =
+        serde_json::from_str(include_str!("../../../model-catalog/whisper-network.json")).unwrap();
     let vad: serde_json::Value = serde_json::from_str(include_str!(
         "../../../model-catalog/whisper-vad-network.json"
     ))
     .unwrap();
     let variants: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("../../../model-catalog/whisper-variants.json")).unwrap();
-    assert_eq!(variants.len(), 6);
+    assert_eq!(variants.len(), 3);
     for variant in variants {
-        let mut manifest = fixed().remove(0);
+        let mut manifest = qwen();
         manifest.engine = Engine::Whisper;
         manifest.files = serde_json::from_value(network["files"].clone()).unwrap();
         manifest
@@ -62,8 +66,8 @@ fn all_six_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_ch
 #[test]
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
-    assert_eq!(registry.models.len(), 20);
-    assert_eq!(registry.notices.len(), 25);
+    assert_eq!(registry.models.len(), 12);
+    assert_eq!(registry.notices.len(), 19);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();
         let text = verify_notice(record, bytes).unwrap();
@@ -81,7 +85,7 @@ fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
 }
 #[test]
 fn unknown_installed_package_reports_declaration_without_guessing_rights() {
-    let mut manifest = fixed().remove(0);
+    let mut manifest = qwen();
     manifest.files[0].expected_hash = Some("f".repeat(64)); // runtime alone does not change model license
     let weight = manifest
         .files
@@ -97,13 +101,13 @@ fn unknown_installed_package_reports_declaration_without_guessing_rights() {
     assert_eq!(review.notices[0].source_url, "");
     assert_eq!(
         review.disclosure_hash,
-        "ebba7c615ea09f6197a39301345aa6a58cd353d1bd06a81cce7f248f10fcf454"
+        "0680295d5b30b478966e7af531723613f6eff790caed0535a9b7f7c631f45664"
     );
     assert!(validate_download_policy(&manifest).is_ok());
 }
 #[test]
 fn disclosure_hash_binds_summary_restrictions_text_and_source_but_not_action_binding() {
-    let manifest = fixed().remove(0);
+    let manifest = qwen();
     let original = official(&manifest).unwrap().unwrap().disclosure_hash;
     for mutation in 0..4 {
         let mut d = official(&manifest).unwrap().unwrap();
@@ -123,28 +127,11 @@ fn disclosure_hash_binds_summary_restrictions_text_and_source_but_not_action_bin
     }
 }
 #[test]
-fn lfm_disclosure_keeps_threshold_and_related_entities_visible() {
-    let manifest = fixed()
-        .into_iter()
-        .find(|m| m.model_name == "LFM3-1.7B")
-        .unwrap();
-    let d = official(&manifest).unwrap().unwrap();
-    assert!(d.summary.contains("商用利用"));
-    assert!(d
-        .restrictions
-        .iter()
-        .any(|r| r.contains("US$10,000,000") && r.contains("関連法人")));
-    let original = d.notices.iter().find(|n| n.name.contains("LFM")).unwrap();
-    assert!(original.text.contains("LFM Open License v1.0"));
-    assert!(original.text.contains("5. Commercial Use Limitation."));
-}
-
-#[test]
 fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
-    let manifest = fixed().remove(0);
+    let manifest = qwen();
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "b76a64011d60367a1f4a049e256694a144eadc4fe9fe10ca94ce1c93d28bdaa3"
+        "77b6234add679035e883adc9955877111dd475233e2897fe7d3d7456b9570de3"
     );
     let gemma = fixed()
         .into_iter()
@@ -181,7 +168,7 @@ fn license_command_role_is_main_only() {
 
 #[test]
 fn matching_weights_with_a_non_catalog_runtime_remain_unconfirmed() {
-    let mut manifest = fixed().remove(0);
+    let mut manifest = qwen();
     assert!(installed(&manifest, &fixed()).unwrap().official);
     manifest
         .files

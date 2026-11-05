@@ -56,17 +56,15 @@ export function canonicalRecipe(value: unknown): DownloadRecipe {
       result.archive = { format: "tar", expectedSize: size(a.expectedSize), expectedHash: sha(a.expectedHash), memberPath };
     }
     const file = manifest.files[index];
-    const declaredAsrAsset = file.role === "asr_asset" && manifest.engine === "asr"
-      && Object.values(manifest.backend?.files ?? {}).includes(file.relativePath);
     if (result.url === bundledWhisperSource) {
-      const file = manifest.files[index], member = result.archive?.memberPath;
+      const member = result.archive?.memberPath;
       if (manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
         || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
     } else if (result.url === bundledAsrSource) {
-      if (manifest.engine !== "asr" || manifest.target !== "macos_aarch64" || !result.archive || !(["executable", "notice"].includes(file.role) || declaredAsrAsset)) fail();
+      if (manifest.engine !== "asr" || manifest.target !== "macos_aarch64" || !result.archive || !["executable", "notice"].includes(file.role)) fail();
     } else if (result.url === bundledWindowsSource) {
       if (manifest.target !== "windows_x86_64" || !result.archive
-        || !(["executable", "runtime_library", "notice"].includes(file.role) || declaredAsrAsset)) fail();
+        || !["executable", "runtime_library", "notice"].includes(file.role)) fail();
     } else if (result.url.startsWith("mon-bundled:")) fail();
     return result;
   });

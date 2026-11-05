@@ -42,7 +42,7 @@ cargo fmt --all --check
 
 ## 議事録ランタイムの実資材検証
 
-Desktopの`full`では、Windows x64とmacOSで固定カタログのQwen 2.5 1.5B Q4、Qwen 3 4B Q4、Qwen 3.5 4B Q4を実際に読み込みます。合成JSON入力を使い、CLIの直接実行と常駐workerの連続3要求について、出力内容・プロトコル完了・モデルデータとworkerのSHAを確認します。3モデルは旧ランタイムを使っていた系列の代表であり、全量子化・全容量や実会議の議事録品質を評価する検査ではありません。
+Desktopの`full`では、Windows x64とmacOSで固定カタログのQwen 3 4B Q4とQwen 3.5 4B Q4を実際に読み込みます。合成JSON入力を使い、CLIの直接実行と常駐workerの連続3要求について、出力内容・プロトコル完了・モデルデータとworkerのSHAを確認します。2モデルは旧ランタイムを使っていた系列の代表であり、全量子化・全容量や実会議の議事録品質を評価する検査ではありません。
 
 ```sh
 # OS別のランタイム・workerを準備した後で実行します。
@@ -53,7 +53,7 @@ python3 tools/mon_llama_runtime_check.py --metal --report output/rust-tests/llam
 
 macOSの準備には`python3 tools/mon_inference_runtime.py`、Windowsの準備には[Windowsビルド手順](build-windows.md)を使います。通常の検査はCPUを使い、Metalの追加検査はGPUへのレイヤー配置をログでも要求します。実マイク・利用中DB・会議音声は使用しません。固定資材の取得には数GiBのネットワーク・空き容量が必要です。`--models-dir`で同じIDの`.gguf`を渡す場合も容量とSHAを照合します。
 
-専用の`.cache/llama-runtime-check`へ取得するモデルデータはActionsのキャッシュと成果物へアップロードしません。3モデルの合計は約5.92 GiBで、初回取得と推論の時間を分けて確認します。同じ代表モデルの準備中は、同一archiveを開いたまま照合・展開を共有します。取り出す各ファイルのサイズ・SHA検査は省略せず、次のモデルではarchiveを再照合します。
+専用の`.cache/llama-runtime-check`へ取得するモデルデータはActionsのキャッシュと成果物へアップロードしません。2モデルの合計は約4.88 GiBで、初回取得と推論の時間を分けて確認します。同じ代表モデルの準備中は、同一archiveを開いたまま照合・展開を共有します。取り出す各ファイルのサイズ・SHA検査は省略せず、次のモデルではarchiveを再照合します。
 
 JSONには既存の`directSeconds`・`residentThreeRequestsSeconds`に加え、`preparationSeconds`、取得・照合・展開・直接実行・常駐実行の`phaseSeconds`、モデルごとの`totalSeconds`、検査全体の`runTotalSeconds`を記録します。取得には台帳更新などの小さな付随処理もあり、その時間は`acquisitionOverhead`です。`preparationSeconds`は準備全体の時間なので、内訳の`phaseSeconds`へ重ねて加算しません。途中失敗やtimeoutでも、それまでの結果、失敗した`stage`、終了状態を保存します。workerやcatalogを読めない初期段階の失敗は`choice: null`の記録となります。
 
@@ -159,7 +159,7 @@ Rustの`incremental=false`や`rlib`のみの生成は、既定設定へ自動適
 
 `make check-browser`または`npm --prefix app run test:browser`は合成IPCを使う画面検査です。実機WebView、OS権限、実音声推論とは区別します。
 
-ASR変更時は`python3 tools/mon_asr_assets.py --check`と、`python3 tools/mon_rust_tests.py -- asr model_ transcription analysis_flow local_engine::resident ipc_acl`を使います。実モデル資材と許可された合成音声がある場合のみ、`MON_ASR_ASSETS=/absolute/assets python3 tools/mon_rust_tests.py native_asr_models -- --ignored`で追加確認します。必要な資材と条件は当該テストの定義を確認してください。
+ASR変更時は`python3 tools/mon_rust_tests.py -- asr model_ transcription analysis_flow local_engine::resident ipc_acl`を使います。実モデル資材と許可された合成音声がある場合のみ、`MON_ASR_ASSETS=/absolute/assets python3 tools/mon_rust_tests.py native_asr_models -- --ignored`で追加確認します。必要な資材と条件は当該テストの定義を確認してください。
 
 ## 任意の品質と性能評価
 

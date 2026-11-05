@@ -9,7 +9,8 @@ import { parseDownloadDefinition, downloadDigest, packageReviewHash, downloadByt
 import "../src/style.css";
 import "../src/prototype-alignment.css";
 import officialChoices from "../model-catalog/macos.json";
-import whisperNetwork from "../model-catalog/whisper-small-network.json";
+import asrChoices from "../model-catalog/asr-transducer.json";
+import whisperNetwork from "../model-catalog/whisper-network.json";
 import vadNetwork from "../model-catalog/whisper-vad-network.json";
 import { defaultVadOptions } from "../src/vad-state";
 import whisperVariants from "../model-catalog/whisper-variants.json";
@@ -22,7 +23,7 @@ const fakeRuntimeFiles = [
   { relativePath: "build-info.json", role: "notice", expectedSize: 32, expectedHash: "a".repeat(64) },
 ];
 const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし", description: "同梱処理の画面検証のみ・実ファイルなし", recipe: {
-  schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files, ...vadNetwork.files] },
+  schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper medium（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files, ...vadNetwork.files] },
   sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources, ...vadNetwork.sources],
 } };
 const hybridChoices = whisperVariants.map(variant => {
@@ -35,6 +36,16 @@ const hybridChoices = whisperVariants.map(variant => {
   choice.recipe.sources[3] = { ...choice.recipe.sources[3], relativePath: path,
     url: `https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-${variant.name}.bin` };
   return choice;
+});
+const transducerChoices = asrChoices.map(choice => {
+  const runtime = [
+    { relativePath: "bin/mon-transducer-worker", role: "executable", expectedSize: 100, expectedHash: "a".repeat(64) },
+    { relativePath: "notices/nlohmann-MIT.txt", role: "notice", expectedSize: 16, expectedHash: "a".repeat(64) },
+  ];
+  const sources = runtime.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://asr-v1/asr-runtime.tar",
+    archive: { format: "tar", expectedSize: 10240, expectedHash: "a".repeat(64), memberPath: file.relativePath } }));
+  return { ...choice, recipe: { ...choice.recipe, manifest: { ...choice.recipe.manifest, files: [...runtime, ...choice.recipe.manifest.files] },
+    sources: [...sources, ...choice.recipe.sources] } };
 });
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
 f.profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
@@ -64,9 +75,9 @@ async function officialOptions() {
       const { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(option.label, { recipeHash: option.review.recipeHash }, false, f.policyRevision);
       return { ...option, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
     }));
-    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...officialChoices].map(async choice => {
+    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...transducerChoices, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
-      const review = await reviewed(definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(choice.label, { recipeHash: review.recipeHash }, choice.id.includes("lfm3"), f.policyRevision);
+      const review = await reviewed(definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(choice.label, { recipeHash: review.recipeHash }, false, f.policyRevision);
       return { id: choice.id, label: choice.label, description: choice.description, definition, review, tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
     }));
     const review = await reviewed(f.definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture("文字起こし（合成）", { recipeHash: review.recipeHash }, f.licenseRestricted, f.policyRevision);
@@ -81,7 +92,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     const option = "recipeHash" in args.target ? options.find((o: any) => o.review.recipeHash === args.target.recipeHash) : null;
     const entry = "packageId" in args.target ? f.entries.find((e: any) => e.packageId === args.target.packageId && e.reviewHash === args.target.expectedReviewHash) : null;
     if (!option && !entry) throw Error("模擬の利用条件対象不一致");
-    const result = await modelLicenseFixture(option?.label ?? entry.modelName, args.target, option?.id.includes("lfm3") || f.licenseRestricted, f.policyRevision);
+    const result = await modelLicenseFixture(option?.label ?? entry.modelName, args.target, f.licenseRestricted, f.policyRevision);
     if (f.changedPolicy) result.summary = "変更された合成条件";
     if (f.licenseDelay) return new Promise(resolve => { f.finishLicense = () => resolve(result); });
     return result;

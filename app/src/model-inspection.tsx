@@ -18,7 +18,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, isRetiredModel as isRetired, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
+import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
 import { modelVocabularySupport } from "./model-vocabulary-support";
 import { StartupNoticeHost } from "./startup-notices";
 import type { StartupNotice } from "./startup-notice-state";
@@ -192,7 +192,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     const option = choice.option;
     setTarget(choice.label);
     if (!entry && option) {
-      entry = candidateEntries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
+      entry = candidateEntries.find(item => item.sourceType === "download" && canReuseOfficialModel(item, option) && (engine === "asr" ? isAsrEngine(item.engine) : item.engine === engine) && item.placementRecorded && item.bodyRemoved !== true);
       if (!entry) {
         let receipt = downloads.get(option.review.recipeHash);
         {
@@ -390,7 +390,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const installed = installedModelGroups(entries, profiles);
 
   const selectedProfile = profiles.find(item => item.name === "standard");
-  const copyStatus = (item: ModelPlacementEntry) => isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
+  const copyStatus = (item: ModelPlacementEntry) => selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
   const purposeOf = (item: ModelPlacementEntry) => engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
   const renderCopy = (item: ModelPlacementEntry, grouped = false) => <InstalledModelCopy key={item.packageId} item={item} name={modelDisplayName(item, options)} status={copyStatus(item)} purpose={purposeOf(item)} vocabularySupport={modelVocabularySupport(item, backends)} grouped={grouped} disabled={disabled} deletion={deletion} />;
   return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
@@ -468,7 +468,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     {!installed.length && <p>導入済みモデルはありません。「ローカルAI」からモデルを導入できます。</p>}
     <ul>{installed.map(group => {
       if (group.entries.length === 1) return <li key={group.key}>{renderCopy(group.entry)}</li>;
-      const status = group.entries.some(item => copyStatus(item) === "使用中") ? "使用中" : group.entries.every(isRetired) ? "選択対象外" : "導入済み";
+      const status = group.entries.some(item => copyStatus(item) === "使用中") ? "使用中" : "導入済み";
       return <li key={group.key} className="model-inventory-group"><div className="model-inventory-summary"><strong>{modelDisplayName(group.entry, options)}</strong>
         <span>{purposeOf(group.entry)} · 合計 {bytesLabel(group.totalBytes)} · {group.entries.length}コピー · {status}</span></div>
         <details className="model-copies"><summary>コピーを管理（{group.entries.length}件）</summary><div role="group" aria-label={`${modelDisplayName(group.entry, options)}のコピー`}>

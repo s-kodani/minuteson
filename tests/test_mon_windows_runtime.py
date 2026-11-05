@@ -50,7 +50,7 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
             def acquire(url,*_):
                 self.assertNotIn('/b11533/',url)
                 return archive if '/llama.cpp/' in url else sherpa
-            with patch.object(runtime,'PACKAGE',package),patch.object(runtime,'acquire',side_effect=acquire),patch.object(runtime.mon_model_catalog,'compile_target',return_value=[]):
+            with patch.object(runtime,'PACKAGE',package),patch.object(runtime,'acquire',side_effect=acquire):
                 runtime.upstream_engines()
             for engine in ('llama','llama11960'):
                 self.assertEqual({p.relative_to(package/engine).as_posix() for p in (package/engine).rglob('*') if p.is_file()},{'llama-completion.exe','ggml-base.dll','notices/llama-MIT.txt'})

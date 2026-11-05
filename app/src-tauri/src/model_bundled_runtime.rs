@@ -152,7 +152,7 @@ impl Bundle {
     }
     #[cfg(test)]
     pub(crate) fn recipe(&self) -> Result<Recipe, String> {
-        self.recipe_for("small")
+        self.recipe_for("medium")
     }
     pub(crate) fn recipes(&self) -> Result<Vec<(String, Recipe)>, String> {
         Self::variants()?
@@ -168,15 +168,7 @@ impl Bundle {
             serde_json::from_str(include_str!("../../model-catalog/whisper-variants.json"))
                 .map_err(|_| "文字起こしモデルの候補情報が不正です")?;
         let names: Vec<_> = variants.iter().map(|v| v.name.as_str()).collect();
-        if names
-            != [
-                "tiny",
-                "base",
-                "small",
-                "medium",
-                "large-v3",
-                "large-v3-turbo",
-            ]
+        if names != ["medium", "large-v3", "large-v3-turbo"]
             || variants.iter().any(|v| {
                 v.bytes == 0
                     || v.bytes > 4 * 1024 * 1024 * 1024
@@ -193,10 +185,9 @@ impl Bundle {
             .into_iter()
             .find(|v| v.name == name)
             .ok_or("非対応の文字起こしモデルです")?;
-        let mut network: Network = serde_json::from_str(include_str!(
-            "../../model-catalog/whisper-small-network.json"
-        ))
-        .map_err(|_| "文字起こしモデルの固定配布情報が不正です")?;
+        let mut network: Network =
+            serde_json::from_str(include_str!("../../model-catalog/whisper-network.json"))
+                .map_err(|_| "文字起こしモデルの固定配布情報が不正です")?;
         let path = format!("models/ggml-{name}.bin");
         network.files[0].relative_path = path.clone();
         network.files[0].expected_size = Some(variant.bytes);

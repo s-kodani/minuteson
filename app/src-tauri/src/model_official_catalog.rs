@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 11);
+        assert_eq!(choices.len(), 7);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
             assert!(ids.insert(choice.id.clone()));
@@ -150,9 +150,9 @@ mod tests {
                         limits.max_output_tokens,
                         limits.max_context_tokens
                     ),
-                    if choice.id.contains("qwen35-") || choice.id.contains("lfm3-") {
+                    if choice.id.contains("qwen35-") {
                         (262144, 32768, 262144)
-                    } else if choice.id.contains("gemma4-") || choice.id.contains("phi4-") {
+                    } else if choice.id.contains("gemma4-") {
                         (131072, 32768, 131072)
                     } else if matches!(
                         choice.id.as_str(),
@@ -160,20 +160,14 @@ mod tests {
                     ) {
                         (40960, 32768, 40960)
                     } else {
-                        (32768, 8192, 32768)
+                        panic!("unverified minutes model")
                     }
                 );
             }
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
             let expected = match choice.id.as_str() {
-                "llama-b11533-qwen25-15b-q4km" => {
-                    "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083"
-                }
                 "sherpa-1138-pyannote3-eres2net-base" => {
                     "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
-                }
-                "llama-b11533-qwen25-15b-q8" => {
-                    "c22378addb7bfa61fa5cb4c1856d64b263d5c82923dc556ab7a9bef348f70106"
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
                     "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96"
@@ -192,12 +186,6 @@ mod tests {
                 }
                 "llama-b11960-gemma4-e4b-it-q4km" => {
                     "733daf690e7514e028c97f186ecb3f806a00338347ba2aed83f15abf9facd4aa"
-                }
-                "llama-b11960-phi4-mini-instruct-q4km" => {
-                    "5303c39fa0d3b3114d52fc071a9e09ea5502532d1a52104467db8b5f0680d190"
-                }
-                "llama-b11960-lfm3-17b-q4km" => {
-                    "9193aca93434d1450a772da9a997c4b28265537479a9a452c7fda4827f87d75f"
                 }
                 _ => panic!("unverified catalog choice"),
             };

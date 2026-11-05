@@ -18,7 +18,7 @@ if(MSVC)
 else()
   target_compile_options(mon_transducer_text_test PRIVATE -UNDEBUG)
 endif()
-add_test(NAME transducer_settings_and_bpe COMMAND mon_transducer_text_test)
+add_test(NAME transducer_hotwords COMMAND mon_transducer_text_test)
 
 # Reuse the pinned nlohmann header already acquired for the production workers.
 # Tests never fetch dependencies or require model weights.

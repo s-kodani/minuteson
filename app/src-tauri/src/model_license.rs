@@ -264,15 +264,14 @@ impl Registry {
                 }
             }
         }
-        let small: serde_json::Value = serde_json::from_str(include_str!(
-            "../../model-catalog/whisper-small-network.json"
-        ))
-        .map_err(|_| "Whisper固定情報が不正です")?;
+        let network: serde_json::Value =
+            serde_json::from_str(include_str!("../../model-catalog/whisper-network.json"))
+                .map_err(|_| "Whisper固定情報が不正です")?;
         let vad: serde_json::Value =
             serde_json::from_str(include_str!("../../model-catalog/whisper-vad-network.json"))
                 .map_err(|_| "VAD固定情報が不正です")?;
-        let mut files: Vec<PackageFile> =
-            serde_json::from_value(small["files"].clone()).map_err(|_| "Whisper構成が不正です")?;
+        let mut files: Vec<PackageFile> = serde_json::from_value(network["files"].clone())
+            .map_err(|_| "Whisper構成が不正です")?;
         files.extend(
             serde_json::from_value::<Vec<PackageFile>>(vad["files"].clone())
                 .map_err(|_| "VAD構成が不正です")?,

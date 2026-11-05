@@ -336,20 +336,15 @@ mod tests {
         let c = Capacity::synthetic(&e, 32768, 8192);
         e.model.sha256 = "b".repeat(64);
         assert!(c.validate(&e).is_err());
-        e.model.sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e".into();
-        e.model.size = 1117320736;
+        e.model.sha256 = "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5".into();
+        e.model.size = 2_497_280_256;
         let reviewed = Capacity::reviewed(&e.model).unwrap();
         assert_eq!(
             (reviewed.max_context_tokens, reviewed.max_output_tokens),
-            (32768, 8192)
+            (40_960, 32_768)
         );
         e.model.size -= 1;
         assert!(Capacity::reviewed(&e.model).is_err());
-        e.model.sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db".into();
-        e.model.size = 491400032;
-        assert!(Capacity::reviewed(&e.model)
-            .unwrap_err()
-            .contains("minutes_model_limits_unknown"));
     }
     #[test]
     fn all_catalog_llms_bind_independent_exact_bytes_and_never_exceed_output_caps() {
@@ -423,7 +418,7 @@ mod tests {
             e.model.size += 1;
             assert!(Capacity::reviewed(&e.model).is_err());
         }
-        assert_eq!(seen.len(), 9);
+        assert_eq!(seen.len(), 5);
     }
     #[test]
     fn model_input_limit_is_independent_of_context_and_output_limits() {

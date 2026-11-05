@@ -7,7 +7,7 @@ import { modelLicenseFixture } from "./model-license-fixture.ts";
 const target = { recipeHash: "a".repeat(64) };
 test("native Rust disclosure golden preserves original license bytes and matches the independent hash", async () => {
   const review = JSON.parse(readFileSync(new URL("./fixtures/model-license-native-golden.json", import.meta.url), "utf8"));
-  assert.equal(review.disclosureHash, "b76a64011d60367a1f4a049e256694a144eadc4fe9fe10ca94ce1c93d28bdaa3");
+  assert.equal(review.disclosureHash, "77b6234add679035e883adc9955877111dd475233e2897fe7d3d7456b9570de3");
   assert.deepEqual(await assertModelLicenseReview(review, review.targetBinding), review);
 });
 test("full offline disclosure binds the exact recipe, metadata and every notice byte", async () => {

@@ -3,7 +3,7 @@
 MON_RESIDENT_RUNTIME: worker package directory
 MON_RESIDENT_INPUT_WAV: synthetic mono PCM16 16k speech WAV
 MON_RESIDENT_WHISPER_MODEL / MON_RESIDENT_WHISPER_CLI
-MON_RESIDENT_LLAMA_MODEL / MON_RESIDENT_LLAMA_CLI (Qwen2.5 regression)
+MON_RESIDENT_LLAMA_MODEL / MON_RESIDENT_LLAMA_CLI (Qwen 3 regression)
 MON_RESIDENT_SHERPA_ROOT: package with bin/, models/, lib/
 MON_RESIDENT_EMBEDDING_HELPER: existing single-shot MON helper
 MON_RESIDENT_VAD_MODEL: optional pinned Silero VAD model
@@ -292,9 +292,8 @@ class NativeResident(unittest.TestCase):
             (d/'schema.json').write_text(json.dumps(dict(type='object',properties=dict(ok=dict(type='boolean')),required=['ok'],additionalProperties=False)))
             return ['--model',os.environ['MON_RESIDENT_LLAMA_MODEL'],'--file',str(d/'prompt.txt'),'--system-prompt-file',str(d/'system.txt'),'--json-schema-file',str(d/'schema.json'),'--threads','2','--threads-batch','2','--ctx-size','2048','--predict','64','--gpu-layers','0','--seed','42','--temp','0','--conversation','--jinja','--single-turn','--no-display-prompt','--no-context-shift','--no-escape','--offline','--no-warmup','--fit','off','--reasoning','off','--color','off','--log-colors','off','--simple-io','--device','none','--no-kv-offload','--no-op-offload']
         if getattr(self, 'qwen3', False):
-            qwen25_args = args
             def args(d, i):
-                values = qwen25_args(d, i)
+                values = args(d, i)
                 values[values.index('--model')+1] = os.environ['MON_RESIDENT_LLAMA_QWEN3_MODEL']
                 values[values.index('--temp')+1] = '0.7'
                 template = r"""{%- for message in messages %}{{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n<think>\n\n</think>\n\n' }}{%- endif %}"""

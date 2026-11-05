@@ -33,7 +33,7 @@ class StorePackageTests(unittest.TestCase):
             self.put(".cache/windows-runtime/package/" + name, b"runtime:" + name.encode())
         for name in msix.RUNTIME_DIRS:
             self.put(".cache/windows-runtime/package/" + name + "/worker.dll", b"MZlibrary")
-        self.put(".cache/windows-runtime/package/asr/assets/models/bpe.vocab", b"vocabulary")
+        self.put(".cache/windows-runtime/package/asr/bin/mon-transducer-worker.exe", b"transducer worker")
         self.put(".cache/windows-runtime/package/mon-speaker-embedding.pdb", b"debug only")
         self.put(".cache/windows-runtime/package/workers/worker.pdb", b"debug only")
         for name in msix.LOGOS:
@@ -116,7 +116,7 @@ class StorePackageTests(unittest.TestCase):
     def test_stage_keeps_vocabulary_dlls_notices_and_excludes_debug_files(self):
         files = self.package_stage()
         names = {f["path"] for f in files}
-        self.assertIn("windows-runtime/asr/assets/models/bpe.vocab", names)
+        self.assertIn("windows-runtime/asr/bin/mon-transducer-worker.exe", names)
         self.assertIn("windows-runtime/llama/worker.dll", names)
         self.assertIn("notices/nlohmann-json-MIT.txt", names)
         self.assertIn("resources.pri", names)

@@ -12,7 +12,7 @@ async(page)=>{
   await modal.getByRole("button",{name:"再試行",exact:true}).click();
   await modal.getByRole("heading",{name:"主要な利用技術",exact:true}).waitFor();
   await modal.getByText("React",{exact:true}).waitFor();
-  await modal.getByText("Qwen2.5-1.5B-Instruct",{exact:true}).waitFor();
+  await modal.getByText("Qwen3-4B",{exact:true}).waitFor();
   check(await page.evaluate(()=>window.creditsFixture.calls===2),"retry count incorrect");
   results.push("settings link loads lazily; native errors and explicit retry stay inside credits modal");
   await modal.getByText("ライブラリ一覧（80件）",{exact:true}).click();

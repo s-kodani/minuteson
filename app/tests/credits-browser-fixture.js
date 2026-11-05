@@ -9,7 +9,7 @@ window.__TAURI_INTERNALS__.invoke=async(command,args,options)=>{
   if(fixture.fail)throw Error("合成クレジット読込エラー");
   return {
     technologies:[entry("React","19.0.0","MIT"),entry("llama.cpp","b11533","MIT")],
-    models:[entry("Qwen2.5-1.5B-Instruct","fixed-model-version","Apache-2.0")],
+    models:[entry("Qwen3-4B","fixed-model-version","Apache-2.0")],
     dependencies:Array.from({length:80},(_,i)=>entry(`dependency-${i}`,"1.2.3","MIT")),
     notices:[{title:"依存ライブラリの通知文",text:`Synthetic notice\n${"All original attribution text remains readable.\n".repeat(300)}<script>window.creditMarkupExecuted=true</script>`}],
   };
