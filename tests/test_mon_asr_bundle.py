@@ -5,7 +5,6 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('mon_asr_bundle', Path(__file__).resolve().parents[1]/'tools/mon_asr_bundle.py')
 bundle = importlib.util.module_from_spec(SPEC)
@@ -20,14 +19,8 @@ class AsrBundleTests(unittest.TestCase):
             first=bundle.assemble(root)
             self.assertEqual(first,bundle.assemble(root))
             with tarfile.open(root/'asr-runtime.tar') as archive:
-                self.assertEqual(archive.getnames()[:2],['bin/mon-transducer-worker','notices/nlohmann-MIT.txt'])
-                members = bundle.asset_members()
-                self.assertEqual(archive.getnames()[2:], [member for _, _, _, member in members])
-                for _, file, _, member in members:
-                    self.assertEqual(len(archive.extractfile(member).read()), file['expectedSize'])
+                self.assertEqual(archive.getnames(), ['bin/mon-transducer-worker', 'notices/nlohmann-MIT.txt'])
             self.assertEqual(len(first['files']), 2)
-            self.assertEqual(set(first['modelAssets']), {'haas-ja-v1.0-onnx-quantized'})
-            self.assertEqual(first['modelAssets']['haas-ja-v1.0-onnx-quantized'][0]['role'], 'asr_asset')
             (root/'mon-transducer-worker').write_bytes(b'resigned native worker')
             second=bundle.assemble(root)
             self.assertNotEqual(first['archiveSha256'],second['archiveSha256'])
@@ -44,7 +37,9 @@ class AsrBundleTests(unittest.TestCase):
             (root/'catalog.json').write_text(json.dumps([dict(recipe=dict(manifest=dict(engine='whisper.cpp'),sources=[old_source]))]))
             bundle.append_windows_choices(root)
             choices=json.loads((root/'catalog.json').read_text(encoding='utf8'))
-            self.assertEqual(len(choices),4)
+            self.assertEqual([choice['id'] for choice in choices[1:]], [
+                'windows-reazonspeech-k2-v2-int8-fp32', 'windows-reazonspeech-k2-v2-fp32',
+            ])
             expected=bundle.digest(root/'runtime.tar')
             for choice in choices:
                 for source in choice['recipe']['sources']:
@@ -56,27 +51,9 @@ class AsrBundleTests(unittest.TestCase):
                 self.assertEqual(len([f for f in manifest['files'] if f['role']=='executable']),1)
                 self.assertEqual(len([f for f in manifest['files'] if f['role']=='runtime_library']),2)
                 self.assertTrue(all(f['relativePath'].endswith('.dll') for f in manifest['files'] if f['role']=='runtime_library'))
-                if manifest['backend']['id'] == 'sherpa-onnx-nemo-tdt':
-                    self.assertEqual(manifest['modelVersion'],'7f5ab0a4b1bf39db78afd6691eeecbc4f9d42e39')
-                    asset = next(f for f in manifest['files'] if f['relativePath'] == 'models/bpe.vocab')
-                    source = next(s for s in choice['recipe']['sources'] if s['relativePath'] == asset['relativePath'])
-                    self.assertEqual(asset['role'], 'asr_asset')
-                    self.assertEqual(source['url'], old_source['url'])
-                    self.assertEqual(source['archive']['memberPath'], 'asr/assets/haas-ja-v1.0-onnx-quantized/models/bpe.vocab')
-                    self.assertEqual(source['archive']['expectedHash'], expected)
-                else:
-                    self.assertEqual(manifest['modelVersion'],'291488c8151be24d7da4bf7af26e533fad96e407')
-                    self.assertFalse(any(f['relativePath'] == 'models/bpe.vocab' for f in manifest['files']))
+                self.assertEqual(manifest['backend']['id'], 'sherpa-onnx-transducer')
+                self.assertEqual(manifest['modelVersion'], '291488c8151be24d7da4bf7af26e533fad96e407')
             first = (root/'catalog.json').read_bytes()
             bundle.append_windows_choices(root)
             self.assertEqual((root/'catalog.json').read_bytes(), first)
             self.assertEqual(bundle.digest(root/'runtime.tar'), expected)
-
-    def test_model_specific_asset_rejects_catalog_hash_mismatch(self):
-        import copy
-        definitions = copy.deepcopy(bundle.mon_model_catalog.definitions())
-        haas = next(d for d in definitions if d['id'] == 'haas-ja-v1.0-onnx-quantized')
-        next(f for f in haas['files'] if f['relativePath'] == 'models/bpe.vocab')['expectedHash'] = '0'*64
-        with patch.object(bundle.mon_model_catalog, 'definitions', return_value=definitions):
-            with self.assertRaisesRegex(ValueError, 'catalog SHA-256'):
-                bundle.asset_members()

@@ -80,24 +80,46 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 19);
-    assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
+    let ids: Vec<_> = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|choice| choice["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "whisper-194-medium-multilingual-vad620",
+            "whisper-194-large-v3-multilingual-vad620",
+            "whisper-194-large-v3-turbo-multilingual-vad620",
+            "sherpa-1138-pyannote3-eres2net-base",
+            "sherpa-1138-pyannote3-int8-eres2net-base",
+            "llama-b11533-qwen3-8b-q4km",
+            "llama-b11533-qwen3-4b-q4km",
+            "llama-b11533-qwen35-4b-q4km",
+            "llama-b11533-qwen35-9b-q4km",
+            "llama-b11960-gemma4-e4b-it-q4km",
+            "reazonspeech-k2-v2-int8-fp32",
+            "reazonspeech-k2-v2-fp32",
+        ]
+    );
+    assert_eq!(catalog[0]["label"], "Whisper medium（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
         catalog[6]["review"]["recipeHash"],
-        "73810acdc69c22f73aea20d3d38bc84f4a53e4299bcee220f984f3b78992d083"
+        "19548a8e0a3221266c8d231c2146f85f6575c3cb71adadf89de51b000eb29a66"
     );
     assert_eq!(
-        catalog[7]["review"]["recipeHash"],
+        catalog[3]["review"]["recipeHash"],
         "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
     assert_eq!(review.recipe_schema_version, 4);
-    assert_eq!(review.download_bytes, 488_492_581);
+    assert_eq!(review.download_bytes, 1_534_653_673);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
-    assert_eq!(review.total_bytes, 488_492_581 + runtime_bytes);
+    assert_eq!(review.total_bytes, 1_534_653_673 + runtime_bytes);
     assert!(!review.installed && !review.ready);
     assert_eq!(review.publisher_authenticity, "not_verified");
     let origin = recipe.origin(&uuid::Uuid::new_v4().to_string()).unwrap();
@@ -121,14 +143,7 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        [
-            "tiny",
-            "base",
-            "small",
-            "medium",
-            "large-v3",
-            "large-v3-turbo"
-        ]
+        ["medium", "large-v3", "large-v3-turbo"]
     );
     let mut hashes = std::collections::BTreeSet::new();
     for (name, recipe) in &recipes {
@@ -165,10 +180,11 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
                 1_624_555_275,
                 "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
             ),
-            _ => (
-                model.expected_size.unwrap(),
-                model.expected_hash.as_deref().unwrap(),
+            "medium" => (
+                1_533_763_059,
+                "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
             ),
+            _ => panic!("unexpected Whisper variant"),
         };
         assert_eq!(model.expected_size, Some(size));
         assert_eq!(model.expected_hash.as_deref(), Some(sha));
@@ -215,10 +231,8 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
             .prepare(&root, recipe, &crate::test_support::never_cancelled)
             .unwrap();
     }
-    assert!(bundle.recipe_for("tiny.en").is_err());
-    // The small ASR weights retain their original model provenance.
-    let small = recipes.iter().find(|(name, _)| name == "small").unwrap();
-    assert_eq!(small.1, bundle.recipe().unwrap());
+    assert!(bundle.recipe_for("medium.en").is_err());
+    assert_eq!(recipes[0].1, bundle.recipe().unwrap());
 }
 #[test]
 fn index_rejects_changed_version_options_types_paths_sha_unknown_and_oversize() {

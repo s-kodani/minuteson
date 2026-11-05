@@ -39,7 +39,7 @@ class NativeOutputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             model = root / 'model.gguf'; model.write_bytes(b'synthetic')
-            choice = dict(id='llama-b11533-qwen25-15b-q4km', recipe=dict(manifest=dict(
+            choice = dict(id='llama-b11533-qwen3-4b-q4km', recipe=dict(manifest=dict(
                 engineVersion='b11960', files=[dict(role='llm', expectedHash='model-sha')])) )
             def run(arguments, **kwargs):
                 if 'input' not in kwargs:
@@ -284,12 +284,12 @@ class NativeFailureReportTests(unittest.TestCase):
             self.assertGreaterEqual(records[1]['totalSeconds'], records[1]['phaseSeconds'][phase])
             self.assertTrue(all(not directory.exists() for directory in calls))
 
-    def test_three_successful_representatives_keep_the_existing_report_fields(self):
+    def test_successful_representatives_keep_the_existing_report_fields(self):
         with patch.object(native, 'check', return_value=dict(directSeconds=1.0,
                 residentThreeRequestsSeconds=2.0, directPeakRssBytes=None)) as check:
             self.assertEqual(self.invoke(), 0)
         records = json.loads(self.report.read_text())
-        self.assertEqual(check.call_count, 3)
+        self.assertEqual(check.call_count, len(native.REPRESENTATIVES))
         self.assertEqual([record['choice'] for record in records], list(native.REPRESENTATIVES))
         self.assertTrue(all(record['status'] == 'passed' and record['exitCode'] == 0 for record in records))
         self.assertTrue(all(record['runTotalSeconds'] >= record['totalSeconds'] for record in records))

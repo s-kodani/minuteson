@@ -101,39 +101,6 @@ pub(crate) fn artifact_names(engine: Engine) -> &'static [&'static str] {
     }
 }
 
-fn asr_probe_hint(record: &PlacementRecord) -> Result<Option<&'static str>, String> {
-    if record.manifest.engine != Engine::Asr {
-        return Ok(None);
-    }
-    let backend = record
-        .manifest
-        .backend
-        .as_ref()
-        .ok_or("ASRバックエンドがありません")?;
-    Ok(crate::transcription::asr::find(&backend.id)?.compatibility_hint())
-}
-
-fn settings_for(record: &PlacementRecord) -> Result<serde_json::Value, String> {
-    let mut value = settings(record.manifest.engine);
-    if let Some(hint) = asr_probe_hint(record)? {
-        value["vadEnabled"] = serde_json::json!(false);
-        value["additionalHotwordsCheck"] = serde_json::json!(hint);
-    }
-    Ok(value)
-}
-
-fn artifact_names_for(record: &PlacementRecord) -> Result<Vec<&'static str>, String> {
-    let mut names = artifact_names(record.manifest.engine).to_vec();
-    if asr_probe_hint(record)?.is_some() {
-        names.extend([
-            "with-hints/input-source.json",
-            "with-hints/result.json",
-            "with-hints/stderr.log",
-            "with-hints/stdout.log",
-        ]);
-    }
-    Ok(names)
-}
 impl ProbeReport {
     pub(crate) fn validate(&self, record: &PlacementRecord) -> Result<(), String> {
         record.validate()?;
@@ -141,7 +108,7 @@ impl ProbeReport {
     }
     pub(crate) fn validate_portable(&self, record: &PlacementRecord) -> Result<(), String> {
         record.validate_portable()?;
-        let names = artifact_names_for(record)?;
+        let names = artifact_names(record.manifest.engine);
         if self.schema_version != 1
             || self.adapter_revision != 1
             || !canonical_id(&self.operation_id)
@@ -149,13 +116,13 @@ impl ProbeReport {
             || self.review_hash != record.review_hash
             || self.engine != record.manifest.engine
             || self.declared_engine_version != record.manifest.engine_version
-            || self.settings != settings_for(record)?
+            || self.settings != settings(record.manifest.engine)
             || self.artifacts.len() != names.len()
             || self.elapsed_ms > i64::MAX as u64
         {
             return Err("モデル互換性の試行条件・対象が一致しません".into());
         }
-        for (artifact, name) in self.artifacts.iter().zip(names) {
+        for (artifact, name) in self.artifacts.iter().zip(names.iter().copied()) {
             if artifact.name != name || artifact.size > 16 * 1024 * 1024 || !hash(&artifact.sha256)
             {
                 return Err("モデル互換性の入力・出力・ログ証拠が不正です".into());

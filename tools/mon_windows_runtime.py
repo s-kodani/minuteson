@@ -151,18 +151,6 @@ def upstream_engines():
             leaf=Path(member.name).name
             if member.isfile() and (leaf=='sherpa-onnx-offline-speaker-diarization.exe' or leaf.lower().endswith('.dll')):
                 dump(archive.extractfile(member).read(),PACKAGE/'sherpa'/leaf)
-    # Ship engine notices with the app itself, before any model is downloaded.
-    upstream=mon_model_catalog.compile_target('windows_x86_64')
-    for choice in upstream:
-        if choice['id'] not in ('llama-b11533-qwen25-15b-q4km','sherpa-1138-pyannote3-eres2net-base'):continue
-        engine='llama' if choice['recipe']['manifest']['engine']=='llama.cpp' else 'sherpa'
-        for file,source in zip(choice['recipe']['manifest']['files'],choice['recipe']['sources']):
-            if file['role']!='notice':continue
-            if file['relativePath']=='notices/Qwen-Apache-2.0.txt' or file['relativePath']=='notices/segmentation-MIT.txt':continue
-            url=source['url']
-            if file['relativePath']=='notices/llama-MIT.txt':url='https://raw.githubusercontent.com/ggml-org/llama.cpp/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE'
-            path=acquire(url,file['expectedSize'],file['expectedHash'])
-            dump(path.read_bytes(),PACKAGE/engine/file['relativePath'])
     # The CPU package is verified as an entire upstream release. Preserve the
     # full DLL dispatch set rather than depending on the build host's PATH.
     print('Windows runtime files:',[str(p.relative_to(PACKAGE)) for p in PACKAGE.rglob('*') if p.is_file()],flush=True)
@@ -173,7 +161,7 @@ def catalog(redist_files=None):
     if set(redist_files) != set(VC_RUNTIME_FILES) or any(not isinstance(data, bytes) or not data for data in redist_files.values()):
         raise ValueError('All required Visual C++ redistributable DLL bytes must be supplied')
     upstream=mon_model_catalog.compile_target('windows_x86_64')
-    whisper_network=json.loads((ROOT/'app/model-catalog/whisper-small-network.json').read_text(encoding="utf8"))
+    whisper_network=json.loads((ROOT/'app/model-catalog/whisper-network.json').read_text(encoding="utf8"))
     variants=json.loads((ROOT/'app/model-catalog/whisper-variants.json').read_text(encoding="utf8"))
     choices=[]
     for variant in variants:

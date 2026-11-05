@@ -18,8 +18,6 @@ fn fixture(id: &str) -> (AsrConfig, Value) {
         .enumerate()
         .map(|(index, slot)| {
             let name = match *slot {
-                "data" => "encoder.data",
-                "bpeVocab" => "bpe.vocab",
                 "decoder" => "decoder.onnx",
                 "joiner" => "joiner.onnx",
                 "library" => "sherpa-library",
@@ -57,7 +55,7 @@ fn fixture(id: &str) -> (AsrConfig, Value) {
         "schemaVersion": 1, "backendId": id, "models": models, "durationUs": 1_000_000,
         "segments": [{"startUs":100_000,"endUs":900_000,"text":"ミライに連絡してください"}],
         "tokens": [{"startUs":100_000,"text":"ミライ"}],
-        "ignoredHotwords": ["未対応"], "ignoredHotwordReasons":{"未対応":"token unavailable"},
+        "ignoredHotwords": ["未対応"],
     });
     (config, result)
 }
@@ -73,82 +71,75 @@ fn unavailable(mut config: AsrConfig) -> AsrConfig {
 
 #[test]
 fn asr_saved_result_rebinds_all_verified_aliases_and_roundtrips_without_models() {
-    for id in [asr::TRANSDUCER, asr::NEMO_TDT] {
-        let (original, mut raw) = fixture(id);
-        let aliases = std::iter::once(("model", &original.model))
-            .chain(
-                original
-                    .backend
-                    .as_ref()
-                    .unwrap()
-                    .files
-                    .values()
-                    .map(|file| ("artifact", file)),
+    let (original, mut raw) = fixture(asr::TRANSDUCER);
+    let aliases = std::iter::once(("model", &original.model))
+        .chain(
+            original
+                .backend
+                .as_ref()
+                .unwrap()
+                .files
+                .values()
+                .map(|file| ("artifact", file)),
+        )
+        .map(|(role, file)| {
+            (
+                (role.to_owned(), file.size, file.sha256.clone()),
+                file.path.file_name().unwrap().to_str().unwrap().to_owned(),
             )
-            .map(|(role, file)| {
-                (
-                    (role.to_owned(), file.size, file.sha256.clone()),
-                    file.path.file_name().unwrap().to_str().unwrap().to_owned(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let aliases = |file: &Fingerprint, role: &str| {
-            aliases
-                .get(&(role.to_owned(), file.size, file.sha256.clone()))
-                .cloned()
-                .into_iter()
-                .collect()
-        };
-        for path in raw["models"].as_object_mut().unwrap().values_mut() {
-            *path = json!(path.as_str().unwrap().rsplit('/').next().unwrap());
-        }
-        let portable = unavailable(original);
-        let bytes = serde_json::to_vec(&raw).unwrap();
-        let (before, after) = restore_asr_result(
-            &bytes,
-            &portable,
-            &portable,
-            &["encoder.onnx".into()],
-            1_000_000,
-            &aliases,
-        )
-        .unwrap();
-        assert_eq!(before, after);
-        let rebuilt: Value = serde_json::from_slice(&after).unwrap();
-        assert_eq!(
-            rebuilt["models"].as_object().unwrap().len(),
-            raw["models"].as_object().unwrap().len()
-        );
-        for path in rebuilt["models"].as_object().unwrap().values() {
-            assert!(path.as_str().unwrap().starts_with("mon-unavailable:"));
-        }
-        for field in [
-            "segments",
-            "tokens",
-            "ignoredHotwords",
-            "ignoredHotwordReasons",
-        ] {
-            assert_eq!(rebuilt[field], raw[field]);
-        }
-        let (_, again) = restore_asr_result(
-            &after,
-            &portable,
-            &portable,
-            &["encoder.onnx".into()],
-            1_000_000,
-            &aliases,
-        )
-        .unwrap();
-        assert_eq!(
-            again, after,
-            "rebackup/rerestore must retain path-free results"
-        );
+        })
+        .collect::<BTreeMap<_, _>>();
+    let aliases = |file: &Fingerprint, role: &str| {
+        aliases
+            .get(&(role.to_owned(), file.size, file.sha256.clone()))
+            .cloned()
+            .into_iter()
+            .collect()
+    };
+    for path in raw["models"].as_object_mut().unwrap().values_mut() {
+        *path = json!(path.as_str().unwrap().rsplit('/').next().unwrap());
     }
+    let portable = unavailable(original);
+    let bytes = serde_json::to_vec(&raw).unwrap();
+    let (before, after) = restore_asr_result(
+        &bytes,
+        &portable,
+        &portable,
+        &["encoder.onnx".into()],
+        1_000_000,
+        &aliases,
+    )
+    .unwrap();
+    assert_eq!(before, after);
+    let rebuilt: Value = serde_json::from_slice(&after).unwrap();
+    assert_eq!(
+        rebuilt["models"].as_object().unwrap().len(),
+        raw["models"].as_object().unwrap().len()
+    );
+    for path in rebuilt["models"].as_object().unwrap().values() {
+        assert!(path.as_str().unwrap().starts_with("mon-unavailable:"));
+    }
+    for field in ["segments", "tokens", "ignoredHotwords"] {
+        assert_eq!(rebuilt[field], raw[field]);
+    }
+    let (_, again) = restore_asr_result(
+        &after,
+        &portable,
+        &portable,
+        &["encoder.onnx".into()],
+        1_000_000,
+        &aliases,
+    )
+    .unwrap();
+    assert_eq!(
+        again, after,
+        "rebackup/rerestore must retain path-free results"
+    );
 }
 
 #[test]
 fn asr_saved_result_refuses_unbound_dependencies_wrong_backend_and_invalid_times() {
-    let (config, raw) = fixture(asr::NEMO_TDT);
+    let (config, raw) = fixture(asr::TRANSDUCER);
     for corruption in [
         "dependency",
         "missing-slot",
@@ -158,12 +149,12 @@ fn asr_saved_result_refuses_unbound_dependencies_wrong_backend_and_invalid_times
     ] {
         let mut value = raw.clone();
         match corruption {
-            "dependency" => value["models"]["data"] = json!("foreign.data"),
+            "dependency" => value["models"]["decoder"] = json!("foreign.onnx"),
             "missing-slot" => {
-                value["models"].as_object_mut().unwrap().remove("bpeVocab");
+                value["models"].as_object_mut().unwrap().remove("tokens");
             }
             "extra-slot" => value["models"]["extra"] = json!("undeclared.onnx"),
-            "backend" => value["backendId"] = json!(asr::TRANSDUCER),
+            "backend" => value["backendId"] = json!(asr::WHISPER),
             "time" => value["segments"][0]["endUs"] = json!(2_000_000),
             _ => unreachable!(),
         }

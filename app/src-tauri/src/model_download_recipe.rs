@@ -187,7 +187,6 @@ impl RecipeExt for Recipe {
                         file.role,
                         crate::model_inspection::Role::Executable
                             | crate::model_inspection::Role::Notice
-                            | crate::model_inspection::Role::AsrAsset
                     )
                 {
                     return Err("ASR同梱素材の対象・構成が不正です".into());
@@ -200,7 +199,6 @@ impl RecipeExt for Recipe {
                         crate::model_inspection::Role::Executable
                             | crate::model_inspection::Role::RuntimeLibrary
                             | crate::model_inspection::Role::Notice
-                            | crate::model_inspection::Role::AsrAsset
                     )
                 {
                     return Err("Windows同梱素材の対象・構成が不正です".into());

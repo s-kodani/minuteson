@@ -73,4 +73,4 @@ npm --prefix app run tauri -- dev
 
 このリポジトリの自作コード・文書・自作画像は、[MIT License](LICENSE)で提供します。著作権表示は`Copyright (c) 2026 s-kodani`です。
 
-第三者のコード・資料・語彙データ、依存ライブラリ、外部から取得するAIモデルと実行エンジンには、それぞれの利用条件が適用されます。個別のLICENSE・NOTICE・著作権表示を優先してください。[第三者ライセンス資料](third-party/notices/README.md)、[モデル利用条件の原文](third-party/model-licenses/README.md)、[モデル定義](app/model-catalog/)を参照してください。LFM3など、商用利用に年商等の条件があるモデルも含まれます。導入画面の利用条件と全文を確認してください。
+第三者のコード・資料、依存ライブラリ、外部から取得するAIモデルと実行エンジンには、それぞれの利用条件が適用されます。個別のLICENSE・NOTICE・著作権表示を優先してください。[第三者ライセンス資料](third-party/notices/README.md)、[モデル利用条件の原文](third-party/model-licenses/README.md)、[モデル定義](app/model-catalog/)を参照してください。導入画面の利用条件と全文を確認してください。

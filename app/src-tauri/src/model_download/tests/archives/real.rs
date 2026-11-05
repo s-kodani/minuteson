@@ -3,16 +3,6 @@ use super::*;
 #[test]
 #[ignore = "requires official local assets and explicit permission for a synthetic CPU trial"]
 fn real_llama_catalog_archive_copy_and_cpu_with_reused_assets() {
-    llama_trial("llama-b11533-qwen25-15b-q4km");
-}
-
-#[test]
-#[ignore = "requires fixed official Q8 assets and explicit synthetic CPU/Markdown generation permission"]
-fn real_qwen_q8_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets() {
-    llama_trial("llama-b11533-qwen25-15b-q8");
-}
-
-fn llama_trial(choice: &str) {
     let archive_path =
         PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").expect("official archive path"));
     let model_path =
@@ -21,7 +11,7 @@ fn llama_trial(choice: &str) {
         std::env::var("MON_QA_QWEN_LICENSE").expect("fixed official Qwen license path"),
     );
     trial(
-        choice,
+        "llama-b11533-qwen3-4b-q4km",
         &|url| {
             if url.ends_with(".tar.gz") {
                 archive_path.clone()
@@ -90,7 +80,7 @@ fn trial(choice_id: &str, local: &impl Fn(&str) -> PathBuf, expected_calls: usiz
 }
 
 #[test]
-#[ignore = "requires the app-owned bundled runtime and fixed small model assets; explicit synthetic CPU permission"]
+#[ignore = "requires the app-owned bundled runtime and fixed medium model assets; explicit synthetic CPU permission"]
 fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets() {
     let bundle_root = PathBuf::from(
         std::env::var("MON_QA_ASR_BUNDLE").expect("native app bundle resource directory"),
@@ -103,11 +93,11 @@ fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets(
         .prepare(&bundle_root, &recipe, &crate::test_support::never_cancelled)
         .unwrap();
     trial_recipe(
-        "whisper-194-small-multilingual",
+        "whisper-194-medium-multilingual",
         recipe,
         &|url| {
-            if url.ends_with("ggml-small.bin") {
-                payload.join("models/ggml-small.bin")
+            if url.ends_with("ggml-medium.bin") {
+                payload.join("models/ggml-medium.bin")
             } else if url.ends_with("README.md") {
                 payload.join("notices/whisper-model-card.md")
             } else {
@@ -122,7 +112,7 @@ fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets(
 }
 
 #[test]
-#[ignore = "requires all six fixed Whisper assets, the app-owned runtime, and explicit synthetic CPU permission"]
+#[ignore = "requires all three fixed Whisper assets, the app-owned runtime, and explicit synthetic CPU permission"]
 fn real_all_whisper_variants_copy_cpu_and_apply_with_reused_assets() {
     all_whisper_trials(None);
 }
@@ -147,12 +137,11 @@ fn real_all_whisper_variants_import_transcribe_publish_and_reopen_synthetic_voic
 fn all_whisper_trials(voice: Option<&Path>) {
     let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").expect("app runtime"));
     let payload =
-        PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").expect("small payload and notices"));
+        PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").expect("Whisper download notices"));
     let extra = PathBuf::from(
         std::env::var("MON_QA_EXTRA_MODELS")
-            .expect("fixed base, medium, large-v3 and large-v3-turbo assets"),
+            .expect("fixed medium, large-v3 and large-v3-turbo assets"),
     );
-    let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").expect("fixed tiny asset"));
     let choices = crate::model_bundled_runtime::Bundle::open(&bundle_root)
         .unwrap()
         .recipes()
@@ -162,26 +151,12 @@ fn all_whisper_trials(voice: Option<&Path>) {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        [
-            "tiny",
-            "base",
-            "small",
-            "medium",
-            "large-v3",
-            "large-v3-turbo"
-        ]
+        ["medium", "large-v3", "large-v3-turbo"]
     );
     // Keep only one variant's staging and managed copies alive at a time.
     // Exercise the same recipe, placement and CPU admission for every variant.
     for (name, recipe) in choices {
-        let model = match name.as_str() {
-            "tiny" => tiny.clone(),
-            "base" | "medium" | "large-v3" | "large-v3-turbo" => {
-                extra.join(format!("ggml-{name}.bin"))
-            }
-            "small" => payload.join("models/ggml-small.bin"),
-            _ => panic!("unexpected Whisper variant"),
-        };
+        let model = extra.join(format!("ggml-{name}.bin"));
         let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
         bundle
             .prepare(&bundle_root, &recipe, &crate::test_support::never_cancelled)
@@ -616,8 +591,7 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
             [
                 "sherpa-1138-pyannote3-eres2net-base",
                 "sherpa-1138-pyannote3-int8-eres2net-base",
-                "llama-b11533-qwen25-15b-q4km",
-                "llama-b11533-qwen25-15b-q8",
+                "llama-b11533-qwen3-4b-q4km",
             ]
             .contains(&c["id"].as_str().unwrap())
         })
@@ -628,10 +602,6 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    allowed.push(
-        // Historical fixture placement stays intact, but is no longer offered.
-        "36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e".to_string(),
-    );
     allowed.extend(
         crate::model_bundled_runtime::Bundle::open(&PathBuf::from(
             std::env::var("MON_QA_ASR_BUNDLE").unwrap(),
@@ -661,8 +631,6 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
         .all(|m| m.title.starts_with("QA-abnormal-")));
     let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").unwrap());
     let payload = PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").unwrap());
-    let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").unwrap());
-    let small = PathBuf::from(std::env::var("MON_QA_ASR_SMALL").unwrap());
     let extra = PathBuf::from(std::env::var("MON_QA_EXTRA_MODELS").unwrap());
     let recipes = crate::model_bundled_runtime::Bundle::open(&bundle_root)
         .unwrap()
@@ -677,18 +645,8 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
             &format!("whisper-194-{name}-multilingual"),
             recipe,
             &|url| {
-                if url.ends_with("ggml-tiny.bin") {
-                    tiny.clone()
-                } else if url.ends_with("ggml-base.bin") {
-                    extra.join("ggml-base.bin")
-                } else if url.ends_with("ggml-small.bin") {
-                    small.clone()
-                } else if url.ends_with("ggml-medium.bin") {
-                    extra.join("ggml-medium.bin")
-                } else if url.ends_with("ggml-large-v3.bin") {
-                    extra.join("ggml-large-v3.bin")
-                } else if url.ends_with("ggml-large-v3-turbo.bin") {
-                    extra.join("ggml-large-v3-turbo.bin")
+                if url.ends_with(&format!("ggml-{name}.bin")) {
+                    extra.join(format!("ggml-{name}.bin"))
                 } else if url.ends_with("README.md") {
                     payload.join("notices/whisper-model-card.md")
                 } else {
@@ -707,14 +665,12 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
     let assets = PathBuf::from(std::env::var("MON_QA_SHERPA_ASSETS").unwrap());
     let notices = PathBuf::from(std::env::var("MON_QA_SHERPA_NOTICES").unwrap());
     let archive = PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").unwrap());
-    let qwen15 = PathBuf::from(std::env::var("MON_QA_QWEN15_MODEL").unwrap());
-    let qwen15_q8 = PathBuf::from(std::env::var("MON_QA_QWEN15_Q8_MODEL").unwrap());
+    let qwen = PathBuf::from(std::env::var("MON_QA_QWEN_MODEL").unwrap());
     let license = PathBuf::from(std::env::var("MON_QA_QWEN_LICENSE").unwrap());
     for (choice_id, calls) in [
         ("sherpa-1138-pyannote3-eres2net-base", 7),
         ("sherpa-1138-pyannote3-int8-eres2net-base", 7),
-        ("llama-b11533-qwen25-15b-q4km", 3),
-        ("llama-b11533-qwen25-15b-q8", 3),
+        ("llama-b11533-qwen3-4b-q4km", 3),
     ] {
         let choice = catalog
             .as_array()
@@ -730,11 +686,7 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                 if url.ends_with(".tar.gz") {
                     archive.clone()
                 } else if url.ends_with(".gguf") {
-                    if choice_id == "llama-b11533-qwen25-15b-q8" {
-                        qwen15_q8.clone()
-                    } else {
-                        qwen15.clone()
-                    }
+                    qwen.clone()
                 } else if url.contains("/Qwen/") {
                     license.clone()
                 } else if url.ends_with("osx-arm64-shared-no-tts.tar.bz2") {
@@ -762,22 +714,20 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
             Some((&meetings, &models, &storage)),
         );
     }
-    assert_eq!(storage.list_model_placements().unwrap().len(), 9);
+    assert_eq!(storage.list_model_placements().unwrap().len(), 6);
     let profiles = storage.model_profiles().unwrap();
     assert_eq!(profiles[0].components.len(), 3);
     assert!(profiles[0].configuration_complete);
     assert!(profiles[0]
         .components
         .iter()
-        .any(
-            |component| component.model_name == "Qwen2.5-1.5B-Instruct Q8_0"
-                && component.engine == crate::model_inspection::Engine::Llama
-                && component.settings_match
-                && component.compatibility_current
-        ));
+        .any(|component| component.model_name == "Qwen3-4B"
+            && component.engine == crate::model_inspection::Engine::Llama
+            && component.settings_match
+            && component.compatibility_current));
     assert!(profiles[1].components.is_empty());
     println!(
-        "dedicated native fixture selected Qwen 1.5B; no download, capture, playback or normal QA mutation"
+        "dedicated native fixture selected Qwen 3 4B; no download, capture, playback or normal QA mutation"
     );
     drop(storage);
     drop(bootstrap);

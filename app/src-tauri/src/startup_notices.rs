@@ -206,7 +206,11 @@ mod tests {
     fn runtime_notice_requires_exact_managed_weights_and_an_old_present_package() {
         let choices: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../../model-catalog/macos.json")).unwrap();
-        let recipe: Recipe = serde_json::from_value(choices[0]["recipe"].clone()).unwrap();
+        let choice = choices
+            .iter()
+            .find(|choice| choice["id"] == "llama-b11533-qwen3-4b-q4km")
+            .unwrap();
+        let recipe: Recipe = serde_json::from_value(choice["recipe"].clone()).unwrap();
         let weight = recipe
             .manifest
             .files

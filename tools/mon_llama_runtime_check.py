@@ -21,7 +21,7 @@ import time
 from mon_windows_parity_assets import Fetch
 
 ROOT = Path(__file__).resolve().parents[1]
-REPRESENTATIVES = ('llama-b11533-qwen25-15b-q4km', 'llama-b11533-qwen3-4b-q4km', 'llama-b11533-qwen35-4b-q4km')
+REPRESENTATIVES = ('llama-b11533-qwen3-4b-q4km', 'llama-b11533-qwen35-4b-q4km')
 
 
 @contextmanager

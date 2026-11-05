@@ -26,7 +26,7 @@ for (const [name, fixture, source] of suites) {
           `<script type="module">await import("/tests/${fixture}");</script>`);
         await route.fulfill({ response, body });
       });
-      await page.goto(`${baseURL}/${["vad-settings", "qwen35-models", "additional-minutes-models"].includes(name) ? "?official=1" : ""}`);
+      await page.goto(`${baseURL}/${["vad-settings", "all-model-choices", "whisper-variants", "qwen35-models"].includes(name) ? "?official=1" : ""}`);
       if (fixtureReadiness[fixture]) await page.waitForFunction(key => !!window[key], fixtureReadiness[fixture]);
     }
     const capturePath = path => info.outputPath(basename(path));

@@ -3,7 +3,7 @@
   const model=page.getByRole('combobox',{name:'文字起こしのモデル',exact:true});
   const row=page.locator('.model-selection-row').filter({has:model});
   await model.waitFor();
-  await model.selectOption('official:whisper-synthetic-tiny');
+  await model.selectOption('official:whisper-synthetic-medium');
   await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
   await approveModelLicense();
   const panel=page.getByRole('region',{name:'発話区間検知（VAD）',exact:true});
@@ -51,10 +51,10 @@
   await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli===600);
   check(await page.evaluate(()=>window.modelDownloadFixture.calls.filter(c=>['start_model_download','check_model_compatibility'].includes(c.command)).length)===callsBefore,'tuning downloaded or reran CPU');
   results.push('off keeps values, on restores them, reset waits for apply, tuning reuses the model');
-  await model.selectOption('official:whisper-synthetic-base');
+  await model.selectOption('official:whisper-synthetic-large-v3');
   await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
   await approveModelLicense();
-  await page.waitForFunction(()=>window.modelDownloadFixture.profiles[0].components[0].modelName==='Whisper base（多言語）');
+  await page.waitForFunction(()=>window.modelDownloadFixture.profiles[0].components[0].modelName==='Whisper large-v3（多言語）');
   await panel.waitFor();
   await page.evaluate(()=>window.modelDownloadFixture.setVisible(false)); await panel.waitFor({state:'hidden'});
   await page.evaluate(()=>window.modelDownloadFixture.setVisible(true)); await panel.waitFor();
@@ -79,12 +79,12 @@
   // An installed pre-VAD model matches the official display choice, but offers an upgrade.
   await page.evaluate(()=>{
     const f=window.modelDownloadFixture;
-    const old=f.entries.find(e=>e.modelName==='Whisper tiny（多言語）');
+    const old=f.entries.find(e=>e.modelName==='Whisper medium（多言語）');
     old.modelFiles=old.modelFiles.filter(file=>file.role!=='vad'); old.download.recipeHash='d'.repeat(64);
     f.setVisible(false);
   });
   await panel.waitFor({state:'hidden'}); await page.evaluate(()=>window.modelDownloadFixture.setVisible(true)); await model.waitFor();
-  await model.selectOption('official:whisper-synthetic-tiny');
+  await model.selectOption('official:whisper-synthetic-medium');
   await row.getByRole('button',{name:'VADを追加して使用',exact:true}).waitFor();
   results.push('installed pre-VAD weights offer an explicit VAD upgrade without duplicate choices');
   return {passed:results.length,results};
