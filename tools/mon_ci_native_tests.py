@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Build native tests once; select quick, heavy or full without profile changes."""
 import argparse
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -16,7 +19,7 @@ SWIFT_FIXTURE = "swift_generated_pc_only_capture"
 
 def build_library_tests(manifest, *, all_targets=False, targets=None):
     command = ["cargo", "test", "--manifest-path", str(manifest), "--locked",
-               *([] if all_targets else ["--lib"]), "--no-run", "--message-format=json"]
+               *([] if all_targets else ["--lib"]), "--timings", "--no-run", "--message-format=json"]
     executables = []
     linked_paths = []
     with subprocess.Popen(command, cwd=manifest.parent, stdout=subprocess.PIPE,
@@ -87,10 +90,91 @@ def runtime_environment(executable, linked_paths, cwd):
     return environment
 
 
-def _run_native_tests(root, swift_fixture, suite, all_targets, threads, processes, metrics):
+@contextmanager
+def measured_phase(metrics, name):
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        metrics["phaseSeconds"][name] += time.monotonic() - started
+
+
+def diagnostic_context(manifest):
+    """Capture only build-related context, never the complete environment."""
+    keys = ("RUNNER_OS", "RUNNER_ARCH", "RUNNER_ENVIRONMENT", "ImageOS", "ImageVersion",
+            "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_JOBS",
+            "MON_CI_RUST_CACHE_HIT", "MON_CI_NATIVE_CACHE_HIT", "MON_CI_FULL")
+    context = {"pythonVersion": platform.python_version(),
+               "environment": {key: os.environ[key] for key in keys if key in os.environ}}
+    if "TAURI_CONFIG" in os.environ:
+        context["tauriConfigSha256"] = hashlib.sha256(os.environ["TAURI_CONFIG"].encode()).hexdigest()
+    try:
+        query = subprocess.run([os.environ.get("RUSTC", "rustc"), "-vV"], cwd=manifest.parent,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=30, check=False)
+        context["rustc"] = query.stdout.strip() if query.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        context["rustc"] = None
+    # Reusable/release workflows may check out source_ref instead of GITHUB_SHA.
+    # Bind measurements to the actual checkout, without recording diff content.
+    context["sourceSha"] = None
+    try:
+        query = subprocess.run(["git", "-C", str(manifest.parents[2]), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=10, check=False)
+        sha = query.stdout.strip()
+        if query.returncode == 0 and len(sha) in (40, 64) and all(c in "0123456789abcdef" for c in sha):
+            context["sourceSha"] = sha
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return context
+
+
+def collect_cargo_timings(manifest, executables, destination, phase, since_ns):
+    """Stage this Cargo invocation's HTML beside the uploaded JSON diagnostics."""
+    roots = {manifest.parent / "target", manifest.parents[2] / "target"}
+    if os.environ.get("CARGO_TARGET_DIR"):
+        configured = Path(os.environ["CARGO_TARGET_DIR"])
+        roots.add(configured if configured.is_absolute() else manifest.parent / configured)
+    for executable in executables:
+        # Also cover an explicit --target triple below the Cargo target root.
+        root = executable.parent.parent.parent
+        roots.update((root, root.parent))
+    reports = []
+    seen = set()
+    for root in sorted(roots):
+        timing_root = root.resolve() / "cargo-timings"
+        if timing_root in seen:
+            continue
+        seen.add(timing_root)
+        for source in sorted(timing_root.glob("cargo-timing*.html")):
+            if source.is_symlink() or not source.is_file() or source.stat().st_mtime_ns < since_ns:
+                continue
+            # Different target directories must not overwrite one another.
+            folder = hashlib.sha256(str(timing_root).encode()).hexdigest()[:12]
+            target = destination / phase / folder / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            reports.append(target.relative_to(destination.parent).as_posix())
+    return reports
+
+
+def _run_native_tests(root, swift_fixture, suite, all_targets, threads, processes, metrics,
+                      timing_directory=None):
     manifest = (ROOT if root is None else Path(root)).resolve() / "app/src-tauri/Cargo.toml"
     targets = {}
+    executables = []
+    def collect(phase, since_ns):
+        if timing_directory is not None:
+            try:
+                metrics["cargoTimingReports"].extend(collect_cargo_timings(
+                    manifest, executables, timing_directory, phase, since_ns))
+            except OSError as error:
+                # Diagnostics must not turn a test failure into a copy error or
+                # discard the legacy JSON report when a filesystem is full.
+                print(f"[rust-tests] Cannot stage Cargo timings: {error}", file=sys.stderr)
     started = time.monotonic()
+    timing_started_ns = time.time_ns()
     try:
         if all_targets:
             code, executables, linked_paths = build_library_tests(
@@ -99,6 +183,7 @@ def _run_native_tests(root, swift_fixture, suite, all_targets, threads, processe
             code, executables, linked_paths = build_library_tests(manifest)
     finally:
         metrics["buildSeconds"] = time.monotonic() - started
+        collect("build", timing_started_ns)
     if code:
         return code
     libraries = ([path for path in executables if targets[path] == TEST_TARGET]
@@ -119,24 +204,26 @@ def _run_native_tests(root, swift_fixture, suite, all_targets, threads, processe
             is_library = executable == libraries[0]
             if suite == "heavy" and not is_library:
                 continue
-            environment = runtime_environment(executable, linked_paths, manifest.parent)
+            with measured_phase(metrics, "runtimeEnvironment"):
+                environment = runtime_environment(executable, linked_paths, manifest.parent)
             environments[executable] = environment
-            if suite != "full" and is_library:
-                # Import lazily so the existing full-library entry point stays
-                # independent of suite inventory and diagnostic subprocesses.
-                try:
-                    from tools.mon_rust_suites import run_suite
-                except ModuleNotFoundError:
-                    from mon_rust_suites import run_suite
-                parallel = {"processes": processes} if processes != 1 else {}
-                code = run_suite(executable, cwd=manifest.parent, env=environment,
-                                 suite=suite, threads=threads, **parallel)
-            else:
-                command = [str(executable)]
-                if threads is not None:
-                    command.append(f"--test-threads={threads}")
-                code = subprocess.run(command, cwd=manifest.parent, env=environment,
-                                      check=False).returncode
+            with measured_phase(metrics, "libraryTests" if is_library else "otherTargets"):
+                if suite != "full" and is_library:
+                    # Import lazily so the existing full-library entry point stays
+                    # independent of suite inventory and diagnostic subprocesses.
+                    try:
+                        from tools.mon_rust_suites import run_suite
+                    except ModuleNotFoundError:
+                        from mon_rust_suites import run_suite
+                    parallel = {"processes": processes} if processes != 1 else {}
+                    code = run_suite(executable, cwd=manifest.parent, env=environment,
+                                     suite=suite, threads=threads, **parallel)
+                else:
+                    command = [str(executable)]
+                    if threads is not None:
+                        command.append(f"--test-threads={threads}")
+                    code = subprocess.run(command, cwd=manifest.parent, env=environment,
+                                          check=False).returncode
             if code:
                 return code
         if swift_fixture:
@@ -145,14 +232,22 @@ def _run_native_tests(root, swift_fixture, suite, all_targets, threads, processe
             command = [str(executable), SWIFT_FIXTURE, "--ignored"]
             if threads is not None:
                 command.append(f"--test-threads={threads}")
-            code = subprocess.run(command, cwd=manifest.parent, env=environment,
-                                  check=False).returncode
+            with measured_phase(metrics, "swiftFixture"):
+                code = subprocess.run(command, cwd=manifest.parent, env=environment,
+                                      check=False).returncode
             if code:
                 return code
         if all_targets and suite != "heavy":
-            return subprocess.run(["cargo", "test", "--manifest-path", str(manifest),
-                                   "--locked", "--doc"], cwd=manifest.parent,
-                                  check=False).returncode
+            # Cargo may compile a separate non-test artifact for doctests. Keep
+            # this inside legacy executionSeconds, but expose its whole cost.
+            timing_started_ns = time.time_ns()
+            try:
+                with measured_phase(metrics, "docTests"):
+                    return subprocess.run(["cargo", "test", "--manifest-path", str(manifest),
+                                           "--locked", "--timings", "--doc"], cwd=manifest.parent,
+                                          check=False).returncode
+            finally:
+                collect("doc", timing_started_ns)
         return 0
     finally:
         metrics["executionSeconds"] = time.monotonic() - started
@@ -176,17 +271,28 @@ def run_native_tests(root=None, swift_fixture=False, *, suite="full", all_target
                "cpuCount": os.cpu_count(), "allTargets": all_targets, "threads": threads,
                "processes": processes,
                "buildSeconds": 0,
+               "phaseSeconds": {name: 0 for name in ("diagnosticContext", "runtimeEnvironment", "libraryTests",
+                                                     "otherTargets", "swiftFixture", "docTests")},
                "executionSeconds": 0, "exitCode": 1}
+    timing_directory = Path(timings_json).parent / "cargo-timings" if timings_json is not None else None
+    if timing_directory is not None:
+        metrics["cargoTimingReports"] = []
     started = time.monotonic()
     try:
+        if timings_json is not None:
+            manifest = (ROOT if root is None else Path(root)).resolve() / "app/src-tauri/Cargo.toml"
+            with measured_phase(metrics, "diagnosticContext"):
+                metrics["context"] = diagnostic_context(manifest)
         metrics["exitCode"] = _run_native_tests(
-            root, swift_fixture, suite, all_targets, threads, processes, metrics)
+            root, swift_fixture, suite, all_targets, threads, processes, metrics, timing_directory)
         return metrics["exitCode"]
     finally:
         metrics["totalSeconds"] = time.monotonic() - started
         print(f"[rust-tests] Suite {suite}; build {metrics['buildSeconds']:.2f}s; "
               f"execution {metrics['executionSeconds']:.2f}s; "
               f"total {metrics['totalSeconds']:.2f}s; exit {metrics['exitCode']}", flush=True)
+        print("[rust-tests] Phases: " + "; ".join(
+            f"{name} {seconds:.2f}s" for name, seconds in metrics["phaseSeconds"].items()), flush=True)
         if timings_json is not None:
             path = Path(timings_json)
             path.parent.mkdir(parents=True, exist_ok=True)

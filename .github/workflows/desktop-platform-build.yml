@@ -16,6 +16,10 @@ on:
       full:
         type: boolean
         default: false
+      skip_windows_msix:
+        description: 'Release build delegates Store package validation to its required store job'
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
@@ -39,6 +43,17 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate delegated Microsoft Store check
+        env:
+          MON_SKIP_WINDOWS_MSIX: ${{ inputs.skip_windows_msix }}
+          MON_CI_FULL: ${{ inputs.full || inputs.suite == 'full' }}
+          MON_CALLER: ${{ github.workflow }}
+        run: |
+          python3 - <<'PY'
+          import os
+          if os.environ['MON_SKIP_WINDOWS_MSIX'] == 'true' and (os.environ['MON_CI_FULL'] != 'true' or os.environ['MON_CALLER'] != 'Release build'):
+              raise SystemExit('Only full Release build validation may delegate its Store package check')
+          PY
       - id: scope
         env:
           MON_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -163,6 +178,7 @@ jobs:
     env:
       PYTHONUTF8: '1'
       MON_CI_FULL: ${{ inputs.full || inputs.suite == 'full' }}
+      MON_SKIP_WINDOWS_MSIX: ${{ inputs.skip_windows_msix }}
       MON_SAVE_CI_CACHE: ${{ github.ref == 'refs/heads/main' && github.workflow != 'Release build' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.source_ref == '' || inputs.source_ref == github.sha) }}
     strategy:
       fail-fast: false
@@ -211,18 +227,54 @@ jobs:
               break
             fi
           done
-      - name: Fingerprint native build inputs and toolchain
-        if: env.MON_CI_FULL == 'true'
-        id: native_cache_key
+      - name: Fingerprint windows-runtime inputs and toolchain
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        id: windows_runtime_key
         shell: bash
-        run: python tools/mon_ci_cache.py >> "$GITHUB_OUTPUT"
-      - name: Restore native build intermediates
-        if: env.MON_CI_FULL == 'true'
-        id: native_cache
+        run: python tools/mon_ci_cache.py --component windows-runtime >> "$GITHUB_OUTPUT"
+      - name: Restore windows-runtime build intermediates
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        id: windows_runtime_cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ steps.native_cache_key.outputs.paths }}
-          key: ${{ steps.native_cache_key.outputs.key }}
+          path: ${{ steps.windows_runtime_key.outputs.paths }}
+          key: ${{ steps.windows_runtime_key.outputs.key }}
+      - name: Fingerprint windows-capture inputs and toolchain
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        id: windows_capture_key
+        shell: bash
+        run: python tools/mon_ci_cache.py --component windows-capture >> "$GITHUB_OUTPUT"
+      - name: Restore windows-capture build intermediates
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        id: windows_capture_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.windows_capture_key.outputs.paths }}
+          key: ${{ steps.windows_capture_key.outputs.key }}
+      - name: Fingerprint macos-capture inputs and toolchain
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        id: macos_capture_key
+        shell: bash
+        run: python tools/mon_ci_cache.py --component macos-capture >> "$GITHUB_OUTPUT"
+      - name: Restore macos-capture build intermediates
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        id: macos_capture_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.macos_capture_key.outputs.paths }}
+          key: ${{ steps.macos_capture_key.outputs.key }}
+      - name: Fingerprint macos-workers inputs and toolchain
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        id: macos_workers_key
+        shell: bash
+        run: python tools/mon_ci_cache.py --component macos-workers >> "$GITHUB_OUTPUT"
+      - name: Restore macos-workers build intermediates
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        id: macos_workers_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.macos_workers_key.outputs.paths }}
+          key: ${{ steps.macos_workers_key.outputs.key }}
       - name: Restore checksum-verified native downloads
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         id: native_downloads
@@ -232,6 +284,22 @@ jobs:
             .cache/windows-parity/assets
             .cache/windows-runtime/downloads
           key: native-downloads-v1-${{ runner.os }}-${{ hashFiles('app/model-catalog/*.json', 'tools/mon_windows_runtime.py', 'tools/mon_windows_workers.py', 'tools/mon_inference_runtime.py', 'tools/mon_windows_vulkan_sdk.py', 'tools/mon_windows_capture_dependencies.py') }}
+      - name: Record restored cache context
+        shell: bash
+        env:
+          MON_RAW_RUST_CACHE_HIT: ${{ steps.rust_cache.outputs.cache-hit }}
+          MON_RAW_WINDOWS_RUNTIME: ${{ steps.windows_runtime_cache.outputs.cache-hit }}
+          MON_RAW_WINDOWS_CAPTURE: ${{ steps.windows_capture_cache.outputs.cache-hit }}
+          MON_RAW_MACOS_CAPTURE: ${{ steps.macos_capture_cache.outputs.cache-hit }}
+          MON_RAW_MACOS_WORKERS: ${{ steps.macos_workers_cache.outputs.cache-hit }}
+        run: |
+          python - <<'PY'
+          import json, os
+          components = {name: os.environ['MON_RAW_' + name.upper().replace('-', '_')] for name in ('windows-runtime', 'windows-capture', 'macos-capture', 'macos-workers')}
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf8') as output:
+              output.write('MON_CI_RUST_CACHE_HIT=' + os.environ['MON_RAW_RUST_CACHE_HIT'] + '\n')
+              output.write('MON_CI_NATIVE_CACHE_HIT=' + json.dumps({key: value for key, value in components.items() if value}) + '\n')
+          PY
       - name: Install frontend dependencies
         run: npm ci --prefix app
       - name: Rust formatting
@@ -249,10 +317,13 @@ jobs:
       - name: Fetch notice source metadata
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: cargo fetch --manifest-path app/src-tauri/Cargo.toml --locked
-      - name: Build Windows QA installer
+      - name: Prepare Windows resources before native validation
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        working-directory: app
-        run: npm run tauri:windows:qa:build
+        run: |
+          $receipt = Join-Path $env:RUNNER_TEMP 'mon-windows-preparation.json'
+          python tools/mon_windows_preparation.py run --phase windows-preparation --report output/rust-tests/Windows-phases.json -- powershell.exe -NoProfile -ExecutionPolicy Bypass -File app/prepare-windows.ps1 -Receipt $receipt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MON_WINDOWS_PREPARATION_RECEIPT=$receipt" >> $env:GITHUB_ENV
       - name: Validate Windows capture and model catalog
         # Runtime/helper resources now exist, so run the Windows synthetic
         # capture/storage tests without microphones or real model downloads.
@@ -264,25 +335,6 @@ jobs:
           python tools/mon_ci_native_tests.py --suite full --all-targets --timings-json output/rust-tests/${{ runner.os }}.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
-      - name: Build and verify Microsoft Store MSIX
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        working-directory: app
-        run: npm run tauri:windows:store:build
-      - name: Verify DPI declarations in the linked Windows executable
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        run: |
-          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
-          python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
-      - name: Upload Microsoft Store build identity
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: minuteson-windows-x64-store-identity
-          path: |
-            output/windows-store-work/*/source.json
-            output/windows-store-work/*/build.json
-          if-no-files-found: error
-          retention-days: 7
       - name: macOS Swift compiler and capture regression tests
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         shell: bash
@@ -313,6 +365,32 @@ jobs:
       - name: Validate upgraded LLM runtimes with representative weights
         if: env.MON_CI_FULL == 'true'
         run: python tools/mon_llama_runtime_check.py --report output/rust-tests/llama-runtime-${{ runner.os }}.json
+      - name: Build Windows QA installer
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        run: python tools/mon_windows_preparation.py run --phase windows-qa-packaging --report output/rust-tests/Windows-phases.json -- npm.cmd --prefix app run tauri:windows:qa:build
+      - name: Verify DPI declarations in the linked Windows QA executable
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        run: |
+          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
+          python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
+      - name: Build and verify Microsoft Store MSIX
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        run: python tools/mon_windows_preparation.py run --phase windows-store-packaging --report output/rust-tests/Windows-phases.json -- npm.cmd --prefix app run tauri:windows:store:build
+      - name: Verify DPI declarations in the linked Windows Store executable
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        run: |
+          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
+          python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
+      - name: Upload Microsoft Store build identity
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: minuteson-windows-x64-store-identity
+          path: |
+            output/windows-store-work/*/source.json
+            output/windows-store-work/*/build.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Windows build identity
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -332,12 +410,30 @@ jobs:
           executable="$GITHUB_WORKSPACE/app/src-tauri/target/debug/mon-desktop"
           digest=$(shasum -a 256 "$executable" | cut -d ' ' -f 1)
           node tools/mon_owned_engine_check.mjs --executable "$executable" --sha256 "$digest"
-      - name: Save native build intermediates
-        if: success() && env.MON_CI_FULL == 'true' && env.MON_SAVE_CI_CACHE == 'true' && steps.native_cache.outputs.cache-hit != 'true'
+      - name: Save windows-runtime build intermediates
+        if: success() && env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SAVE_CI_CACHE == 'true' && steps.windows_runtime_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ steps.native_cache_key.outputs.paths }}
-          key: ${{ steps.native_cache_key.outputs.key }}
+          path: ${{ steps.windows_runtime_key.outputs.paths }}
+          key: ${{ steps.windows_runtime_key.outputs.key }}
+      - name: Save windows-capture build intermediates
+        if: success() && env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SAVE_CI_CACHE == 'true' && steps.windows_capture_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.windows_capture_key.outputs.paths }}
+          key: ${{ steps.windows_capture_key.outputs.key }}
+      - name: Save macos-capture build intermediates
+        if: success() && env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_SAVE_CI_CACHE == 'true' && steps.macos_capture_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.macos_capture_key.outputs.paths }}
+          key: ${{ steps.macos_capture_key.outputs.key }}
+      - name: Save macos-workers build intermediates
+        if: success() && env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_SAVE_CI_CACHE == 'true' && steps.macos_workers_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.macos_workers_key.outputs.paths }}
+          key: ${{ steps.macos_workers_key.outputs.key }}
       - name: Save checksum-verified native downloads
         if: success() && env.MON_CI_FULL == 'true' && env.MON_SAVE_CI_CACHE == 'true' && runner.os == 'Windows' && steps.native_downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

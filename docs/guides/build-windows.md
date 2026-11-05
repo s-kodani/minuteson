@@ -67,6 +67,12 @@ npm.cmd --prefix app run tauri:windows:qa:build
 
 ソース・本体・ヘルパー・インストーラーの一致とネイティブCTestが成功した後に配布用コピーを更新します。失敗時は以前のコピーを保持するため、古いファイルを今回の成功と取り違えないよう証跡のビルドIDを確認します。ビルド自体はインストール・起動しません。
 
+## CIでの準備済み資材の再利用
+
+全件CIは`app/prepare-windows.ps1 -Receipt <絶対パス>`で資材を先に準備し、native検証が終わってからQA／MSIXを作ります。receiptは同じActions jobの`RUNNER_TEMP`内に作成し、`MON_WINDOWS_PREPARATION_RECEIPT`でビルドフックへ渡します。ソース、実際のcompiler、run／attempt／job、unsignedモード、frontend・runtime・helper・通知文のサイズとSHAが一致する場合だけ再準備を省略します。
+
+receiptを渡さない通常のQA／Storeビルドは従来どおり必要資材を準備します。指定済みreceiptの欠落・不整合は停止し、署名付きビルドではunsignedの準備結果を流用しません。Windows runtimeの一時構築・検証と正式packageへの置換が完了してからreceiptを確定します。実装は[準備証跡ツール](../../tools/mon_windows_preparation.py)にあります。
+
 ## 開発起動と通常版
 
 ヘルパー準備後の開発起動は`npm.cmd --prefix app run tauri -- dev`です。通常版と同じ保存設定を使うため、実データと分けた検証はQAを使います。

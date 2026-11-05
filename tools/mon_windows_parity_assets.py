@@ -3,6 +3,7 @@
 settings are opened. Hash-verified existing model bytes are reused in place.
 """
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -33,34 +34,49 @@ def save(path,value):
 class Fetch:
     def __init__(self,budget,base=None):
         self.limit=budget
+        self.timings = {'downloadSeconds': 0.0, 'verificationSeconds': 0.0}
         self.base=BASE if base is None else Path(base)
         self.ledger_path=LEDGER if base is None else self.base/'download-ledger.json'
         records=[json.loads(p.read_text(encoding='utf8')) for p in (self.ledger_path,self.ledger_path.with_suffix('.json.pending')) if p.exists()]
         self.ledger=max(records,key=lambda r:r['downloadedBytes']) if records else dict(downloadedBytes=0,attempts=[])
         if self.ledger['downloadedBytes']>budget:raise ValueError('previous network usage exceeds this budget')
+
+    @contextmanager
+    def measured(self, phase):
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.timings[phase] += time.monotonic() - started
+
+    def verified_hash(self, path):
+        with self.measured('verificationSeconds'):
+            return sha(path)
+
     def acquire(self,url,size,digest):
         if not url.startswith('https://'):raise ValueError('fixed HTTPS input required')
         target=self.base/'assets'/digest
         candidates=[target,*list((ROOT/'.cache/windows-runtime/downloads').glob(digest[:16]+'-*'))]
         for p in candidates:
-            if p.is_file() and p.stat().st_size==size and sha(p)==digest:return p
+            if p.is_file() and p.stat().st_size==size and self.verified_hash(p)==digest:return p
         target.parent.mkdir(parents=True,exist_ok=True)
         pending=target.with_suffix('.partial')
         attempt=dict(url=url,expectedBytes=size,receivedBytes=0,state='running')
         self.ledger['attempts'].append(attempt);save(self.ledger_path,self.ledger)
         try:
-            request=urllib.request.Request(url,headers={'User-Agent':'MON-Windows-parity-validation'})
-            with urllib.request.urlopen(request,timeout=60) as response,pending.open('wb') as output:
-                while True:
-                    remaining=self.limit-self.ledger['downloadedBytes']
-                    if remaining<=0:raise ValueError('additional network budget exhausted')
-                    data=response.read(min(1024*1024,remaining))
-                    if not data:break
-                    attempt['receivedBytes']+=len(data);self.ledger['downloadedBytes']+=len(data)
-                    save(self.ledger_path,self.ledger)
-                    if attempt['receivedBytes']>size:raise ValueError('fixed input exceeded expected size')
-                    output.write(data)
-            if pending.stat().st_size!=size or sha(pending)!=digest:raise ValueError('fixed input checksum mismatch')
+            with self.measured('downloadSeconds'):
+                request=urllib.request.Request(url,headers={'User-Agent':'MON-Windows-parity-validation'})
+                with urllib.request.urlopen(request,timeout=60) as response,pending.open('wb') as output:
+                    while True:
+                        remaining=self.limit-self.ledger['downloadedBytes']
+                        if remaining<=0:raise ValueError('additional network budget exhausted')
+                        data=response.read(min(1024*1024,remaining))
+                        if not data:break
+                        attempt['receivedBytes']+=len(data);self.ledger['downloadedBytes']+=len(data)
+                        save(self.ledger_path,self.ledger)
+                        if attempt['receivedBytes']>size:raise ValueError('fixed input exceeded expected size')
+                        output.write(data)
+            if pending.stat().st_size!=size or self.verified_hash(pending)!=digest:raise ValueError('fixed input checksum mismatch')
             pending.replace(target);attempt['state']='verified';return target
         except Exception:
             attempt['state']='failed';raise

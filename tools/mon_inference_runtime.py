@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
@@ -199,6 +200,8 @@ target_compile_features(mon-transducer-worker PRIVATE cxx_std_17)
 
 def recipe_hash():
     h = hashlib.sha256(Path(__file__).read_bytes())
+    # The pinned whisper source and shared CMake options are compiler inputs.
+    h.update(Path(__file__).with_name("mon_whisper_runtime.py").read_bytes())
     for p in sorted((ROOT / "probes/inference-worker").iterdir()):
         if p.is_file() and p.suffix in (".cpp", ".hpp"):
             h.update(p.name.encode()); h.update(p.read_bytes())
@@ -206,39 +209,122 @@ def recipe_hash():
     return h.hexdigest()
 
 
+def build_options(engine):
+    options = list(asr.OPTIONS) if engine == "whisper" else [v for v in asr.OPTIONS if "WHISPER" not in v]
+    if engine == "llama":
+        options += ["-DLLAMA_BUILD_COMMON=ON", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_TOOLS=OFF",
+                    "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_APP=OFF", "-DLLAMA_BUILD_MTMD=OFF",
+                    "-DLLAMA_OPENSSL=OFF"]
+    return options
+
+
+def build_identity(cmake, cache):
+    """Fingerprint the compiler/SDK in the same clean environment as CMake."""
+    cmake = Path(cmake).resolve()
+    env = asr.environment(cmake)
+    def version(*command):
+        stdout, _ = asr.command(list(command), env=env, timeout=30)
+        return stdout.decode("utf8", errors="replace").strip()
+    return {"platform": os.sys.platform, "arch": platform.machine(),
+            "image": os.environ.get("ImageVersion", "local"),
+            "workspace": str(ROOT.resolve()), "cache": str(Path(cache).resolve()),
+            "cmakePath": str(cmake), "cmake": version(str(cmake), "--version"),
+            "clang": version("/usr/bin/clang", "--version"),
+            "sdkPath": version("/usr/bin/xcrun", "--show-sdk-path"),
+            "sdk": version("/usr/bin/xcrun", "--show-sdk-version"),
+            "options": {engine: build_options(engine) for engine in ("whisper", "llama")}}
+
+
+def build_fingerprint(stamp, identity):
+    return hashlib.sha256(json.dumps({"recipe": stamp, "toolchain": identity},
+                                     sort_keys=True).encode()).hexdigest()
+
+
+def source_roots(sources):
+    roots = {}
+    for engine in ("whisper", "llama"):
+        directory = sources / engine
+        asr.private(directory, directory=True)
+        children = list(directory.iterdir())
+        if len(children) != 1:
+            raise ValueError("cached inference source has an unexpected root")
+        roots[engine] = asr.private(children[0], directory=True)
+    return roots
+
+
+def prepare_sources(cache, intermediate, fingerprint, whisper, llama, header):
+    sources = intermediate / "sources"
+    marker = sources / ".complete.json"
+    if sources.exists():
+        asr.private(sources, directory=True)
+        if marker.is_file() and json.loads(marker.read_text(encoding="utf8")) == {"fingerprint": fingerprint}:
+            return source_roots(sources)
+        # An interrupted/older initialization must never be patched twice.
+        shutil.rmtree(sources)
+    with tempfile.TemporaryDirectory(prefix="source-prepare-", dir=cache) as temporary:
+        pending = Path(temporary) / "sources"
+        pending.mkdir(mode=0o700)
+        roots = {"whisper": extract(whisper, pending / "whisper"),
+                 "llama": extract(llama, pending / "llama")}
+        for root in roots.values():
+            shutil.copytree(ROOT / "probes/inference-worker", root / "mon")
+            shutil.copyfile(roots["llama"] / "vendor/nlohmann/json.hpp", root / "mon/json.hpp")
+            shutil.copyfile(header, root / "mon/c-api.h")
+        patch_whisper(roots["whisper"])
+        patch_llama(roots["llama"])
+        (pending / ".complete.json").write_text(json.dumps({"fingerprint": fingerprint}), encoding="utf8")
+        pending.rename(sources)
+    return source_roots(sources)
+
+
+def publish_package(pending, package):
+    """Swap only a fully checked build package, retaining the old one on failure."""
+    previous = pending.with_name(pending.name + "-previous")
+    try:
+        if package.exists():
+            asr.private(package, directory=True)
+            package.rename(previous)
+        pending.rename(package)
+    except BaseException:
+        if previous.exists() and not package.exists():
+            previous.rename(package)
+        raise
+    if previous.exists():
+        shutil.rmtree(previous)
+
+
 def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=None, jobs=4, sherpa_license=None):
+    if not isinstance(jobs, int) or not 1 <= jobs <= 64:
+        raise ValueError("worker build jobs must be between 1 and 64")
     cache.mkdir(parents=True, exist_ok=True)
     cache = cache.resolve()
+    cmake = Path(cmake).resolve()
+    asr.private(cache, directory=True)
     with asr.lock(cache):
         package = cache / "package"
         stamp = recipe_hash()
-        if package.exists() and (package / "build-info.json").exists():
-            info = json.loads((package / "build-info.json").read_text(encoding="utf8"))
-            if info.get("recipeSha256") == stamp:
-                from mon_asr_bundle import assemble
-                assemble(package)
-                verify(package)
-                return package
-        whisper = acquire(cache,"whisper-source.tar.gz",asr.SOURCE_URL,asr.SOURCE_SHA,asr.SOURCE_BYTES,whisper_source)
-        llama = acquire(cache,f"llama-source-{LLAMA_COMMIT}.tar.gz",f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{LLAMA_COMMIT}",LLAMA_SHA,LLAMA_BYTES,llama_source)
-        header = acquire(cache,"c-api.h",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/sherpa-onnx/c-api/c-api.h",HEADER_SHA,supplied=sherpa_header)
-        license_file = acquire(cache,"sherpa-LICENSE",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/LICENSE",SHERPA_LICENSE_SHA,11358,sherpa_license)
-        with tempfile.TemporaryDirectory(prefix="build-", dir=cache) as temporary:
+        fingerprint = build_fingerprint(stamp, build_identity(cmake, cache))
+        # Cached compiler products are reusable; signing/assembly and all
+        # package checks run in a fresh stage even when a local package exists.
+        downloads = cache / "downloads"
+        downloads.mkdir(mode=0o700, exist_ok=True)
+        asr.private(downloads, directory=True)
+        whisper = acquire(downloads,"whisper-source.tar.gz",asr.SOURCE_URL,asr.SOURCE_SHA,asr.SOURCE_BYTES,whisper_source)
+        llama = acquire(downloads,f"llama-source-{LLAMA_COMMIT}.tar.gz",f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{LLAMA_COMMIT}",LLAMA_SHA,LLAMA_BYTES,llama_source)
+        header = acquire(downloads,"c-api.h",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/sherpa-onnx/c-api/c-api.h",HEADER_SHA,supplied=sherpa_header)
+        license_file = acquire(downloads,"sherpa-LICENSE",f"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/{SHERPA_COMMIT}/LICENSE",SHERPA_LICENSE_SHA,11358,sherpa_license)
+        intermediate = cache / "intermediates" / fingerprint
+        intermediate.mkdir(mode=0o700, parents=True, exist_ok=True)
+        asr.private(intermediate, directory=True)
+        roots = prepare_sources(cache, intermediate, fingerprint, whisper, llama, header)
+        with tempfile.TemporaryDirectory(prefix="package-prepare-", dir=cache) as temporary:
             work = Path(temporary)
-            roots = {"whisper": extract(whisper,work/"whisper"),"llama":extract(llama,work/"llama")}
-            for root in roots.values():
-                shutil.copytree(ROOT / "probes/inference-worker",root/"mon")
-                shutil.copyfile(roots["llama"]/"vendor/nlohmann/json.hpp",root/"mon/json.hpp")
-                shutil.copyfile(header,root/"mon/c-api.h")
-            patch_whisper(roots["whisper"]); patch_llama(roots["llama"])
             pending = work / "package"; pending.mkdir(mode=0o700)
             env = asr.environment(cmake)
             env["TMPDIR"] = str(work)
             for engine, root in roots.items():
-                build = work/(engine+"-build")
-                options = list(asr.OPTIONS) if engine == "whisper" else [v for v in asr.OPTIONS if "WHISPER" not in v]
-                if engine == "llama":
-                    options += ["-DLLAMA_BUILD_COMMON=ON","-DLLAMA_BUILD_TESTS=OFF","-DLLAMA_BUILD_TOOLS=OFF","-DLLAMA_BUILD_EXAMPLES=OFF","-DLLAMA_BUILD_APP=OFF","-DLLAMA_BUILD_MTMD=OFF","-DLLAMA_OPENSSL=OFF"]
+                build = intermediate / "build" / engine
+                options = build_options(engine)
                 asr.command([str(cmake),"-S",str(root),"-B",str(build),*options],env=env)
                 targets = [NAMES[engine]] + ([NAMES["sherpa"], NAMES["asr-transducer"]] if engine == "llama" else [])
                 asr.command([str(cmake),"--build",str(build),"--target",*targets,"--parallel",str(jobs)],env=env,timeout=1800)
@@ -250,7 +336,7 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
                     asr.verify_binary(pending/target)
             index = [{"protocol":1,"engine":engine,"name":name,"bytes":(pending/name).stat().st_size,"sha256":asr.digest(pending/name)} for engine,name in NAMES.items()]
             (pending/"runtime-index.json").write_text(json.dumps(index,indent=2)+"\n")
-            (pending/"build-info.json").write_text(json.dumps({"recipeSha256":stamp,"whisperCommit":asr.COMMIT,"llamaCommit":LLAMA_COMMIT,"sherpaCommit":SHERPA_COMMIT,"protocol":1,"licenseReview":"not_verified","distributionReady":False},indent=2)+"\n")
+            (pending/"build-info.json").write_text(json.dumps({"recipeSha256":stamp,"buildFingerprint":fingerprint,"whisperCommit":asr.COMMIT,"llamaCommit":LLAMA_COMMIT,"sherpaCommit":SHERPA_COMMIT,"protocol":1,"licenseReview":"not_verified","distributionReady":False},indent=2)+"\n")
             # Include the original source notices alongside the derived workers.
             for name, path in [("whisper-MIT.txt",roots["whisper"]/"LICENSE"),("llama-MIT.txt",roots["llama"]/"LICENSE"),("nlohmann-MIT.txt",roots["llama"]/"vendor/nlohmann/json.hpp")]:
                 if name.startswith("nlohmann"):
@@ -261,11 +347,10 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
             shutil.copyfile(license_file,pending/"sherpa-Apache-2.0.txt")
             # Build only publication: existing installed worker bytes live in
             # the application's hash cache and never get overwritten here.
-            if package.exists(): shutil.rmtree(package)
-            shutil.copytree(pending,package)
             from mon_asr_bundle import assemble
-            assemble(package)
-            verify(package)
+            assemble(pending)
+            verify(pending)
+            publish_package(pending, package)
             return package
 
 

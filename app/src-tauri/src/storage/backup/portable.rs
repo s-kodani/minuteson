@@ -72,7 +72,7 @@ pub(super) fn schema(version: usize) -> Result<Connection, String> {
     )
 }
 
-pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
+pub(super) fn initialize(mut db: Connection, version: usize) -> Result<Connection, String> {
     if !matches!(version, 35 | 36 | 37 | 38) {
         return Err("未対応のバックアップDB形式です".into());
     }
@@ -80,16 +80,118 @@ pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, S
         .map_err(|e| e.to_string())?;
     // Use the identical trusted bootstrap SQL as Storage::open. Exact schema
     // comparison at publication must not mistake spacing for a foreign schema.
-    db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
+    // Construct the fresh validation database atomically. In particular, a
+    // file-backed connection must not sync every schema statement separately.
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
     for &(version, sql) in &MIGRATIONS[..version] {
-        db.execute_batch(sql).map_err(|e| e.to_string())?;
-        db.execute(
+        tx.execute_batch(sql).map_err(|e| e.to_string())?;
+        tx.execute(
             "INSERT INTO schema_migrations VALUES(?1,?2,0)",
             params![version, format!("{:x}", Sha256::digest(sql.as_bytes()))],
         )
         .map_err(|e| e.to_string())?;
     }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(db)
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use super::*;
+
+    fn schema_rows(db: &Connection) -> Vec<(String, String, String, Option<String>)> {
+        db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn history(db: &Connection) -> Vec<(i64, String, i64)> {
+        db.prepare("SELECT version,checksum,applied_at FROM schema_migrations ORDER BY version")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn portable_versions_preserve_exact_schema_history_and_durability_after_reopen() {
+        for version in 35..=38 {
+            // The existing migration fixture independently constructs the
+            // pre-transaction schema, including the original SQL/checksums.
+            let reference = crate::storage::backup::archive::tests::migration_database(
+                Connection::open_in_memory().unwrap(),
+                version,
+            );
+            for mode in ["delete", "wal"] {
+                let root = tempfile::tempdir().unwrap();
+                let path = root.path().join("portable.sqlite3");
+                let db = Connection::open(&path).unwrap();
+                db.pragma_update(None, "journal_mode", mode).unwrap();
+                db.pragma_update(None, "synchronous", "FULL").unwrap();
+                let db = initialize(db, version).unwrap();
+                assert_eq!(schema_rows(&db), schema_rows(&reference));
+                assert_eq!(history(&db), history(&reference));
+                assert_eq!(
+                    db.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+                        .unwrap(),
+                    2
+                );
+                assert_eq!(
+                    db.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+                        .unwrap(),
+                    mode
+                );
+                drop(db);
+                let db = Connection::open(&path).unwrap();
+                assert_eq!(schema_rows(&db), schema_rows(&reference));
+                assert_eq!(history(&db), history(&reference));
+                assert_eq!(
+                    db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                        .unwrap(),
+                    "ok"
+                );
+                assert!(!db
+                    .prepare("PRAGMA foreign_key_check")
+                    .unwrap()
+                    .query([])
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn late_schema_failure_rolls_back_schema_and_history_without_changing_existing_data() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("portable.sqlite3");
+        let db = Connection::open(&path).unwrap();
+        // Migration 38 fails only after all preceding schema/history writes.
+        db.execute_batch("CREATE TABLE voice_sample_audio(marker TEXT); INSERT INTO voice_sample_audio VALUES('keep');").unwrap();
+        let before = schema_rows(&db);
+        assert!(initialize(db, 38).is_err());
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(schema_rows(&db), before);
+        assert_eq!(
+            db.query_row("SELECT marker FROM voice_sample_audio", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert_eq!(
+            db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
 }
 
 pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {

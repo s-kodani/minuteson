@@ -1,9 +1,21 @@
+param([string]$Receipt)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $env:PYTHONUTF8 = '1'
 if ($env:OS -ne 'Windows_NT') { throw 'Prepare Windows resources on Windows.' }
+$preparationTool = Join-Path $PSScriptRoot '../tools/mon_windows_preparation.py'
+if ($env:MON_WINDOWS_PREPARATION_RECEIPT) {
+    if ($Receipt) { throw 'A new receipt cannot be combined with reuse of prepared resources.' }
+    & python $preparationTool verify --receipt $env:MON_WINDOWS_PREPARATION_RECEIPT
+    if ($LASTEXITCODE -ne 0) { throw 'Prepared Windows resources do not match this unsigned job.' }
+    return
+}
 Push-Location $PSScriptRoot
 try {
+    if ($Receipt) {
+        & python $preparationTool begin --receipt $Receipt
+        if ($LASTEXITCODE -ne 0) { throw 'Windows preparation inputs could not be recorded.' }
+    }
     & python ../tools/mon_windows_capture_dependencies.py
     if ($LASTEXITCODE -ne 0) { throw 'Capture protocol dependency preparation failed.' }
     & python ../tools/mon_windows_runtime.py
@@ -23,5 +35,9 @@ try {
     if ($env:MON_WINDOWS_RELEASE_SIGNING -eq '1') {
         & "$PSScriptRoot/../tools/sign-windows.ps1" -Path (Join-Path $binaries 'mon-windows-capture-x86_64-pc-windows-msvc.exe')
         if (-not $?) { throw 'Capture sidecar signing failed.' }
+    }
+    if ($Receipt) {
+        & python $preparationTool record --receipt $Receipt
+        if ($LASTEXITCODE -ne 0) { throw 'Prepared Windows resources could not be verified.' }
     }
 } finally { Pop-Location }

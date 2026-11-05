@@ -185,15 +185,20 @@ class DesktopWorkflowTests(unittest.TestCase):
         value = value.replace("&&", " and ").replace("||", " or ")
         return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
 
-    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False):
+    def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False,
+                     skip_windows_msix=False, workflow="Desktop platform validation"):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
+                   "inputs.skip_windows_msix": skip_windows_msix,
                    "runner.os": operating_system, "github.ref": "refs/heads/main",
-                   "github.workflow": "Desktop platform validation", "inputs.source_ref": "", "github.sha": SHA,
-                   "steps.native_cache.outputs.cache-hit": "false", "steps.native_downloads.outputs.cache-hit": "false",
+                   "github.workflow": workflow, "inputs.source_ref": "", "github.sha": SHA,
+                   "steps.native_downloads.outputs.cache-hit": "false",
+                   **{f"steps.{name}_cache.outputs.cache-hit": "false" for name in (
+                       "windows_runtime", "windows_capture", "macos_capture", "macos_workers")},
                    "steps.rust_cache.outputs.cache-hit": str(rust_cache_hit).lower()}
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
         context["env.MON_SAVE_CI_CACHE"] = str(self.expression(native["env"]["MON_SAVE_CI_CACHE"], context)).lower()
+        context["env.MON_SKIP_WINDOWS_MSIX"] = str(skip_windows_msix).lower()
         return [step for step in native["steps"] if self.expression(step.get("if", "True"), context)]
 
     def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
@@ -230,6 +235,77 @@ class DesktopWorkflowTests(unittest.TestCase):
                     fallback = next(s for s in caches if s is not primary)
                     self.assertNotIn('key', fallback['with'])
                     self.assertEqual(fallback['with']['save-if'], 'false')
+
+    def test_native_intermediate_caches_have_component_specific_exact_inputs_and_paths(self):
+        native = self.workflow['jobs']['native']['steps']
+        for component, operating_system in (("windows-runtime", "Windows"), ("windows-capture", "Windows"),
+                                            ("macos-capture", "macOS"), ("macos-workers", "macOS")):
+            identifier = component.replace('-', '_')
+            fingerprint = next(s for s in native if s.get('id') == identifier + '_key')
+            self.assertIn('--component ' + component, fingerprint['run'])
+            self.assertIn("runner.os == '" + operating_system + "'", fingerprint['if'])
+            restore = next(s for s in native if s.get('id') == identifier + '_cache')
+            save = next(s for s in native if s.get('name') == 'Save ' + component + ' build intermediates')
+            self.assertEqual(restore['with'], save['with'])
+            self.assertNotIn('restore-keys', restore['with'])
+            self.assertIn(identifier + '_key.outputs.paths', restore['with']['path'])
+            self.assertIn("env.MON_SAVE_CI_CACHE == 'true'", save['if'])
+
+    def test_windows_resources_and_all_native_checks_precede_both_package_flavors(self):
+        steps = self.native_steps(event='workflow_call', full=True)
+        names = [s.get('name') for s in steps]
+        prepare = names.index('Prepare Windows resources before native validation')
+        native = names.index('Validate Windows capture and model catalog')
+        llm = names.index('Validate upgraded LLM runtimes with representative weights')
+        qa = names.index('Build Windows QA installer')
+        qa_dpi = names.index('Verify DPI declarations in the linked Windows QA executable')
+        store = names.index('Build and verify Microsoft Store MSIX')
+        store_dpi = names.index('Verify DPI declarations in the linked Windows Store executable')
+        self.assertLess(prepare, native)
+        self.assertLess(native, llm)
+        self.assertLess(llm, qa)
+        self.assertLess(qa, qa_dpi)
+        self.assertLess(qa_dpi, store)
+        self.assertLess(store, store_dpi)
+        preparation = steps[prepare]
+        self.assertIn('-Receipt $receipt', preparation['run'])
+        self.assertIn('MON_WINDOWS_PREPARATION_RECEIPT=$receipt', preparation['run'])
+        for index in (prepare, qa, store):
+            self.assertIn('mon_windows_preparation.py run --phase', steps[index]['run'])
+
+    def test_release_delegates_only_msix_to_its_required_store_job(self):
+        self.assertFalse(self.events['workflow_call']['inputs']['skip_windows_msix']['default'])
+        steps = self.native_steps(event='workflow_dispatch', full=True, skip_windows_msix=True, workflow='Release build')
+        commands = '\n'.join(s.get('run', '') for s in steps)
+        self.assertIn('tauri:windows:qa:build', commands)
+        self.assertIn('--suite full --all-targets', commands)
+        self.assertIn('mon_llama_runtime_check.py', commands)
+        self.assertNotIn('tauri:windows:store:build', commands)
+        uploads = [s['with']['name'] for s in steps if s.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertIn('mon-windows-x64-qa-identity', uploads)
+        self.assertNotIn('minuteson-windows-x64-store-identity', uploads)
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text())
+        self.assertTrue(workflow['jobs']['ci']['with']['skip_windows_msix'])
+        store = workflow['jobs']['store']
+        store_commands = '\n'.join(s.get('run', '') for s in store['steps'])
+        self.assertEqual(store_commands.count('tauri:windows:store:build'), 1)
+        self.assertIn('MON_WINDOWS_DPI_BINARY', store_commands)
+        self.assertIn('test_mon_windows_dpi.py', store_commands)
+        self.assertIn('ci', store['needs'])
+        self.assertIn('store', workflow['jobs']['publish']['needs'])
+
+    def test_store_delegation_is_rejected_outside_full_release_validation(self):
+        step = next(s for s in self.workflow['jobs']['changes']['steps'] if s.get('name') == 'Validate delegated Microsoft Store check')
+        script = '\n'.join(step['run'].splitlines()[1:-1])
+        for skip, full, caller in (('true', 'false', 'Release build'), ('true', 'true', 'Desktop platform validation'),
+                                    ('true', 'true', 'Release build'), ('false', 'false', 'Desktop platform validation')):
+            with self.subTest(skip=skip, full=full, caller=caller), patch.dict(os.environ, {
+                    'MON_SKIP_WINDOWS_MSIX': skip, 'MON_CI_FULL': full, 'MON_CALLER': caller}):
+                if skip == 'true' and (full != 'true' or caller != 'Release build'):
+                    with self.assertRaises(SystemExit):
+                        exec(compile(script, 'store-delegation', 'exec'), {})
+                else:
+                    exec(compile(script, 'store-delegation', 'exec'), {})
 
     def test_swift_analysis_cache_preserves_extraction_and_trusted_main_writes(self):
         workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
