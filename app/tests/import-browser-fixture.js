@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 const engine = { executablePath:"",modelPath:"",vadModelPath:null,threads:4,useGpu:false };
 const diar = { executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:500,windowShiftMilli:100,minDurationOnMs:0,minDurationOffMs:0 };
 const llama = {executablePath:"",modelPath:"",threads:4,contextTokens:8192,predictionTokens:2048,gpuLayers:0,seed:1,promptBudget:5400};
+const importDurationUs = 4_000_000;
 const f = window.monImportFixture = {
   calls:[],failCancel:false,failSelect:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
   import:{revision:0,phase:"idle",busy:false,recordingBlocked:false,token:null,fileName:null,info:null,sourceBytes:null,requiredBytes:null,availableBytes:null,completed:0,saved:null,errorMessage:null},
@@ -28,7 +29,7 @@ mockIPC(async(command,args)=>{
       if(f.failSelect)throw Error("模擬音声選択失敗");
       if(f.cancelPanel){await f.changed({phase:"idle",busy:false});return structuredClone(f.import);}
       await f.changed({phase:"inspecting",busy:true,token:crypto.randomUUID(),saved:null,info:null,errorMessage:null});
-      setTimeout(()=>{if(f.import.phase==="inspecting")void f.changed({phase:"ready",busy:false,fileName:"会議.wav",sourceBytes:256044,requiredBytes:135497772,availableBytes:f.insufficientSpace?1:800000000,errorMessage:f.insufficientSpace?"保存先の空き容量が不足しています":null,info:{schemaVersion:1,detectedFormat:"wav",codec:"pcm",sampleRate:16000,channels:2,frames:64000,durationUs:4000000}});},200);
+      setTimeout(()=>{if(f.import.phase==="inspecting")void f.changed({phase:"ready",busy:false,fileName:"会議.wav",sourceBytes:256044,requiredBytes:135497772,availableBytes:f.insufficientSpace?1:800000000,errorMessage:f.insufficientSpace?"保存先の空き容量が不足しています":null,info:{schemaVersion:1,detectedFormat:"wav",codec:"pcm",sampleRate:16000,channels:2,frames:64000,durationUs:importDurationUs}});},200);
       return structuredClone(f.import);
     }
     case "cancel_audio_import":
@@ -50,6 +51,18 @@ mockIPC(async(command,args)=>{
     }
     case "list_meetings":return structuredClone(f.meetings);
     case "get_meeting":if(f.failOpen)throw Error("模擬会議読込失敗");return structuredClone(f.meetings.find(m=>m.id===args.id)??null);
+    case "get_meeting_audio_summary":
+      if (!f.meetings.some(meeting => meeting.id === args.meetingId && meeting.sourceType === "audio_import")) {
+        throw Error("再生できる確定済み音声がありません");
+      }
+      return { schemaVersion: 1, durationUs: importDurationUs, modes: ["mixed"] };
+    case "get_meeting_deletion_availability":
+      return args.meetingIds.map(meetingId => {
+        if (f.meetings.some(meeting => meeting.id === meetingId)) {
+          return { meetingId, available: true, audioDeleted: false, blockers: [] };
+        }
+        return { meetingId, available: false, audioDeleted: null, blockers: [{ kind: "missing", reason: "会議が見つかりません", jobId: null }] };
+      });
     case "get_analysis_preferences":return {id:"whisper_profiles",lockVersion:0,payload:{standard:engine,highAccuracy:engine}};
     case "get_diarization_preferences":return {id:"sherpa_profiles",lockVersion:0,payload:{standard:diar,highAccuracy:diar}};
     case "get_minutes_preferences":return {id:"llama_profiles",lockVersion:0,payload:{standard:llama,highAccuracy:llama}};
@@ -57,9 +70,9 @@ mockIPC(async(command,args)=>{
     case "get_meeting_vocabulary":return {global:structuredClone(f.global),meeting:structuredClone(f.books[args.meetingId]??{id:`meeting:${args.meetingId}`,payload:[],lockVersion:0})};
     case "get_analysis_flow":return f.meetings.find(m=>m.id===args.meetingId)?.lifecycle==="imported"?{id:"flow",meetingId:args.meetingId,profile:"high_accuracy",stage:"configuration",lockVersion:1,transcriptionJob:null,diarizationJob:null,errorMessage:"高精度モデルが未準備です"}:null;
     case "get_analysis_jobs":case "get_minutes_exports":return [];
-    case "get_meeting_analysis_audio":return {tracks:[{id:"imported-track",kind:"imported",startUs:0,endUs:4000000,sampleRate:16000,channels:2}]};
+    case "get_meeting_analysis_audio":return {tracks:[{id:"imported-track",kind:"imported",startUs:0,endUs:importDurationUs,sampleRate:16000,channels:2}]};
     case "get_analysis_versions":case "get_minutes_versions":return {meetingLockVersion:1,currentId:null,previousId:null,draft:null,versions:[]};
-    case "get_current_analysis":case "get_transcript_draft":case "get_current_minutes":case "get_minutes_draft":case "finish_main_close":return null;
+    case "get_current_analysis":case "get_transcript_draft":case "get_current_minutes":case "get_minutes_markdown":case "get_minutes_draft":case "finish_main_close":return null;
     default:throw Error(`Unexpected import fixture command: ${command}`);
   }
 },{shouldMockEvents:true});
