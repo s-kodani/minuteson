@@ -25,7 +25,6 @@ mod input_status;
 mod internal_logs;
 #[cfg(test)]
 mod ipc_acl;
-pub(crate) mod job_codec;
 mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -48,7 +47,6 @@ mod platform_dialog;
 mod playback;
 mod processing_optimization;
 mod recorder;
-mod recorder_info;
 mod recorder_operation_notices;
 mod recorder_panel;
 mod recording_confirmation;
@@ -62,13 +60,11 @@ mod residency;
 mod restored_processing;
 #[cfg(target_os = "macos")]
 mod rounded_windows;
-mod saved_artifact;
 mod session;
 mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
 mod startup_instance;
-mod startup_notices;
 mod startup_reset;
 mod storage;
 mod transcription;
@@ -179,7 +175,6 @@ async fn preview_model_profile_application(
     diarization_threads: Option<u32>,
     diarization_cluster_threshold_milli: Option<u32>,
     whisper_vad_options: Option<transcription::vad::VadOptions>,
-    diarization_speech_sensitivity_milli: Option<i32>,
 ) -> Result<storage::model_profiles::ApplyPreview, mon_contracts::AppError> {
     let result: Result<storage::model_profiles::ApplyPreview, String> = async move {
         if window.label() != "main" {
@@ -198,7 +193,7 @@ async fn preview_model_profile_application(
                 Some(&token),
                 &|| guard.cancelled(),
                 |lease| {
-                    model_application::preview_with_sensitivity(
+                    model_application::preview_with_vad(
                         &app.state::<Storage>(),
                         &models_root,
                         profile,
@@ -208,7 +203,6 @@ async fn preview_model_profile_application(
                         diarization_threads,
                         diarization_cluster_threshold_milli,
                         whisper_vad_options,
-                        diarization_speech_sensitivity_milli,
                         &|| guard.cancelled() || lease.cancelled(),
                     )
                 },
@@ -427,21 +421,6 @@ async fn review_pending_deletion(
     .await;
     result
 }
-#[cfg(any(unix, windows))]
-#[tauri::command]
-fn get_deletion_paths(
-    window: WebviewWindow,
-    confirmation_id: String,
-    offset: usize,
-) -> Result<storage::deletion::operations::PathPage, mon_contracts::AppError> {
-    let result: Result<storage::deletion::operations::PathPage, String> = (|| {
-        data_app(&window)?
-            .state::<DataController>()
-            .deletion_page(&confirmation_id, offset)
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("get_deletion_paths", message))
-}
-
 #[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 async fn get_storage_bootstrap(
@@ -495,23 +474,6 @@ fn review_pending_model_deletion(
     })();
     result
 }
-#[cfg(any(unix, windows))]
-#[tauri::command]
-fn get_model_deletion_paths(
-    window: WebviewWindow,
-    confirmation_id: String,
-    offset: usize,
-) -> Result<storage::deletion::models::operations::PathPage, mon_contracts::AppError> {
-    let result: Result<storage::deletion::models::operations::PathPage, String> = (|| {
-        data_app(&window)?
-            .state::<DataController>()
-            .model_deletion_page(&confirmation_id, offset)
-    })();
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("get_model_deletion_paths", message)
-    })
-}
-
 #[cfg(any(unix, windows))]
 #[tauri::command]
 async fn get_model_deletion_items(
@@ -866,8 +828,12 @@ fn save_vocabulary_book(
 fn get_asr_preferences(
     window: WebviewWindow,
 ) -> Result<storage::PreferencesSnapshot, mon_contracts::AppError> {
-    let result: Result<storage::PreferencesSnapshot, String> =
-        (|| get_analysis_preferences(window).map_err(Into::into))();
+    let result: Result<storage::PreferencesSnapshot, String> = (|| {
+        if window.label() != "main" {
+            return Err("メイン画面で操作してください".into());
+        }
+        window.state::<Storage>().analysis_preferences()
+    })();
     result.map_err(|message| mon_contracts::AppError::from_command("get_asr_preferences", message))
 }
 
@@ -888,28 +854,13 @@ fn get_asr_backends(
 }
 
 #[tauri::command]
-fn get_analysis_preferences(
-    window: WebviewWindow,
-) -> Result<storage::PreferencesSnapshot, mon_contracts::AppError> {
-    let result: Result<storage::PreferencesSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read analysis settings".into());
-        }
-        window.state::<Storage>().analysis_preferences()
-    })();
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("get_analysis_preferences", message)
-    })
-}
-
-#[tauri::command]
 fn get_ui_preferences(
     window: WebviewWindow,
 ) -> Result<storage::UiPreferencesSnapshot, mon_contracts::AppError> {
     let result: Result<storage::UiPreferencesSnapshot, String> = (|| {
         if !matches!(
             window.label(),
-            "main" | "recorder" | recording_confirmation_window::LABEL | recorder_info::LABEL
+            "main" | "recorder" | recording_confirmation_window::LABEL
         ) {
             return Err("Only application windows can read presentation settings".into());
         }
@@ -956,25 +907,24 @@ fn get_diarization_preferences(
     })
 }
 #[tauri::command]
-async fn get_analysis_versions(
+async fn get_minutes_source(
     window: WebviewWindow,
     meeting_id: String,
-) -> Result<storage::VersionState, mon_contracts::AppError> {
-    let result: Result<storage::VersionState, String> = async move {
+) -> Result<storage::MinutesSource, mon_contracts::AppError> {
+    let result: Result<storage::MinutesSource, String> = async move {
         if window.label() != "main" {
-            return Err("Only the main window can read analysis versions".into());
+            return Err("メイン画面で操作してください".into());
         }
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
-            app.state::<Storage>().analysis_versions(&meeting_id)
+            app.state::<Storage>().minutes_source(&meeting_id)
         })
         .await
         .map_err(|e| e.to_string())?
     }
     .await;
-    result
-        .map_err(|message| mon_contracts::AppError::from_command("get_analysis_versions", message))
+    result.map_err(|message| mon_contracts::AppError::from_command("get_minutes_source", message))
 }
 
 #[tauri::command]
@@ -1185,14 +1135,11 @@ async fn save_minutes_markdown(
 ) -> Result<storage::minutes_markdown::MarkdownDocument, mon_contracts::AppError> {
     let result: Result<storage::minutes_markdown::MarkdownDocument, String> = async move {
         let app = minutes_app(&window)?;
-        let worker = app.clone();
-        let document = tauri::async_runtime::spawn_blocking(move || {
-            worker.state::<Storage>().save_minutes_markdown(request)
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Storage>().save_minutes_markdown(request)
         })
         .await
-        .map_err(|e| e.to_string())??;
-        let _ = app.emit("minutes-markdown-changed", &document.meeting_id);
-        Ok(document)
+        .map_err(|e| e.to_string())?
     }
     .await;
     result
@@ -1401,28 +1348,6 @@ async fn publish_regenerated_transcription(
 }
 
 #[tauri::command]
-fn start_analysis_flow(
-    window: WebviewWindow,
-    meeting_id: String,
-) -> Result<storage::analysis_flows::AnalysisFlow, mon_contracts::AppError> {
-    let result: Result<storage::analysis_flows::AnalysisFlow, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can start analysis flow".into());
-        }
-        let flow = window
-            .state::<Storage>()
-            .ensure_analysis_flow(&meeting_id)?;
-        window
-            .app_handle()
-            .emit("analysis-flow-changed", flow.clone())
-            .map_err(|e| e.to_string())?;
-        AnalysisController::kick(window.app_handle())?;
-        Ok(flow)
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("start_analysis_flow", message))
-}
-
-#[tauri::command]
 fn continue_analysis_flow(
     window: WebviewWindow,
     meeting_id: String,
@@ -1562,7 +1487,7 @@ async fn retry_voice_audio_storage(window: WebviewWindow) -> Result<(), mon_cont
     let result: Result<(), String> = async move {
         let app = minutes_app(&window)?;
         tauri::async_runtime::spawn_blocking(move || {
-            let result = app.state::<Storage>().preserve_voice_audio(None, &|| false);
+            let result = app.state::<Storage>().retry_voice_audio_cleanup();
             let _ = app.emit("voice-identity-changed", ());
             result
         })
@@ -3097,7 +3022,6 @@ pub fn run() {
     builder
         .manage(startup_attention::Startup::default())
         .manage(startup_reset::Reset::default())
-        .manage(startup_notices::Notices::default())
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
         .manage(recording_recovery::Recovery::default())
@@ -3255,18 +3179,14 @@ pub fn run() {
             }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let migrated = (|| -> Result<(), String> {
+                let recovered = (|| -> Result<(), String> {
                     let storage = handle.state::<Storage>();
                     #[cfg(any(unix, windows))]
                     if !storage.data_write_blocked() {
                         data_controller::finish_interrupted_deletions(&handle)?;
                     }
                     if storage.data_write_blocked() {
-                        // Recovery controls must remain reachable even when an
-                        // audio migration is pending. Storage fences still deny
-                        // normal writes and AnalysisController cannot run. The
-                        // recovery receipt requires a clean restart before any
-                        // deferred startup work, including migration, resumes.
+                        // Keep recovery controls available while writes remain fenced.
                         return handle.state::<startup_attention::Startup>().ready();
                     }
                     let errors = std::sync::Mutex::new(Vec::new());
@@ -3284,28 +3204,18 @@ pub fn run() {
                         return Err(errors.join("\n"));
                     }
                     storage.finish_pending_meeting_audio()?;
-                    storage.migrate_single_wav(&|done, total, meeting| {
-                        let _ = handle
-                            .state::<startup_attention::Startup>()
-                            .migration_progress(done, total, meeting);
-                    })?;
-                    storage.upgrade_completed_audio_cleanup(&|done, total, meeting| {
-                        let _ = handle
-                            .state::<startup_attention::Startup>()
-                            .migration_progress(done, total, meeting);
-                    })?;
                     handle.state::<startup_attention::Startup>().ready()?;
-                    if let Err(error) = storage.preserve_voice_audio(None, &|| false) {
+                    if let Err(error) = storage.retry_voice_audio_cleanup() {
                         internal_logs::report_error("voice_audio", &error);
                     }
                     let _ = handle.emit("voice-identity-changed", ());
                     internal_logs::phase("application", None, None, "ready", None);
                     Ok(())
                 })();
-                if let Err(error) = migrated {
+                if let Err(error) = recovered {
                     let _ = handle.state::<startup_attention::Startup>().block(
                         startup_attention::Failure::new(
-                            startup_attention::Stage::AudioMigration,
+                            startup_attention::Stage::AudioRecovery,
                             error,
                             Some(&root),
                             handle.path().app_config_dir().ok().as_deref(),
@@ -3375,18 +3285,6 @@ pub fn run() {
                     } else {
                         window.app_handle().exit(0);
                     }
-                }
-                return;
-            }
-            if window.label() == recorder_info::LABEL {
-                // Native window/WebView focus transfers can emit a transient blur
-                // during opening. Only explicit close or recorder lifecycle hides help.
-                match event {
-                    WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        let _ = recorder_info::hide(window.app_handle(), true);
-                    }
-                    _ => {}
                 }
                 return;
             }

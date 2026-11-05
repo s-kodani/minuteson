@@ -64,29 +64,6 @@ fn old_registry_versions_two_and_three_are_rejected_without_rewriting_keep_recei
         db.pragma_update(None, "user_version", version).unwrap();
         drop(db);
         let before = std::fs::read(&journal).unwrap();
-        #[cfg(windows)]
-        if version == 2 {
-            let storage = Storage::open(root.path().into()).unwrap();
-            drop(storage);
-            let db = Connection::open(&journal).unwrap();
-            assert_eq!(
-                db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                    .unwrap(),
-                4
-            );
-            assert_eq!(
-                db.query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
-                    r.get::<_, String>(0)
-                })
-                .unwrap(),
-                receipt
-            );
-            assert_eq!(
-                std::fs::read(path.join("unknown")).unwrap(),
-                b"keep owned body"
-            );
-            continue;
-        }
         assert!(Storage::open(root.path().into()).is_err());
         assert_eq!(std::fs::read(&journal).unwrap(), before);
         assert_eq!(

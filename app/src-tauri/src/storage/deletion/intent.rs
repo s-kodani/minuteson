@@ -239,6 +239,10 @@ impl Intent {
         })
     }
     pub(super) fn validate(&self, db: &Connection) -> Result<(), String> {
+        #[cfg(not(test))]
+        if !self.file_header.directory_scope() {
+            return Err("会議の削除記録は現行のフォルダー確認形式が必要です".into());
+        }
         self.scope.validate_format(db)?;
         self.file_header.root.validate(true)?;
         self.file_header.database.validate(false)?;

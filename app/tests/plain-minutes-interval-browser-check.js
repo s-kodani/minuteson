@@ -26,7 +26,7 @@ async page=>{
   results.push("click starts at the exact fractional time on the whole timeline in the one shared dock; pause and navigation release work");
   for(const [modes,expected] of [[['mixed'],'mixed']]){
     stage=`audio-mode-${expected}`;
-    await page.evaluate(modes=>{window.__mon.audioSummary.modes=modes;window.__mon.emitPlain("minutes-version-changed");},modes);
+    await page.evaluate(modes=>{window.__mon.audioSummary.modes=modes;window.__mon.emitPlain("analysis-version-changed");},modes);
     await page.waitForFunction(modes=>JSON.stringify(window.__mon.audioSummary.modes)===JSON.stringify(modes),modes);
     // Re-enter to reload the shared track settings from the new saved source.
     await close();
@@ -37,7 +37,7 @@ async page=>{
   results.push("recorded canonical meeting audio uses the same native mode without a model");
   stage="no-audio-edit";
   const played=await count("prepare_meeting_playback");
-  await page.evaluate(()=>{window.__mon.audioSummary.modes=[];window.__mon.emitPlain("minutes-version-changed");});await link().waitFor({state:"hidden"});
+  await page.evaluate(()=>{window.__mon.audioSummary.modes=[];window.__mon.emitPlain("analysis-version-changed");});await link().waitFor({state:"hidden"});
   check(await panel().getByText("点検区間",{exact:true}).isVisible()&&await count("prepare_meeting_playback")===played,"no-audio text disappeared or played");
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();
   const input=()=>panel().getByRole("textbox",{name:"議事録のMarkdown本文",exact:true});await input().fill("# 音声なしでも人間が編集\n");

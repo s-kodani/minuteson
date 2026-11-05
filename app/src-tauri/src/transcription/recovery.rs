@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -64,20 +63,6 @@ impl State {
         }
         Ok(())
     }
-    pub(super) fn validate_input(
-        &self,
-        first: u64,
-        end: u64,
-        duration: i64,
-        model: &Path,
-    ) -> Result<(), String> {
-        if (micros(self.frames) - duration).abs() > 63 {
-            return Err("再認識の音声長が一致しません".into());
-        }
-        self.check(first, end.min(self.frames), self.frames, model)
-            .map(|_| ())
-    }
-
     pub(super) fn check(
         &self,
         core_first: u64,

@@ -23,7 +23,7 @@ test("audio confirmation shows the meeting, retained text and exactly cancel/del
   const html = render();
   assert.match(html, /音声だけを削除/u);
   assert.match(html, /長い会議名 &lt;検証&gt;/u);
-  assert.match(html, /音声は復元できません。文字起こし・議事録・根拠テキストと履歴は保持します。/u);
+  assert.match(html, /音声は復元できません。文字起こし・議事録・下書きは保持します。/u);
   assert.equal((html.match(/<button\b/gu) ?? []).length, 2);
   assert.match(html, />キャンセル<\/button>[\s\S]*>削除<\/button>/u);
   assert.doesNotMatch(html, /<input|<ul|disabled=""/u);

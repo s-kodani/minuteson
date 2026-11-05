@@ -1,9 +1,11 @@
 //! Server-held model deletion selections. IDs and serialized views are not permits.
+#[cfg(test)]
+use super::capture;
 use super::intent::{
     self,
     removal::{self, renewal},
 };
-use super::{capture, Entry, Snapshot};
+use super::{Entry, Snapshot};
 use crate::{analysis_worker::data_maintenance::DataMaintenanceLease, storage::Storage};
 use rusqlite::params;
 use serde::Serialize;
@@ -44,15 +46,6 @@ pub(crate) struct Preview {
     pub previous_path_count: Option<usize>,
     pub prior_deletion_completed: bool,
     pub reservation_roots: Vec<String>,
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PathPage {
-    pub confirmation_id: String,
-    pub offset: usize,
-    pub total: usize,
-    pub next_offset: Option<usize>,
-    pub entries: Vec<Entry>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -422,6 +415,7 @@ impl Prepared {
             target,
         })
     }
+    #[cfg(test)]
     pub(crate) fn fresh(
         storage: &Storage,
         root: &Path,
@@ -473,21 +467,6 @@ impl Prepared {
     }
     pub(crate) fn preview(&self) -> Preview {
         self.preview.clone()
-    }
-    pub(crate) fn page(&self, confirmation: &str, offset: usize) -> Result<PathPage, String> {
-        self.confirmation(confirmation)?;
-        let entries = self.target.entries();
-        if offset > entries.len() || offset % 50 != 0 {
-            return Err("モデル削除一覧の位置が不正です".into());
-        }
-        let end = offset.saturating_add(50).min(entries.len());
-        Ok(PathPage {
-            confirmation_id: confirmation.into(),
-            offset,
-            total: entries.len(),
-            next_offset: (end < entries.len()).then_some(end),
-            entries: entries[offset..end].to_vec(),
-        })
     }
     fn confirmation(&self, id: &str) -> Result<(), String> {
         if id == self.preview.confirmation_id {

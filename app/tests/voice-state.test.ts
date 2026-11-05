@@ -33,7 +33,7 @@ test("manual registration binds only selected candidates without using matching 
 
 test("voice completion receipts bind the exact job specification without fabricating an analysis revision",async()=>{
   const {verifiedJobOutput,JobNotificationTracker}=await import("../src/job-notification-state.ts");
-  const queued={id:"voice-job",meetingId:"meeting",meetingTitle:"会議",kind:"voice_registration" as const,state:"queued",operationId:"operation",inputHash:"a".repeat(64),specHash:"b".repeat(64),completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,retryOfJobId:null,attempt:1,createdAt:100,updatedAt:100};
+  const queued={id:"voice-job",meetingId:"meeting",meetingTitle:"会議",kind:"voice_registration" as const,state:"queued",operationId:"operation",inputHash:"a".repeat(64),specHash:"b".repeat(64),completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,pauseReason:null,retryOfJobId:null,attempt:1,createdAt:100,updatedAt:100};
   const job={...queued,state:"succeeded",completedUnits:1,updatedAt:200};
   const proof={job,contentHash:job.specHash,publicationState:"voice"};
   assert.equal(verifiedJobOutput(job,proof),"voice");

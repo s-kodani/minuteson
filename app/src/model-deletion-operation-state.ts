@@ -3,14 +3,6 @@ export type ModelDeletionStartupReason = "model_completed_scope_reappeared" | "m
 export interface ModelBodyDeletionItem { operationId: string; state: string; packageId: string | null; modelName: string | null; reviewAllowed: boolean; errorMessage: string | null; startupReason?: ModelDeletionStartupReason | null }
 export interface ModelBodyDeletionListing { items: ModelBodyDeletionItem[]; writeBlocked: boolean; restartRequired: boolean; reason: string | null }
 
-export function modelDeletionStartupLabel(reason: ModelDeletionStartupReason): string {
-  switch (reason) {
-    case "model_completed_scope_reappeared": return "完了済みモデル削除の対象が再出現しています。自動では削除しません。現在の対象を確認し、新しい削除要求で解決してください。";
-    case "model_completed_receipt_invalid": return "完了済みモデル削除の記録・削除要求の受付履歴を検証できません。対象を保持し、通常書込みを停止しています。";
-    case "model_completed_scope_uninspectable": return "完了済みモデル削除の保存領域・対象を安全に検査できません。対象を保持し、通常書込みを停止しています。";
-  }
-}
-
 const id = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(v);
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !v.includes("\0") && new TextEncoder().encode(v).length <= 4096;
 export function assertModelBodyDeletionListing(l: ModelBodyDeletionListing): void {
@@ -41,10 +33,6 @@ export interface ModelDeletionPreview {
 export interface ModelDeletionReceipt {
   operationId: string; packageId: string; bodyDeleted: boolean; retained: boolean; historyRetained: true; restartRequired: boolean;
 }
-export interface ModelDeletionEntry {
-  relativePath: string; directory: boolean; registered: boolean; present: boolean; bytes: number | null; sha256: string | null; changed: boolean;
-}
-export interface ModelDeletionPage { confirmationId: string; offset: number; total: number; nextOffset: number | null; entries: ModelDeletionEntry[] }
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const fail = (): never => { throw Error("モデル削除の状態が不正です。対象を再確認してください。"); };
 const reservation = (root: string, operation: string) => {
@@ -79,19 +67,3 @@ export function assertModelDeletionReceipt(r: ModelDeletionReceipt, p: ModelDele
     || typeof r.bodyDeleted !== "boolean" || r.retained !== !r.bodyDeleted || r.historyRetained !== true || typeof r.restartRequired !== "boolean"
     || p.phase !== (r.bodyDeleted ? "completed" : "retained") || p.pending || p.executeAllowed) fail();
 }
-export function assertModelDeletionPage(page: ModelDeletionPage, p: ModelDeletionPreview, offset: number): void {
-  assertModelDeletionPreview(p);
-  if (!page || page.confirmationId !== p.confirmationId || page.offset !== offset || page.total !== p.pathCount
-    || !count(offset) || offset % 50 !== 0 || offset > p.pathCount || !Array.isArray(page.entries)
-    || page.entries.length !== Math.min(50, p.pathCount - offset) || page.nextOffset !== (offset + page.entries.length < p.pathCount ? offset + page.entries.length : null)) fail();
-  for (const e of page.entries) {
-    if (!e || !text(e.relativePath) || new TextEncoder().encode(e.relativePath).length > 4096 || e.relativePath.includes("\\")
-      || e.relativePath.split("/").some(part => !part || part === "." || part === "..")
-      || ![p.packageId, ...p.reservationRoots].some(root => e.relativePath === root || e.relativePath.startsWith(root + "/"))
-      || ![e.directory, e.registered, e.present, e.changed].every(v => typeof v === "boolean")
-      || (!e.present && !e.registered) || (e.directory || !e.present ? e.bytes !== null || e.sha256 !== null || e.changed : !count(e.bytes) || typeof e.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(e.sha256))
-      || (e.changed && !e.registered)) fail();
-  }
-  if (new Set(page.entries.map(e => e.relativePath)).size !== page.entries.length) fail();
-}
-export const modelDeletionPhaseLabel = (phase: ModelDeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再確認待ち", awaiting_ack: "完了応答を未確認", retained: "保持して中止", completed: "削除完了" })[phase];

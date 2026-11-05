@@ -131,7 +131,7 @@ fn manual_splits_materialize_fresh_lineages_original_scope_and_fixed_minutes_wit
     assert!(storage.minutes_input_updated(&job.id).unwrap());
     assert_eq!(storage.load_minutes_input(&job.id).unwrap(), fixed);
     storage
-        .undo_last_transcript_edit(&edited.id, edited.lock_version)
+        .save_transcript_draft(&edited.id, edited.lock_version, saved.payload.clone())
         .unwrap();
     assert!(!storage.minutes_input_updated(&job.id).unwrap());
     drop(storage);
@@ -236,10 +236,9 @@ fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_refe
             )
             .unwrap();
         let config: Value = serde_json::from_str(&config).unwrap();
-        assert_eq!(
-            config["manualSpeakerOperations"]["merges"][0]["target_id"],
-            manual
-        );
+        assert!(config["manualAssignmentLineages"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
         assert!(db
             .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
             .optional()
@@ -247,7 +246,7 @@ fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_refe
             .is_none());
     }
     storage
-        .undo_last_transcript_edit(&saved.id, saved.lock_version)
+        .save_transcript_draft(&saved.id, saved.lock_version, draft.payload.clone())
         .unwrap();
     assert!(!storage.minutes_input_updated(&before.id).unwrap());
     assert!(storage.minutes_input_updated(&after.id).unwrap());
@@ -274,7 +273,7 @@ fn input_update_detection_tracks_content_not_draft_versions_and_handles_no_draft
         .unwrap();
     assert!(storage.minutes_input_updated(&job.id).unwrap());
     storage
-        .undo_last_transcript_edit(&changed.id, changed.lock_version)
+        .save_transcript_draft(&changed.id, changed.lock_version, saved.payload.clone())
         .unwrap();
     assert!(!storage.minutes_input_updated(&job.id).unwrap());
     let meeting = storage.get_meeting(&request.meeting_id).unwrap().unwrap();
@@ -430,11 +429,11 @@ fn fixed_minutes_input_remaps_edits_and_preserves_public_heads_across_reopen() {
         .is_none());
     assert_eq!(
         storage
-            .analysis_versions(&request.meeting_id)
+            .minutes_source(&request.meeting_id)
             .unwrap()
-            .versions
-            .len(),
-        1
+            .current_id
+            .as_deref(),
+        Some(original.id.as_str())
     );
     assert_eq!(
         storage

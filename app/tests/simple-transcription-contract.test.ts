@@ -57,7 +57,7 @@ test("automatic utterance publication checks ownership and commits head and stag
   assert.match(storage, /head.is_some\(\) \|\| super::drafts::load_draft/);
   assert.match(storage, /analysis_content_hash\(&tx, output\)\? != hash/);
   assert.match(storage, /publication_state='committed'/);
-  assert.match(storage, /current_analysis_id=\?1,previous_analysis_id=NULL/);
+  assert.match(storage, /UPDATE meetings SET current_analysis_id=\?1/);
   assert.match(storage, /tx.commit\(\)/);
   assert.match(native("analysis_flow.rs"), /storage.complete_analysis_flow\(flow\)/);
 });

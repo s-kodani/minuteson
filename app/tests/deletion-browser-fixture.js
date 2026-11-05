@@ -10,7 +10,7 @@ f.changed = patch => changed(patch.kind && patch.kind !== "deletion" ? { ...patc
 const idle = structuredClone(f.snapshot);
 const d = window.deletionFixture = {
   mode: "success", unknownCount: 0, fileCount: 1, blocked: false, restart: false, cold: false,
-  listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null, reservedMode: false, foreignRootPage: false, invalidPendingReview: false,
+  listFail: false, reviewLost: false, reservedMode: false, invalidPendingReview: false,
   items: [], deleted: 0, kept: 0, reconfirmed: 0, complete: () => {}, last: null, closes: 0,
   prepareHold: false, closeHold: false, closeFail: false, quitFail: false, liveTokens: new Set(),
   mountPlayback: async () => { const { mountPlaybackHarness } = await import("./deletion-playback-browser-harness.tsx"); d.unmountPlayback = mountPlaybackHarness(f.meetings[0].id); },
@@ -34,14 +34,14 @@ mockIPC(async (command, args) => {
   if (["get_current_analysis", "get_transcript_draft", "get_analysis_flow", "get_minutes_markdown"].includes(command)) return null;
   if (command === "get_meeting_vocabulary") return { global: structuredClone(f.book), meeting: { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 } };
   if (["get_analysis_jobs", "list_restored_meeting_ids"].includes(command)) return [];
-  if (command === "get_analysis_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };
-  if (["get_deletion_items", "review_meeting_deletion", "review_pending_deletion", "get_deletion_paths", "close_playback", "prepare_utterance_playback"].includes(command)
+  if (command === "get_minutes_source") return { meetingLockVersion: 0, currentId: null, contentHash: null, draft: null };
+  if (["get_deletion_items", "review_meeting_deletion", "review_pending_deletion", "close_playback", "prepare_utterance_playback"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "deletion")) f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_deletion_items") {
     if (d.listFail) throw Error("模擬削除一覧失敗");
     return { items: structuredClone(d.items), deletingMeetingIds: d.items.map(i => i.meetingId).filter(Boolean), writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? d.restart ? "削除解決後の再起動が必要" : "未完了削除のため書込停止" : null };
   }
-  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required" };
+  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required", deletionAvailable: false, deletionReason: "保存先の切替後は終了して再起動が必要です", deletionReasonCode: "relocation_restart_required" };
   if (command === "review_meeting_deletion" || command === "review_pending_deletion") {
     if (d.reviewRejected) { d.reviewRejected=false; throw "meeting_deletion_not_started:確認の直前に対象会議の処理が始まりました"; }
     if (command === "review_pending_deletion" && d.invalidPendingReview) throw Error("模擬完了記録の検証失敗");
@@ -53,23 +53,6 @@ mockIPC(async (command, args) => {
     setTimeout(() => void f.changed({ phase: "ready", busy: false, retryAllowed: true, deletionPreview: p }), 30);
     if (d.reviewLost) throw Error("模擬削除確認の応答喪失");
     return structuredClone(f.snapshot);
-  }
-  if (command === "get_deletion_paths") {
-    const p = structuredClone(f.snapshot.deletionPreview);
-    if (d.pageFail) throw Error("模擬一覧取得失敗");
-    if (!p || args.confirmationId !== p.confirmationId || args.offset % 50) throw Error("一覧の確認が失効");
-    const page = { confirmationId: args.confirmationId, offset: args.offset, total: p.pathCount, nextOffset: args.offset + 50 < p.pathCount ? args.offset + 50 : null,
-      entries: Array.from({ length: Math.min(50, p.pathCount - args.offset) }, (_, index) => {
-        const n = args.offset + index, directory = n < 2;
-        if (p.reservationRoots?.length && n >= 3) {
-          const root = d.foreignRootPage ? `meetings/.mon-delete-${crypto.randomUUID()}-2` : p.reservationRoots[0];
-          return { relativePath: root + (n === 3 ? "" : "/unknown.txt"), directory: n === 3, registered: false, missing: false, changed: false, stageHint: null, bytes: n === 3 ? null : 1024 };
-        }
-        if (p.reservationRoots?.length && n === 2) return { relativePath: `meetings/${p.meetingId}/audio/input.flac`, directory: false, registered: !p.rowPhaseCommitted, missing: false, changed: false, stageHint: null, bytes: 1024 };
-        return { relativePath: `meetings/${p.meetingId}${n === 0 ? "" : n === 1 ? "/audio" : `/audio/file-${n}.flac`}`, directory, registered: !directory && n >= 2 + d.unknownCount, missing: false, changed: false, stageHint: null, bytes: directory ? null : 1024 };
-      }) };
-    if (d.pathsDelay) { d.pathsDelay = false; await new Promise(resolve => { d.releasePage = resolve; }); }
-    return page;
   }
   if (command === "start_data_operation" && f.snapshot.kind === "deletion") {
     if (d.executeRejected) { d.executeRejected=false; throw "meeting_deletion_not_started:実行の直前に対象会議の処理が始まりました"; }

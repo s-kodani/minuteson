@@ -11,8 +11,6 @@ pub(super) use ledger::archive::ArchiveQueue;
 pub(crate) use ledger::archive::Batch as ArchivedBatch;
 // Immutable transfer codec; archive publication and restored delivery binding
 // are separate consumers and must not treat its producer owner as authority.
-pub(crate) use ledger::archive::portable::restored::State as RestoredInputState;
-pub(crate) use ledger::archive::portable::Snapshot as PortableInputSnapshot;
 pub(super) use ledger::Ledger;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

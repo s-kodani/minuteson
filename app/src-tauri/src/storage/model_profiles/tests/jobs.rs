@@ -5,8 +5,6 @@ use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::transcription::asr::AsrConfig;
 use serde_json::json;
 
-mod rebinding;
-
 fn whisper(f: &Fixture) -> AsrConfig {
     let p = f.storage.analysis_preferences().unwrap().payload.standard;
     let capture = |s: &str| {
@@ -43,7 +41,6 @@ fn sherpa(f: &Fixture) -> SherpaConfig {
         window_shift_milli: p.window_shift_milli,
         min_duration_on_ms: p.min_duration_on_ms,
         min_duration_off_ms: p.min_duration_off_ms,
-        speech_sensitivity_milli: p.speech_sensitivity_milli,
     }
 }
 fn llama(f: &Fixture) -> (LlamaConfig, usize) {

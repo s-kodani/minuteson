@@ -38,7 +38,7 @@ export type Role =
 export type Target = "macos_aarch64" | "windows_x86_64";
 export type PauseReason = "user" | "recording" | "exit";
 export type Platform = "macos" | "windows" | "other";
-export type WindowRole = "main" | "recorder" | "recorder-info" | "recording-confirmation" | "startup-attention";
+export type WindowRole = "main" | "recorder" | "recording-confirmation" | "startup-attention";
 
 export interface AppError {
   code: string;

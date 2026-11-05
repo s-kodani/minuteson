@@ -21,7 +21,7 @@ const f = window.dataFixture = {
     if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
 };
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
-const operationEntries = ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
+const operationEntries = ["window_action", "confirmation"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
 window.isTauri = true; mockWindows("main");
 export const dataSaveIPC = async (command, args) => {
   if (command === "get_meeting_deletion_availability") {
@@ -58,7 +58,8 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_data_operation_availability") {
     const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker === "録音通知履歴の確認・更新中" ? null : f.blocker;
     const deletionReason=reason==="録音通知履歴の確認・更新中"?null:reason;
-    const result = { available: reason === null, reason, deletionAvailable:deletionReason===null, deletionReason };
+    const reasonCode = f.snapshot.restartRequired ? "relocation_restart_required" : reason ? "operation_active" : null;
+    const result = { available: reason === null, reason, reasonCode, deletionAvailable:deletionReason===null, deletionReason, deletionReasonCode:deletionReason ? reasonCode : null };
     if (f.holdAvailability) return new Promise(resolve => { f.availabilityComplete = () => resolve(result); });
     return result;
   }
@@ -137,7 +138,7 @@ export const dataSaveIPC = async (command, args) => {
     const finish = async () => {
       if (f.snapshot.phase === "cancelling" && f.mode !== "cancelRace") return f.changed({ phase: "cancelled", busy: false, retryAllowed: true });
       f.published++;
-      if (f.snapshot.kind === "backup") await f.changed({ phase: "completed", busy: false, backupReceipt: { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, size: 1024, sha256: "a".repeat(64) } });
+      if (f.snapshot.kind === "backup") await f.changed({ phase: "completed", busy: false, backupReceipt: { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, size: 1024, sha256: "a".repeat(64) } });
       else {
         const ids = p.meetingTitles.map(title => { const id = crypto.randomUUID(); f.meetings.push({ id, title, lifecycle: "imported", sourceType: "audio_import", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 1 }); return id; });
         f.restored.push(...ids);
@@ -173,7 +174,7 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_model_placements") return [];
   if (command === "get_official_model_options") return [];
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
-  if (["get_asr_preferences", "get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
+  if (["get_asr_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
   if (["get_audio_import"].includes(command)) return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
   if (command === "finish_main_close") { if (f.failClose) throw Error("模擬終了失敗"); return null; }
   throw Error(`Unexpected data fixture command: ${command}`);

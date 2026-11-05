@@ -244,13 +244,12 @@ fn auto_trial_pins_actual_model_layers_and_works_below_the_old_memory_floor() {
 printf '%s\n' 'using device MTL0 (Apple GPU)' 'load_tensors: offloaded 29/29 layers to GPU' >&2
 printf '%s' '{"ok":true}'"#,
     );
-    let resolved = resolve_with_memory(
+    let resolved = resolve(
         Policy::AutoMetalV2,
         &c,
         8192,
         root.path(),
         &crate::test_support::never_cancelled,
-        false,
     )
     .unwrap()
     .unwrap();
@@ -278,13 +277,12 @@ if [ "$1" = 256 ]; then printf '%s\n' 'failed to allocate buffer' >&2; exit 1; f
 printf '%s\n' 'load_tensors: offloaded 32/37 layers to GPU' >&2
 printf '%s' '{"ok":true}'"#,
     );
-    let resolved = resolve_with_memory(
+    let resolved = resolve(
         Policy::AutoMetalV2,
         &c,
         8192,
         root.path(),
         &crate::test_support::never_cancelled,
-        false,
     )
     .unwrap()
     .unwrap();
@@ -300,13 +298,12 @@ printf '%s' '{"ok":true}'"#,
 fn auto_trial_without_device_uses_cpu_and_cancellation_never_pins_cpu() {
     let root = tempfile::tempdir().unwrap();
     let c = automatic_config(root.path(), "printf 'no GPU device' >&2; exit 1");
-    let resolved = resolve_with_memory(
+    let resolved = resolve(
         Policy::AutoMetalV2,
         &c,
         8192,
         root.path(),
         &crate::test_support::never_cancelled,
-        true,
     )
     .unwrap()
     .unwrap();
@@ -322,14 +319,10 @@ fn auto_trial_without_device_uses_cpu_and_cancellation_never_pins_cpu() {
         root.path(),
         "touch stopped; printf 'using device MTL0\\n' >&2; /bin/sleep 2; exit 1",
     );
-    assert!(resolve_with_memory(
-        Policy::AutoMetalV2,
-        &c,
-        8192,
-        root.path(),
-        &|| root.path().join("stopped").exists(),
-        true
-    )
+    assert!(resolve(Policy::AutoMetalV2, &c, 8192, root.path(), &|| root
+        .path()
+        .join("stopped")
+        .exists(),)
     .unwrap()
     .is_none());
     assert!(!root.path().join("gpu-trial-1").exists());

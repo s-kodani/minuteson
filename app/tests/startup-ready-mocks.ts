@@ -7,7 +7,6 @@ export { mockWindows } from "@tauri-apps/api/mocks";
 export const mockIPC: typeof nativeMockIPC = (callback, options) => nativeMockIPC((command, args) => {
   if (command === "get_window_environment") return { schemaVersion: 1, productName: "MinutesOn", role: getCurrentWindow().label, platform: new URLSearchParams(location.search).get("resident") ?? (navigator.platform.startsWith("Win") ? "windows" : "macos"), capabilities: { voiceIdentity: true } };
   if (command === "get_voice_audio_storage_state" && !(window as Window & {monVoiceFixture?:unknown}).monVoiceFixture) return {cleanupPending:false};
-  if (command === "get_startup_notices" && !(window as Window & { startupNoticesFixture?: unknown }).startupNoticesFixture) return [];
   if (command === "get_asr_backends") return [{ id: "whisper.cpp", vocabularyDescription: "対応：表記・読み。用語と読みを文章のヒントとして渡します。補足は保存・表示用です。", supportsVadOverlap: true, defaultVad: structuredClone(defaultVadOptions) }];
   if (command === "get_startup_report") return { schemaVersion: 1, phase: "ready", failure: null, ...(new URLSearchParams(location.search).has("resident") ? { platform: new URLSearchParams(location.search).get("resident") === "macos" ? "macos" : "windows" } : {}) };
   // Window chrome may mount on Windows before the fixture's workspace providers.

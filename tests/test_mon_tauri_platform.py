@@ -65,7 +65,7 @@ class TauriPlatformTests(unittest.TestCase):
             "start_model_download", "save_transcript_draft", "save_minutes_markdown",
             "save_ui_preferences", "get_internal_logs", "finish_main_close",
         }
-        for window in ["recorder", "recorder-info", "recording-confirmation"]:
+        for window in ["recorder", "recording-confirmation"]:
             with self.subTest(window=window):
                 self.assertFalse(self.grants(window) & sensitive)
                 self.assertIn("get_ui_preferences", self.grants(window))
@@ -75,17 +75,13 @@ class TauriPlatformTests(unittest.TestCase):
             "get_window_environment", "get_ui_preferences", "get_recording_confirmation", "decide_recording_confirmation",
             "get_recorder_operation_notices", "publish_recorder_operation_notice",
         })
-        self.assertEqual(self.grants("recorder-info"), {
-            "get_window_environment", "get_ui_preferences", "get_recorder_operation_notices", "close_recorder_info",
-            "publish_recorder_operation_notice",
-        })
         self.assertTrue({"request_recording_confirmation", "get_recording_input_status",
                          "open_main_window", "hide_recorder_panel"} <= self.grants("recorder"))
 
     def test_archived_target_reads_are_main_only_and_keep_native_admission(self):
         command = "get_archived_recording_input_notice_rows"
         self.assertIn(command, self.grants("main"))
-        for window in ["recorder", "recorder-info", "recording-confirmation", "startup-attention"]:
+        for window in ["recorder", "recording-confirmation", "startup-attention"]:
             self.assertNotIn(command, self.grants(window))
         source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
         body = source.split("async fn " + command, 1)[1].split("#[tauri::command]", 1)[0]
@@ -113,7 +109,7 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertEqual(qa["bundle"]["windows"]["webviewInstallMode"]["type"], "offlineInstaller")
         self.assertFalse(qa["bundle"]["windows"]["allowDowngrades"])
         self.assertEqual({w["label"] for w in qa["app"]["windows"]},
-                         {"main", "recorder", "recorder-info", "recording-confirmation"})
+                         {"main", "recorder", "recording-confirmation"})
         self.assertEqual(qa["app"]["security"], self.base["app"]["security"])
         for window in qa["app"]["windows"]:
             if window["label"] != "main":
@@ -134,13 +130,13 @@ class TauriPlatformTests(unittest.TestCase):
     def test_public_brand_versions_and_store_data_identity(self):
         self.assertEqual(self.base["productName"], "MinutesOn")
         self.assertTrue(all(window["title"].startswith("MinutesOn") for window in self.base["app"]["windows"]))
-        self.assertEqual(self.base["version"], "1.0.1")
+        self.assertEqual(self.base["version"], "1.0.0")
         package = json.loads((ROOT / "app/package.json").read_text(encoding="utf8"))
         lock = json.loads((ROOT / "app/package-lock.json").read_text(encoding="utf8"))
         cargo = tomllib.loads((TAURI / "Cargo.toml").read_text(encoding="utf8"))
         cargo_lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf8"))
         self.assertEqual({package["version"], lock["version"], lock["packages"][""]["version"], cargo["package"]["version"],
-                          next(p["version"] for p in cargo_lock["package"] if p["name"] == "mon-desktop")}, {"1.0.1"})
+                          next(p["version"] for p in cargo_lock["package"] if p["name"] == "mon-desktop")}, {"1.0.0"})
         store = merge(self.base, configuration("tauri.windows.store.conf.json"))
         self.assertEqual(store["identifier"], "jp.mon.desktop.store")
         self.assertNotEqual(store["identifier"], self.base["identifier"])

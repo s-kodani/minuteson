@@ -40,7 +40,6 @@ const keys = {
   "llama.cpp": ["executablePath", "modelPath", "threads", "contextTokens", "predictionTokens", "gpuLayers", "seed", "promptBudget"],
 };
 function fail(): never { throw Error("モデル構成と確認内容が一致しません。記録を再読込し、適用内容を再確認してください。"); }
-export function profileName(name: ModelProfileName) { return name === "standard" ? "標準" : "高精度"; }
 export function canReviewApplication(entry: ModelPlacementEntry): boolean {
   placementLabel(entry);
   return entry.placementRecorded && modelBodyAvailable(entry) && entry.compatibility?.state === "succeeded";
@@ -63,12 +62,6 @@ export function assertProfileView(view: ModelProfileView) {
 export function assertProfileCatalog(views: ModelProfileView[]) {
   if (!Array.isArray(views) || views.length !== 2 || new Set(views.map(v => v?.name)).size !== 2) fail();
   views.forEach(assertProfileView);
-}
-export function profileConfigurationLabel(view: ModelProfileView) {
-  assertProfileView(view);
-  if (!view.id) return "管理モデルは未選択";
-  if (view.components.some(c => !c.settingsMatch || !c.compatibilityCurrent)) return "保存構成と現在の設定・互換性記録に不一致あり";
-  return view.configurationComplete ? "3エンジンの保存構成が一致（実行準備・品質は別途確認）" : "一部の管理モデルを選択済み";
 }
 function settingsEntries(value: ModelSettings): [string, unknown][] {
   if (!value || !Object.hasOwn(keys, value.engine) || !value.settings || typeof value.settings !== "object") fail();
@@ -133,7 +126,6 @@ export function assertApplicationResult(view: ModelProfileView, operationId: str
     || !component || component.packageId !== preview.packageId || component.checkOperationId !== preview.checkOperationId
     || !component.settingsMatch || !component.compatibilityCurrent) fail();
 }
-export const preferenceCommand = (engine: ModelSettings["engine"]) => ({ "asr": "get_asr_preferences", "whisper.cpp": "get_asr_preferences", "sherpa-onnx": "get_diarization_preferences", "llama.cpp": "get_minutes_preferences" })[engine];
 export function assertAppliedPreferences(value: { lockVersion: number; payload: { standard: unknown; highAccuracy: unknown } }, preview: ModelApplicationPreview) {
   const key = preview.profile === "standard" ? "standard" : "highAccuracy";
   const expected = Object.fromEntries(settingsEntries(preview.after));

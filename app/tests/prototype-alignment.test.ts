@@ -20,11 +20,10 @@ test("floating surfaces round every corner and do not use a thick square toast s
   assert.match(css, /\.toast-card \{[^}]*border:1px solid var\(--border\)[^}]*overflow:hidden/);
   assert.match(css, /\.toast-host \{[^}]*padding:0/);
   assert.match(css, /\.toast-host \.mon-notification-stack \{ z-index:30/);
-  assert.match(css, /\.recorder-info-window \{[^}]*overflow:auto[^}]*border-radius:12px/);
 });
-test("macOS clips only the three detached native windows using public selectors", () => {
+test("macOS clips only the two detached native windows using public selectors", () => {
   const native = source("../src-tauri/src/rounded_windows.rs");
-  assert.match(native, /\["recorder", "recorder-info", "recording-confirmation"\]/);
+  assert.match(native, /\["recorder", "recording-confirmation"\]/);
   assert.match(native, /MainThreadMarker::new\(\)/);
   assert.match(native, /setCornerRadius: 12\.0_f64/);
   assert.match(native, /setMasksToBounds: true/);

@@ -3,7 +3,7 @@ async (page, capturePath = path => path)=>{
  let sequence=0;
  const id=()=>"00000000-0000-4000-8000-"+(++sequence).toString().padStart(12,"0");
  const empty=()=>({revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null});
- const initial=()=>({operations:["window_action","confirmation","theme_read","info_read","session_read"].map(source=>({source,revision:0,eventId:null,message:null,dismissed:false})),recording:{revision:1,phase:"recording",elapsedMs:45000,microphoneConnected:true,systemAudioConnected:true,meetingId:"synthetic-meeting",sessionId:id(),errorMessage:null},decision:empty(),calls:[],presentations:0,quitNotified:false,lostStop:false,failStop:false,failRead:false,suppressEvents:false});
+ const initial=()=>({operations:["window_action","confirmation"].map(source=>({source,revision:0,eventId:null,message:null,dismissed:false})),recording:{revision:1,phase:"recording",elapsedMs:45000,microphoneConnected:true,systemAudioConnected:true,meetingId:"synthetic-meeting",sessionId:id(),errorMessage:null},decision:empty(),calls:[],presentations:0,quitNotified:false,lostStop:false,failStop:false,failRead:false,suppressEvents:false});
  let backend=initial();
  const command=(name,args,label)=>{
   const s=backend,d=s.decision;

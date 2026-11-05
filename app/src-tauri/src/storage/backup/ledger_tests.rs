@@ -121,7 +121,7 @@ fn restore_ledger_rejects_same_batch_with_changed_mapping_archive_or_corrupted_p
     )
     .unwrap();
     let plan = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
-    let mut target = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut target = portable::schema().unwrap();
     {
         let mut tx = target.transaction().unwrap();
         plan.reserve(&mut tx, &crate::test_support::never_cancelled)
@@ -184,7 +184,7 @@ fn restore_ledger_cancellation_rolls_back_its_savepoint_even_if_outer_transactio
     })
     .unwrap();
     let plan = BatchPlan::new(&ids, &crate::test_support::never_cancelled).unwrap();
-    let mut target = portable::schema(MIGRATIONS.len()).unwrap();
+    let mut target = portable::schema().unwrap();
     let mut tx = target.transaction().unwrap();
     let calls = Cell::new(0);
     assert!(plan

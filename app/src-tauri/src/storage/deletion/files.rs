@@ -146,7 +146,6 @@ fn raw_recording_metadata_name(leaf: &str) -> bool {
         leaf,
         "raw-microphone.json"
             | "raw-system.json"
-            | "final-flac.json"
             | "partial-flac.json"
             | "partial-recovery.json"
             | ".final-flac.lock"
@@ -291,7 +290,6 @@ impl Records {
                         | "original.mp3"
                         | "original.m4a"
                         | "original.flac"
-                        | "audio.flac"
                         | "decoded.caf"
                         | "manifest.json"
                 )

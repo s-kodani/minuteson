@@ -583,7 +583,7 @@ pub(in crate::storage::backup) fn recover_with_policy(
     if !pending {
         return Ok(());
     }
-    if schema(db)? != schema(&portable::schema(MIGRATIONS.len())?)? {
+    if schema(db)? != schema(&portable::schema()?)? {
         return Err("復元回収前の保存先SQL定義が信頼済み定義と一致しません".into());
     }
     let mut query=db.prepare("SELECT id FROM maintenance_operations WHERE kind='restore_addition' AND state NOT IN ('completed','recovered') ORDER BY created_at,id").map_err(|e|e.to_string())?;
@@ -605,7 +605,7 @@ pub(in crate::storage::backup) fn recovery_evidence(
     db: &Connection,
     id: &str,
 ) -> Result<recovery::Evidence, String> {
-    if !uuid(id) || schema(db)? != schema(&portable::schema(MIGRATIONS.len())?)? {
+    if !uuid(id) || schema(db)? != schema(&portable::schema()?)? {
         return Err("復元回収の台帳定義またはIDが不正です".into());
     }
     let (batch,json,sha,state,error,progress,created,updated):(String,String,String,String,Option<String>,String,i64,i64)=db.query_row("SELECT restore_batch_id,target_manifest_json,target_hash,state,error_code,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='restore_addition'",params![id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?;
@@ -708,32 +708,6 @@ pub(in crate::storage::backup) fn recover_selected(
         return Err("公開済みまたは保持して確認済みの対象は回収しません".into());
     }
     recover_one(root, db, id)
-}
-
-#[cfg(test)]
-pub(in crate::storage::backup) fn remove_schema_for_test(db: &Connection) {
-    crate::storage::model_metadata::remove_schema_for_test(db);
-    let present: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=22)",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    if !present {
-        return;
-    }
-    for table in ["maintenance_paths", "maintenance_operations"] {
-        assert_eq!(
-            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-        db.execute_batch(&format!("DROP TABLE {table};")).unwrap();
-    }
-    db.execute_batch("DELETE FROM schema_migrations WHERE version=22;")
-        .unwrap();
 }
 
 #[cfg(test)]

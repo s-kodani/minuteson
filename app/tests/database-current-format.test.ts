@@ -11,8 +11,8 @@ test("database startup rejects old formats before journal changes and recovery w
 });
 
 test("new database creation is transactional and only the current schema is accepted", () => {
-  assert.match(source, /version != MIGRATIONS\.len\(\)/);
-  assert.doesNotMatch(source, /upgrade_voice_registry|upgrade_speaker_completion/);
+  assert.match(source, /version != SCHEMA_VERSION as i64 \|\| checksum != schema_checksum\(\)/);
+  assert.doesNotMatch(source, /schema_upgrade|MIGRATIONS|upgrade_voice_registry|upgrade_speaker_completion/);
   assert.match(source, /if !empty_or_current_database\(&transaction\)\?/);
   assert.match(source, /transaction\.commit\(\)\?/);
 });

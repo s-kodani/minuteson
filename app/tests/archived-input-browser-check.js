@@ -89,38 +89,38 @@ async page=>{
     results.push("known maintenance suppresses delivery and writes until a fresh post-maintenance read");
 
     await page.evaluate(()=>{const f=window.closeFixture,uid=i=>`${i.toString(16).padStart(8,"0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
-      f.archived.rows=Array.from({length:40},(_,i)=>f.newArchivedRow({sessionId:uid(i+1),title:`旧形式${i+1}`,legacy:true}));f.archived.rows.push(f.newArchivedRow({sessionId:uid(50),title:"二ページ目の会議",loss:3}));
+      f.archived.rows=Array.from({length:40},(_,i)=>f.newArchivedRow({sessionId:uid(i+1),title:`記録なし${i+1}`,noJournal:true}));f.archived.rows.push(f.newArchivedRow({sessionId:uid(50),title:"二ページ目の会議",loss:3}));
     });await page.evaluate(()=>window.closeFixture.recordChanged({phase:"idle"}));await page.waitForFunction(()=>window.closeFixture.archived.rows.at(-1).lanes.microphone[0].delivery.rendered);
     await card().filter({hasText:"二ページ目の会議"}).waitFor();
     check(await page.evaluate(()=>window.closeFixture.calls.some(c=>c.command==="get_archived_recording_input_notices"&&c.args.afterSessionId!==null)),"archive never traversed next page");
-    results.push("32-row cursor traversal reaches later recordings, and legacy rows do not create notifications");
+    results.push("32-row cursor traversal reaches later recordings, and rows without an input journal do not create notifications");
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows.unshift(f.newArchivedRow({sessionId:"00000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa",title:"後から終了した会議"}));return f.recordChanged({phase:"idle"});});
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
-    await seed({title:"復元された点検会議",both:true,loss:2,historySaveIssue:"failed",deliveryUnavailable:true});
+    await seed({title:"保存済みの点検会議",count:0,both:true,loss:2,historySaveIssue:"failed"});
     await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
     // The previous source can remain until the bounded cursor traversal wraps
     // and completes an authoritative new cycle. Wait for its normal removal;
     // never dismiss a card or delete a receipt to make this check pass.
     await page.waitForFunction(()=>[...document.querySelectorAll(".toast-host .toast-card")].every(e=>! /終了した録音.*(?:マイク|PC音声)/u.test(e.textContent??"")));
-    const imported=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
-    let importedText=await imported.innerText();
-    check(importedText.includes("接続記録の保存処理でエラーが発生しました")&&importedText.includes("マイクの接続通知を2件残せませんでした")&&importedText.includes("PC音声の接続通知を2件残せませんでした"),"imported diagnosis/loss did not reach production review UI");
-    check(!importedText.includes("過去の接続状況を確認できません"),"readable imported diagnosis was labelled unreadable");
-    const importedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
-    check((await calls()).every(c=>c.sessionId!==importedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"immutable imported state started reception or rendering");
-    results.push("imported diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
+    const saved=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
+    let savedText=await saved.innerText();
+    check(savedText.includes("接続記録の保存処理でエラーが発生しました")&&savedText.includes("マイクの接続通知を2件残せませんでした")&&savedText.includes("PC音声の接続通知を2件残せませんでした"),"saved diagnosis/loss did not reach production review UI");
+    check(!savedText.includes("過去の接続状況を確認できません"),"readable saved diagnosis was labelled unreadable");
+    const savedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
+    check((await calls()).every(c=>c.sessionId!==savedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"a recording without pending notices started reception or rendering");
+    results.push("saved diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
     await reload();await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
     const reopened=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
-    importedText=await reopened.innerText();
-    check(importedText.includes("接続記録の保存処理でエラー")&&importedText.includes("接続通知を2件残せませんでした")&&(await calls()).every(c=>c.sessionId!==importedOwner),"reload removed immutable import issues or adopted receipt authority");
-    results.push("imported failed persistence and retained loss survive WebView replacement without acknowledgement requests");
+    savedText=await reopened.innerText();
+    check(savedText.includes("接続記録の保存処理でエラー")&&savedText.includes("接続通知を2件残せませんでした")&&(await calls()).every(c=>c.sessionId!==savedOwner),"reload removed immutable import issues or started acknowledging absent notices");
+    results.push("saved failed persistence and retained loss survive WebView replacement without acknowledgement requests");
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
       await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
-      check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`imported diagnosis UI overflows ${width} ${theme}`);
-      await page.screenshot({path:`output/playwright/archive-expanded-imported-${theme}-${width}-20261012.png`});
+      check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`saved diagnosis UI overflows ${width} ${theme}`);
+      await page.screenshot({path:`output/playwright/archive-expanded-saved-${theme}-${width}-20261012.png`});
     }}
-    results.push("readable imported diagnostics retain bounded 960/360px light/dark layouts");
+    results.push("readable saved diagnostics retain bounded 960/360px light/dark layouts");
     await closeHistory();
     await page.setViewportSize({width:1200,height:900});
     const visualTitle="終了済み録音の通知を確認するための点検会議";

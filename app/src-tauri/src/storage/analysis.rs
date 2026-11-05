@@ -290,7 +290,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
         let head: Option<(String, String)> = transaction.query_row(
-            "SELECT a.id, a.content_hash FROM meetings m JOIN analysis_revisions a ON a.meeting_id = m.id WHERE m.id = ?1 AND ((?2 IS NULL AND a.id = m.current_analysis_id AND a.publication_state = 'committed') OR (?2 = a.id AND (a.publication_state = 'candidate' OR (a.publication_state = 'committed' AND a.id IN (m.current_analysis_id, m.previous_analysis_id)))))",
+            "SELECT a.id, a.content_hash FROM meetings m JOIN analysis_revisions a ON a.meeting_id = m.id WHERE m.id = ?1 AND ((?2 IS NULL AND a.id = m.current_analysis_id AND a.publication_state = 'committed') OR (?2 = a.id AND (a.publication_state = 'candidate' OR (a.publication_state = 'committed' AND a.id = m.current_analysis_id))))",
             params![meeting_id, revision_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|e| e.to_string())?;
         let Some((id, content_hash)) = head else {
@@ -370,11 +370,7 @@ impl Storage {
                         spec.parameters["diarization"]["knownInput"].clone(),
                     )
                     .map_err(|e| e.to_string())?;
-                    let source = super::transcription::read_analysis_audio_plan(
-                        &transaction,
-                        meeting_id,
-                        None,
-                    )?;
+                    let source = super::transcription::read_audio_plan(&transaction, meeting_id)?;
                     known.validate(&source)?;
                     if spec.parameters["diarization"]["source"]
                         != serde_json::to_value(&source).map_err(|e| e.to_string())?
@@ -445,8 +441,7 @@ impl Storage {
                 let known: super::transcription::known::KnownInput =
                     serde_json::from_value(spec.parameters["knownInput"].clone())
                         .map_err(|e| e.to_string())?;
-                let source =
-                    super::transcription::read_analysis_audio_plan(&transaction, meeting_id, None)?;
+                let source = super::transcription::read_audio_plan(&transaction, meeting_id)?;
                 if spec.parameters["source"]
                     != serde_json::to_value(&source).map_err(|e| e.to_string())?
                     || known
@@ -611,7 +606,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?;
             let original: Value = serde_json::from_str(&original).map_err(|e| e.to_string())?;
             for key in [
-                "manualUtteranceSplits",
+                "manualAssignmentLineages",
                 "sourceRecognitionLineages",
                 "reviewRanges",
                 "completionStatus",

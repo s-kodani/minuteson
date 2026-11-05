@@ -25,7 +25,7 @@ REQUIRED = (
     ".cache/windows-third-party-notices/third-party-inventory.json",
     *OUTPUT_FILES,
     *(".cache/windows-runtime/package/" + name for name in (
-        "catalog.json", "runtime-index.json", "runtime.tar", "embedding-index.json",
+        "catalog.json", "runtime.tar", "embedding-index.json",
         "mon-speaker-embedding.exe", "workers/runtime-index.json", "workers/mon-whisper-worker.exe",
         "workers/mon-llama-worker.exe", "workers/mon-sherpa-worker.exe", "workers/mon-transducer-worker.exe",
         "workers/mon-whisper-vulkan-worker.exe", "workers/mon-llama-vulkan-worker.exe", "asr/bin/mon-transducer-worker.exe",

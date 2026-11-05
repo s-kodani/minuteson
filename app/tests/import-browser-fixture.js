@@ -63,7 +63,7 @@ mockIPC(async(command,args)=>{
         }
         return { meetingId, available: false, audioDeleted: null, blockers: [{ kind: "missing", reason: "会議が見つかりません", jobId: null }] };
       });
-    case "get_analysis_preferences":return {id:"whisper_profiles",lockVersion:0,payload:{standard:engine,highAccuracy:engine}};
+    case "get_asr_preferences":return {id:"whisper_profiles",lockVersion:0,payload:{standard:engine,highAccuracy:engine}};
     case "get_diarization_preferences":return {id:"sherpa_profiles",lockVersion:0,payload:{standard:diar,highAccuracy:diar}};
     case "get_minutes_preferences":return {id:"llama_profiles",lockVersion:0,payload:{standard:llama,highAccuracy:llama}};
     case "get_vocabulary_book":return structuredClone(args.meetingId?f.books[args.meetingId]??{id:`meeting:${args.meetingId}`,payload:[],lockVersion:0}:f.global);
@@ -71,7 +71,7 @@ mockIPC(async(command,args)=>{
     case "get_analysis_flow":return f.meetings.find(m=>m.id===args.meetingId)?.lifecycle==="imported"?{id:"flow",meetingId:args.meetingId,profile:"high_accuracy",stage:"configuration",lockVersion:1,transcriptionJob:null,diarizationJob:null,errorMessage:"高精度モデルが未準備です"}:null;
     case "get_analysis_jobs":case "get_minutes_exports":return [];
     case "get_meeting_analysis_audio":return {tracks:[{id:"imported-track",kind:"imported",startUs:0,endUs:importDurationUs,sampleRate:16000,channels:2}]};
-    case "get_analysis_versions":case "get_minutes_versions":return {meetingLockVersion:1,currentId:null,previousId:null,draft:null,versions:[]};
+    case "get_minutes_source":return {meetingLockVersion:1,currentId:null,contentHash:null,draft:null};
     case "get_current_analysis":case "get_transcript_draft":case "get_current_minutes":case "get_minutes_markdown":case "get_minutes_draft":case "finish_main_close":return null;
     default:throw Error(`Unexpected import fixture command: ${command}`);
   }

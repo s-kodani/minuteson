@@ -3,206 +3,6 @@ use crate::storage::{current_minutes_fixture as minutes_fixture, Storage};
 use rusqlite::{config::DbConfig, params, Connection};
 use std::cell::Cell;
 
-fn recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequest {
-    use crate::storage::edit_recovery::{SaveRequest, TextBuffer};
-    let analysis = f
-        .storage
-        .load_current_analysis(&f.meeting)
-        .unwrap()
-        .unwrap();
-    let draft = f
-        .storage
-        .create_transcript_draft(&f.meeting, &analysis.id)
-        .unwrap();
-    SaveRequest {
-        meeting_id: f.meeting.clone(),
-        draft_id: draft.id.clone(),
-        base_analysis_id: analysis.id.clone(),
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        expected_draft_lock_version: draft.lock_version,
-        expected_recovery_lock_version: 0,
-        name_buffers: vec![],
-        buffers: vec![TextBuffer {
-            utterance_id: analysis.utterances[0].id.clone(),
-            text: analysis.utterances[0].effective_text.clone(),
-            speaker_ids: vec![],
-            had_override: false,
-            value: "完全削除する未確定本文".into(),
-        }],
-    }
-}
-
-fn name_recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequest {
-    use crate::storage::drafts::ManualSpeaker;
-    use crate::storage::edit_recovery::NameBuffer;
-    let mut request = recovery_request(f);
-    let draft = f
-        .storage
-        .load_transcript_draft(&f.meeting)
-        .unwrap()
-        .unwrap();
-    let mut payload = draft.payload;
-    payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
-    let speaker = format!("manual:{}", uuid::Uuid::new_v4());
-    payload.manual_speakers.push(ManualSpeaker {
-        id: speaker.clone(),
-        label: "削除対象の手動話者".into(),
-    });
-    let saved = f
-        .storage
-        .save_transcript_draft(&draft.id, draft.lock_version, payload)
-        .unwrap();
-    request.expected_draft_lock_version = saved.lock_version;
-    request.buffers.clear();
-    request.name_buffers.push(NameBuffer {
-        speaker_id: speaker,
-        name: None,
-        had_override: false,
-        value: "完全削除する未確定名".into(),
-    });
-    request
-}
-
-#[test]
-fn edit_recovery_is_in_confirmed_deletion_scope_and_new_input_invalidates_old_consent() {
-    for with_names in [false, true] {
-        let f = Fixture::new();
-        let request = if with_names {
-            name_recovery_request(&f)
-        } else {
-            recovery_request(&f)
-        };
-        f.storage
-            .save_transcript_edit_recovery(request.clone())
-            .unwrap();
-        let before = f.scope();
-        assert_eq!(
-            before
-                .tables
-                .iter()
-                .find(|t| t.name == "transcript_edit_recovery")
-                .unwrap()
-                .rows,
-            1
-        );
-        let mut updated = request;
-        updated.operation_id = uuid::Uuid::new_v4().to_string();
-        updated.expected_recovery_lock_version = 1;
-        if with_names {
-            updated.name_buffers[0].value.push_str("更新");
-        } else {
-            updated.buffers[0].value.push_str("更新");
-        }
-        f.storage.save_transcript_edit_recovery(updated).unwrap();
-        let after = f.scope();
-        assert_ne!(before.hash().unwrap(), after.hash().unwrap());
-        let operation = f.consent(&before);
-        let db = f.storage.connection.lock().unwrap();
-        assert!(erase_confirmed_rows(
-            &db,
-            &operation,
-            &before,
-            &crate::test_support::never_cancelled
-        )
-        .is_err());
-        assert_eq!(
-            db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-            1
-        );
-        assert!(db
-        .execute(
-            "UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3 WHERE id=?1",
-            params![operation, after.encode().unwrap(), after.hash().unwrap()],
-        )
-        .is_err());
-        assert_eq!(
-            db.query_row(
-                "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
-                params![operation],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap(),
-            before.encode().unwrap()
-        );
-    }
-}
-
-#[test]
-fn edit_recovery_confirmed_full_deletion_purges_text_and_names_preserving_unrelated_meeting_and_settings(
-) {
-    for with_names in [false, true] {
-        let f = Fixture::new();
-        let mut request = if with_names {
-            name_recovery_request(&f)
-        } else {
-            recovery_request(&f)
-        };
-        let marker = format!("RECOVERY-PRIVATE-{}", uuid::Uuid::new_v4());
-        if with_names {
-            request.name_buffers[0].value = marker.repeat(3);
-        } else {
-            request.buffers[0].value = marker.repeat(200);
-        }
-        f.storage.save_transcript_edit_recovery(request).unwrap();
-        let scope = f.scope();
-        let operation = f.consent(&scope);
-        let db = f.storage.connection.lock().unwrap();
-        erase_confirmed_rows(
-            &db,
-            &operation,
-            &scope,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        finish_database_purge(
-            &db,
-            &operation,
-            &scope,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        assert_eq!(
-            db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-            0
-        );
-        assert_eq!(
-            db.query_row(
-                "SELECT count(*) FROM meetings WHERE id=?1",
-                params![f.other],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-            1
-        );
-        assert_eq!(
-            db.query_row(
-                "SELECT value_json FROM app_settings WHERE key='delete-test'",
-                [],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap(),
-            "{\"keep\":true}"
-        );
-        for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
-            let file = f._root.path().join(name);
-            if file.exists() {
-                assert!(!std::fs::read(file)
-                    .unwrap()
-                    .windows(marker.len())
-                    .any(|bytes| bytes == marker.as_bytes()));
-            }
-        }
-    }
-}
-
 pub(super) struct Fixture {
     pub(super) _root: tempfile::TempDir,
     pub(super) storage: Storage,
@@ -286,13 +86,12 @@ fn deletion_scope_counts_current_markdown_transcript_and_vocabulary_without_copy
     let rows = |name| scope.tables.iter().find(|t| t.name == name).unwrap().rows;
     assert_eq!(rows("meetings"), 1);
     assert_eq!(rows("minutes_markdown"), 1);
-    assert_eq!(rows("minutes_revisions"), 0);
+
     assert_eq!(rows("processing_jobs"), 0);
     assert_eq!(rows("analysis_revisions"), 1);
     assert_eq!(rows("job_checkpoints"), 0);
     assert_eq!(rows("working_drafts"), 1);
-    assert_eq!(rows("edit_operations"), 0);
-    assert_eq!(rows("evidence_links"), 0);
+
     assert!(rows("utterances") > 0);
     assert_eq!(rows("vocabulary_entries"), 1);
     let manifest = scope.encode().unwrap();
@@ -330,17 +129,13 @@ fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_mo
     assert_eq!(count(&db, "meetings"), 1);
     for name in [
         "analysis_revisions",
-        "minutes_revisions",
         "minutes_markdown",
         "working_drafts",
-        "edit_operations",
         "processing_jobs",
         "job_checkpoints",
         "analysis_input_snapshots",
         "speakers",
         "utterances",
-        "minutes_items",
-        "evidence_links",
         "recording_sessions",
         "audio_tracks",
         "audio_chunks",
@@ -613,7 +408,7 @@ fn deletion_scope_refuses_foreign_schema_missing_guards_and_active_work() {
         [],
     )
     .unwrap();
-    db.execute_batch("DROP TRIGGER minutes_committed_no_delete")
+    db.execute_batch("DROP TRIGGER analysis_committed_no_delete")
         .unwrap();
     assert!(
         Scope::capture(&db, &f.meeting, "", &crate::test_support::never_cancelled)
@@ -888,7 +683,7 @@ fn deletion_scope_checks_migration_history_and_disabled_guards_before_mutation()
     );
     db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
     db.execute(
-        "UPDATE schema_migrations SET checksum=?1 WHERE version=1",
+        "UPDATE schema_migrations SET checksum=?1 ",
         params!["f".repeat(64)],
     )
     .unwrap();

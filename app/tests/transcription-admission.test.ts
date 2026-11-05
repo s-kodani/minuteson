@@ -31,8 +31,6 @@ test('a newer unrelated job cannot claim preparation ownership',()=>{
  const a=new Admissions();a.begin('meeting','会議','pending');
  a.observe([{meetingId:'meeting',kind:'transcription',createdAt:Date.now()+10000,analysisOperation:{id:'foreign'}}]);
  assert.equal(a.getSnapshot().length,1);
- assert.equal(a.bind('meeting','foreign','new-flow'),'foreign');
- assert.equal(a.bind('meeting','pending','actual-flow'),'actual-flow');
- a.observe([{meetingId:'meeting',kind:'transcription',operationId:'flow:actual-flow:transcription'}]);
+ a.observe([{meetingId:'meeting',kind:'transcription',operationId:'flow:pending:transcription'}]);
  assert.equal(a.getSnapshot().length,0);
 });

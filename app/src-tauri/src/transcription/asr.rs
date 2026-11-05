@@ -214,9 +214,6 @@ pub(crate) fn engine(config: &AsrConfig) -> Engine {
         Engine::Whisper
     }
 }
-pub(crate) fn is_asr(engine: Engine) -> bool {
-    matches!(engine, Engine::Whisper | Engine::Asr)
-}
 pub(crate) fn validate_manifest(manifest: &PackageManifest) -> Result<(), String> {
     if manifest.engine != Engine::Asr {
         if manifest.backend.is_some() || manifest.files.iter().any(|f| f.role == Role::AsrAsset) {

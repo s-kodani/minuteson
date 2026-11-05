@@ -131,15 +131,9 @@
 .info-popover a { color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
 .info-popover .info-details { margin-top:8px; }
 .info-popover::backdrop { background:transparent; }
-.recorder-info-window { box-sizing:border-box; min-height:100dvh; padding:16px; background:var(--surface); color:var(--text); font-size:var(--reading-font-size,15px); line-height:1.6; overflow-wrap:anywhere; }
-.recorder-info-window p { margin:12px 0; color:var(--secondary-text); }
-.recorder-info-trigger { display:inline-grid; position:relative; justify-items:center; gap:4px; }
 .mini-top:has(.mini-inputs) { gap:2px; }
 .mini-top .mini-inputs { display:grid; min-width:144px; grid-template-columns:minmax(75px,1.15fr) minmax(65px,1fr); }
 .recorder-operation-badge { text-align:center; font-size:8px; line-height:10px; color:var(--danger-text); }
-.recorder-info-trigger button[data-help-error="true"] { color:var(--danger-text); border-color:var(--danger-text); }
-.recorder-info-error { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.recorder-operation-details p { white-space:pre-wrap; }.recorder-operation-details h4 { font-size:inherit; margin:12px 0 0; }.recorder-operation-details ul { padding-left:20px; }
 .data-path { overflow-wrap:anywhere; }
 .issue-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; color:var(--danger-text); font-size:12px; }
 .job-issues { margin:12px 0; padding:12px 16px; background:var(--surface); border:1px solid var(--border); border-radius:10px; font-size:13px; }

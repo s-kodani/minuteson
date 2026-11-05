@@ -6,15 +6,12 @@ mod recovery;
 mod transducer;
 pub(crate) use recovery::ReviewRange;
 pub(crate) mod input;
-mod restore;
 pub(crate) mod vad;
 #[cfg(test)]
 pub(crate) mod wave;
 pub(crate) mod whisper;
 mod windows_acceleration;
 pub(crate) use mon_contracts::ProcessingError;
-pub(crate) use restore::restore_parameters;
-pub(crate) use restore::restore_saved_results;
 
 #[cfg(test)]
 pub(crate) fn reference_is_repetitive(segments: &[whisper::Segment]) -> bool {
@@ -172,7 +169,7 @@ pub(crate) fn retry_preflight(
     let optimization =
         crate::processing_optimization::Scope::enter(parameters.optimization_version)?;
     let decoded = checked_checkpoint(original, checkpoint.cloned())?;
-    let runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+    let runtime = parameters.engine.clone();
     runtime.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
@@ -438,49 +435,6 @@ fn saved_output(
     checked_output(p, output, &bytes, rejected.as_deref(), duration)
 }
 
-pub(crate) fn restore_checkpoint_references(
-    job: &JobSnapshot,
-    value: serde_json::Value,
-    mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
-) -> Result<serde_json::Value, String> {
-    use crate::saved_artifact::Role;
-    let mut checkpoint = checked_checkpoint(job, Some(value))?;
-    if job
-        .total_units
-        .is_some_and(|total| checkpoint.outputs.len() as i64 > total)
-    {
-        return Err("再開情報が固定した総区間数を超えています".into());
-    }
-    for output in &mut checkpoint.outputs {
-        (output.wav_asset_id, output.wav_hash) =
-            map(Role::TemporaryPcm, &output.wav_asset_id, &output.wav_hash)?;
-        (output.json_asset_id, output.json_hash) = map(
-            Role::TranscriptionResult,
-            &output.json_asset_id,
-            &output.json_hash,
-        )?;
-        if let Some(rejected) = output
-            .recognition
-            .as_mut()
-            .and_then(|a| a.rejected.as_mut())
-        {
-            (rejected.json_asset_id, rejected.json_hash) = map(
-                Role::TranscriptionResult,
-                &rejected.json_asset_id,
-                &rejected.json_hash,
-            )?;
-        }
-    }
-    if let Some(pending) = &mut checkpoint.pending_recovery {
-        (pending.reference.json_asset_id, pending.reference.json_hash) = map(
-            Role::TranscriptionResult,
-            &pending.reference.json_asset_id,
-            &pending.reference.json_hash,
-        )?;
-    }
-    serde_json::to_value(checkpoint).map_err(|e| e.to_string())
-}
-
 fn checked_parameters(
     storage: &Storage,
     spec: &JobSpec,
@@ -722,7 +676,7 @@ pub(crate) fn process(
                 .map_or(true, |job| job.state != "running")
     };
     let attempt = (|| {
-        let mut runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+        let mut runtime = parameters.engine.clone();
         if let Some(policy) = parameters.acceleration_policy {
             policy.configure(&mut runtime);
         }

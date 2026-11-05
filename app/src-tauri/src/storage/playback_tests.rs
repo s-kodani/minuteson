@@ -170,11 +170,22 @@ fn cancellation_and_revoked_utterance_never_publish_audio() {
         let storage = Storage::open(temp.path().into()).unwrap();
         let (meeting, analysis, utterance) = fixture(&storage);
         let checks = std::cell::Cell::new(0);
-        let result=storage.prepare_utterance_audio_cancellable(&meeting,&analysis,&utterance,&|| {
-            checks.set(checks.get()+1);
-            if checks.get()==4 && revoke {storage.connection.lock().unwrap().execute("UPDATE meetings SET current_analysis_id=NULL,previous_analysis_id=NULL WHERE id=?1",[&meeting]).unwrap();}
-            !revoke && checks.get()>=4
-        });
+        let result =
+            storage.prepare_utterance_audio_cancellable(&meeting, &analysis, &utterance, &|| {
+                checks.set(checks.get() + 1);
+                if checks.get() == 4 && revoke {
+                    storage
+                        .connection
+                        .lock()
+                        .unwrap()
+                        .execute(
+                            "UPDATE meetings SET current_analysis_id=NULL WHERE id=?1",
+                            [&meeting],
+                        )
+                        .unwrap();
+                }
+                !revoke && checks.get() >= 4
+            });
         assert!(result.is_err());
     }
 }

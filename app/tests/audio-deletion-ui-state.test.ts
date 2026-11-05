@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { audioDeletionNewScope, audioDeletionPublishRequest, audioDeletionDispositionLabel, audioDeletionPhaseLabel, audioDeletionStartupLabel, audioDeletionSimpleReview, audioDeletionSimplePublishRequest } from "../src/audio-deletion-ui-state.ts";
+import { audioDeletionNewScope, audioDeletionPublishRequest, audioDeletionDispositionLabel, audioDeletionPhaseLabel, audioDeletionSimpleReview, audioDeletionSimplePublishRequest } from "../src/audio-deletion-ui-state.ts";
 import type { DataSnapshot } from "../src/data-operation-state.ts";
 import type { AudioDeletionPage, AudioDeletionPreview } from "../src/audio-deletion-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
-const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, reconfirmationSourceKind: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
+const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, reconfirmationSourceKind: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
 const ready = (p = preview()): DataSnapshot => ({ revision: 2, token: id(1), kind: "audio_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, audioDeletionPreview: p, audioDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 const page = (p: AudioDeletionPreview): AudioDeletionPage => ({ confirmationId: p.confirmationId, offset: 0, total: 2, nextOffset: null, entries: [{ relativePath: `meetings/${p.meetingId}/audio/track.caf`, assetId: id(7), disposition: "registered_audio", present: true, bytes: 4, sha256: "b".repeat(64), changed: false }, { relativePath: `meetings/${p.meetingId}/unknown`, assetId: null, disposition: "unclassified", present: true, bytes: 8, sha256: "c".repeat(64), changed: false }] });
 test("simple confirmation needs no page and includes classified unregistered audio using native IDs only", () => {
@@ -60,8 +60,6 @@ test("UI labels distinguish retained unknowns, availability commit and restored-
   assert.match(audioDeletionDispositionLabel("unclassified"), /保持/u);
   assert.match(audioDeletionPhaseLabel("availability"), /利用不可/u);
   assert.match(audioDeletionPhaseLabel("awaiting_ack"), /完了確認待ち/u);
-  assert.match(audioDeletionStartupLabel("restored_audio_scope_reappeared"), /削除要求がありません/u);
-  for (const reason of ["restored_audio_receipt_invalid", "restored_audio_scope_uninspectable"]) assert.match(audioDeletionStartupLabel(reason), /保持/u);
 });
 test("restored baseline UI never publishes even with both display consents", () => {
   const p: AudioDeletionPreview = { ...preview(), phase: "restored_unavailable", pending: true, executeAllowed: false, resumeReason: "no consent", reconfirmationAllowed: true };

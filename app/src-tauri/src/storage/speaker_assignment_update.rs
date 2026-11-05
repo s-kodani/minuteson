@@ -19,87 +19,82 @@ pub(crate) struct Reply {
     pub completion_job_id: Option<String>,
 }
 
-// Empty selections have no utterance_speakers row. Recover their intent from
-// immutable parents, retained drafts, split provenance and diarization ledgers.
+// A cleared assignment has no speaker row, so preserve its lineage explicitly.
 pub(super) fn manual_lineages(
     tx: &Transaction<'_>,
     analysis: &str,
 ) -> Result<BTreeSet<String>, String> {
-    let ancestors = {
-        let mut q=tx.prepare("WITH RECURSIVE history(id,depth) AS (SELECT ?1,0 UNION ALL SELECT a.parent_revision_id,depth+1 FROM analysis_revisions a JOIN history h ON a.id=h.id WHERE a.parent_revision_id IS NOT NULL AND depth<1000) SELECT id FROM history").map_err(|e|e.to_string())?;
-        let rows = q
-            .query_map([analysis], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
-    };
-    let mut manual = BTreeSet::new();
-    for id in ancestors {
-        let mut q=tx.prepare("SELECT DISTINCT u.lineage_id FROM utterances u JOIN utterance_speakers s ON s.utterance_id=u.id AND s.analysis_revision_id=u.analysis_revision_id WHERE u.analysis_revision_id=?1 AND s.assignment_source='manual' UNION SELECT u.lineage_id FROM diarization_manual_assignments d JOIN utterances u ON u.id=d.utterance_id AND u.analysis_revision_id=d.analysis_id WHERE d.analysis_id=?1").map_err(|e|e.to_string())?;
-        for row in q
-            .query_map([&id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-        {
-            manual.insert(row.map_err(|e| e.to_string())?);
+    let config: String = tx
+        .query_row(
+            "SELECT config_json FROM analysis_revisions WHERE id=?1",
+            [analysis],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let config: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+    let mut manual: BTreeSet<String> = config
+        .get("manualAssignmentLineages")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let mut query = tx.prepare(
+        "SELECT DISTINCT u.lineage_id FROM utterances u
+         JOIN utterance_speakers s ON s.utterance_id=u.id AND s.analysis_revision_id=u.analysis_revision_id
+         WHERE u.analysis_revision_id=?1 AND s.assignment_source='manual'
+         UNION SELECT u.lineage_id FROM diarization_manual_assignments d
+         JOIN utterances u ON u.id=d.utterance_id AND u.analysis_revision_id=d.analysis_id
+         WHERE d.analysis_id=?1"
+    ).map_err(|e| e.to_string())?;
+    for lineage in query
+        .query_map([analysis], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+    {
+        manual.insert(lineage.map_err(|e| e.to_string())?);
+    }
+    let draft: Option<String> = tx.query_row(
+        "SELECT payload_json FROM working_drafts WHERE base_analysis_id=?1 AND target_kind='transcript'",
+        [analysis], |row| row.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    if let Some(draft) = draft {
+        let payload: TranscriptDraftPayload =
+            serde_json::from_str(&draft).map_err(|e| e.to_string())?;
+        let mut assignments = tx.prepare(
+            "SELECT u.id,u.lineage_id,s.speaker_id FROM utterances u LEFT JOIN utterance_speakers s
+             ON s.utterance_id=u.id AND s.analysis_revision_id=u.analysis_revision_id
+             WHERE u.analysis_revision_id=?1 ORDER BY u.id,s.speaker_id"
+        ).map_err(|e| e.to_string())?;
+        let mut rows = assignments.query([analysis]).map_err(|e| e.to_string())?;
+        let mut by_utterance = std::collections::BTreeMap::<String, (String, Vec<String>)>::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let id: String = row.get(0).map_err(|e| e.to_string())?;
+            let lineage: String = row.get(1).map_err(|e| e.to_string())?;
+            let speaker: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+            let (_, speakers) = by_utterance
+                .entry(id)
+                .or_insert_with(|| (lineage, Vec::new()));
+            speakers.extend(speaker);
         }
-        let config: String = tx
-            .query_row(
-                "SELECT config_json FROM analysis_revisions WHERE id=?1",
-                [&id],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let config: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
-        if let Some(ops) = config["manualUtteranceSplits"].as_array() {
-            for op in ops {
-                if let Some(splits) = op["splits"].as_array() {
-                    for split in splits {
-                        if let Some(parts) = split["parts"].as_array() {
-                            for part in parts {
-                                if let Some(id) = part["id"].as_str() {
-                                    manual.insert(id.into());
-                                }
-                            }
-                        }
-                    }
-                }
+        let edits: std::collections::BTreeMap<_, _> = payload
+            .utterances
+            .iter()
+            .map(|edit| (edit.utterance_id.as_str(), &edit.speaker_ids))
+            .collect();
+        for (id, (lineage, speakers)) in by_utterance {
+            let mut effective = edits
+                .get(id.as_str())
+                .map_or_else(|| speakers.clone(), |ids| (*ids).clone());
+            effective.sort();
+            if super::drafts::merged_assignments(&payload, &effective) != speakers {
+                manual.insert(lineage);
             }
         }
-        let lineages = super::minutes_input::lineage_map(tx, "utterances", &id)?;
-        let mut q=tx.prepare("SELECT payload_json FROM working_drafts WHERE base_analysis_id=?1 AND target_kind='transcript'").map_err(|e|e.to_string())?;
-        let rows = q
-            .query_map([&id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            let payload: TranscriptDraftPayload =
-                serde_json::from_str(&row.map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            // Unsaved-to-analysis splits already have explicit manual intent in
-            // the saved editor. Their part IDs become lineages on publication.
-            for part in payload
+        manual.extend(
+            payload
                 .utterance_splits
-                .iter()
-                .flat_map(|split| &split.parts)
-            {
-                manual.insert(part.id.clone());
-            }
-            for edit in payload.utterances {
-                let mut q=tx.prepare("SELECT speaker_id FROM utterance_speakers WHERE analysis_revision_id=?1 AND utterance_id=?2 ORDER BY speaker_id").map_err(|e|e.to_string())?;
-                let rows = q
-                    .query_map(params![id, edit.utterance_id], |r| r.get::<_, String>(0))
-                    .map_err(|e| e.to_string())?;
-                let before = rows
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?;
-                let mut after = edit.speaker_ids;
-                after.sort();
-                if before != after {
-                    if let Some(lineage) = lineages.get(&edit.utterance_id) {
-                        manual.insert(lineage.clone());
-                    }
-                }
-            }
-        }
+                .into_iter()
+                .flat_map(|split| split.parts.into_iter().map(|part| part.id)),
+        );
     }
     Ok(manual)
 }
@@ -333,8 +328,12 @@ impl Storage {
             Some(&update),
         )?;
         super::transcript_consolidation::copy_voice_matches(&tx, &source, &id)?;
-        tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1",[&request.meeting_id]).map_err(|e|e.to_string())?;
-        tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
+        tx.execute(
+            "DELETE FROM working_drafts WHERE meeting_id=?1 AND target_kind='transcript'",
+            [&request.meeting_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("UPDATE meetings SET current_analysis_id=?1,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
         let hash = super::revisions::analysis_content_hash(&tx, &id)?;
         let analysis =
             super::analysis::read_analysis_content(&tx, &request.meeting_id, &id, &hash)?;

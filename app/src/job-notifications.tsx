@@ -143,7 +143,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     refreshRef.current = refresh;
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 3000);
-    for (const event of ["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "meetings-changed"]) {
+    for (const event of ["analysis-job-changed", "analysis-version-changed", "meetings-changed"]) {
       void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(() => { /* Periodic reads continue without event hints. */ });
     }
     void listen<unknown>("minutes-runtime-progress", event => {

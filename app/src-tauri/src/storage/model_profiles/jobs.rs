@@ -8,8 +8,6 @@ use crate::model_compatibility::ProbeReport;
 use crate::transcription::asr::AsrConfig;
 use serde_json::{json, Value};
 
-pub(crate) mod rebinding;
-
 #[cfg(test)]
 mod tests;
 
@@ -169,7 +167,6 @@ impl Execution<'_> {
                     window_shift_milli: e.window_shift_milli,
                     min_duration_on_ms: e.min_duration_on_ms,
                     min_duration_off_ms: e.min_duration_off_ms,
-                    speech_sensitivity_milli: e.speech_sensitivity_milli,
                 })
             }
             Self::Llama(e, prompt_budget) => {
@@ -198,12 +195,8 @@ impl Execution<'_> {
                 value
             }
             Self::Sherpa(e) => {
-                let mut value = json!({"threads":e.threads,"clusterThresholdMilli":e.cluster_threshold_milli,
-                "windowShiftMilli":e.window_shift_milli,"minDurationOnMs":e.min_duration_on_ms,"minDurationOffMs":e.min_duration_off_ms});
-                if e.speech_sensitivity_milli != 0 {
-                    value["speechSensitivityMilli"] = json!(e.speech_sensitivity_milli);
-                }
-                value
+                json!({"threads":e.threads,"clusterThresholdMilli":e.cluster_threshold_milli,
+                "windowShiftMilli":e.window_shift_milli,"minDurationOnMs":e.min_duration_on_ms,"minDurationOffMs":e.min_duration_off_ms})
             }
             Self::Llama(e, b) => json!({"threads":e.threads,"contextTokens":e.context_tokens,
                 "predictionTokens":e.prediction_tokens,"gpuLayers":e.gpu_layers,"seed":e.seed,"promptBudget":b}),
@@ -355,41 +348,6 @@ fn package_directory<'a>(path: &'a Path, relative: &str, package: &str) -> Optio
     .then_some(root)
 }
 
-// All declared dependencies travel as unavailable historical metadata, including
-// libraries without an explicit whisper/llama CLI argument. No local path or
-// profile/check/package installation is transported.
-pub(in crate::storage) fn portable_files(
-    value: &Value,
-) -> Result<Vec<super::super::model_metadata::ModelFileMetadata>, String> {
-    let snapshot: Snapshot = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-    snapshot.validate_provenance()?;
-    snapshot
-        .package
-        .files
-        .iter()
-        .map(|file| {
-            let metadata = super::super::model_metadata::ModelFileMetadata {
-                name: Path::new(&file.relative_path)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .ok_or("モデルの履歴名が不正です")?
-                    .into(),
-                size: file.actual_size,
-                sha256: file.actual_hash.clone(),
-                role: match file.role {
-                    Role::Executable => "executable",
-                    Role::Asr | Role::Llm => "model",
-                    Role::Vad => "vadModel",
-                    _ => "artifact",
-                }
-                .into(),
-            };
-            metadata.validate()?;
-            Ok(metadata)
-        })
-        .collect()
-}
-
 pub(crate) fn attach(mut profile: Value, snapshot: Option<Snapshot>) -> Result<Value, String> {
     if let Some(snapshot) = snapshot {
         profile["managedModel"] = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
@@ -413,9 +371,6 @@ pub(crate) fn validate(profile: &Value, execution: Execution<'_>) -> Result<(), 
             &execution,
         )?;
     }
-    if let Some(binding) = rebinding::read(profile)? {
-        binding.validate(profile, execution)?;
-    }
     Ok(())
 }
 pub(crate) fn verify(
@@ -424,9 +379,6 @@ pub(crate) fn verify(
     cancel: &impl Fn() -> bool,
 ) -> Result<(), String> {
     validate(profile, execution)?;
-    if let Some(binding) = rebinding::read(profile)? {
-        return binding.verify(profile, execution, cancel);
-    }
     if let Some(snapshot) = read(profile)? {
         snapshot.verify(
             profile["profile"]
@@ -758,11 +710,6 @@ impl Storage {
 }
 
 pub(in crate::storage) fn gate(db: &Connection, spec: &JobSpec) -> Result<(), String> {
-    // A relocation proof belongs only to a separately reviewed retry. A new
-    // job must use the ordinary profile selection, never supplied retry paths.
-    if spec.profile_snapshot.get("runtimeModel").is_some() {
-        return Err("モデルの再結合は確認付きの新しい再試行として行ってください".into());
-    }
     let native = matches!(
         spec.profile_snapshot["profile"].as_str(),
         Some("standard" | "high_accuracy")

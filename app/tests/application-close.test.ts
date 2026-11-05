@@ -26,7 +26,7 @@ test("closing rejects new tokens, operation kinds, ready revisions and unreviewe
 test("busy progress and a winning publication retain the reviewed operation", () => {
   const c = context(); c.data = { ...c.data, token, kind: "backup", busy: true, phase: "publishing" };
   assertCloseTargets(c, { ...c, data: { ...c.data, revision: 2 } });
-  const saved = { ...c.data, revision: 3, busy: false, phase: "completed", backupReceipt: { archiveId: token, meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 12, sha256: "a".repeat(64) } };
+  const saved = { ...c.data, revision: 3, busy: false, phase: "completed", backupReceipt: { archiveId: token, meetingCount: 1, assetCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 12, sha256: "a".repeat(64) } };
   assertCloseTargets(c, { ...c, data: saved });
   assert.equal(saved.backupReceipt.archiveId, token);
 });

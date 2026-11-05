@@ -36,7 +36,6 @@ pub(crate) struct SherpaSettings {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
-    pub speech_sensitivity_milli: i32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -54,11 +53,6 @@ pub(crate) struct SherpaConfig {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::diarization::sensitivity::is_standard"
-    )]
-    pub speech_sensitivity_milli: i32,
 }
 
 impl SherpaConfig {
@@ -79,7 +73,6 @@ impl SherpaConfig {
             window_shift_milli: settings.window_shift_milli,
             min_duration_on_ms: settings.min_duration_on_ms,
             min_duration_off_ms: settings.min_duration_off_ms,
-            speech_sensitivity_milli: settings.speech_sensitivity_milli,
         }
     }
     pub(crate) fn capture(
@@ -131,7 +124,6 @@ impl SherpaConfig {
             || !(1..=1000).contains(&self.window_shift_milli)
             || self.min_duration_on_ms > 60_000
             || self.min_duration_off_ms > 60_000
-            || !super::sensitivity::valid(self.speech_sensitivity_milli)
             || num_speakers.is_some_and(|n| !(1..=MAX_SPEAKERS).contains(&n))
         {
             return Err("話者分離の人数または固定設定が不正です".into());

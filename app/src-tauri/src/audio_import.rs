@@ -291,12 +291,11 @@ pub(crate) struct ImportManifest {
     pub audio: FileEvidence,
 }
 impl ImportManifest {
-    // Version 1 is retained only to finish an already staged FLAC import.
-    pub(crate) fn decoded_format(&self) -> Result<&str, String> {
-        match (self.schema_version, self.audio_format.as_deref()) {
-            (1, None) => Ok("flac"),
-            (2, Some("caf")) => Ok("caf"),
-            _ => Err("取り込みmanifestの音声形式・形式版が不正です".into()),
+    pub(crate) fn validate_format(&self) -> Result<(), String> {
+        if self.schema_version == 2 && self.audio_format.as_deref() == Some("caf") {
+            Ok(())
+        } else {
+            Err("取り込みmanifestの音声形式・形式版が不正です".into())
         }
     }
 }
@@ -416,12 +415,13 @@ pub(crate) fn import_configured(
             return Err("管理コピーの復号結果が確認した音声と一致しません".into());
         }
         let proof = Fingerprint::capture(&caf, cancelled)?;
-        let audio = VerifiedAudio::open_cancellable(
+        let mut audio = VerifiedAudio::open_cancellable(
             File::open(&caf).map_err(|e| e.to_string())?,
             proof.size,
             &proof.sha256,
             cancelled,
         )?;
+        audio.require_caf()?;
         if audio.format.frames != decoded.frames
             || audio.format.sample_rate != decoded.sample_rate
             || audio.format.channels != decoded.channels

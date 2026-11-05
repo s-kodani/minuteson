@@ -39,10 +39,7 @@ unsafe extern "system" {
     ) -> i32;
 }
 fn target(label: &str) -> bool {
-    matches!(
-        label,
-        "recorder" | "recorder-info" | "recording-confirmation"
-    )
+    matches!(label, "recorder" | "recording-confirmation")
 }
 fn apply(window: *mut c_void, size: tauri::PhysicalSize<u32>, scale: f64) -> Result<(), String> {
     if size.width == 0 || size.height == 0 {
@@ -106,7 +103,7 @@ fn apply(window: *mut c_void, size: tauri::PhysicalSize<u32>, scale: f64) -> Res
     Ok(())
 }
 pub(crate) fn configure(app: &AppHandle) -> Result<(), String> {
-    for label in ["recorder", "recorder-info", "recording-confirmation"] {
+    for label in ["recorder", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
             apply(
                 window.hwnd().map_err(|e| e.to_string())?.0,

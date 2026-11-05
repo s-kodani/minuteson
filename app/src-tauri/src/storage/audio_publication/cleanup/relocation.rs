@@ -80,9 +80,7 @@ pub(in crate::storage) fn capture(
             if cancelled() {
                 return Err("音声整理の移動対応の確認を中断しました".into());
             }
-            let Some(recorded) = file.identity.as_ref() else {
-                continue;
-            };
+            let recorded = &file.identity;
             if !Path::new(&file.relative).starts_with(Path::new("meetings").join(&meeting)) {
                 continue;
             }
@@ -100,14 +98,14 @@ pub(in crate::storage) fn capture(
                     .source_metadata(&file.relative)?
                     .ok_or("音声整理の移動元実体がありません")?,
             )?;
-            let mut effective = Some(recorded.clone());
+            let mut effective = recorded.clone();
             crate::storage::recordings::flac::relocation::effective_cleanup_identity(
                 storage,
                 &meeting,
                 &file,
                 &mut effective,
             )?;
-            if effective.as_ref() != Some(&observed) {
+            if effective != observed {
                 return Err("音声整理の移動元実体が差し替えられています".into());
             }
             result.push(Claim {
@@ -172,17 +170,14 @@ pub(in crate::storage) fn effective(
     aliases: &Aliases,
     meeting: &str,
     file: &RetiredAudio,
-    identity: &mut Option<Identity>,
+    identity: &mut Identity,
 ) -> Result<(), String> {
     let Some((claim, target)) = aliases.get(&(meeting.into(), file.relative.clone())) else {
         return Ok(());
     };
-    if file.bytes != claim.bytes
-        || file.hash != claim.hash
-        || file.identity.as_ref() != Some(&claim.recorded)
-    {
+    if file.bytes != claim.bytes || file.hash != claim.hash || file.identity != claim.recorded {
         return Err("音声整理の台帳が承認した移動元と一致しません".into());
     }
-    *identity = Some(target.clone());
+    *identity = target.clone();
     Ok(())
 }

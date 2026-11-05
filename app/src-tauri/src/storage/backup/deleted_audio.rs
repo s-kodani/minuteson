@@ -157,19 +157,14 @@ impl Verified {
     pub(super) fn verify_omissions(&self, omitted: &[archive::OmittedAsset]) -> Result<(), String> {
         let mut seen = BTreeSet::new();
         for item in omitted {
-            if let Some(asset) = self.asset(&item.meeting_id, &item.asset_id) {
-                if item.reason != archive::OmittedReason::SourceAudioDeleted
-                    || item.source_size != asset.size as u64
-                    || item.source_sha256 != asset.hash
-                    || !seen.insert(item.asset_id.clone())
-                {
-                    return Err("検査済み音声削除履歴と除外理由・由来が一致しません".into());
-                }
-            } else if item.reason == archive::OmittedReason::SourceAudioDeleted
-                || (item.reason == archive::OmittedReason::RecreatablePcm
-                    && self.contains(&item.meeting_id))
+            let asset = self
+                .asset(&item.meeting_id, &item.asset_id)
+                .ok_or("音声削除履歴のない欠落音声は採用しません")?;
+            if item.source_size != asset.size as u64
+                || item.source_sha256 != asset.hash
+                || !seen.insert(item.asset_id.clone())
             {
-                return Err("音声削除履歴のない欠落・再生成可能PCMは採用しません".into());
+                return Err("検査済み音声削除履歴と除外理由・由来が一致しません".into());
             }
         }
         if seen.len() != self.assets.len() {
@@ -258,17 +253,11 @@ pub(super) fn verify(
     let mut actual = BTreeMap::new();
     for item in omitted {
         check_cancelled(check)?;
-        if item.reason == archive::OmittedReason::SourceAudioDeleted {
-            if actual
-                .insert(item.asset_id.clone(), item.meeting_id.clone())
-                .is_some()
-            {
-                return Err("削除済み音声の除外記録が重複しています".into());
-            }
-        } else if item.reason == archive::OmittedReason::RecreatablePcm
-            && meetings.contains(&item.meeting_id)
+        if actual
+            .insert(item.asset_id.clone(), item.meeting_id.clone())
+            .is_some()
         {
-            return Err("元音声の削除後にPCMを再生成可能として扱いません".into());
+            return Err("削除済み音声の除外記録が重複しています".into());
         }
     }
     if expected != actual {

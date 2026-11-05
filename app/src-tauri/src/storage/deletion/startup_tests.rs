@@ -176,10 +176,7 @@ fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_
     let mut f = Fixture::new();
     {
         let db = f.storage().connection.lock().unwrap();
-        assert_eq!(
-            crate::storage::verify_migration_history(&db).unwrap(),
-            crate::storage::MIGRATIONS.len()
-        );
+        crate::storage::verify_database_schema(&db).unwrap();
     }
     let saved = evidence(f.storage());
     f.cold();
@@ -189,10 +186,7 @@ fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_
         super::reason(&f.storage().connection.lock().unwrap(), &f.operation).unwrap(),
         None
     );
-    assert_eq!(
-        crate::storage::verify_migration_history(&f.storage().connection.lock().unwrap()).unwrap(),
-        crate::storage::MIGRATIONS.len()
-    );
+    crate::storage::verify_database_schema(&f.storage().connection.lock().unwrap()).unwrap();
     f.kept();
     f.storage().create_meeting("AFTER VERIFIED REOPEN").unwrap();
     f.cold();
@@ -200,56 +194,6 @@ fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_
     assert!(!f.storage().data_write_blocked());
 }
 
-#[test]
-fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_permission() {
-    let mut f = Fixture::new();
-    {
-        let db = f.storage().connection.lock().unwrap();
-        // This fixture must have a contiguous v27 history, rather than a
-        // current voice-registry entry above the removed historical suffix.
-        for table in [
-            "voice_audio_operations",
-            "voice_sample_audio",
-            "voice_matches",
-            "voice_samples",
-            "voice_people",
-            "voice_policies",
-        ] {
-            assert_eq!(
-                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
-                0
-            );
-            db.execute_batch(&format!("DROP TABLE {table};")).unwrap();
-        }
-        db.execute("DELETE FROM schema_migrations WHERE version>=32", [])
-            .unwrap();
-        crate::storage::edit_recovery::remove_schema_for_test(&db);
-    }
-    let root = f.storage().root().to_owned();
-    let saved = evidence(f.storage());
-    f.reappear(false);
-    drop(f.storage.take());
-    let error = Storage::open(root.clone()).err().unwrap().to_string();
-    assert!(error.contains("非対応の旧DB形式"));
-    assert_eq!(std::fs::read(&f.file).unwrap(), b"REAPPEARED UNKNOWN");
-    assert_eq!(std::fs::read(&f.keep).unwrap(), b"KEEP");
-    let db = Connection::open_with_flags(
-        root.join("meetings.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    assert_eq!(evidence_database(&db), saved);
-    assert_eq!(crate::storage::verify_migration_history(&db).unwrap(), 27);
-    assert!(!db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='transcript_edit_recovery')",
-            [],
-            |r| r.get::<_, bool>(0)
-        )
-        .unwrap());
-}
 fn finish_pending(f: &Fixture) {
     finish_operation(f.storage(), &f.operation);
 }

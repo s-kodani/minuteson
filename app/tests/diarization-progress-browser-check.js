@@ -7,7 +7,7 @@ async page => {
   const common = page.getByRole("region", { name: "進行中の処理", exact: true });
   await page.evaluate(async () => {
     const f = window.monBrowserFixture;
-    const job = { id: crypto.randomUUID(), meetingId: "meeting-0", meetingTitle: "会議A", operationId: crypto.randomUUID(), kind: "diarization", state: "running", completedUnits: 0, totalUnits: 2, errorCode: null, outputAnalysisId: null, outputMinutesId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), retryOfJobId: null, attempt: 1, createdAt: Date.now(), updatedAt: Date.now() };
+    const job = { id: crypto.randomUUID(), meetingId: "meeting-0", meetingTitle: "会議A", operationId: crypto.randomUUID(), kind: "diarization", state: "running", completedUnits: 0, totalUnits: 2, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "a".repeat(64), inputHash: "b".repeat(64), retryOfJobId: null, attempt: 1, createdAt: Date.now(), updatedAt: Date.now() };
     f.jobs = [job]; f.notificationJobs = [job];
     f.progressEvent = { jobId: job.id, specHash: job.specHash, attempt: 1, unitIndex: 0, invocationOrder: 1, sequence: 1, engineBasisPoints: 1250, finishing: false };
     await f.emitNotification();

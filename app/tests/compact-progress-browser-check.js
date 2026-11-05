@@ -24,7 +24,7 @@ async (page, capturePath, detailUI) => {
   const baseline = await geometry();
   await page.evaluate(async () => {
     const f = window.monBrowserFixture, now = Date.now();
-    f.notificationJobs = [{ id: crypto.randomUUID(), meetingId: 'meeting-0', meetingTitle: '週次ミーティング', operationId: crypto.randomUUID(), kind: 'transcription', state: 'running', completedUnits: 2, totalUnits: 4, errorCode: null, outputAnalysisId: null, outputMinutesId: null, pauseReason: null, specHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), retryOfJobId: null, attempt: 1, createdAt: now - 134000, updatedAt: now }];
+    f.notificationJobs = [{ id: crypto.randomUUID(), meetingId: 'meeting-0', meetingTitle: '週次ミーティング', operationId: crypto.randomUUID(), kind: 'transcription', state: 'running', completedUnits: 2, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), retryOfJobId: null, attempt: 1, createdAt: now - 134000, updatedAt: now }];
     await f.emitNotification();
   });
   await state(false);

@@ -256,9 +256,13 @@ impl Storage {
         )
         .map_err(|e| e.to_string())?;
         if plan.replacement.is_some() {
-            tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1", params![old.meeting_id]).map_err(|e|e.to_string())?;
+            tx.execute(
+                "DELETE FROM working_drafts WHERE meeting_id=?1 AND target_kind='transcript'",
+                params![old.meeting_id],
+            )
+            .map_err(|e| e.to_string())?;
         }
-        let changed = tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=NULL,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND current_analysis_id IS ?4", params![output,now_ms()?,old.meeting_id,head]).map_err(|e|e.to_string())?;
+        let changed = tx.execute("UPDATE meetings SET current_analysis_id=?1,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND current_analysis_id IS ?4", params![output,now_ms()?,old.meeting_id,head]).map_err(|e|e.to_string())?;
         if changed != 1 {
             return Err("文字起こしの保存先が変更されています".into());
         }
@@ -277,6 +281,7 @@ impl Storage {
             .map_err(|_| "DBロックを取得できません")?;
         read_flow(&db, meeting)
     }
+    #[cfg(test)]
     pub(crate) fn ensure_analysis_flow(&self, meeting: &str) -> Result<AnalysisFlow, String> {
         let mut db = self
             .connection

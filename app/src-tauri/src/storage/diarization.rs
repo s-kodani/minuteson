@@ -233,8 +233,7 @@ impl Storage {
         spec.total_units = Some(total);
         if schema_version == crate::current_formats::DIARIZATION {
             let (fixed_source, known) = crate::diarization::known::fixed_coverage(&spec)?;
-            let source =
-                super::transcription::read_analysis_audio_plan(&tx, &spec.meeting_id, None)?;
+            let source = super::transcription::read_audio_plan(&tx, &spec.meeting_id)?;
             if source != fixed_source
                 || super::transcription::known::read(&tx, &spec.meeting_id, &source)? != known
             {

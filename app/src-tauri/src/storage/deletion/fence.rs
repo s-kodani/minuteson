@@ -362,7 +362,6 @@ pub(super) fn write_model_prepared<'a>(
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
     lease.validate_model_deletion()?;
-    confirmed.verify_current_schema(db)?;
     confirmed.verify_saved(db)?;
     Writer::begin(storage, db, true)
 }

@@ -138,21 +138,6 @@ fn selected_model_body_controller_deletes_exact_copy_and_replays_receipt() {
     assert_eq!(ready.phase, "ready");
     assert!(f.model.path("cli").exists());
     assert_eq!(f.model.operation_count(), 0);
-    let page = f
-        .controller
-        .model_deletion_page(
-            &ready
-                .model_deletion_preview
-                .as_ref()
-                .unwrap()
-                .confirmation_id,
-            0,
-        )
-        .unwrap();
-    assert!(page
-        .entries
-        .iter()
-        .all(|e| e.relative_path.starts_with(&f.model.package)));
     let request = f.request(&ready, Action::Publish);
     let done = f.run(&ready, Action::Publish);
     assert!(done.model_deletion_receipt.as_ref().unwrap().body_deleted);
@@ -274,28 +259,18 @@ fn model_review_progress_is_model_specific_and_cancellable_before_any_file_remov
 }
 
 #[test]
-fn model_deletion_native_snapshots_and_pages_match_frontend_contract() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+fn model_deletion_native_snapshots_keep_and_retry_current_operation() {
     let f = Fixture::new();
-    let mut views = Vec::new();
-    let mut record = |snapshot: &Snapshot| {
-        let preview = snapshot.model_deletion_preview.as_ref().unwrap();
-        let page = f
-            .controller
-            .model_deletion_page(&preview.confirmation_id, 0)
-            .unwrap();
-        views.push(serde_json::json!({ "snapshot": snapshot, "page": page }));
-    };
     let ready = f.ready();
-    record(&ready);
     let stopped = f.stop_at(&ready, Action::Publish, "model_delete_scope_fixed");
-    record(&stopped);
-    let kept = f.run(&stopped, Action::Keep);
-    record(&kept);
+    assert!(
+        f.run(&stopped, Action::Keep)
+            .model_deletion_receipt
+            .unwrap()
+            .retained
+    );
     let ready = f.ready();
     let stopped = f.stop_at(&ready, Action::Publish, "deleting_model_files");
-    record(&stopped);
     let operation = stopped
         .model_deletion_preview
         .as_ref()
@@ -303,42 +278,14 @@ fn model_deletion_native_snapshots_and_pages_match_frontend_contract() {
         .operation_id
         .clone();
     let pending = f.pending(&operation);
-    record(&pending);
     std::fs::write(f.model.path("extra"), b"changed scope").unwrap();
     let done = f.run(&pending, Action::Publish);
     assert_eq!(done.phase, "completed");
-    record(&done);
     let pending = f.pending(&operation);
     assert_eq!(
         pending.model_deletion_preview.as_ref().unwrap().phase,
         "awaiting_ack"
     );
-    record(&pending);
     let replayed = f.run(&pending, Action::Publish);
     assert_eq!(replayed.phase, "completed");
-    record(&replayed);
-    // Exercise the production frontend validators against native serialization,
-    // rather than maintaining two independently invented versions of the IPC.
-    let mut node = Command::new("node")
-        .arg("--experimental-strip-types")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../tests/model-deletion-native-contract.mjs"
-        ))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Node.js is required for the frontend/native contract test");
-    node.stdin
-        .take()
-        .unwrap()
-        .write_all(&serde_json::to_vec(&views).unwrap())
-        .unwrap();
-    let output = node.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

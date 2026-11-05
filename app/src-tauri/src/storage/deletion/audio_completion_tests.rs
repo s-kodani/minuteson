@@ -234,10 +234,7 @@ fn current_completed_audio_reopens_preserving_unavailable_source_and_original_ev
         &f.meeting
     )
     .is_err());
-    assert_eq!(
-        crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
-        crate::storage::MIGRATIONS.len()
-    );
+    crate::storage::verify_database_schema(&f.storage.connection.lock().unwrap()).unwrap();
     f.storage
         .create_meeting("OTHER MEETING AFTER AUDIO REOPEN")
         .unwrap();
@@ -385,14 +382,13 @@ fn completion_requires_files_finished_and_live_actual_lease() {
 }
 #[test]
 fn missing_journal_in_current_schema_never_grants_source_admission() {
-    for truncated_history in [false, true] {
+    for missing_schema_stamp in [false, true] {
         let f = Fixture::new();
         let db = f.storage.connection.lock().unwrap();
         db.execute_batch("DROP TABLE maintenance_paths; DROP TABLE maintenance_operations;")
             .unwrap();
-        if truncated_history {
-            db.execute("DELETE FROM schema_migrations WHERE version>=22", [])
-                .unwrap();
+        if missing_schema_stamp {
+            db.execute("DELETE FROM schema_migrations", []).unwrap();
         }
         assert!(deleted(&db, &f.meeting).is_err());
         assert!(crate::storage::deletion::audio::require_source(&db, &f.meeting).is_err());

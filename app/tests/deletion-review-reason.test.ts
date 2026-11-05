@@ -33,17 +33,17 @@ test("a pending model receipt and a failed read are explained without claiming W
   assert.doesNotMatch(deletionReviewReason(operation,state), /このアプリでは削除機能/);
 });
 
-test("deletion admission uses its native lane while retaining real blockers and old-build compatibility", () => {
-  assert.deepEqual(deletionAvailability({available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:true,deletionReason:null}), {available:true,reason:null});
+test("deletion admission uses its native lane while retaining real blockers and rejects incomplete replies", () => {
+  assert.deepEqual(deletionAvailability({available:false,reason:"録音通知履歴の確認・更新中",reasonCode:"operation_active",deletionAvailable:true,deletionReason:null,deletionReasonCode:null}), {available:true,reason:null,reasonCode:null});
   for (const reason of ["AI処理中", "モデル準備中", "録音・音声保存中", "保存先切替中"]) {
-    const availability = {available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:false,deletionReason:reason};
+    const availability = {available:false,reason:"録音通知履歴の確認・更新中",reasonCode:"operation_active" as const,deletionAvailable:false,deletionReason:reason,deletionReasonCode:"operation_active" as const};
     const admission = deletionAvailability(availability);
     assert.equal(admission.available, false);
     const operation = {connected:true,availability} as DataOperation;
     assert.equal(deletionReviewReason(operation,{native:true,supported:true,locked:false,protectedNow:false,sharedAvailable:admission.available,availabilityReason:admission.reason}), `${reason}のため削除できません。`);
   }
-  assert.deepEqual(deletionAvailability({available:true,reason:null}), {available:true,reason:null});
-  assert.deepEqual(deletionAvailability({available:false,reason:"AI処理中"}), {available:false,reason:"AI処理中"});
+  assert.throws(() => assertDataAvailability({available:true,reason:null} as never));
+  assert.throws(() => assertDataAvailability({available:false,reason:"AI処理中"} as never));
   assert.equal(deletionAvailability(null).available, false);
 });
 
@@ -54,7 +54,6 @@ test("recovery admission uses its own fixed code independently of translated cop
   assert.equal(deletionAvailability(value).reasonCode, code);
   assert.equal(deletionAvailability({...value,deletionReasonCode:null} as unknown as Parameters<typeof deletionAvailability>[0]).reasonCode, null);
   assert.throws(() => assertDataAvailability({...value,deletionReasonCode:null}));
-  assert.equal(deletionAvailability({available:false,reason:"保存先の切替後は終了して再起動が必要です"}).reasonCode, undefined);
   assert.equal(deletionAvailability({...value,deletionReasonCode:"operation_active"}).reasonCode, "operation_active");
 });
 

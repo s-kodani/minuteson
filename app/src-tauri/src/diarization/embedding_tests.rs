@@ -128,7 +128,6 @@ fn helper_conditions_require_exact_runtime_membership_and_preserve_legacy_engine
         window_shift_milli: 500,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     };
     let original = serde_json::to_vec(&engine).unwrap();
     let config = ExtractorConfig {
@@ -261,7 +260,6 @@ impl Fixture {
             window_shift_milli: 500,
             min_duration_on_ms: 0,
             min_duration_off_ms: 0,
-            speech_sensitivity_milli: 0,
         };
         let config = ExtractorConfig::capture(&engine.executable.path, &engine).unwrap();
         Self {
@@ -454,7 +452,6 @@ fn real_feature_child_repeats_exact_synthetic_features_with_fixed_library_model_
         window_shift_milli: 500,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     };
     let config = ExtractorConfig {
         library_index: 0,

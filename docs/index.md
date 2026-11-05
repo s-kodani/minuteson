@@ -4,7 +4,7 @@ okf_version: "0.2"
 
 # MinutesOn ドキュメント
 
-MinutesOn 1.0.1の完成版を基準に、利用と保守に必要な情報をまとめています。各文書はOpen Knowledge Format v0.2で管理します。
+公開前のMinutesOn 1.0.0を基準に、利用と保守に必要な情報をまとめています。各文書はOpen Knowledge Format v0.2で管理します。
 
 ## 初めて使う
 

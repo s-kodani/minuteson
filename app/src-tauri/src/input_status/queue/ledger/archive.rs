@@ -11,7 +11,6 @@ use std::{fs::File, time::Instant};
 
 // The portable codec does not acquire a second mutable writer. Storage binds
 // its immutable result to logical backup/restore ownership separately.
-pub(crate) mod portable;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

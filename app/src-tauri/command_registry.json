@@ -7,7 +7,6 @@
       "roles": [
         "main",
         "recorder",
-        "recorder-info",
         "recording-confirmation"
       ],
       "signature": {
@@ -232,57 +231,6 @@
       "signature": {
         "async": false,
         "arguments": [],
-        "response": {
-          "type": "Result<(),mon_contracts::AppError>",
-          "ok": "()",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
-      "name": "get_startup_notices",
-      "handler": "startup_notices::get_startup_notices",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": true,
-        "arguments": [],
-        "response": {
-          "type": "Result<Vec<Notice>,mon_contracts::AppError>",
-          "ok": "Vec<Notice>",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
-      "name": "respond_startup_notice",
-      "handler": "startup_notices::respond_startup_notice",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": true,
-        "arguments": [
-          {
-            "name": "id",
-            "wireName": "id",
-            "type": "String",
-            "optional": false
-          },
-          {
-            "name": "revision",
-            "wireName": "revision",
-            "type": "String",
-            "optional": false
-          },
-          {
-            "name": "response",
-            "wireName": "response",
-            "type": "Response",
-            "optional": false
-          }
-        ],
         "response": {
           "type": "Result<(),mon_contracts::AppError>",
           "ok": "()",
@@ -650,12 +598,6 @@
             "wireName": "whisperVadOptions",
             "type": "Option<transcription::vad::VadOptions>",
             "optional": true
-          },
-          {
-            "name": "diarization_speech_sensitivity_milli",
-            "wireName": "diarizationSpeechSensitivityMilli",
-            "type": "Option<i32>",
-            "optional": true
           }
         ],
         "response": {
@@ -932,35 +874,6 @@
       }
     },
     {
-      "name": "get_deletion_paths",
-      "handler": "get_deletion_paths",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [
-          {
-            "name": "confirmation_id",
-            "wireName": "confirmationId",
-            "type": "String",
-            "optional": false
-          },
-          {
-            "name": "offset",
-            "wireName": "offset",
-            "type": "usize",
-            "optional": false
-          }
-        ],
-        "response": {
-          "type": "Result<storage::deletion::operations::PathPage,mon_contracts::AppError>",
-          "ok": "storage::deletion::operations::PathPage",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
       "name": "get_model_deletion_items",
       "handler": "get_model_deletion_items",
       "roles": [
@@ -1024,35 +937,6 @@
         "response": {
           "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
           "ok": "data_controller::Snapshot",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
-      "name": "get_model_deletion_paths",
-      "handler": "get_model_deletion_paths",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [
-          {
-            "name": "confirmation_id",
-            "wireName": "confirmationId",
-            "type": "String",
-            "optional": false
-          },
-          {
-            "name": "offset",
-            "wireName": "offset",
-            "type": "usize",
-            "optional": false
-          }
-        ],
-        "response": {
-          "type": "Result<storage::deletion::models::operations::PathPage,mon_contracts::AppError>",
-          "ok": "storage::deletion::models::operations::PathPage",
           "error": "mon_contracts::AppError"
         }
       }
@@ -2048,8 +1932,6 @@
       "name": "decide_recording_confirmation",
       "handler": "recording_confirmation_window::decide_recording_confirmation",
       "roles": [
-        "main",
-        "recorder",
         "recording-confirmation"
       ],
       "signature": {
@@ -2114,28 +1996,11 @@
       }
     },
     {
-      "name": "get_recorder_info",
-      "handler": "recorder_info::get_recorder_info",
-      "roles": [
-        "recorder"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [],
-        "response": {
-          "type": "Result<bool,mon_contracts::AppError>",
-          "ok": "bool",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
       "name": "get_recorder_operation_notices",
       "handler": "recorder_operation_notices::get_recorder_operation_notices",
       "roles": [
         "main",
         "recorder",
-        "recorder-info",
         "recording-confirmation"
       ],
       "signature": {
@@ -2153,7 +2018,6 @@
       "handler": "recorder_operation_notices::publish_recorder_operation_notice",
       "roles": [
         "recorder",
-        "recorder-info",
         "recording-confirmation"
       ],
       "signature": {
@@ -2216,39 +2080,6 @@
         "response": {
           "type": "Result<Snapshot,mon_contracts::AppError>",
           "ok": "Snapshot",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
-      "name": "show_recorder_info",
-      "handler": "recorder_info::show_recorder_info",
-      "roles": [
-        "recorder"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [],
-        "response": {
-          "type": "Result<bool,mon_contracts::AppError>",
-          "ok": "bool",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
-      "name": "close_recorder_info",
-      "handler": "recorder_info::close_recorder_info",
-      "roles": [
-        "recorder",
-        "recorder-info"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [],
-        "response": {
-          "type": "Result<bool,mon_contracts::AppError>",
-          "ok": "bool",
           "error": "mon_contracts::AppError"
         }
       }
@@ -2984,29 +2815,6 @@
       }
     },
     {
-      "name": "start_analysis_flow",
-      "handler": "start_analysis_flow",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [
-          {
-            "name": "meeting_id",
-            "wireName": "meetingId",
-            "type": "String",
-            "optional": false
-          }
-        ],
-        "response": {
-          "type": "Result<storage::analysis_flows::AnalysisFlow,mon_contracts::AppError>",
-          "ok": "storage::analysis_flows::AnalysisFlow",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
       "name": "get_analysis_preparations",
       "handler": "get_analysis_preparations",
       "roles": [
@@ -3667,28 +3475,11 @@
       }
     },
     {
-      "name": "get_analysis_preferences",
-      "handler": "get_analysis_preferences",
-      "roles": [
-        "main"
-      ],
-      "signature": {
-        "async": false,
-        "arguments": [],
-        "response": {
-          "type": "Result<storage::PreferencesSnapshot,mon_contracts::AppError>",
-          "ok": "storage::PreferencesSnapshot",
-          "error": "mon_contracts::AppError"
-        }
-      }
-    },
-    {
       "name": "get_ui_preferences",
       "handler": "get_ui_preferences",
       "roles": [
         "main",
         "recorder",
-        "recorder-info",
         "recording-confirmation"
       ],
       "signature": {
@@ -3828,8 +3619,8 @@
       }
     },
     {
-      "name": "get_analysis_versions",
-      "handler": "get_analysis_versions",
+      "name": "get_minutes_source",
+      "handler": "get_minutes_source",
       "roles": [
         "main"
       ],
@@ -3844,8 +3635,8 @@
           }
         ],
         "response": {
-          "type": "Result<storage::VersionState,mon_contracts::AppError>",
-          "ok": "storage::VersionState",
+          "type": "Result<storage::MinutesSource,mon_contracts::AppError>",
+          "ok": "storage::MinutesSource",
           "error": "mon_contracts::AppError"
         }
       }

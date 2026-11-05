@@ -20,7 +20,7 @@ test("bounded stop observation never fabricates successful cancellation", async 
   assert.equal(waits, 2);
 });
 test("a publication winning cancellation is retained as completed not rollback", async () => {
-  const completed: DataSnapshot = { ...snapshot(false), phase: "completed", backupReceipt: { archiveId: token, meetingCount: 1, assetCount: 1, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 128, sha256: "a".repeat(64) } };
+  const completed: DataSnapshot = { ...snapshot(false), phase: "completed", backupReceipt: { archiveId: token, meetingCount: 1, assetCount: 1, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 128, sha256: "a".repeat(64) } };
   const result = await waitForDataStop(token, "backup", async () => completed);
   assert.equal(result, completed); assert.equal(result.phase, "completed");
 });

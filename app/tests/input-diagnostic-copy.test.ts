@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {archivedDiagnosticMessage} from "../src/input-diagnostic-copy.ts";
 import {InputJournalNotices,journalMessage} from "../src/input-journal-state.ts";
 import type {ArchivedInputView} from "../src/archived-input-controller.ts";
-const base:ArchivedInputView={meetingId:"m",sessionId:"s",title:"会議",notices:[],reception:{microphone:"none",system:"none"},loss:{microphone:0,system:0},historyIssue:null,unavailable:false,deliveryUnavailable:false,historySaveIssue:null,checked:true,historySaveConfirmed:true};
+const base:ArchivedInputView={meetingId:"m",sessionId:"s",title:"会議",notices:[],reception:{microphone:"none",system:"none"},loss:{microphone:0,system:0},historyIssue:null,unavailable:false,historySaveIssue:null,checked:true,historySaveConfirmed:true};
 test("automatic diagnostics stay silent, including mixed read and delivery delays",()=>{
   for(const historySaveIssue of [null,"unconfirmed","unavailable"] as const){
-    assert.equal(archivedDiagnosticMessage({...base,unavailable:true,deliveryUnavailable:true,historySaveIssue,reception:{microphone:"unconfirmed",system:"unconfirmed"}}),"");
+    assert.equal(archivedDiagnosticMessage({...base,unavailable:true,historySaveIssue,reception:{microphone:"unconfirmed",system:"unconfirmed"}}),"");
   }
   assert.equal(archivedDiagnosticMessage(base),"");
 });

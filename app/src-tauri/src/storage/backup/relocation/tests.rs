@@ -50,31 +50,24 @@ fn placed_current_database_is_validated_without_migration_and_keeps_cancellation
     let before = native_tables(&db);
     validate_database(&mut db, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(native_tables(&db), before);
-    assert_eq!(verify_migration_history(&db).unwrap(), MIGRATIONS.len());
+    verify_database_schema(&db).unwrap();
     assert!(validate_database(&mut db, &|| true).is_err());
     assert_eq!(native_tables(&db), before);
 }
 
 #[test]
-fn placed_old_database_schemas_are_rejected_without_mutation() {
-    for version in 27..MIGRATIONS.len() {
-        // Rejection data only. Product snapshot/restore constructors never
-        // create or migrate these unsupported schemas.
-        let mut db = Connection::open_in_memory().unwrap();
-        db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
-        for &(number, sql) in &MIGRATIONS[..version] {
-            db.execute_batch(sql).unwrap();
-            db.execute(
-                "INSERT INTO schema_migrations VALUES(?1,?2,0)",
-                params![number, format!("{:x}", Sha256::digest(sql.as_bytes()))],
-            )
-            .unwrap();
-        }
-        let before = native_tables(&db);
-        assert!(validate_database(&mut db, &crate::test_support::never_cancelled).is_err());
-        assert_eq!(native_tables(&db), before);
-        assert_eq!(verify_migration_history(&db).unwrap(), version);
-    }
+fn placed_old_database_schema_is_rejected_without_mutation() {
+    let mut db = Connection::open_in_memory().unwrap();
+    db.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        INSERT INTO schema_migrations VALUES (38, 'old', 0);
+        CREATE TABLE preserved(payload TEXT NOT NULL); INSERT INTO preserved VALUES ('keep');").unwrap();
+    assert!(validate_database(&mut db, &crate::test_support::never_cancelled).is_err());
+    assert_eq!(
+        db.query_row("SELECT payload FROM preserved", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "keep"
+    );
 }
 
 #[test]
@@ -162,7 +155,7 @@ fn native_image_preserves_wal_ids_all_tables_settings_and_unregistered_audio() {
 }
 
 #[test]
-fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_conditions() {
+fn native_image_preserves_current_draft_markdown_and_local_model_conditions() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, analysis, _) = crate::storage::playback::tests::fixture(&storage);
@@ -200,9 +193,6 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
     assert!(rows
         .iter()
         .any(|t| t.name == "working_drafts" && t.rows > 0));
-    assert!(rows
-        .iter()
-        .any(|t| t.name == "edit_operations" && t.rows > 0));
     assert!(rows
         .iter()
         .any(|t| t.name == "minutes_markdown" && t.rows == 1));

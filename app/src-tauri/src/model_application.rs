@@ -92,34 +92,6 @@ pub(crate) fn preview_with_vad(
     whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<ApplyPreview, String> {
-    preview_with_sensitivity(
-        storage,
-        models_root,
-        name,
-        package,
-        review,
-        check,
-        diarization_threads,
-        diarization_cluster_threshold_milli,
-        whisper_vad_options,
-        None,
-        cancelled,
-    )
-}
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn preview_with_sensitivity(
-    storage: &Storage,
-    models_root: &Path,
-    name: ProfileName,
-    package: &str,
-    review: &str,
-    check: &str,
-    diarization_threads: Option<u32>,
-    diarization_cluster_threshold_milli: Option<u32>,
-    whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
-    diarization_speech_sensitivity_milli: Option<i32>,
-    cancelled: &impl Fn() -> bool,
-) -> Result<ApplyPreview, String> {
     let (record, directory) = crate::model_compatibility::verify_success(
         storage,
         models_root,
@@ -128,7 +100,7 @@ pub(crate) fn preview_with_sensitivity(
         review,
         cancelled,
     )?;
-    let result = storage.preview_model_profile_with_sensitivity(
+    let result = storage.preview_model_profile_with_vad(
         name,
         &record,
         &directory,
@@ -136,7 +108,6 @@ pub(crate) fn preview_with_sensitivity(
         diarization_threads,
         diarization_cluster_threshold_milli,
         whisper_vad_options,
-        diarization_speech_sensitivity_milli,
     )?;
     if cancelled() {
         return Err("モデル適用の事前確認を取り消しました".into());

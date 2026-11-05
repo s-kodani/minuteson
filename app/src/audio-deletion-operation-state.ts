@@ -1,7 +1,7 @@
 // Display data only. Native confirmation IDs refer to server-held observations;
 // paths, hashes and a claimed saved policy never grant deletion authority.
 export interface AudioDeletionTrack { id: string; kind: string; state: string; chunks: number; durationUs: number }
-export interface AudioDeletionRetained { analysisRevisions: number; utterances: number; minutesRevisions: number; drafts: number; editOperations: number; evidenceLinks: number; jobs: number; externalExportRecords: number }
+export interface AudioDeletionRetained { analysisRevisions: number; utterances: number; minutesRevisions: number; drafts: number; jobs: number; externalExportRecords: number }
 export interface AudioDeletionPreview {
   confirmationId: string; operationId: string; meetingId: string; sourceOperationId: string | null;
   reconfirmationSourceKind: "native_audio_deletion" | "native_audio_pending" | "restored_audio_unavailable" | null;
@@ -49,7 +49,7 @@ export function assertAudioDeletionPreview(p: AudioDeletionPreview): void {
     || (p.phase === "review" && (p.sourceOperationId !== null || p.priorDeletionCompleted))
     || (["review", "restored_unavailable", "reconfirmation"].includes(p.phase) ? p.includeUnregisteredRecorded !== null : typeof p.includeUnregisteredRecorded !== "boolean")) fail();
   const r = p.retained;
-  if (!r || ![r.analysisRevisions, r.utterances, r.minutesRevisions, r.drafts, r.editOperations, r.evidenceLinks, r.jobs, r.externalExportRecords].every(count)
+  if (!r || ![r.analysisRevisions, r.utterances, r.minutesRevisions, r.drafts, r.jobs, r.externalExportRecords].every(count)
     || !Array.isArray(p.tracks) || p.tracks.length > 200000) fail();
   for (const t of p.tracks) if (!t || !id(t.id) || !["mic", "system", "imported", "processed"].includes(t.kind)
     || !["ready", "interrupted", "failed"].includes(t.state) || !count(t.chunks) || t.chunks > 200000 || !count(t.durationUs)) fail();

@@ -91,7 +91,6 @@ function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport
       <p>終了後、原因を確認してから明示的に再起動してください。再起動時は保存先を改めて検証します。保存済みのデータを巻き戻す操作ではありません。</p>
     </section>}
     {report?.phase === "blocked" && <StartupReset availability={report.reset} onBusy={setResetBusy} />}
-    {report?.phase === "starting" && report.migration && <p role="status">会議音声を移行しています：{report.migration.completed} / {report.migration.total}件。完了後に通常画面を開きます。</p>}
     {report?.phase === "ready" && <p role="status">保存先の起動確認は完了しています。<a href={normal.href}>通常画面を開く</a></p>}
     <div className="analysis-actions"><IconButton label="保持した診断だけを再読込" icon="refresh" type="button" className="secondary" disabled={!isTauri() || busy || quitting || resetBusy} onClick={() => void read()} />{report?.phase === "blocked" && <><button type="button" disabled={busy || quitting || resetBusy || retryUncertain} onClick={() => void retry()}>起動をやり直す</button><button type="button" disabled={busy || quitting || resetBusy} onClick={() => void quit()}>このアプリを終了</button></>}</div>
     <p>再読込はメモリに保持した診断だけを読みます。保存先を再び開く、検査・回収する、自動再試行する操作ではありません。</p>

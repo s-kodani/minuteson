@@ -8,7 +8,7 @@ import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
-import { jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
+import { jobLabel, type AnalysisJob, type MinutesSource } from "./analysis-state";
 import { minutesConfigured, type MinutesPreferences } from "./minutes-state";
 import { MinutesMarkdownEditor } from "./minutes-markdown-editor";
 import { MarkdownSaveController, markdownStamp, type MarkdownDocument } from "./minutes-markdown-state";
@@ -38,7 +38,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [exportState, setExportState] = useState(() => exporter.snapshot());
   const [exportedEvent, setExportedEvent] = useState("");
   const exportOpener = useRef<HTMLButtonElement|null>(null), returnExportFocus = useRef(false);
-  const [source, setSource] = useState<VersionState | null>(null);
+  const [source, setSource] = useState<MinutesSource | null>(null);
   const [audioSummary, setAudioSummary] = useState<MeetingAudioSummary | null>(null);
   const audio = useMeetingAudio(meetingId);
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
@@ -92,7 +92,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     const resource = observeInvalidations({
       read: async () => {
             const [saved, analysis, preferences, allJobs, summary] = await Promise.all([
-              read(), invoke<VersionState>("get_analysis_versions", { meetingId }),
+              read(), invoke<MinutesSource>("get_minutes_source", { meetingId }),
               invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences"),
               invoke<Job[]>("get_analysis_jobs", { meetingId }),
               // No token, file read, OS permission or automatic playback.
@@ -105,7 +105,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
             setAudioSummary(summary);
             minutesAdmissions.observe(meetingId, allJobs.map(job => job.operationId));
       },
-      subscribe: notify => subscribeInvalidations(["analysis-job-changed", "analysis-version-changed", "minutes-version-changed", "model-profile-changed"], notify),
+      subscribe: notify => subscribeInvalidations(["analysis-job-changed", "analysis-version-changed", "model-profile-changed"], notify),
       error: cause => { if (!disposed) setError(String(cause)); },
       intervalMs: 3000, schedule: browserSchedule, focus: browserFocus,
     });
@@ -131,10 +131,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       // admission (after replacement confirmation), never a meeting override.
       const engine = preferences.payload.standard;
       if (!engine || !minutesConfigured(engine)) throw Error("設定のローカルAIで議事録用モデルを導入してください。");
-      const analysis = await invoke<VersionState>("get_analysis_versions", { meetingId });
-      const version = analysis.versions.find(v => v.id === analysis.currentId);
-      if (!version) throw Error("先に文字起こしを完了してください。");
-      const base = { input: { meetingId, expectedAnalysisId: version.id, expectedContentHash: version.contentHash,
+      const analysis = await invoke<MinutesSource>("get_minutes_source", { meetingId });
+      if (!analysis.currentId || !analysis.contentHash) throw Error("先に文字起こしを完了してください。");
+      const base = { input: { meetingId, expectedAnalysisId: analysis.currentId, expectedContentHash: analysis.contentHash,
         expectedMeetingLockVersion: analysis.meetingLockVersion, expectedDraft: analysis.draft },
         ...engine, profile: "standard" };
       const expected = markdownStamp(saved), key = JSON.stringify({ base, expected });

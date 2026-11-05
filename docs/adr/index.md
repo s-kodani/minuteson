@@ -8,12 +8,12 @@
 - [ADR 0004 全体モデル設定と実行条件固定](0004-global-models.md) — モデル選択を全体設定へ集約し、開始済み処理の資材と条件を固定する。
 - [ADR 0005 解析結果の直接保存と編集保護](0005-direct-results-edit-protection.md) — 結果を発言一覧へ直接保存し、明示再生成時の競合と後続処理を管理する。
 - [ADR 0006 Markdownを議事録の正本とする](0006-markdown-minutes.md) — 議事録をMarkdownプレビューとテキスト編集へ絞り、生成は明示操作にする。
-- [ADR 0007 限定的な前進更新と追加復元](0007-forward-updates-backup.md) — 実装が明示的に対応する旧形式だけ更新・復元し、既存データを保持する。
-- [ADR 0008 完成版の位置付けとOKF文書管理](0008-release-documentation.md) — 1.0.1を完成版として扱い、現行仕様・手順・判断理由をOKFへ集約する。
+- [ADR 0007 限定的な前進更新と追加復元](0007-forward-updates-backup.md) — 旧版の前進更新と復元に関する過去の判断。
+- [ADR 0008 完成版の位置付けとOKF文書管理](0008-release-documentation.md) — 現行仕様・手順・判断理由をOKFへ集約する。
 
 - [ADR 0009 完成WAVを残して作業音声を整理する](0009-completed-wav-cleanup.md) — Windows・macOSでWAV確定後の作業音声を整理し、外部原本と未救出音声を保持する。
 - [ADR 0010 PR検査と下書きからの自動公開](0010-devsecops-release.md) — 公開前の検査、Releases画面でのタグ管理、署名処理の分離。
 - [ADR 0011 モデル利用条件の確認とStore成果物の出自検証](0011-oss-model-disclosure.md) — モデル条件の表示・オフライン原文確認と、Store提出前の成果物出自検証。
-- [ADR 0012 起動時の案内と明示操作の分離](0012-startup-notices.md) — 案内の一覧・既読・延期を共通化し、更新は機能側の確認と実行状態で管理する。
+- [ADR 0012 起動時の案内と明示操作の分離](0012-startup-notices.md) — 旧ランタイムの更新案内に関する過去の判断。
 
 [ドキュメント目次へ戻る](../index.md)

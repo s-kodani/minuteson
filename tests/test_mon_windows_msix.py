@@ -85,7 +85,7 @@ class StorePackageTests(unittest.TestCase):
 
     def test_store_identity_version_isolated_id_and_permissions(self):
         self.assertEqual(self.config["identityName"], "s-kodani.MinutesOn")
-        self.assertEqual(self.config["version"], "1.0.1.0")
+        self.assertEqual(self.config["version"], "1.0.0.0")
         self.assertEqual(self.config["tauriIdentifier"], "jp.mon.desktop.store")
         xml = msix.ET.fromstring(msix.manifest_xml(self.config))
         identity = xml.find("{" + msix.FOUNDATION + "}Identity")
@@ -123,7 +123,7 @@ class StorePackageTests(unittest.TestCase):
         self.assertEqual(len(msix.APP_ICON_LOGOS), 42)
         self.assertTrue({"Assets/" + name for name in msix.APP_ICON_LOGOS} <= names)
         self.assertFalse(any(n.endswith(".pdb") for n in names))
-        msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
+        msix.verify_payload(self.package, self.config, files)
 
     def test_current_payload_rejects_missing_pri_or_theme_variant(self):
         files = self.package_stage()
@@ -131,7 +131,7 @@ class StorePackageTests(unittest.TestCase):
             with self.subTest(missing=name):
                 incomplete = [entry for entry in files if entry["path"] != name]
                 with self.assertRaisesRegex(ValueError, "Required MSIX payload is missing"):
-                    msix.verify_payload(self.package, self.config, incomplete, msix.PAYLOAD_VERSION)
+                    msix.verify_payload(self.package, self.config, incomplete)
 
     def test_missing_input_fails_before_creating_stage(self):
         (self.root / ".cache/windows-runtime/package/runtime.tar").unlink()
@@ -187,15 +187,16 @@ class StorePackageTests(unittest.TestCase):
         self.assertTrue(result["currentSourceMatches"])
         self.assertEqual(result["packageSha256"], msix.evidence.sha256_file(published))
 
-    def test_historical_evidence_without_qualified_icons_remains_verifiable(self):
+    def test_historical_evidence_without_qualified_icons_is_rejected(self):
         files = self.package_stage(legacy=True)
         legacy = {"schemaVersion": 1, "startedAt": "test", "completedAt": "test",
                   "source": self.source, "kind": "windows-store-msix", "identity": self.config,
                   "package": msix.artifact(self.root, self.package), "files": files}
         self.manifest.write_text(json.dumps(legacy), encoding="utf-8")
-        self.assertTrue(msix.verify(self.root, self.manifest)["currentSourceMatches"])
+        with self.assertRaisesRegex(ValueError, "Unsupported MSIX payload version"):
+            msix.verify(self.root, self.manifest)
         with self.assertRaisesRegex(ValueError, "Required MSIX payload is missing"):
-            msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
+            msix.verify_payload(self.package, self.config, files)
         legacy["payloadVersion"] = 999
         self.manifest.write_text(json.dumps(legacy), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Unsupported MSIX payload version"):
@@ -285,7 +286,7 @@ class StorePackageTests(unittest.TestCase):
         result = subprocess.run([str(tool), "pack", "/d", str(self.stage), "/p", str(self.package), "/h", "SHA256", "/no"],
                                 capture_output=True, text=True, errors="replace")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        msix.verify_payload(self.package, self.config, files, msix.PAYLOAD_VERSION)
+        msix.verify_payload(self.package, self.config, files)
 
 
 if __name__ == "__main__":

@@ -155,16 +155,6 @@ pub(super) fn resolve(
     directory: &Path,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Resolved>, String> {
-    resolve_with_memory(policy, base, context, directory, cancelled, false)
-}
-fn resolve_with_memory(
-    policy: Policy,
-    base: &LlamaConfig,
-    context: u32,
-    directory: &Path,
-    cancelled: &impl Fn() -> bool,
-    _legacy_total_memory_flag: bool,
-) -> Result<Option<Resolved>, String> {
     if cancelled() {
         return Ok(None);
     }

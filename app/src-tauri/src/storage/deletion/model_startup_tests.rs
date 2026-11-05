@@ -115,10 +115,7 @@ fn current_completed_model_reopens_without_rewriting_evidence_or_reviving_bodies
     assert_eq!(reason(&f, &op), None);
     assert!(!f.storage.data_write_blocked());
     assert!(!f.path("").exists());
-    assert_eq!(
-        crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
-        crate::storage::MIGRATIONS.len()
-    );
+    crate::storage::verify_database_schema(&f.storage.connection.lock().unwrap()).unwrap();
     f.storage
         .create_meeting("MODEL HISTORY IS READABLE AFTER REOPEN")
         .unwrap();

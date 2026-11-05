@@ -310,7 +310,6 @@ pub(in crate::storage) fn fixture(
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     };
     let rows="0.000 -- 4.000 speaker_00\n2.000 -- 3.000 speaker_01\n5.000 -- 6.000 speaker_01\n7.000 -- 8.000 speaker_00\n";
     let auto = format!("{}\nStarted\n{rows}", config.expected_header(None));
@@ -376,14 +375,17 @@ fn fixed_speaker_count_is_applied_once_to_the_whole_meeting_without_a_quality_cl
         .unwrap()
         .unwrap();
     assert_eq!(calls(root.path()), 1);
-    let config = s
-        .analysis_versions(&m)
+    let config: String = s
+        .connection
+        .lock()
         .unwrap()
-        .versions
-        .into_iter()
-        .find(|v| v.id == id)
-        .unwrap()
-        .config;
+        .query_row(
+            "SELECT config_json FROM analysis_revisions WHERE id=?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let config: serde_json::Value = serde_json::from_str(&config).unwrap();
     assert_eq!(config["tracks"], serde_json::to_value(settings).unwrap());
     assert_eq!(config["estimatedSpeakers"], json!([2]));
     assert_eq!(config["timelineAlignment"], "unverified");
@@ -724,7 +726,7 @@ fn stale_start_wrong_tracks_and_sql_result_redirection_are_rejected() {
 
 fn current_request(s: &Storage, m: &str, operation: &str) -> MinutesJobRequest {
     let view = s.load_current_analysis(m).unwrap().unwrap();
-    let state = s.analysis_versions(m).unwrap();
+    let state = s.minutes_source(m).unwrap();
     MinutesJobRequest {
         meeting_id: m.into(),
         operation_id: operation.into(),
@@ -736,7 +738,7 @@ fn current_request(s: &Storage, m: &str, operation: &str) -> MinutesJobRequest {
 }
 
 #[test]
-fn candidate_playback_rejects_changed_speaker_segments() {
+fn current_playback_rejects_changed_speaker_segments() {
     let root = tempfile::tempdir().unwrap();
     let (s, m, c, r) = fixture(root.path(), true);
     let job = enqueue(&s, r, c);
@@ -744,6 +746,7 @@ fn candidate_playback_rejects_changed_speaker_segments() {
     let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
+    adopt(&s, &m, &id).unwrap();
     let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
     let u = view
         .utterances
@@ -798,35 +801,34 @@ fn playback_rejects_internal_or_no_longer_visible_revisions() {
         .is_err());
 }
 fn adopt(s: &Storage, m: &str, id: &str) -> Result<CommittedAnalysis, String> {
-    let view = s.load_visible_analysis(m, id)?.unwrap();
-    let state = s.analysis_versions(m)?;
-    s.adopt_analysis(AdoptRequest {
-        meeting_id: m.into(),
-        revision_id: id.into(),
-        expected_content_hash: view.content_hash,
-        expected_meeting_lock_version: state.meeting_lock_version,
-        expected_draft: state.draft,
-        confirm_replacing_previous: true,
-    })
+    let state = s.minutes_source(m)?;
+    let parent: Option<String> = s
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT parent_revision_id FROM analysis_revisions WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if parent != state.current_id {
+        return Err("解析の親が変更されています".into());
+    }
+    s.commit_analysis_candidate(m, id, state.meeting_lock_version, false)
 }
 
 #[test]
 fn explicit_unknown_assignment_and_names_survive_adoption_and_next_diarization() {
     let root = tempfile::tempdir().unwrap();
     let (s, m, c, r) = fixture(root.path(), false);
-    let original = r.expected_analysis_id.clone();
     let job = enqueue(&s, r, c.clone());
     s.acquire_local_inference_job().unwrap().unwrap();
     let id = diarization::process(&s, &job.id, &crate::test_support::never_cancelled, &|_| {})
         .unwrap()
         .unwrap();
     adopt(&s, &m, &id).unwrap();
-    assert_eq!(
-        s.analysis_versions(&m).unwrap().previous_id,
-        Some(original.clone())
-    );
-    let archived = s.visible_analysis_draft(&m, &original).unwrap().unwrap();
-    assert_eq!(archived.payload.utterances.len(), 3);
+    assert!(s.load_transcript_draft(&m).unwrap().is_none());
     let next = enqueue(&s, current_request(&s, &m, "next-analysis"), c);
     assert_eq!(
         s.load_diarization_input(&next.id)
@@ -858,10 +860,7 @@ fn explicit_unknown_assignment_and_names_survive_adoption_and_next_diarization()
             .as_deref(),
         Some("確定した氏名")
     );
-    assert_eq!(
-        s.visible_analysis_draft(&m, &original).unwrap().unwrap(),
-        archived
-    );
+    assert!(s.load_transcript_draft(&m).unwrap().is_none());
 }
 
 #[test]
@@ -914,10 +913,7 @@ fn a_changed_current_head_does_not_reparent_or_silently_adopt_the_old_input_resu
         old
     );
     assert!(adopt(&s, &m, &id).is_err());
-    assert_eq!(
-        s.analysis_versions(&m).unwrap().current_id,
-        Some(replacement)
-    );
+    assert_eq!(s.minutes_source(&m).unwrap().current_id, Some(replacement));
 }
 
 #[test]
@@ -1118,7 +1114,6 @@ fn real_sherpa_worker_commits_checked_tracks_and_a_candidate_without_replacing_e
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     }
     .enqueue(&s)
     .unwrap();

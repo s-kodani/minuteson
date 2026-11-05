@@ -4,6 +4,7 @@ use crate::storage::deletion::fs::NativeProof as _;
 use crate::{model_inspection::MANIFEST, model_placement::PlacementRecord, storage::Storage};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 
@@ -134,6 +135,7 @@ impl Snapshot {
         Ok(())
     }
 }
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Preview {
@@ -334,9 +336,8 @@ fn usages(db: &Connection, package: &str) -> Result<(u64, u64, u64), String> {
             |r| r.get::<_, i64>(0),
         )
         .map_err(|e| e.to_string())?;
-    // Both original and explicitly rebound job provenance are historical
-    // references, not running-process ownership or permission to delete.
-    let jobs = db.query_row("SELECT count(*) FROM processing_jobs WHERE json_extract(profile_snapshot_json,'$.managedModel.package.packageId')=?1 OR json_extract(profile_snapshot_json,'$.runtimeModel.package.packageId')=?1",params![package],|r|r.get::<_, i64>(0)).map_err(|e|e.to_string())?;
+    // Fixed job provenance is retained separately from live process ownership.
+    let jobs = db.query_row("SELECT count(*) FROM processing_jobs WHERE json_extract(profile_snapshot_json,'$.managedModel.package.packageId')=?1",params![package],|r|r.get::<_, i64>(0)).map_err(|e|e.to_string())?;
     let active = db
         .query_row(
             "SELECT count(*) FROM processing_jobs WHERE state IN ('running','pausing')",
@@ -347,6 +348,7 @@ fn usages(db: &Connection, package: &str) -> Result<(u64, u64, u64), String> {
     let count = |n: i64| u64::try_from(n).map_err(|_| "モデル参照件数が範囲外です".to_string());
     Ok((count(profiles)?, count(jobs)?, count(active)?))
 }
+#[cfg(test)]
 fn capture(
     storage: &Storage,
     root: &Path,
@@ -371,6 +373,7 @@ fn capture_directory(
     storage.require_data_writable()?;
     Ok(snapshot)
 }
+#[cfg(test)]
 fn capture_unlocked(
     storage: &Storage,
     root: &Path,
@@ -568,6 +571,7 @@ fn validate_root(storage: &Storage, root: &Path, package: &str) -> Result<(), St
 }
 
 use crate::storage;
+#[cfg(test)]
 pub(crate) fn preview(
     storage: &Storage,
     root: &Path,

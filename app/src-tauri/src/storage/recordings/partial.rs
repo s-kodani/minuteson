@@ -134,7 +134,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title,r.state FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('interrupted','failed') AND r.audio_manifest_hash IS NULL AND r.input_history_snapshot_json IS NULL AND m.source_type='recording' AND m.lifecycle IN ('recording','draft') AND (?1 IS NULL OR r.id>?1) ORDER BY r.id LIMIT 201").map_err(|e|e.to_string())?;
+        let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title,r.state FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('interrupted','failed') AND r.audio_manifest_hash IS NULL AND m.source_type='recording' AND m.lifecycle IN ('recording','draft') AND (?1 IS NULL OR r.id>?1) ORDER BY r.id LIMIT 201").map_err(|e|e.to_string())?;
         let mut items = query
             .query_map([after], |row| {
                 Ok(Item {
@@ -679,12 +679,12 @@ fn partial_admission(
     if !matches!(session.state.as_str(), "interrupted" | "failed") {
         return Err("未終了または失敗した録音だけを部分救出できます".into());
     }
-    let (config, mode, manifest, restored): (String, String, Option<String>, bool) = db.query_row(
-        "SELECT capture_config_json,capture_mode,audio_manifest_hash,input_history_snapshot_json IS NOT NULL FROM recording_sessions WHERE id=?1",
-        [id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).map_err(|e|e.to_string())?;
+    let (config, mode, manifest): (String, String, Option<String>) = db.query_row(
+        "SELECT capture_config_json,capture_mode,audio_manifest_hash FROM recording_sessions WHERE id=?1",
+        [id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(|e|e.to_string())?;
     let parsed: RecordingConfig = serde_json::from_str(&config).map_err(|e| e.to_string())?;
     parsed.validate()?;
-    if mode != parsed.mode || manifest.is_some() || restored {
+    if mode != parsed.mode || manifest.is_some() {
         return Err("部分救出の開始条件・元録音の所属または未確定状態が一致しません".into());
     }
     let occupied: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_tracks WHERE meeting_id=?1) OR EXISTS(SELECT 1 FROM processing_jobs WHERE meeting_id=?1 AND state IN ('queued','running','pausing','paused','interrupted'))",

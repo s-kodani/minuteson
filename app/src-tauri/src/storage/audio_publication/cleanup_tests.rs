@@ -38,7 +38,6 @@ fn completed_workspace_retires_unknown_audio_and_parts_but_preserves_documents_a
         std::fs::write(area.join(name), b"unfinished audio").unwrap();
     }
     std::fs::write(area.join("empty.part"), b"").unwrap();
-    std::fs::write(area.join("decoded.caf"), b"redundant decoded audio").unwrap();
     for name in [
         "raw-microphone-00000001.json",
         ".final-flac.lock",
@@ -106,7 +105,6 @@ fn completed_import_removes_managed_copy_and_decoded_caf_but_never_external_orig
     let original = std::fs::read(area.join("original.wav")).unwrap();
     std::fs::write(&external, &original).unwrap();
     std::fs::write(area.join("empty.part"), b"").unwrap();
-    std::fs::write(area.join("decoded.caf"), b"redundant decoded audio").unwrap();
     storage.finalize_audio_import(&import.id).unwrap();
     assert!(!area.join("original.wav").exists());
     assert!(!area.join("decoded.caf").exists());
@@ -115,60 +113,6 @@ fn completed_import_removes_managed_copy_and_decoded_caf_but_never_external_orig
     assert!(area.join("manifest.json").exists());
     assert_eq!(std::fs::read(external).unwrap(), original);
     assert!(wav(&storage, &import.meeting_id).is_file());
-}
-
-#[test]
-fn startup_upgrade_recensuses_cleaned_meetings_once_without_regenerating_wav() {
-    let (temp, storage, meeting, _) = tests::fixture();
-    storage
-        .publish_single_wav(&meeting, &|| false, &|_, _| {})
-        .unwrap();
-    let path = wav(&storage, &meeting);
-    let bytes = std::fs::read(&path).unwrap();
-    let metadata = std::fs::metadata(&path).unwrap();
-    let leftover = workspace(&storage, &meeting).join("old-unregistered.part");
-    let wave_leftover = path.parent().unwrap().join(".unclaimed-wave.part");
-    std::fs::write(&leftover, b"left by an earlier version").unwrap();
-    std::fs::write(&wave_leftover, b"").unwrap();
-    let before: String = storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT cleanup_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    storage
-        .upgrade_completed_audio_cleanup(&|_, _, _| {})
-        .unwrap();
-    assert!(!leftover.exists());
-    assert!(!wave_leftover.exists());
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().modified().unwrap(),
-        metadata.modified().unwrap()
-    );
-    let after: String = storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT cleanup_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let before: Vec<serde_json::Value> = serde_json::from_str(&before).unwrap();
-    let after: Vec<serde_json::Value> = serde_json::from_str(&after).unwrap();
-    assert_eq!(&after[..before.len()], &before);
-    drop(storage);
-    let storage = Storage::open(temp.path().to_path_buf()).unwrap();
-    storage
-        .upgrade_completed_audio_cleanup(&|_, _, _| panic!("already complete"))
-        .unwrap();
-    assert!(wav(&storage, &meeting).is_file());
 }
 
 #[test]
@@ -230,53 +174,6 @@ fn failed_database_completion_retries_without_requiring_deleted_inputs() {
         .publish_single_wav(&meeting, &|| false, &|_, _| panic!("do not regenerate"))
         .unwrap();
     assert_eq!(wav(&storage, &meeting), canonical);
-}
-
-#[test]
-fn restored_current_contents_preserve_unowned_workspace_during_initial_cleanup() {
-    let (_temp, storage, meeting, _) = tests::fixture();
-    storage
-        .publish_single_wav(&meeting, &|| false, &|_, _| {})
-        .unwrap();
-    let target = tempfile::tempdir().unwrap();
-    let (restored, id, _) = super::super::backup::published_restore_for_rebinding_test(
-        &storage,
-        target.path(),
-        &meeting,
-        &[],
-    );
-    let before = std::fs::read(wav(&restored, &id)).unwrap();
-    let leftover = workspace(&restored, &id).join("restored-leftover.part");
-    std::fs::write(&leftover, b"").unwrap();
-    restored
-        .upgrade_completed_audio_cleanup(&|_, _, _| {})
-        .unwrap();
-    // Current-content restore carries no original input tracks or producer receipts.
-    // A directory created afterward is unknown, even under the restored session.
-    assert!(leftover.exists());
-    assert_eq!(std::fs::read(wav(&restored, &id)).unwrap(), before);
-}
-
-#[test]
-fn invalid_wav_prevents_cleanup_and_upgrade_is_retryable() {
-    let (_temp, storage, meeting, _) = tests::fixture();
-    storage
-        .publish_single_wav(&meeting, &|| false, &|_, _| {})
-        .unwrap();
-    let canonical = wav(&storage, &meeting);
-    let before = std::fs::read(&canonical).unwrap();
-    let leftover = workspace(&storage, &meeting).join("pending.part");
-    std::fs::write(&leftover, b"retained until WAV verifies").unwrap();
-    std::fs::write(&canonical, b"corrupt WAV").unwrap();
-    assert!(storage
-        .upgrade_completed_audio_cleanup(&|_, _, _| {})
-        .is_err());
-    assert!(leftover.exists());
-    std::fs::write(&canonical, before).unwrap();
-    storage
-        .upgrade_completed_audio_cleanup(&|_, _, _| {})
-        .unwrap();
-    assert!(!leftover.exists());
 }
 
 #[cfg(windows)]
@@ -405,7 +302,7 @@ fn legacy_flac_input_directory_retires_unregistered_parts() {
 }
 
 #[test]
-fn native_legacy_plan_admits_track_with_only_unclaimed_crash_parts() {
+fn native_partial_plan_admits_track_with_only_unclaimed_crash_parts() {
     use crate::storage::publication_files::Directory;
     let (_temp, storage, meeting, _) = tests::fixture();
     let root = Directory::open(&workspace(&storage, &meeting)).unwrap();
@@ -421,7 +318,7 @@ fn native_legacy_plan_admits_track_with_only_unclaimed_crash_parts() {
     let uncheckpointed_directory = Directory::open(&uncheckpointed).unwrap();
     let input_hash = "a".repeat(64);
     root.json(
-        "final-flac.json",
+        "partial-flac.json",
         &serde_json::json!({
             "schema_version":1,"input_hash":input_hash,
             "recording_directory":root.identity,
@@ -454,7 +351,7 @@ fn native_legacy_plan_admits_track_with_only_unclaimed_crash_parts() {
     assert!(!part.exists());
     assert!(!no_checkpoint_part.exists());
     assert!(area.join(format!(".{chunk}.json")).exists());
-    assert!(root.path.join("final-flac.json").exists());
+    assert!(root.path.join("partial-flac.json").exists());
     assert!(root.path.join(".final-flac.lock").exists());
     assert!(wav(&storage, &meeting).is_file());
 }

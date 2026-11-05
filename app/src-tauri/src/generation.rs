@@ -8,7 +8,6 @@ mod markdown_plan;
 mod memory;
 pub(crate) mod model_budget;
 mod optimization;
-pub(crate) mod restore;
 pub(crate) mod runtime;
 use crate::storage::{JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
 use serde::{Deserialize, Serialize};
@@ -103,18 +102,6 @@ struct Artifact {
     name: String,
     id: String,
     hash: String,
-}
-
-pub(crate) fn restore_checkpoint_references(
-    job: &JobSnapshot,
-    parameters: Value,
-    value: Value,
-    map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
-) -> Result<Value, String> {
-    if !matches!(parameters["schemaVersion"].as_u64(), Some(9)) {
-        return Err(REMOVED_GENERATION.into());
-    }
-    markdown_job::restore::references(job, parameters, value, map)
 }
 
 fn profile(engine: &llama::LlamaConfig, name: &str) -> Value {

@@ -16,7 +16,6 @@ pub(crate) fn notification_summary(
         || job.total_units != Some(1)
         || c["jobId"] != job.id
         || job.output_analysis_id.is_some()
-        || job.output_minutes_id.is_some()
     {
         return Err("話者補完の完了記録が一致しません".into());
     }
@@ -73,8 +72,9 @@ mod tests {
             "id":"job","meetingId":"meeting","kind":"speaker_completion","state":"succeeded",
             "operationId":"operation","inputHash":"input","specHash":"spec",
             "completedUnits":1,"totalUnits":1,"errorCode":null,"createdAt":1,"updatedAt":1,
-            "outputAnalysisId":null,"outputMinutesId":null,"pauseReason":null,"retryOfJobId":null,"attempt":1
-        })).unwrap()
+            "outputAnalysisId":null,"pauseReason":null,"retryOfJobId":null,"attempt":1
+        }))
+        .unwrap()
     }
     struct Proof {
         calls: Cell<usize>,

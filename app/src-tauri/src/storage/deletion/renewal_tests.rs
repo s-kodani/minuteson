@@ -882,7 +882,7 @@ fn renewal_another_pending_kind_blocks_inspection_and_acceptance_without_changin
 }
 
 #[test]
-fn renewal_saved_generation_is_used_by_native_preview_paging_execution_and_final_acknowledgement() {
+fn renewal_saved_generation_is_used_by_native_preview_execution_and_final_acknowledgement() {
     let f = Fixture::new();
     let mut r = f.begin(false);
     let prior = operations::Prepared::pending(
@@ -907,12 +907,6 @@ fn renewal_saved_generation_is_used_by_native_preview_paging_execution_and_final
     assert_eq!(current.path_count, r.manifest.entries.len());
     assert_eq!(current.unregistered_count, 1);
     assert_ne!(prior.confirmation_id, current.confirmation_id);
-    assert!(native.page(&prior.confirmation_id, 0).is_err());
-    let page = native.page(&current.confirmation_id, 0).unwrap();
-    assert!(page
-        .entries
-        .iter()
-        .any(|p| p.relative_path.ends_with("/new-unknown.txt") && !p.registered));
     let receipt = native
         .execute(
             &f.storage,

@@ -13,78 +13,14 @@ use std::sync::atomic::Ordering;
 pub(crate) mod archive;
 mod contents;
 mod deleted_audio;
-pub(in crate::storage) mod restored_audio;
-mod retired_audio;
-pub(in crate::storage) use deleted_audio::Verified as DeletedAudioHistory;
-mod exclusions;
-pub(in crate::storage) mod input_snapshots;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
 pub(crate) mod recovery;
 #[cfg(any(target_os = "macos", windows))]
 pub(crate) mod relocation;
+pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) mod scratch;
-
-// Only durable restore omission evidence grants the missing-cache exception.
-// Neither a broken ready file nor an original input can be adopted as a cache.
-pub(crate) fn omitted_processing_asset(
-    storage: &Storage,
-    meeting: &str,
-    id: &str,
-    hash: &str,
-    role: crate::saved_artifact::Role,
-) -> Result<Option<FileAsset>, String> {
-    let (reason, media) = match role {
-        crate::saved_artifact::Role::TemporaryPcm => ("recreatable_pcm", "audio/wav"),
-        crate::saved_artifact::Role::DiarizationLog => ("native_log", "text/plain"),
-        _ => return Err("除外された処理成果物の役割が不正です".into()),
-    };
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let asset = db.query_row(
-        "SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1 AND meeting_id=?2 AND content_hash=?3 AND media_type=?4",
-        params![id, meeting, hash, media], |r| Ok(FileAsset {
-            id:r.get(0)?, meeting_id:r.get(1)?, relative_path:r.get(2)?, media_type:r.get(3)?,
-            size_bytes:r.get(4)?, content_hash:r.get(5)?, state:r.get(6)?,
-        }),
-    ).optional().map_err(|e| e.to_string())?;
-    let omitted = asset
-        .map(|a| exclusions::matches(&db, &a, reason).map(|yes| yes.then_some(a)))
-        .transpose()
-        .map(Option::flatten)?;
-    drop(db);
-    if let Some(asset) = &omitted {
-        let path = storage.managed_path(Path::new(&asset.relative_path))?;
-        let parent = path.parent().ok_or("除外ファイルの配置先が不正です")?;
-        let root = storage.root.canonicalize().map_err(|e| e.to_string())?;
-        if parent.canonicalize().map_err(|e| e.to_string())?
-            != root.join(
-                Path::new(&asset.relative_path)
-                    .parent()
-                    .ok_or("除外ファイルの配置先が不正です")?,
-            )
-        {
-            return Err("除外ファイルの配置先が差し替えられています".into());
-        }
-        match crate::native_fs::symlink_metadata(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-            Ok(_) => return Err("未配置の除外ファイルの場所に予期しない実体があります".into()),
-        }
-    }
-    Ok(omitted)
-}
-
-#[cfg(test)]
-pub(in crate::storage) fn portable_json_for_model_test(
-    bytes: &[u8],
-    references: &mut std::collections::BTreeSet<super::model_metadata::ModelFileMetadata>,
-) -> Result<Vec<u8>, String> {
-    portable::portable_json(bytes, false, references)
-}
 
 #[cfg(test)]
 pub(in crate::storage) fn published_restore_for_rebinding_test(
@@ -254,8 +190,7 @@ impl Storage {
              OR EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')
              OR EXISTS(SELECT 1 FROM export_records WHERE state='writing')
              OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing')
-             OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building')
-             OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building')",
+             OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building')",
             [], |r| r.get(0),
         ).map_err(|e| e.to_string())?;
         if active {
@@ -323,7 +258,7 @@ impl Storage {
         cancelled: &impl Fn() -> bool,
     ) -> Result<Snapshot<'_>, String> {
         check_cancelled(cancelled)?;
-        self.preserve_voice_audio(None, cancelled)?;
+        self.prepare_preserved_voice_audio(None, cancelled)?;
         let maintenance = self.backup_maintenance()?;
         let stage = match parent {
             Some(parent) => scratch::Stage::create(parent)?,
@@ -332,9 +267,7 @@ impl Storage {
         let database = stage.path().join("snapshot.sqlite3");
         snapshot_database(self, &database, cancelled)?;
         let mut db = read_only(&database)?;
-        if verify_migration_history(&db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
-            return Err("未対応のDBスナップショット形式です".into());
-        }
+        verify_database_schema(&db).map_err(|e| e.to_string())?;
         let meetings = read_meetings(&db)?;
         let deleted_audio = deleted_audio::Native::capture(self, &db, cancelled)?;
         let asset_directory = stage.path().join("assets");
@@ -513,30 +446,8 @@ fn read_only(path: &Path) -> Result<Connection, String> {
 
 fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Result<(), String> {
     check_cancelled(cancelled)?;
-    if verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
-        return Err("未対応のDBスナップショット形式です".into());
-    }
-    validate_database_contents(db, cancelled)
-}
-
-fn validate_database_contents(
-    db: &mut Connection,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
-    for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
-        check_cancelled(cancelled)?;
-        let retired: bool = db
-            .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
-                r.get(0)
-            })
-            .map_err(|e| e.to_string())?;
-        if retired {
-            return Err("旧形式の構造化議事録を含むデータには対応していません".into());
-        }
-    }
-    input_snapshots::validate_database(db, cancelled)?;
-    // Validate native selections and imported, unavailable catalog history.
-    super::model_profiles::portable::history::Bundle::export(db, cancelled)?;
+    verify_database_schema(db).map_err(|e| e.to_string())?;
+    super::model_profiles::portable::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;
     let result: String = db
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
@@ -569,21 +480,16 @@ fn validate_database_contents(
             }
         }
     }
-    // Validate every saved draft (including inactive ones), not just UI heads.
-    let mut statement = tx.prepare("SELECT meeting_id,target_kind,base_analysis_id,base_minutes_id,payload_json,content_hash,schema_version FROM working_drafts ORDER BY id").map_err(|e| e.to_string())?;
+    let mut statement = tx
+        .prepare("SELECT meeting_id FROM working_drafts ORDER BY id")
+        .map_err(|e| e.to_string())?;
     let mut rows = statement.query([]).map_err(|e| e.to_string())?;
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         check_cancelled(cancelled)?;
         let meeting: String = row.get(0).map_err(|e| e.to_string())?;
-        let kind: String = row.get(1).map_err(|e| e.to_string())?;
-        if kind == "transcript" {
-            let base: String = row.get(2).map_err(|e| e.to_string())?;
-            let draft = super::drafts::load_draft_for_base(&tx, &meeting, Some(&base))?
-                .ok_or("保存済み下書きが見つかりません")?;
-            super::drafts::validate_payload(&tx, &base, draft.payload)?;
-        } else {
-            return Err("旧形式の議事録下書きには対応していません".into());
-        }
+        let draft =
+            super::drafts::load_draft(&tx, &meeting)?.ok_or("保存済み下書きが見つかりません")?;
+        super::drafts::validate_payload(&tx, &draft.base_analysis_id, draft.payload)?;
     }
     let mut statement = tx
         .prepare("SELECT id FROM processing_jobs ORDER BY id")
@@ -593,7 +499,6 @@ fn validate_database_contents(
         check_cancelled(cancelled)?;
         super::jobs::read_fixed_input(&tx, &row.get::<_, String>(0).map_err(|e| e.to_string())?)?;
     }
-    super::edit_recovery::verify_all(&tx, cancelled)?;
     super::vocabulary::verify_saved_books(&tx)?;
     for sql in [
         "SELECT plan_json,plan_hash FROM analysis_flows WHERE plan_json IS NOT NULL",
@@ -609,42 +514,6 @@ fn validate_database_contents(
                 return Err("保存済み設定・処理記録・編集履歴が変更されています".into());
             }
         }
-    }
-    let mut statement = tx.prepare("SELECT e.draft_id,d.target_kind,e.sequence,e.payload_json,e.inverse_json,e.before_hash,e.after_hash,d.content_hash FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id ORDER BY e.draft_id,e.sequence").map_err(|e| e.to_string())?;
-    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
-    let mut previous: Option<(String, i64, String, String)> = None;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        check_cancelled(cancelled)?;
-        let draft: String = row.get(0).map_err(|e| e.to_string())?;
-        let kind: String = row.get(1).map_err(|e| e.to_string())?;
-        let sequence: i64 = row.get(2).map_err(|e| e.to_string())?;
-        let payload: String = row.get(3).map_err(|e| e.to_string())?;
-        let inverse: String = row.get(4).map_err(|e| e.to_string())?;
-        let before: String = row.get(5).map_err(|e| e.to_string())?;
-        let after: String = row.get(6).map_err(|e| e.to_string())?;
-        let current: String = row.get(7).map_err(|e| e.to_string())?;
-        if kind != "transcript" {
-            return Err("旧形式の議事録編集履歴には対応していません".into());
-        }
-        let hash = super::drafts::draft_hash;
-        if hash(&payload) != after || hash(&inverse) != before {
-            return Err("保存済み編集履歴の内容が変更されています".into());
-        }
-        if let Some((id, seq, prev_after, prev_current)) = &previous {
-            if *id == draft {
-                if sequence != seq + 1 || before != *prev_after {
-                    return Err("保存済み編集履歴のつながりが不正です".into());
-                }
-            } else if prev_after != prev_current || sequence != 1 {
-                return Err("保存済み編集履歴の最終内容が不正です".into());
-            }
-        } else if sequence != 1 {
-            return Err("保存済み編集履歴の開始位置が不正です".into());
-        }
-        previous = Some((draft, sequence, after, current));
-    }
-    if previous.is_some_and(|(_, _, after, current)| after != current) {
-        return Err("保存済み編集履歴と下書きが一致しません".into());
     }
     let mut statement = tx.prepare("SELECT c.checkpoint_json,c.checkpoint_hash,c.completed_units,j.spec_hash FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id").map_err(|e| e.to_string())?;
     let mut rows = statement.query([]).map_err(|e| e.to_string())?;
@@ -679,14 +548,8 @@ fn read_meetings(db: &Connection) -> Result<Vec<Meeting>, String> {
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
 fn read_assets(db: &Connection) -> Result<Vec<FileAsset>, String> {
-    read_assets_with_deleted(db, &deleted_audio::Native::empty())
-}
-
-fn read_assets_with_deleted(
-    db: &Connection,
-    deleted: &deleted_audio::Native,
-) -> Result<Vec<FileAsset>, String> {
     let mut statement = db.prepare("SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets ORDER BY id").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |r| {
@@ -701,22 +564,7 @@ fn read_assets_with_deleted(
             })
         })
         .map_err(|e| e.to_string())?;
-    let assets: Vec<FileAsset> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-    for asset in &assets {
-        if asset.state != "ready"
-            && !(asset.state == "missing"
-                && (deleted.contains_asset(asset)
-                    || super::meeting_audio::superseded_asset(db, &asset.id)?
-                    || portable::temporary_pcm(db, asset)?
-                    || portable::native_log(db, asset)?))
-        {
-            return Err(
-                "未準備・破損・削除待ちの管理ファイルがあります。修復後にバックアップしてください"
-                    .into(),
-            );
-        }
-    }
-    Ok(assets)
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
 fn source_path(storage: &Storage, asset: &FileAsset) -> Result<PathBuf, String> {
@@ -814,7 +662,7 @@ fn open_source(path: &Path) -> Result<(File, Metadata), String> {
 
 fn stream(
     file: &mut File,
-    mut output: Option<&mut File>,
+    output: Option<&mut File>,
     expected: u64,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(u64, String), String> {

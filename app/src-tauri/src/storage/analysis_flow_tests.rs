@@ -44,7 +44,6 @@ fn pending_fixture(root: &Path) -> (Storage, String) {
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
-        speech_sensitivity_milli: 0,
     };
     let output = format!(
         "{}\nStarted\n0.000 -- 4.000 speaker_00\n",

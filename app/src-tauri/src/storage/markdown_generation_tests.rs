@@ -421,7 +421,6 @@ pub(crate) fn real_managed_model_markdown_roundtrip(
         super::minutes_markdown::content_hash(&generated.markdown)
     );
     assert_eq!(storage.get_job(&first.id).unwrap().state, "succeeded");
-    assert_eq!(storage.get_job(&first.id).unwrap().output_minutes_id, None);
     println!(
         "{label} real managed Markdown generation: {:.3}s; {} bytes",
         started.elapsed().as_secs_f64(),
@@ -485,8 +484,11 @@ pub(crate) fn real_managed_model_markdown_roundtrip(
                 .connection
                 .lock()
                 .unwrap()
-                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get::<_, i64>(0)
+                )
                 .unwrap(),
             0
         );
@@ -553,7 +555,6 @@ fn markdown_worker_publishes_exact_model_text_directly_and_reopen_keeps_it_witho
         " \n# 点検会議\n- 点検日\n[区間](audio:00:00:00.100001-00:00:00.799999)\n"
     );
     assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
-    assert_eq!(storage.get_job(&job.id).unwrap().output_minutes_id, None);
     assert_eq!(calls(root.path()), 1);
     let proof = storage.notification_output(&job.id).unwrap();
     assert_eq!(proof.content_hash, document.content_hash);
@@ -570,9 +571,12 @@ fn markdown_worker_publishes_exact_model_text_directly_and_reopen_keeps_it_witho
     let db = storage.connection.lock().unwrap();
     for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
         assert_eq!(
-            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
+            db.query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
             0
         );
     }
@@ -661,9 +665,12 @@ fn markdown_regeneration_replaces_one_body_without_structured_versions_or_edit_h
     );
     for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
         assert_eq!(
-            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
+            db.query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
             0
         );
     }
@@ -676,8 +683,6 @@ fn markdown_regeneration_replaces_one_body_without_structured_versions_or_edit_h
         .unwrap(),
         0
     );
-    assert_eq!(db.query_row("SELECT COUNT(*) FROM edit_operations WHERE operation_kind IN ('replace_minutes','undo_minutes') OR operation_kind LIKE 'undo_minutes:%'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
-    assert_eq!(db.query_row("SELECT current_minutes_id IS NULL AND previous_minutes_id IS NULL FROM meetings WHERE id=?1", [&req.meeting_id], |r| r.get::<_,bool>(0)).unwrap(), true);
     drop(db);
     drop(storage);
     assert_eq!(

@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-pub(super) mod restore;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
@@ -365,13 +363,18 @@ fn enqueue_with_selection(
             new_runtime.as_ref(),
         )?)
     } else {
-        super::optimization::select(
-            &engine,
-            new_runtime.as_ref(),
-            &task_system(extract, prompt_version),
-            &task_system(merge, prompt_version),
-            prompt_version,
-        )?
+        #[cfg(test)]
+        {
+            super::optimization::select(
+                &engine,
+                new_runtime.as_ref(),
+                &task_system(extract, prompt_version),
+                &task_system(merge, prompt_version),
+                prompt_version,
+            )?
+        }
+        #[cfg(not(test))]
+        return Err("現行の議事録実行計画が必要です".into());
     };
     let prepared_token_plan = if selected_optimization
         .as_ref()
@@ -487,7 +490,7 @@ fn enqueue_with_selection(
             Some(saved) => saved.get("residentRuntime").cloned(),
             None => new_runtime.as_ref().map(serde_json::to_value).transpose().map_err(|e| e.to_string())?,
         };
-        if schema==u64::from(crate::current_formats::MINUTES) {parameters["optimizationVersion"]=serde_json::json!(1);}
+        parameters["optimizationVersion"]=serde_json::json!(crate::current_formats::OPTIMIZATION);
         if let Some(optimization)=optimization {parameters["optimization"]=serde_json::to_value(optimization).map_err(|e|e.to_string())?;}
         if let Some(runtime) = resident_runtime { parameters["residentRuntime"] = runtime; }
         if let Some(snapshot) = prompt_snapshot { parameters["promptSnapshot"] = serde_json::to_value(snapshot).map_err(|e| e.to_string())?; }
@@ -543,7 +546,7 @@ fn checked_fixed_parameters(
                 )?
         }
         || spec.total_units != Some(p.plan.nodes.len() as i64)
-        || managed::rebinding::base_profile(&spec.profile_snapshot)?
+        || spec.profile_snapshot
             != managed::attach(
                 super::profile(&p.engine, name),
                 managed::read(&spec.profile_snapshot)?,
@@ -622,6 +625,10 @@ fn acceleration_context(p: &Parameters) -> Result<u32, String> {
     Ok(p.capacity.token_configuration(&p.engine)?.context_tokens)
 }
 fn validate_capacity(p: &Parameters) -> Result<(), String> {
+    #[cfg(not(test))]
+    if !p.capacity.is_memory_aware() {
+        return Err("現行の議事録実行計画が必要です".into());
+    }
     super::optimization::Policy::validate_model(
         p.optimization.as_ref(),
         &p.engine,
@@ -792,9 +799,6 @@ fn replay_with(
             };
             outputs.push(text);
         }
-        if outputs.len() == p.plan.nodes.len() {
-            if let Some(text) = outputs.last_mut() {}
-        }
         if c.markdown_hash.as_deref()
             != outputs
                 .last()
@@ -840,7 +844,7 @@ pub(crate) fn retry_preflight(
     let input = storage.load_minutes_input(&job.id)?;
     let p = checked_parameters(storage, &job.id, spec, &input)?;
     let c = checked_checkpoint(job, &p, value.cloned())?;
-    let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+    let runtime = p.engine.clone();
     runtime.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
@@ -900,7 +904,7 @@ fn infer(
     let actual_tokens = super::optimization::count(&task.system, &task.prompt).transpose()?;
     let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
     *diagnostic_directory = Some(directory.clone());
-    let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+    let runtime = p.engine.clone();
     let mut execution = p.capacity.execution(&runtime, &task.system, &task.prompt)?;
     let device = acceleration.and_then(|choice| choice.configure(&mut execution));
     crate::internal_logs::detail(
@@ -1035,8 +1039,7 @@ pub(crate) fn process_observed(
     );
     preflight.emit(super::llama_metrics::Phase::Verifying);
     let attempt = (|| {
-        let runtime =
-            managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+        let runtime = p.engine.clone();
         runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
@@ -1177,7 +1180,6 @@ pub(crate) fn process_observed(
             outputs.push(text);
             checkpoint.outputs.push(Output { index, batches });
             if outputs.len() == p.plan.nodes.len() {
-                if let Some(text) = outputs.last_mut() {}
                 checkpoint.markdown_hash = Some(content_hash(outputs.last().unwrap()));
             }
             let checkpoint_started = Instant::now();

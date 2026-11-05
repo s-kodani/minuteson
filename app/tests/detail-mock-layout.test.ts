@@ -88,7 +88,7 @@ test("transcript synthetic failure controls are opt-in and never invoke product 
   assert.match(fixture,/window.monBrowserFixture.failSave = fail/);
   assert.match(fixture,/close.onclick = \(\) => \{ controls.hidden = true; \}/);
   assert.doesNotMatch(fixture,/\.invoke\(|\.setMeetingTitle\(|\.setUtterances\(/);
-  assert.match(fixture,/payload:\{schemaVersion:1,theme:"system"\}/);
+  assert.match(fixture,/payload:\{schemaVersion:1,theme:"system", colorTheme:"monochrome"\}/);
   assert.match(fixture,/c=>c.command===command/);
   assert.match(fixture,/update\(\);window.setInterval\(update,200\)/);
 });

@@ -15,10 +15,7 @@ fn current_acoustic_segments_preserve_voice_windows_overlap_and_unknown_speakers
         .connection
         .lock()
         .unwrap()
-        .execute(
-            "UPDATE working_drafts SET active=0 WHERE meeting_id=?1",
-            [&meeting],
-        )
+        .execute("DELETE FROM working_drafts WHERE meeting_id=?1", [&meeting])
         .unwrap();
     let plan = source.canonical_audio_plan(&meeting).unwrap();
     let track = plan.tracks[0].id.clone();
@@ -145,11 +142,8 @@ fn speaker_assignment_update_round_trip_keeps_current_assignments_without_histor
     let meeting = archive::tests::meeting(&storage, "assignment-source");
     let (track, manifest): (String, String) = {
         let db = storage.connection.lock().unwrap();
-        db.execute(
-            "UPDATE working_drafts SET active=0 WHERE meeting_id=?1",
-            [&meeting],
-        )
-        .unwrap();
+        db.execute("DELETE FROM working_drafts WHERE meeting_id=?1", [&meeting])
+            .unwrap();
         db.query_row("SELECT t.id,a.audio_manifest_hash FROM meetings m JOIN audio_tracks t ON t.meeting_id=m.id JOIN analysis_revisions a ON a.id=m.current_analysis_id WHERE m.id=?1",[&meeting],|r|Ok((r.get(0)?,r.get(1)?))).unwrap()
     };
     let id = storage
@@ -298,6 +292,11 @@ fn voice_registry_round_trip_remaps_people_and_sources_without_merging_names() {
             ],
         )
         .unwrap();
+        db.execute(
+            "INSERT INTO voice_sample_audio(id,state) VALUES(?1,'unavailable')",
+            [&sample],
+        )
+        .unwrap();
     }
     let path = output.path().join("voices.monbackup");
     storage
@@ -370,6 +369,11 @@ fn voice_registry_exports_samples_even_when_the_source_meeting_was_deleted() {
         db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)", [])
             .unwrap();
         db.execute("INSERT INTO voice_samples VALUES('sample','person',?1,?2,2,?3,'deleted-meeting','deleted-analysis','deleted-track',0,1000000,0)",params!["a".repeat(64),crate::voice::EXTRACTOR,crate::voice::encode(&[1.,0.]).unwrap()]).unwrap();
+        db.execute(
+            "INSERT INTO voice_sample_audio(id,state) VALUES('sample','unavailable')",
+            [],
+        )
+        .unwrap();
     }
     let path = output.path().join("voices.monbackup");
     storage
@@ -401,6 +405,11 @@ fn voice_registry_refuses_corrupt_features_before_export() {
         db.execute("INSERT INTO voice_people VALUES('person','登録者',1,0)", [])
             .unwrap();
         db.execute("INSERT INTO voice_samples VALUES('sample','person',?1,?2,2,?3,NULL,NULL,NULL,0,1000000,0)",params!["a".repeat(64),crate::voice::EXTRACTOR,vec![0u8;8]]).unwrap();
+        db.execute(
+            "INSERT INTO voice_sample_audio(id,state) VALUES('sample','unavailable')",
+            [],
+        )
+        .unwrap();
     }
     assert!(storage
         .create_backup_archive(
@@ -439,10 +448,7 @@ fn current_speaker_person_and_voice_links_keep_shared_identity_and_match_states(
         s.connection
             .lock()
             .unwrap()
-            .execute(
-                "UPDATE working_drafts SET active=0 WHERE meeting_id=?1",
-                [&m],
-            )
+            .execute("DELETE FROM working_drafts WHERE meeting_id=?1", [&m])
             .unwrap();
         let plan = s.canonical_audio_plan(&m).unwrap();
         let track = plan.tracks[0].id.clone();

@@ -3,7 +3,6 @@ use crate::diarization::{embedding, sherpa::SherpaConfig};
 use crate::storage::{JobKind, JobSnapshot, Storage};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-pub(crate) mod restore;
 pub(crate) mod result;
 
 pub(crate) const EXTRACTOR: &str = "sherpa-1.13.8-mono16k-normalized-v1";

@@ -51,7 +51,7 @@ impl Storage {
         let tx = connection.transaction().map_err(|e| e.to_string())?;
         super::deletion::audio::require_source(&tx, meeting_id)?;
         let utterance: Option<(String, i64, i64,String)> = tx.query_row(
-            "SELECT u.track_id, u.start_us, u.end_us,a.content_hash FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN meetings m ON m.id=u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))) AND t.state = 'ready'",
+            "SELECT u.track_id, u.start_us, u.end_us,a.content_hash FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN meetings m ON m.id=u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND (a.publication_state='committed' AND a.id=m.current_analysis_id) AND t.state = 'ready'",
             params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,row.get(3)?)),
         ).optional().map_err(|e| e.to_string())?;
         let (track, start, end, hash) =

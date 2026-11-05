@@ -41,12 +41,6 @@ fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
     let meeting = s.create_meeting("再起動後も保持").unwrap();
     drop(s);
     drop(b);
-    // Existing version-2 configuration remains readable and is upgraded only
-    // when recovery actually publishes a new selection.
-    let mut doc: Document =
-        serde_json::from_slice(&std::fs::read(f.config.join(NAME)).unwrap()).unwrap();
-    doc.schema_version = 2;
-    std::fs::write(f.config.join(NAME), serde_json::to_vec(&doc).unwrap()).unwrap();
     f.change_device();
     let old = std::fs::read(f.config.join(NAME)).unwrap();
     for round in 0..2 {

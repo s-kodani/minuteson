@@ -394,17 +394,11 @@ fn paths(sealed: &SealedWorkspace, root: &Path) -> Vec<PathBuf> {
 fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backup() {
     let f = fixture();
     let before = all_rows(&f.target.connection.lock().unwrap());
-    assert_eq!(
-        verify_migration_history(&f.target.connection.lock().unwrap()).unwrap(),
-        MIGRATIONS.len()
-    );
+    verify_database_schema(&f.target.connection.lock().unwrap()).unwrap();
     let root = f.target.root.clone();
     drop(f.target);
     let target = Storage::open(root).unwrap();
-    assert_eq!(
-        verify_migration_history(&target.connection.lock().unwrap()).unwrap(),
-        MIGRATIONS.len()
-    );
+    verify_database_schema(&target.connection.lock().unwrap()).unwrap();
     assert_eq!(all_rows(&target.connection.lock().unwrap()), before);
     let path = f.output.path().join("v22.monbackup");
     target
@@ -416,8 +410,8 @@ fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backu
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
-    assert_eq!(source.manifest.tables.len(), 40);
+    assert_eq!(source.manifest.schema_version, SCHEMA_VERSION);
+    assert_eq!(source.manifest.tables.len(), portable::TABLES.len());
     assert!(source
         .manifest
         .tables
@@ -809,7 +803,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             0
         );
     }
-    assert_eq!(source.manifest.tables.len(), 40);
+    assert_eq!(source.manifest.tables.len(), portable::TABLES.len());
 }
 
 #[test]

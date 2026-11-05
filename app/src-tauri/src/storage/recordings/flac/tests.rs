@@ -321,9 +321,6 @@ impl Fixture {
             base,
         }
     }
-    fn plan(&self) -> Plan {
-        serde_json::from_slice(&std::fs::read(self.base.join(PLAN)).unwrap()).unwrap()
-    }
     fn fail_db(&self) {
         self.storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_flac_commit BEFORE UPDATE OF state ON recording_sessions WHEN NEW.state='saved' BEGIN SELECT RAISE(ABORT,'injected final DB failure'); END").unwrap();
     }
@@ -431,7 +428,7 @@ fn raw_clock_mismatch_rejects_conversion_before_outputs_or_saved_rows_exist() {
         .storage
         .finalize_recording(&fixture.session.id)
         .is_err());
-    assert!(!fixture.base.join(PLAN).exists());
+    assert!(!fixture.base.join(PARTIAL_PLAN).exists());
     fixture.assert_no_registration();
 }
 

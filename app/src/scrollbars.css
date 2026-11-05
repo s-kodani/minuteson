@@ -11,7 +11,7 @@
 * { --scrollbar-inset:2px; }
 textarea { --scrollbar-inset:8px; }
 dialog,.info-popover { --scrollbar-inset:var(--floating-radius,12px); }
-.meeting-table-frame,.meeting-row-menu,.recorder-info-window,.plain-minutes-body>textarea,.notifications-popover .notification-list { --scrollbar-inset:12px; }
+.meeting-table-frame,.meeting-row-menu,.plain-minutes-body>textarea,.notifications-popover .notification-list { --scrollbar-inset:12px; }
 .mini-shell { --scrollbar-inset:13px; }
 .internal-logs-scroll { --scrollbar-inset:10px; }
 .credits-notice pre,.internal-log-detail pre,.startup-attention pre { --scrollbar-inset:6px; }

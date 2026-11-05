@@ -662,7 +662,6 @@
           "enum": [
             "main",
             "recorder",
-            "recorder-info",
             "recording-confirmation",
             "startup-attention"
           ],

@@ -13,8 +13,6 @@ export interface CommandArguments {
   "retry_startup": Record<string, never>;
   "get_residency_state": Record<string, never>;
   "hide_main_to_background": Record<string, never>;
-  "get_startup_notices": Record<string, never>;
-  "respond_startup_notice": { "id": string; "revision": string; "response": unknown };
   "get_official_model_options": Record<string, never>;
   "get_model_license_review": { "target": unknown };
   "start_model_download": { "token": string; "definition": string; "expectedRecipeHash": string };
@@ -26,7 +24,7 @@ export interface CommandArguments {
   "cancel_model_inspection": { "token": string };
   "get_model_placements": Record<string, never>;
   "get_model_profiles": Record<string, never>;
-  "preview_model_profile_application": { "token": string; "profile": unknown; "packageId": string; "expectedReviewHash": string; "checkOperationId": string; "diarizationThreads"?: (number) | null; "diarizationClusterThresholdMilli"?: (number) | null; "whisperVadOptions"?: (unknown) | null; "diarizationSpeechSensitivityMilli"?: (number) | null };
+  "preview_model_profile_application": { "token": string; "profile": unknown; "packageId": string; "expectedReviewHash": string; "checkOperationId": string; "diarizationThreads"?: (number) | null; "diarizationClusterThresholdMilli"?: (number) | null; "whisperVadOptions"?: (unknown) | null };
   "apply_model_profile_application": { "token": string; "preview": unknown };
   "check_model_compatibility": { "token": string; "packageId": string; "expectedReviewHash": string };
   "get_audio_import": Record<string, never>;
@@ -39,11 +37,9 @@ export interface CommandArguments {
   "get_deletion_items": Record<string, never>;
   "review_meeting_deletion": { "meetingId": string };
   "review_pending_deletion": { "operationId": string };
-  "get_deletion_paths": { "confirmationId": string; "offset": number };
   "get_model_deletion_items": Record<string, never>;
   "review_model_body_deletion": { "packageId": string; "expectedReviewHash": string };
   "review_pending_model_deletion": { "operationId": string };
-  "get_model_deletion_paths": { "confirmationId": string; "offset": number };
   "get_audio_deletion_items": Record<string, never>;
   "review_meeting_audio_deletion": { "meetingId": string };
   "review_pending_audio_deletion": { "operationId": string };
@@ -87,12 +83,9 @@ export interface CommandArguments {
   "decide_recording_confirmation": { "id": string; "stop": boolean; "expectedPreparing": boolean };
   "hide_recorder_panel": Record<string, never>;
   "open_main_window": Record<string, never>;
-  "get_recorder_info": Record<string, never>;
   "get_recorder_operation_notices": Record<string, never>;
   "publish_recorder_operation_notice": { "source": unknown; "expectedRevision": number; "message"?: (string) | null };
   "dismiss_recorder_operation_notice": { "source": unknown; "expectedRevision": number; "eventId": string };
-  "show_recorder_info": Record<string, never>;
-  "close_recorder_info": Record<string, never>;
   "list_meetings": Record<string, never>;
   "get_meeting": { "id": string };
   "rename_meeting": { "id": string; "title": string; "expectedLockVersion": number };
@@ -121,7 +114,6 @@ export interface CommandArguments {
   "regenerate_transcription": { "request": unknown };
   "get_ready_analysis_flows": Record<string, never>;
   "publish_regenerated_transcription": { "meetingId": string; "flowId": string; "expectedLockVersion": number; "confirmedTarget"?: (unknown) | null };
-  "start_analysis_flow": { "meetingId": string };
   "get_analysis_preparations": Record<string, never>;
   "get_meeting_analysis_audio": { "meetingId": string };
   "continue_analysis_flow": { "meetingId": string; "expectedLockVersion": number };
@@ -150,14 +142,13 @@ export interface CommandArguments {
   "cancel_analysis_job": { "jobId": string };
   "get_asr_preferences": Record<string, never>;
   "get_asr_backends": Record<string, never>;
-  "get_analysis_preferences": Record<string, never>;
   "get_ui_preferences": Record<string, never>;
   "save_ui_preferences": { "expectedLockVersion": number; "payload": unknown };
   "get_diarization_preferences": Record<string, never>;
   "get_vocabulary_book": { "meetingId"?: (string) | null };
   "get_meeting_vocabulary": { "meetingId": string };
   "save_vocabulary_book": { "meetingId"?: (string) | null; "expectedLockVersion": number; "payload": Array<unknown> };
-  "get_analysis_versions": { "meetingId": string };
+  "get_minutes_source": { "meetingId": string };
 }
 export type CommandName = keyof CommandArguments;
 export type CommandArgs<C extends CommandName> = CommandArguments[C];
@@ -300,43 +291,6 @@ export const commandContracts = {
   "hide_main_to_background": {
     "async": false,
     "arguments": [],
-    "response": {
-      "type": "Result<(),mon_contracts::AppError>",
-      "ok": "()",
-      "error": "mon_contracts::AppError"
-    }
-  },
-  "get_startup_notices": {
-    "async": true,
-    "arguments": [],
-    "response": {
-      "type": "Result<Vec<Notice>,mon_contracts::AppError>",
-      "ok": "Vec<Notice>",
-      "error": "mon_contracts::AppError"
-    }
-  },
-  "respond_startup_notice": {
-    "async": true,
-    "arguments": [
-      {
-        "name": "id",
-        "wireName": "id",
-        "type": "String",
-        "optional": false
-      },
-      {
-        "name": "revision",
-        "wireName": "revision",
-        "type": "String",
-        "optional": false
-      },
-      {
-        "name": "response",
-        "wireName": "response",
-        "type": "Response",
-        "optional": false
-      }
-    ],
     "response": {
       "type": "Result<(),mon_contracts::AppError>",
       "ok": "()",
@@ -620,12 +574,6 @@ export const commandContracts = {
         "wireName": "whisperVadOptions",
         "type": "Option<transcription::vad::VadOptions>",
         "optional": true
-      },
-      {
-        "name": "diarization_speech_sensitivity_milli",
-        "wireName": "diarizationSpeechSensitivityMilli",
-        "type": "Option<i32>",
-        "optional": true
       }
     ],
     "response": {
@@ -816,28 +764,6 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
-  "get_deletion_paths": {
-    "async": false,
-    "arguments": [
-      {
-        "name": "confirmation_id",
-        "wireName": "confirmationId",
-        "type": "String",
-        "optional": false
-      },
-      {
-        "name": "offset",
-        "wireName": "offset",
-        "type": "usize",
-        "optional": false
-      }
-    ],
-    "response": {
-      "type": "Result<storage::deletion::operations::PathPage,mon_contracts::AppError>",
-      "ok": "storage::deletion::operations::PathPage",
-      "error": "mon_contracts::AppError"
-    }
-  },
   "get_model_deletion_items": {
     "async": true,
     "arguments": [],
@@ -882,28 +808,6 @@ export const commandContracts = {
     "response": {
       "type": "Result<data_controller::Snapshot,mon_contracts::AppError>",
       "ok": "data_controller::Snapshot",
-      "error": "mon_contracts::AppError"
-    }
-  },
-  "get_model_deletion_paths": {
-    "async": false,
-    "arguments": [
-      {
-        "name": "confirmation_id",
-        "wireName": "confirmationId",
-        "type": "String",
-        "optional": false
-      },
-      {
-        "name": "offset",
-        "wireName": "offset",
-        "type": "usize",
-        "optional": false
-      }
-    ],
-    "response": {
-      "type": "Result<storage::deletion::models::operations::PathPage,mon_contracts::AppError>",
-      "ok": "storage::deletion::models::operations::PathPage",
       "error": "mon_contracts::AppError"
     }
   },
@@ -1648,15 +1552,6 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
-  "get_recorder_info": {
-    "async": false,
-    "arguments": [],
-    "response": {
-      "type": "Result<bool,mon_contracts::AppError>",
-      "ok": "bool",
-      "error": "mon_contracts::AppError"
-    }
-  },
   "get_recorder_operation_notices": {
     "async": false,
     "arguments": [],
@@ -1719,24 +1614,6 @@ export const commandContracts = {
     "response": {
       "type": "Result<Snapshot,mon_contracts::AppError>",
       "ok": "Snapshot",
-      "error": "mon_contracts::AppError"
-    }
-  },
-  "show_recorder_info": {
-    "async": false,
-    "arguments": [],
-    "response": {
-      "type": "Result<bool,mon_contracts::AppError>",
-      "ok": "bool",
-      "error": "mon_contracts::AppError"
-    }
-  },
-  "close_recorder_info": {
-    "async": false,
-    "arguments": [],
-    "response": {
-      "type": "Result<bool,mon_contracts::AppError>",
-      "ok": "bool",
       "error": "mon_contracts::AppError"
     }
   },
@@ -2274,22 +2151,6 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
-  "start_analysis_flow": {
-    "async": false,
-    "arguments": [
-      {
-        "name": "meeting_id",
-        "wireName": "meetingId",
-        "type": "String",
-        "optional": false
-      }
-    ],
-    "response": {
-      "type": "Result<storage::analysis_flows::AnalysisFlow,mon_contracts::AppError>",
-      "ok": "storage::analysis_flows::AnalysisFlow",
-      "error": "mon_contracts::AppError"
-    }
-  },
   "get_analysis_preparations": {
     "async": false,
     "arguments": [],
@@ -2754,15 +2615,6 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
-  "get_analysis_preferences": {
-    "async": false,
-    "arguments": [],
-    "response": {
-      "type": "Result<storage::PreferencesSnapshot,mon_contracts::AppError>",
-      "ok": "storage::PreferencesSnapshot",
-      "error": "mon_contracts::AppError"
-    }
-  },
   "get_ui_preferences": {
     "async": false,
     "arguments": [],
@@ -2863,7 +2715,7 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
-  "get_analysis_versions": {
+  "get_minutes_source": {
     "async": true,
     "arguments": [
       {
@@ -2874,8 +2726,8 @@ export const commandContracts = {
       }
     ],
     "response": {
-      "type": "Result<storage::VersionState,mon_contracts::AppError>",
-      "ok": "storage::VersionState",
+      "type": "Result<storage::MinutesSource,mon_contracts::AppError>",
+      "ok": "storage::MinutesSource",
       "error": "mon_contracts::AppError"
     }
   }

@@ -237,7 +237,7 @@ fn check(tx: &Transaction<'_>, spec: &JobSpec, plan: &Plan) -> Result<(), String
         return Err("話者補完の固定条件が一致しません".into());
     }
     plan.options.validate()?;
-    if transcription::read_analysis_audio_plan(tx, &spec.meeting_id, None)? != plan.source {
+    if transcription::read_audio_plan(tx, &spec.meeting_id)? != plan.source {
         return Err("話者補完の音声構成が変わりました".into());
     }
     let (view, _, hash) = working(tx, &spec.meeting_id)?;
@@ -640,8 +640,12 @@ impl Storage {
                 Some(&update),
             )?;
             transcript_consolidation::copy_voice_matches(&tx, &source, &id)?;
-            tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1",[&spec.meeting_id]).map_err(|e|e.to_string())?;
-            if tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,spec.meeting_id]).map_err(|e|e.to_string())?!=1{return Err("補完対象の版が変わりました".into());}
+            tx.execute(
+                "DELETE FROM working_drafts WHERE meeting_id=?1 AND target_kind='transcript'",
+                [&spec.meeting_id],
+            )
+            .map_err(|e| e.to_string())?;
+            if tx.execute("UPDATE meetings SET current_analysis_id=?1,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,spec.meeting_id]).map_err(|e|e.to_string())?!=1{return Err("補完対象の版が変わりました".into());}
             Some(id)
         } else {
             None

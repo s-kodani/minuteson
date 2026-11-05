@@ -16,9 +16,7 @@ pub(in crate::storage) struct RetiredAudio {
     pub relative: String,
     pub bytes: u64,
     pub hash: String,
-    // Old receipts remain readable; new receipts also pin same-content swaps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::storage) identity: Option<Identity>,
+    pub(in crate::storage) identity: Identity,
 }
 
 fn check(storage: &Storage, cancelled: &impl Fn() -> bool) -> Result<(), String> {
@@ -100,7 +98,7 @@ fn snapshot(
             relative: relative.into(),
             bytes,
             hash: format!("{:x}", sha.finalize()),
-            identity: Some(Identity::read(&before)?),
+            identity: Identity::read(&before)?,
         },
         before,
     ))
@@ -416,9 +414,7 @@ pub(super) fn finish(
         )?;
         if actual.bytes != expected.bytes
             || actual.hash != expected.hash
-            || identity
-                .as_ref()
-                .is_some_and(|id| Some(id) != actual.identity.as_ref())
+            || identity != actual.identity
         {
             return Err("整理予定の原音声が変更されています".into());
         }

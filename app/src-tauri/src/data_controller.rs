@@ -823,24 +823,6 @@ impl DataController {
         );
         Ok(snapshot)
     }
-    #[cfg(any(unix, windows))]
-    pub(crate) fn deletion_page(
-        &self,
-        confirmation: &str,
-        offset: usize,
-    ) -> Result<deletion::PathPage, String> {
-        let s = self
-            .state
-            .lock()
-            .map_err(|_| "削除一覧のロックを取得できません")?;
-        if s.snapshot.busy {
-            return Err("削除対象の検査・実行中です".into());
-        }
-        match &s.selection {
-            Some(Selection::Deletion(p)) => p.page(confirmation, offset),
-            _ => Err("確認済みの削除対象がありません".into()),
-        }
-    }
 
     #[cfg(any(unix, windows))]
     pub(crate) fn review_audio_deletion(
@@ -922,24 +904,6 @@ impl DataController {
             Work::ModelDeletion(target, root, previous),
         );
         Ok(snapshot)
-    }
-    #[cfg(any(unix, windows))]
-    pub(crate) fn model_deletion_page(
-        &self,
-        confirmation: &str,
-        offset: usize,
-    ) -> Result<model_deletion::PathPage, String> {
-        let s = self
-            .state
-            .lock()
-            .map_err(|_| "モデル削除一覧のロックを取得できません")?;
-        if s.snapshot.busy {
-            return Err("モデル削除の検査・実行中です".into());
-        }
-        match &s.selection {
-            Some(Selection::ModelDeletion(p)) => p.page(confirmation, offset),
-            _ => Err("確認済みのモデル削除対象がありません".into()),
-        }
     }
 
     fn launch(

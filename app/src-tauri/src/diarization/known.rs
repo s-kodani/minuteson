@@ -1,6 +1,5 @@
 //! One native diarization call over the shared, time-aligned meeting WAV.
 use super::*;
-use crate::saved_artifact::{RestoreAssets, Role};
 use crate::storage::KnownInput;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -278,7 +277,7 @@ pub(super) fn preflight(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<crate::playback::PreparedAudio>, String> {
     let known = validate(parameters)?;
-    let runtime = managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?;
+    let runtime = parameters.engine.clone();
     runtime.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
@@ -368,31 +367,21 @@ pub(super) fn load_output(
     )?;
     let result: ResultFile = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     validate_result(&result, spec, parameters, output.index, cancelled)?;
-    if crate::storage::backup::omitted_processing_asset(
-        storage,
+    let bytes = storage.read_inference_artifact(
         &spec.meeting_id,
         &output.stdout_asset_id,
         &output.stdout_hash,
-        Role::DiarizationLog,
-    )?
-    .is_none()
+        "text/plain",
+        16 * 1024 * 1024,
+    )?;
+    if sherpa::parse_with_merges(
+        &bytes,
+        &parameters.engine,
+        result.num_speakers,
+        result.duration_us,
+    )? != (result.segments.clone(), result.speaker_merges.clone())
     {
-        let bytes = storage.read_inference_artifact(
-            &spec.meeting_id,
-            &output.stdout_asset_id,
-            &output.stdout_hash,
-            "text/plain",
-            16 * 1024 * 1024,
-        )?;
-        if sherpa::parse_with_merges(
-            &bytes,
-            &parameters.engine,
-            result.num_speakers,
-            result.duration_us,
-        )? != (result.segments.clone(), result.speaker_merges.clone())
-        {
-            return Err("保存区間の話者結果と元出力が一致しません".into());
-        }
+        return Err("保存区間の話者結果と元出力が一致しません".into());
     }
     Ok(result)
 }
@@ -431,7 +420,7 @@ pub(super) fn process_observed(
                 .map_or(true, |job| job.state != "running")
     };
     let attempt = (|| {
-        let runtime = managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?;
+        let runtime = parameters.engine.clone();
         preflight(storage, &spec, &parameters, &cancelled)?;
         let known = validate(&parameters)?;
         let mut results = Vec::new();
@@ -747,193 +736,6 @@ fn build_candidate(
         segments: raw_segments,
         utterances,
     })
-}
-
-fn validate_restore(
-    old: &JobSpec,
-    new: &JobSpec,
-    before: &Envelope,
-    after: &Envelope,
-) -> Result<(), String> {
-    if before.diarization.completion_after != after.diarization.completion_after
-        || before.diarization.attribution_policy != after.diarization.attribution_policy
-        || before.diarization.resident_runtime != after.diarization.resident_runtime
-        || before.diarization.engine != after.diarization.engine
-        || before.diarization.known_input != after.diarization.known_input
-        || before.diarization.matching != after.diarization.matching
-        || old.profile_snapshot != new.profile_snapshot
-        || old.total_units != new.total_units
-        || before
-            .diarization
-            .tracks
-            .iter()
-            .map(|track| track.num_speakers)
-            .collect::<Vec<_>>()
-            != after
-                .diarization
-                .tracks
-                .iter()
-                .map(|track| track.num_speakers)
-                .collect::<Vec<_>>()
-    {
-        return Err("復元前後の保存区間・抽出・人数条件が一致しません".into());
-    }
-    for (old_track, new_track) in before
-        .diarization
-        .source
-        .tracks
-        .iter()
-        .zip(&after.diarization.source.tracks)
-    {
-        if (
-            old_track.start_us,
-            old_track.end_us,
-            old_track.sample_rate,
-            old_track.channels,
-            &old_track.kind,
-        ) != (
-            new_track.start_us,
-            new_track.end_us,
-            new_track.sample_rate,
-            new_track.channels,
-            &new_track.kind,
-        ) || old_track.chunks.len() != new_track.chunks.len()
-            || old_track
-                .chunks
-                .iter()
-                .zip(&new_track.chunks)
-                .any(|(old, new)| {
-                    (
-                        &old.hash,
-                        old.size,
-                        old.start_us,
-                        old.end_us,
-                        old.frames,
-                        old.sample_rate,
-                        old.channels,
-                        &old.clock_segments,
-                    ) != (
-                        &new.hash,
-                        new.size,
-                        new.start_us,
-                        new.end_us,
-                        new.frames,
-                        new.sample_rate,
-                        new.channels,
-                        &new.clock_segments,
-                    )
-                })
-        {
-            return Err("復元前後の音声証拠・入力形式・取得時計が一致しません".into());
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn restore_result(
-    bytes: &[u8],
-    old: &JobSpec,
-    new: &JobSpec,
-) -> Result<Vec<u8>, String> {
-    if bytes.len() > 8 * 1024 * 1024 {
-        return Err("話者結果が容量上限を超えています".into());
-    }
-    let before = envelope(old)?;
-    let after = envelope(new)?;
-    validate_restore(old, new, &before, &after)?;
-    let mut result: ResultFile = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let run = result
-        .run
-        .as_ref()
-        .ok_or("保存話者結果に区間がありません")?;
-    let index = before
-        .diarization
-        .known_input
-        .as_ref()
-        .unwrap()
-        .runs
-        .iter()
-        .position(|old| old == run)
-        .ok_or("保存話者結果の固定区間がありません")?;
-    validate_result(&result, old, &before.diarization, index, &|| false)?;
-    let new_track = &after.diarization.source.tracks[run.track_index];
-    let old_track = &before.diarization.source.tracks[run.track_index];
-    if (
-        old_track.start_us,
-        old_track.end_us,
-        old_track.sample_rate,
-        old_track.channels,
-    ) != (
-        new_track.start_us,
-        new_track.end_us,
-        new_track.sample_rate,
-        new_track.channels,
-    ) {
-        return Err("復元前後の入力形式・時間が一致しません".into());
-    }
-    result.origin_operation_id = after.request.operation_id;
-    result.input_analysis_id = new
-        .input_analysis_id
-        .clone()
-        .ok_or("復元入力がありません")?;
-    result.input_hash = new.input_hash.clone();
-    result.source_manifest_hash = after.diarization.source.manifest_hash.clone();
-    result.track_id = new_track.id.clone();
-    validate_result(&result, new, &after.diarization, index, &|| false)?;
-    let bytes = serde_json::to_vec(&result).map_err(|e| e.to_string())?;
-    if bytes.len() > 8 * 1024 * 1024 {
-        return Err("復元話者結果が容量上限を超えています".into());
-    }
-    Ok(bytes)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn restore_saved_results(
-    job: &JobSnapshot,
-    old: &JobSpec,
-    new: &JobSpec,
-    value: serde_json::Value,
-    old_initial: &str,
-    new_initial: &str,
-    assets: &mut impl RestoreAssets,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
-    let before = envelope(old)?;
-    let after = envelope(new)?;
-    validate_restore(old, new, &before, &after)?;
-    if before.request.operation_id != old_initial
-        || after.request.operation_id != new_initial
-        || job.kind != "diarization"
-        || job.meeting_id != old.meeting_id
-        || job.input_hash != old.input_hash
-        || job.total_units != old.total_units
-    {
-        return Err("復元する保存区間ジョブの由来が不正です".into());
-    }
-    let checkpoint = checked_checkpoint(job, Some(value))?;
-    for output in checkpoint.outputs {
-        if cancelled() {
-            return Err("話者特徴量の復元を中断しました".into());
-        }
-        let bytes = assets.read(
-            Role::DiarizationResult,
-            &output.result_asset_id,
-            &output.result_hash,
-        )?;
-        let result: ResultFile = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        validate_result(&result, old, &before.diarization, output.index, cancelled)?;
-        let rebuilt = restore_result(&bytes, old, new)?;
-        assets.write(
-            Role::DiarizationResult,
-            &output.result_asset_id,
-            &output.result_hash,
-            &rebuilt,
-        )?;
-    }
-    if cancelled() {
-        return Err("話者特徴量の復元を中断しました".into());
-    }
-    Ok(())
 }
 
 #[cfg(all(test, unix))]

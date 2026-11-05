@@ -8,7 +8,6 @@ use chrono::{Local, TimeZone};
 pub(crate) struct ExportRecord {
     pub id: String,
     pub meeting_id: String,
-    pub minutes_revision_id: Option<String>,
     pub exported_content_hash: String,
     pub output_content_hash: String,
     pub output_size_bytes: i64,
@@ -18,20 +17,19 @@ pub(crate) struct ExportRecord {
     pub created_at: i64,
     pub exported_at: Option<i64>,
 }
-pub(super) const COLUMNS: &str = "id,meeting_id,minutes_revision_id,exported_content_hash,output_content_hash,output_size_bytes,destination_path,state,error_message,created_at,exported_at";
+pub(super) const COLUMNS: &str = "id,meeting_id,exported_content_hash,output_content_hash,output_size_bytes,destination_path,state,error_message,created_at,exported_at";
 pub(super) fn record(r: &rusqlite::Row<'_>) -> rusqlite::Result<ExportRecord> {
     Ok(ExportRecord {
         id: r.get(0)?,
         meeting_id: r.get(1)?,
-        minutes_revision_id: r.get(2)?,
-        exported_content_hash: r.get(3)?,
-        output_content_hash: r.get(4)?,
-        output_size_bytes: r.get(5)?,
-        destination_path: r.get(6)?,
-        state: r.get(7)?,
-        error_message: r.get(8)?,
-        created_at: r.get(9)?,
-        exported_at: r.get(10)?,
+        exported_content_hash: r.get(2)?,
+        output_content_hash: r.get(3)?,
+        output_size_bytes: r.get(4)?,
+        destination_path: r.get(5)?,
+        state: r.get(6)?,
+        error_message: r.get(7)?,
+        created_at: r.get(8)?,
+        exported_at: r.get(9)?,
     })
 }
 pub(super) fn safe_filename(title: &str, created: i64) -> Result<String, String> {

@@ -47,7 +47,6 @@ pub struct JobSnapshot {
     pub created_at: i64,
     pub updated_at: i64,
     pub output_analysis_id: Option<String>,
-    pub output_minutes_id: Option<String>,
     pub pause_reason: Option<PauseReason>,
     pub retry_of_job_id: Option<String>,
     pub attempt: i64,
@@ -122,8 +121,7 @@ impl Storage {
         }
         if job.kind == "minutes_generation" && crate::generation::markdown_job::is_markdown(&spec) {
             verify_latest_checkpoint(&tx, job_id)?;
-            if job.output_minutes_id.is_some()
-                || job.output_analysis_id.is_some()
+            if job.output_analysis_id.is_some()
                 || job.total_units != Some(job.completed_units)
                 || job.completed_units < 1
             {
@@ -269,7 +267,7 @@ impl Storage {
         db.execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'exit', updated_at = ?1 WHERE state = 'running'", params![now_ms()?]).map_err(|e| e.to_string())?;
         Ok(())
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn enqueue_job(&self, spec: JobSpec) -> Result<JobSnapshot, String> {
         let mut connection = self
             .connection
@@ -284,36 +282,36 @@ impl Storage {
         Ok(snapshot)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn acquire_next_job(&self) -> Result<Option<JobSnapshot>, String> {
         self.acquire_job_kind(None)
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire_job_kind(
         &self,
         kind: Option<JobKind>,
     ) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(kind, false)
+        self.acquire_filtered_job(kind)
             .map(|v| v.map(|(job, _)| job))
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire_local_inference_job(&self) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(None, false)
+        self.acquire_filtered_job(None)
             .map(|v| v.map(|(job, _)| job))
     }
 
     pub(crate) fn acquire_owned_inference_job(
         &self,
     ) -> Result<Option<(JobSnapshot, super::meeting_access::MeetingWork)>, String> {
-        self.acquire_filtered_job(None, true)
-            .map(|v| v.map(|(job, owner)| (job, owner.expect("owned job"))))
+        self.acquire_filtered_job(None)
     }
 
     fn acquire_filtered_job(
         &self,
         kind: Option<JobKind>,
-        owned: bool,
-    ) -> Result<Option<(JobSnapshot, Option<super::meeting_access::MeetingWork>)>, String> {
+    ) -> Result<Option<(JobSnapshot, super::meeting_access::MeetingWork)>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -400,11 +398,7 @@ impl Storage {
             &input_hash,
         )?;
         verify_latest_checkpoint(&transaction, &id)?;
-        let owner = if owned {
-            Some(self.begin_meeting_work_locked(&transaction, &meeting_id, "job", Some(&id))?)
-        } else {
-            None
-        };
+        let owner = self.begin_meeting_work_locked(&transaction, &meeting_id, "job", Some(&id))?;
         let now = now_ms()?;
         transaction.execute(
             "UPDATE processing_jobs SET state = 'running', started_at = COALESCE(started_at, ?1), updated_at = ?1 WHERE id = ?2 AND state = 'queued'",
@@ -630,7 +624,7 @@ impl Storage {
             .map_err(|_| "DBロックを取得できません")?;
         // Retain retired jobs in storage, but exclude them before applying the
         // current history limit and decoding executable job kinds.
-        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE meeting_id = ?1 AND kind != 'transcript_cleanup' ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
+        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![meeting_id], job_from_row)
             .map_err(|e| e.to_string())?;
@@ -665,7 +659,7 @@ impl Storage {
             )
             SELECT j.id, j.meeting_id, j.kind, j.state, j.operation_id, j.input_hash, j.spec_hash,
                 j.completed_units, j.total_units, j.error_code, j.created_at, j.updated_at,
-                j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, j.output_minutes_id, m.title
+                j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, m.title
             FROM processing_jobs j JOIN meetings m ON m.id = j.meeting_id
             WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation', 'voice_registration', 'voice_matching', 'speaker_completion') AND (
                 j.state IN ('queued', 'running', 'pausing', 'paused', 'interrupted')
@@ -677,7 +671,7 @@ impl Storage {
             .query_map(params![watched], |row| {
                 Ok(NotificationJob {
                     job: job_from_row(row)?,
-                    meeting_title: row.get(17)?,
+                    meeting_title: row.get(16)?,
                     analysis_operation: None,
                 })
             })
@@ -733,48 +727,6 @@ impl Storage {
         verified_checkpoint: Option<&Value>,
         operation_id: &str,
     ) -> Result<JobSnapshot, String> {
-        self.enqueue_retry_inner(
-            source,
-            verified_spec,
-            verified_checkpoint,
-            operation_id,
-            None,
-            &|| false,
-        )
-    }
-
-    // The facade verifies native inputs/outputs, current model bytes and trial
-    // artifacts off the transaction, then commits this separately reviewed
-    // attempt. Original logical parameters and historical assets stay fixed.
-    #[cfg(test)]
-    pub(crate) fn enqueue_rebound_retry_job(
-        &self,
-        source: &JobSnapshot,
-        verified_spec: &JobSpec,
-        checkpoint: Option<&Value>,
-        operation: &str,
-        binding: &super::model_profiles::jobs::rebinding::Binding,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<JobSnapshot, String> {
-        self.enqueue_retry_inner(
-            source,
-            verified_spec,
-            checkpoint,
-            operation,
-            Some(binding),
-            cancelled,
-        )
-    }
-
-    fn enqueue_retry_inner(
-        &self,
-        source: &JobSnapshot,
-        verified_spec: &JobSpec,
-        verified_checkpoint: Option<&Value>,
-        operation_id: &str,
-        binding: Option<&super::model_profiles::jobs::rebinding::Binding>,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<JobSnapshot, String> {
         if operation_id.trim().is_empty() || operation_id.len() > 128 {
             return Err("再試行の操作IDが不正です".into());
         }
@@ -799,7 +751,7 @@ impl Storage {
         {
             return Err("検証後に元ジョブまたは再開情報が変化しています".into());
         }
-        if !retry_source_permitted(&original, binding.is_some()) || original.attempt >= 1000 {
+        if !retry_source_permitted(&original) || original.attempt >= 1000 {
             return Err(
                 "失敗・取消済みの処理だけ再試行できます。一時停止・中断には再開を使ってください"
                     .into(),
@@ -809,9 +761,6 @@ impl Storage {
             .attempt
             .checked_add(1)
             .ok_or("再試行番号が範囲外です")?;
-        if let Some(binding) = binding {
-            spec.profile_snapshot = binding.attach(&spec)?;
-        }
         spec.operation_id = operation_id.into();
         let hash = retry_spec_hash(&spec, &original.id, attempt)?;
         if let Some(existing) = transaction
@@ -833,12 +782,6 @@ impl Storage {
             }
             return Ok(existing);
         }
-        if let Some(binding) = binding {
-            binding.gate(&transaction, &spec)?;
-        }
-        if cancelled() {
-            return Err("再試行の登録を取り消しました".into());
-        }
         let unfinished: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE retry_of_job_id = ?1 AND state IN ('queued', 'running', 'pausing', 'paused', 'interrupted'))", params![original.id], |row| row.get(0)).map_err(|e| e.to_string())?;
         if unfinished {
             return Err(
@@ -855,9 +798,7 @@ impl Storage {
         let now = now_ms()?;
         let profile = serde_json::to_string(&spec.profile_snapshot).map_err(|e| e.to_string())?;
         let parameters = serde_json::to_string(&spec.parameters).map_err(|e| e.to_string())?;
-        // A bound profile includes two complete provenance records and native
-        // paths; keep it bounded without shrinking the original 64KiB record.
-        if profile.len() > 256 * 1024 || parameters.len() > MAX_CHECKPOINT_BYTES {
+        if profile.len() > 65_536 || parameters.len() > MAX_CHECKPOINT_BYTES {
             return Err("再試行の固定条件が保存サイズ上限を超えています".into());
         }
         transaction.execute("INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, retry_of_job_id, attempt, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)", params![id, spec.meeting_id, spec.kind.as_str(), operation_id, original.id, attempt, spec.input_analysis_id, spec.input_hash, profile, parameters, hash, spec.total_units, now]).map_err(|e| e.to_string())?;
@@ -873,63 +814,9 @@ impl Storage {
         }
         let next = load_job(&transaction, &id)?.ok_or("再試行を読み込めません")?;
         verify_latest_checkpoint(&transaction, &id)?;
-        if cancelled() {
-            return Err("再試行の登録を取り消しました".into());
-        }
         transaction.commit().map_err(|e| e.to_string())?;
         crate::internal_logs::job(&next);
         Ok(next)
-    }
-
-    // Lost-response lookup is read-only and never rechecks today's profile or
-    // filesystem. It cannot enqueue, change source state or dispatch inference.
-    #[cfg(test)]
-    pub(crate) fn rebound_retry_result(
-        &self,
-        source: &JobSnapshot,
-        verified_spec: &JobSpec,
-        checkpoint: Option<&Value>,
-        operation: &str,
-        binding: &super::model_profiles::jobs::rebinding::Binding,
-    ) -> Result<Option<JobSnapshot>, String> {
-        let db = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?;
-        let id: Option<String> = db
-            .query_row(
-                "SELECT id FROM processing_jobs WHERE operation_id=?1",
-                params![operation],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let Some(id) = id else {
-            return Ok(None);
-        };
-        let current = load_job(&db, &source.id)?.ok_or("再試行元がありません")?;
-        let (mut spec, cp) = read_fixed_input(&db, &source.id)?;
-        if current.spec_hash != source.spec_hash
-            || &spec != verified_spec
-            || cp.as_ref() != checkpoint
-        {
-            return Err("確認した再試行元の固定条件・完了結果が一致しません".into());
-        }
-        spec.profile_snapshot = binding.attach(&spec)?;
-        spec.operation_id = operation.into();
-        let attempt = source
-            .attempt
-            .checked_add(1)
-            .ok_or("再試行番号が不正です")?;
-        let result = load_job(&db, &id)?.ok_or("再試行がありません")?;
-        read_fixed_input(&db, &id)?;
-        if result.spec_hash != retry_spec_hash(&spec, &source.id, attempt)?
-            || result.retry_of_job_id.as_deref() != Some(source.id.as_str())
-            || result.attempt != attempt
-        {
-            return Err("同じ操作IDで別の再試行が指定されました".into());
-        }
-        Ok(Some(result))
     }
 
     // Retry parameters remain byte-for-byte fixed, including the original
@@ -990,15 +877,15 @@ impl Storage {
             return Err("処理の再開位置が不正です".into());
         }
         match outcome {
-            "succeeded" | "cancelled" if error_code.is_some() => {
-                return Err("成功・取消にエラーコードは付けられません".into());
+            "cancelled" if error_code.is_some() => {
+                return Err("取消にエラーコードは付けられません".into());
             }
             "failed"
                 if error_code.is_none_or(|code| code.trim().is_empty() || code.len() > 128) =>
             {
                 return Err("失敗にはエラーコードが必要です".into());
             }
-            "succeeded" | "failed" | "cancelled" => {}
+            "failed" | "cancelled" => {}
             _ => return Err("処理の終了状態が不正です".into()),
         }
         let mut connection = self
@@ -1008,22 +895,19 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let current: Option<(String, i64, Option<i64>)> = transaction
+        let current: Option<(String, i64)> = transaction
             .query_row(
-                "SELECT state, completed_units, total_units FROM processing_jobs WHERE id = ?1",
+                "SELECT state, completed_units FROM processing_jobs WHERE id = ?1",
                 params![job_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|error| error.to_string())?;
-        let (state, completed_units, total_units) = current.ok_or("処理が見つかりません")?;
+        let (state, completed_units) = current.ok_or("処理が見つかりません")?;
         if completed_units != expected_completed_units {
             return Err("処理の再開位置が変わりました".into());
         }
         let permitted = match outcome {
-            "succeeded" => {
-                state == "running" && total_units.is_none_or(|total| completed_units == total)
-            }
             "failed" => matches!(
                 state.as_str(),
                 "running" | "pausing" | "paused" | "interrupted"
@@ -1081,7 +965,6 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         output_analysis_id: row.get(12)?,
-        output_minutes_id: row.get(16)?,
         pause_reason: row
             .get::<_, Option<String>>(13)?
             .map(|s| decode_enum_value(13, s))
@@ -1128,7 +1011,7 @@ pub(super) fn enqueue_in_transaction(
     }
     let spec_hash = fixed_spec_hash(spec, None, 1)?;
     if let Some(existing) = transaction.query_row(
-            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE operation_id = ?1",
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE operation_id = ?1",
             params![spec.operation_id],
             job_from_row,
         ).optional().map_err(|error| error.to_string())? {
@@ -1171,7 +1054,6 @@ pub(super) fn initial_operation(
     fixed: &JobSpec,
     mut read: impl FnMut(&str) -> Result<(JobSnapshot, JobSpec), String>,
 ) -> Result<String, String> {
-    let mut child_spec = fixed.clone();
     let mut seen = std::collections::HashSet::new();
     loop {
         if !seen.insert(current.id.clone()) || seen.len() > 1000 {
@@ -1187,58 +1069,28 @@ pub(super) fn initial_operation(
         if parent.id != parent_id
             || parent.meeting_id != fixed.meeting_id
             || parent.attempt.checked_add(1) != Some(current.attempt)
-            || !retry_source_permitted(
-                &parent,
-                child_spec.profile_snapshot.get("runtimeModel").is_some(),
-            )
+            || !retry_source_permitted(&parent)
             || spec.meeting_id != fixed.meeting_id
             || spec.kind != fixed.kind
             || spec.input_analysis_id != fixed.input_analysis_id
             || spec.input_hash != fixed.input_hash
-            || !super::model_profiles::jobs::rebinding::same_profile(&spec, fixed)?
+            || spec.profile_snapshot != fixed.profile_snapshot
             || spec.parameters != fixed.parameters
             || spec.total_units != fixed.total_units
         {
             return Err("再試行の固定条件または由来が一致しません".into());
         }
         current = parent;
-        child_spec = spec;
     }
 }
 
-pub(crate) fn retry_source_permitted(source: &JobSnapshot, rebinding: bool) -> bool {
+fn retry_source_permitted(source: &JobSnapshot) -> bool {
     matches!(source.state.as_str(), "failed" | "cancelled")
-        || (rebinding
-            && source.state == "interrupted"
-            && source.error_code.as_deref() == Some("restored_preparation_required"))
-}
-
-#[cfg(test)]
-pub(in crate::storage) fn remove_rebinding_schema_for_test(db: &Connection) {
-    let present: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=26)",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    if !present {
-        return;
-    }
-    assert_eq!(db.query_row("SELECT COUNT(*) FROM processing_jobs WHERE json_type(profile_snapshot_json,'$.runtimeModel') IS NOT NULL", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
-    db.execute_batch("DROP TRIGGER job_retry_valid; DROP TRIGGER job_parent_retry_no_resume; DELETE FROM schema_migrations WHERE version=26;").unwrap();
-    db.execute_batch(
-        super::MIGRATION_12
-            .split("\nCREATE TRIGGER job_attempt_fixed")
-            .next()
-            .unwrap(),
-    )
-    .unwrap();
 }
 
 pub(super) fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
     connection.query_row(
-        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE id = ?1",
+        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE id = ?1",
         params![id], job_from_row,
     ).optional().map_err(|error| error.to_string())
 }
@@ -1259,9 +1111,6 @@ pub(super) fn read_fixed_input(
     let hash = fixed_spec_hash(&spec, job.retry_of_job_id.as_deref(), job.attempt)?;
     if hash != job.spec_hash {
         return Err("処理の固定設定または再試行情報が変更されています".into());
-    }
-    if spec.profile_snapshot.get("runtimeModel").is_some() {
-        super::model_profiles::jobs::rebinding::validate_spec(&spec)?;
     }
     verify_latest_checkpoint(connection, job_id)?;
     let checkpoint: Option<String> = connection.query_row("SELECT checkpoint_json FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1", params![job_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
@@ -1385,56 +1234,6 @@ mod tests {
                 kind
             );
         }
-    }
-
-    #[test]
-    fn queued_retired_job_does_not_preempt_current_work() {
-        let temp = tempfile::tempdir().unwrap();
-        let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let meeting = storage.create_meeting("現行ジョブ").unwrap();
-        let current = storage
-            .enqueue_job(audio_job(&meeting.id, "current-job"))
-            .unwrap();
-        let retired = uuid::Uuid::new_v4().to_string();
-        storage.connection.lock().unwrap().execute(
-            "INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,completed_units,total_units,attempt,created_at,updated_at) SELECT ?1,meeting_id,'transcript_cleanup','queued','retired-job',input_hash,profile_snapshot_json,parameters_json,spec_hash,0,total_units,1,created_at-1,updated_at FROM processing_jobs WHERE id=?2",
-            params![retired, current.id],
-        ).unwrap();
-        assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, current.id);
-        // A full page of newer retired records must not hide current work or
-        // cause the entire history read to fail at the typed boundary.
-        {
-            let mut db = storage.connection.lock().unwrap();
-            let tx = db.transaction().unwrap();
-            for index in 0..100 {
-                tx.execute(
-                    "INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,completed_units,total_units,attempt,created_at,updated_at) SELECT ?1,meeting_id,'transcript_cleanup','succeeded',?2,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,total_units,1,created_at+1,updated_at FROM processing_jobs WHERE id=?3",
-                    params![Uuid::new_v4().to_string(), format!("retired-history-{index}"), current.id],
-                ).unwrap();
-            }
-            tx.commit().unwrap();
-        }
-        let history = storage.list_jobs(&meeting.id).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].id, current.id);
-        assert_eq!(history[0].state, "running");
-        // Unsupported historical kinds stay untouched in the DB, but are not
-        // admitted into the typed executable snapshot or current worker.
-        let retained: (String, String) = storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT kind,state FROM processing_jobs WHERE id=?1",
-                [&retired],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(retained, ("transcript_cleanup".into(), "queued".into()));
-        assert!(storage
-            .get_job(&retired)
-            .unwrap_err()
-            .contains("transcript_cleanup"));
     }
 
     pub(super) fn audio_job(meeting_id: &str, operation_id: &str) -> JobSpec {
@@ -1600,12 +1399,6 @@ mod tests {
                 .create_analysis_candidate(&meeting.id, input.clone())
                 .unwrap();
         }
-        assert!(!storage
-            .analysis_versions(&meeting.id)
-            .unwrap()
-            .versions
-            .iter()
-            .any(|v| v.id == id));
         let proof = storage.notification_output(&job.id).unwrap();
         assert_eq!(proof.job.id, job.id);
         assert_eq!(proof.job.output_analysis_id.as_deref(), Some(id.as_str()));
@@ -1734,13 +1527,10 @@ mod tests {
         assert!(storage
             .finish_job(&running.id, 2, "succeeded", None)
             .is_err());
-        assert_eq!(
-            storage
-                .finish_job(&running.id, 10, "succeeded", None)
-                .unwrap()
-                .state,
-            "succeeded"
-        );
+        assert!(storage
+            .finish_job(&running.id, 10, "succeeded", None)
+            .is_err());
+        assert_eq!(storage.get_job(&running.id).unwrap().state, "running");
         assert!(storage.resume_job(&running.id).is_err());
     }
 

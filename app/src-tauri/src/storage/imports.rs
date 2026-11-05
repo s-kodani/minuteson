@@ -287,7 +287,7 @@ impl Storage {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        let decoded_format = manifest.decoded_format()?;
+        manifest.validate_format()?;
         if manifest.import_id != before.id
             || manifest.meeting_id != before.meeting_id
             || manifest.info != before.info
@@ -300,18 +300,15 @@ impl Storage {
         manifest.info.validate()?;
         let original_path = base.join(format!("original.{}", manifest.info.detected_format));
         self.checked_import_file(&original_path, Some(&manifest.original), cancelled)?;
-        let decoded_path = base.join(if decoded_format == "caf" {
-            "decoded.caf"
-        } else {
-            "audio.flac"
-        });
+        let decoded_path = base.join("decoded.caf");
         self.checked_import_file(&decoded_path, Some(&manifest.audio), cancelled)?;
-        let audio = VerifiedAudio::open_cancellable(
+        let mut audio = VerifiedAudio::open_cancellable(
             File::open(&decoded_path).map_err(|e| e.to_string())?,
             manifest.audio.size,
             &manifest.audio.sha256,
             cancelled,
         )?;
+        audio.require_caf()?;
         if audio.format.frames != manifest.info.frames
             || audio.format.sample_rate != manifest.info.sample_rate
             || audio.format.channels != manifest.info.channels
@@ -356,11 +353,7 @@ impl Storage {
             &self.root,
             &decoded_path,
             &manifest.audio,
-            if decoded_format == "caf" {
-                "audio/x-caf"
-            } else {
-                "audio/flac"
-            },
+            "audio/x-caf",
             now,
         )?;
         let manifest_id = insert_asset(
@@ -375,7 +368,7 @@ impl Storage {
         tx.execute("UPDATE audio_import_commits SET manifest_asset_id=?2,manifest_hash=?3,error_message=NULL WHERE import_id=?1 AND manifest_asset_id IS NULL",params![id,manifest_id,evidence.sha256]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE audio_imports SET state='ready',original_asset_id=?2,converted_asset_id=?3,error_code=NULL,updated_at=?4 WHERE id=?1",params![id,original,converted,now]).map_err(|e|e.to_string())?;
         let track = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported',?7,?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,manifest.info.sample_rate,manifest.info.channels,now,decoded_format]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','caf',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,?7,?8,'ready',?9)",params![Uuid::new_v4().to_string(),before.meeting_id,track,converted,manifest.info.duration_us,manifest.info.frames as i64,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
         if tx.execute("UPDATE meetings SET lifecycle='imported',duration_us=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?1 AND source_type='audio_import' AND lifecycle='draft'",params![before.meeting_id,manifest.info.duration_us,now]).map_err(|e|e.to_string())?!=1 { return Err("会議の取り込み状態が変更されています".into()); }
         super::analysis_flows::ensure_flow(&tx, &before.meeting_id)?;
@@ -430,10 +423,9 @@ impl Storage {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name();
             let name = name.to_str().ok_or("取り込み物の名前が不正です")?;
-            let owned = matches!(name, "decoded.caf" | "audio.flac" | "manifest.json")
+            let owned = matches!(name, "decoded.caf" | "manifest.json")
                 || name == format!("original.{}", snapshot.info.detected_format)
-                || ((name.starts_with(".mon-flac-") || name.starts_with(".mon-import-manifest-"))
-                    && name.ends_with(".part"))
+                || (name.starts_with(".mon-import-manifest-") && name.ends_with(".part"))
                 || name.starts_with(".mon-import-report-");
             if !owned || !entry.file_type().map_err(|e| e.to_string())?.is_file() {
                 return Err(

@@ -147,16 +147,13 @@ fn valid_source(source: &SourceFacts) -> Result<(), String> {
         )?;
         workspace.recorded.validate(true)?;
         workspace.observed.validate(true)?;
-        if !matches!(workspace.name.as_str(), PLAN | PARTIAL_PLAN)
+        if workspace.name != PARTIAL_PLAN
             || !inventory::valid_hash(&workspace.plan_hash)
             || workspace.tracks.len() > 2
         {
             return Err("FLAC移動履歴の計画が不正です".into());
         }
         if let Some(proof) = &workspace.recovery {
-            if workspace.name != PARTIAL_PLAN {
-                return Err("通常変換へ部分救出の入力証拠を適用しません".into());
-            }
             proof.validate()?;
             claims += usize::from(proof.document.is_some());
         }
@@ -222,7 +219,7 @@ impl Source {
         .map_err(|e| e.to_string())?;
         db.execute_batch("PRAGMA query_only=ON")
             .map_err(|e| e.to_string())?;
-        let mut query = db.prepare("SELECT r.meeting_id,r.id FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE m.source_type='recording' AND r.input_history_snapshot_json IS NULL ORDER BY r.meeting_id,r.id")
+        let mut query = db.prepare("SELECT r.meeting_id,r.id FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE m.source_type='recording' AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings' AND p.entity_key=r.meeting_id) ORDER BY r.meeting_id,r.id")
             .map_err(|e| e.to_string())?;
         let mut workspaces = Vec::new();
         let audio_cleanup = cleanup_history::capture(storage, snapshot, &db, cancelled)?;
@@ -254,7 +251,7 @@ impl Source {
             if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
                 return Err("FLAC変換中は所有記録を移動しません".into());
             }
-            for name in [PLAN, PARTIAL_PLAN] {
+            for name in [PARTIAL_PLAN] {
                 let Some((bytes, stamp)) = root.read_json(name).unwrap_or(None) else {
                     continue;
                 };
@@ -686,7 +683,7 @@ pub(in crate::storage) fn effective_cleanup_identity(
     storage: &Storage,
     meeting: &str,
     file: &crate::storage::audio_publication::cleanup::RetiredAudio,
-    identity: &mut Option<Identity>,
+    identity: &mut Identity,
 ) -> Result<(), String> {
     let Some(aliases) = &storage.flac_history else {
         return Ok(());

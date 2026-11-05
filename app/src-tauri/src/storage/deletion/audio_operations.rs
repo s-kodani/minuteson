@@ -388,7 +388,7 @@ impl Prepared {
         if let Some(id) = prior {
             return Self::pending(storage, &id, lease, check);
         }
-        storage.preserve_voice_audio(Some(meeting), check)?;
+        storage.prepare_preserved_voice_audio(Some(meeting), check)?;
         let census = Census::capture(storage, meeting, &|| check() || lease.cancelled())?;
         Self::build(
             storage,

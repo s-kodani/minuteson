@@ -1,16 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertDeletionListing, assertDeletionPathPage, assertDeletionPreview, deletionAttentionLabel, type DeletionPreview } from "../src/deletion-state.ts";
+import { assertDeletionListing, assertDeletionPreview, type DeletionPreview } from "../src/deletion-state.ts";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 import { registerPlaybackStop, stopAllPlayback } from "../src/playback-barrier.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
-test("startup attention labels describe retained completed scopes without declaring deletion success", () => {
-  assert.match(deletionAttentionLabel("completed_scope_reappeared")!, /自動削除せず保持/u);
-  assert.match(deletionAttentionLabel("completed_receipt_invalid")!, /記録を検証できません/u);
-  assert.match(deletionAttentionLabel("completed_scope_uninspectable")!, /リンクなどを採用せず/u);
-  assert.equal(deletionAttentionLabel(null), null);
-  assert.equal(deletionAttentionLabel("unknown"), null);
-});
 test("completed startup hints retain null meeting FK and do not substitute for a confirmed preview", () => {
   for (const errorCode of ["completed_scope_reappeared", "completed_receipt_invalid", "completed_scope_uninspectable"]) {
     const l = { items: [{ operationId: id(3), state: "completed", meetingId: null, errorCode }], deletingMeetingIds: [], writeBlocked: true, restartRequired: false, reason: "確認待ち" };
@@ -118,25 +111,6 @@ test("retained receipt is not restoration or deletion and preserves kept phase",
 test("deletion counts and phases reject unsafe integers, false row commitment and partial completion", () => {
   for (const patch of [{ bytes: Number.MAX_SAFE_INTEGER + 1 }, { processedPaths: 4 }, { rowPhaseCommitted: true }, { missingCount: 2 }, { keepAllowed: true }, { pending: true }]) assert.throws(() => assertDeletionPreview({ ...preview(), ...patch }));
 });
-test("path pages bind exact confirmation, meeting and bounded metadata offsets", () => {
-  const root = `meetings/${id(4)}`;
-  const page = { confirmationId: id(2), offset: 0, total: 1, nextOffset: null, entries: [{ relativePath: root + "/audio/input.flac", directory: false, registered: true, missing: false, changed: false, stageHint: null, bytes: 123 }] };
-  assert.doesNotThrow(() => assertDeletionPathPage(page, id(2), 0, 1, id(4)));
-  assert.throws(() => assertDeletionPathPage(page, id(5), 0, 1, id(4)));
-  assert.throws(() => assertDeletionPathPage(page, id(2), 0, 1, id(5)));
-  assert.throws(() => assertDeletionPathPage({ ...page, nextOffset: 1 }, id(2), 0, 1, id(4)));
-  for (const relativePath of ["/outside", root + "/../outside", root + "/a\\b", root + "/" + "x".repeat(260)]) assert.throws(() => assertDeletionPathPage({ ...page, entries: [{ ...page.entries[0], relativePath }] }, id(2), 0, 1, id(4)));
-});
-test("deletion page directories carry no content byte count while files retain their measured size", () => {
-  const root = `meetings/${id(4)}`;
-  const directory = { relativePath: root, directory: true, registered: false, missing: false, changed: false, stageHint: null, bytes: null };
-  const file = { relativePath: root + "/audio/source.flac", directory: false, registered: true, missing: false, changed: false, stageHint: null, bytes: 6 };
-  const page = { confirmationId: id(2), offset: 0, total: 3, nextOffset: null, entries: [directory, { ...directory, relativePath: root + "/audio" }, file] };
-  assert.doesNotThrow(() => assertDeletionPathPage(page, id(2), 0, 3, id(4)));
-  for (const patch of [{ bytes: 96 }, { registered: true }, { changed: true }]) {
-    assert.throws(() => assertDeletionPathPage({ ...page, entries: [{ ...directory, ...patch }, page.entries[1], file] }, id(2), 0, 3, id(4)));
-  }
-});
 test("listing distinguishes write fence and restart, rejects duplicates and unsupported evidence", () => {
   const l = { items: [{ operationId: id(3), state: "cleanup", meetingId: null, errorCode: null }], deletingMeetingIds: [], writeBlocked: true, restartRequired: false, reason: "未完了削除" };
   assert.doesNotThrow(() => assertDeletionListing(l));
@@ -150,18 +124,6 @@ test("reservation roots are bounded canonical names of this operation, never fre
   assert.doesNotThrow(() => assertDeletionPreview({ ...p, reservationRoots: [root, `meetings/.mon-delete-${id(3)}-r32-199999`] }));
   for (const reservationRoots of [[root, root], [root + "/child"], [`meetings/.mon-delete-${id(5)}-2`], [root.replace(/-2$/u, "-02")], [root.replace(/-2$/u, "-200000")], [root.replace(/-2$/u, "-r33-2")], [root.replace(/-2$/u, "-r0-2")], ["meetings"], Array.from({ length: 257 }, (_, n) => root.replace(/-2$/u, `-${n}`)).sort()]) assert.throws(() => assertDeletionPreview({ ...p, reservationRoots }));
   for (const phase of ["review", "not_started", "retained"] as const) assert.throws(() => assertDeletionPreview({ ...p, phase, pending: phase === "not_started", keepAllowed: phase !== "review", executeAllowed: phase !== "retained" }));
-});
-test("reserved pages require exact advertised roots and never assign database ownership or follow neighbors", () => {
-  const root = `meetings/.mon-delete-${id(3)}-r1-2`;
-  const entry = { relativePath: root + "/unknown", directory: false, registered: false, missing: false, changed: false, stageHint: null, bytes: 42 };
-  const page = { confirmationId: id(2), offset: 0, total: 1, nextOffset: null, entries: [entry] };
-  const check = (entries = [entry], roots = [root], operation = id(3)) => assertDeletionPathPage({ ...page, entries }, id(2), 0, 1, id(4), roots, operation);
-  assert.doesNotThrow(() => check());
-  assert.doesNotThrow(() => check([{ ...entry, relativePath: root, directory: true, bytes: null } as typeof entry]));
-  assert.throws(() => check([entry], []));
-  assert.throws(() => check([entry], [root], id(5)));
-  assert.throws(() => assertDeletionPathPage(page, id(2), 0, 1, id(4), [root]));
-  for (const patch of [{ registered: true }, { changed: true }, { stageHint: "transcription" }, { relativePath: root }, { relativePath: root + "/../neighbor" }, { relativePath: root + "-other/unknown" }, { relativePath: `meetings/${id(5)}/unknown` }, { relativePath: root + "/" + "x".repeat(256) }]) assert.throws(() => check([{ ...entry, ...patch }]));
 });
 test("stale deletion snapshots do not restore old confirmation and same revision conflicts fail", () => {
   const old = ready(), newer = { ...old, revision: 2, deletionPreview: { ...old.deletionPreview!, confirmationId: id(5) } };

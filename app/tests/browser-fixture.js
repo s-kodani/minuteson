@@ -1,7 +1,7 @@
 import { playbackTimeline } from "../src/playback-follow";
 import { transcriptionAdmissions } from "/src/transcription-admission.ts";
 import {projectTranscript} from "../src/transcript-state";
-import {groupTranscriptRows,transcriptFragmentSeparator} from "../src/transcript-groups";
+import {groupTranscriptRows} from "../src/transcript-groups";
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
 import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
@@ -23,7 +23,6 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
   notifications: () => toasts.getSnapshot().map(({key,id,message})=>({key,id,message})),
   notificationJobs: [], notificationWarnings: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
   lostRetryResponse: false,
-  transcriptHistory: [],
   diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
   vocabulary: { global: { id: "global", payload: [], lockVersion: 0 } }, failVocabulary: false,
   preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
@@ -41,8 +40,12 @@ fixture.failPromptSave = false;
 fixture.losePromptResponse = false;
 const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
 fixture.setRecognitionReview=(ranges,empty=false)=>{const value=currentAnalysis();value.reviewRanges=structuredClone(ranges);if(empty)value.utterances=[];return fixture.emitTranscriptChange();};
-const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
-  versions: [analysis, fixture.candidate,...(fixture.consolidationHistory??[])].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
+const minutesSource = () => ({
+  meetingLockVersion: meetings[0].lockVersion,
+  currentId: fixture.currentId,
+  contentHash: [analysis, fixture.candidate, ...(fixture.consolidationHistory ?? [])].find(item => item.id === fixture.currentId)?.contentHash ?? null,
+  draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
+});
 const switchDraft = (nextId) => {
   if (fixture.draft) fixture.archivedDrafts[fixture.draft.baseAnalysisId] = structuredClone(fixture.draft);
   fixture.draft = fixture.archivedDrafts[nextId] ? structuredClone(fixture.archivedDrafts[nextId]) : null;
@@ -101,7 +104,7 @@ const publishPlayback = (entry,info) => {
   if(entry&&fixture.preparation.losePrepare)throw Error("模擬音声準備の応答喪失");
   return info;
 };
-fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
+fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
   if(fixture.preparation.strict&&["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)){
@@ -231,18 +234,11 @@ mockIPC(async (command, args) => {
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
       if (fixture.failSave) throw new Error("模擬保存競合");
       if (args.expectedLockVersion !== fixture.draft.lockVersion) throw new Error("版番号不一致");
-      fixture.transcriptHistory.push(structuredClone(fixture.draft.payload));
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
       await stampFixtureDraft(fixture.draft);
       if (fixture.lostTranscriptSaveResponse) { fixture.lostTranscriptSaveResponse = false; throw Error("模擬本文保存応答喪失"); }
       return stampFixtureDraft(fixture.draft);
-    case "undo_transcript_edit": {
-      if (args.draftId !== fixture.draft.id || args.expectedLockVersion !== fixture.draft.lockVersion || !fixture.transcriptHistory.length) throw Error("模擬取り消し対象不一致");
-      fixture.draft = { ...fixture.draft, payload: fixture.transcriptHistory.pop(), lockVersion: fixture.draft.lockVersion + 1 };
-      return stampFixtureDraft(fixture.draft);
-    }
-    case "get_asr_preferences":
-    case "get_analysis_preferences": return structuredClone(fixture.preferences);
+    case "get_asr_preferences": return structuredClone(fixture.preferences);
     case "get_vocabulary_book": return structuredClone(fixture.vocabulary[args.meetingId ?? "global"] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 });
     case "get_meeting_vocabulary": return { global: structuredClone(fixture.vocabulary.global), meeting: structuredClone(fixture.vocabulary[args.meetingId] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 }) };
     case "save_vocabulary_book": {
@@ -256,7 +252,7 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.vocabulary[key]);
     }
     case "get_analysis_jobs": return args.meetingId === meetings[0].id ? structuredClone(fixture.jobs) : [];
-    case "get_analysis_versions": return args.meetingId === meetings[0].id ? structuredClone(versions()) : { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
+    case "get_minutes_source": return args.meetingId === meetings[0].id ? structuredClone(minutesSource()) : { meetingLockVersion: 1, currentId: null, contentHash: null, draft: null };
     case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);
     case "get_analysis_version_draft": return structuredClone(fixture.draft?.baseAnalysisId === args.analysisId ? fixture.draft : fixture.archivedDrafts[args.analysisId] ?? null);
     case "start_transcription": {
@@ -347,7 +343,8 @@ mockIPC(async (command, args) => {
       const hidden=new Set(draft?.payload.speaker_merges?.map(m=>m.source_id)??[]);
       const active=view.speakers.filter(s=>!hidden.has(s.id));
       const before=structuredClone(base),speakerIds=new Map(active.map(s=>[s.id,crypto.randomUUID()]));
-      const text=(group,key)=>group.reduce((text,row)=>text+transcriptFragmentSeparator(text,row[key])+row[key],"");
+      const fragmentSeparator = (previous, next) => /[\p{Script=Latin}\p{N}]$/u.test(previous) && /^[\p{Script=Latin}\p{N}]/u.test(next) ? " " : "";
+      const text=(group,key)=>group.reduce((text,row)=>text+fragmentSeparator(text,row[key])+row[key],"");
       const next={...view,id:crypto.randomUUID(),contentHash:'f'.repeat(64),speakers:active.map(s=>({...s,id:speakerIds.get(s.id)})),utterances:groups.map(g=>({...g[0],id:crypto.randomUUID(),sourceUtteranceId:undefined,endUs:g.at(-1).endUs,recognizedText:text(g,'recognizedText'),effectiveText:text(g,'effectiveText'),speakerIds:g[0].speakerIds.map(id=>speakerIds.get(id))}))};
       (fixture.consolidationHistory??=[]).push(before);
       if(draft)fixture.archivedDrafts[before.id]=structuredClone(draft);
@@ -403,7 +400,6 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.promptPreferences);
     }
     case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
-    case "get_minutes_versions": return { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
     case "get_current_minutes": return null;
     case "get_minutes_draft": return null;
     case "get_minutes_exports": return [];

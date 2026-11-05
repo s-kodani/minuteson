@@ -84,7 +84,7 @@ pub(in crate::storage) fn inspect_workspaces(
             }
         }
         let mut documents = Vec::new();
-        for name in [PLAN, PARTIAL_PLAN] {
+        for name in [PARTIAL_PLAN] {
             partial::check_cancel(cancelled)?;
             let Some((bytes, stamp)) = root.read_json(name).unwrap_or(None) else {
                 continue;

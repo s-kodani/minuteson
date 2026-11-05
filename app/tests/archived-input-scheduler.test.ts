@@ -11,6 +11,7 @@ const row=(i:number,active=true):ArchivedInputRow=>({meetingId:id(1000+i),sessio
     delivery:{sequence:1,generation:1,leaseAgeMs:null,rendered:false,receiveId:null,status:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"device_disconnected"}},
   }]:[]}});
 const page=(rows:ArchivedInputRow[],next:string|null=null)=>({schemaVersion:3,recordings:rows,nextCursor:next});
+const ready=(value:unknown)=>({paused:false,value});
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function harness(initial:ArchivedInputRow[]=[]){
   let at=0,serial=0;const timers=new Map<number,{at:number;run:()=>void}>();
@@ -21,10 +22,10 @@ function harness(initial:ArchivedInputRow[]=[]){
     calls.push({at,request});if(held)return new Promise(resolve=>{hold=resolve;});if(fail)throw Error("read failed");
     if(request.kind==="page"){
       const found=rows.filter(r=>request.after===null||r.sessionId>request.after).slice().sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
-      return page(found.slice(0,32),found.length>32?found[31].sessionId:null);
+      return ready(page(found.slice(0,32),found.length>32?found[31].sessionId:null));
     }
     const recordings=rows.filter(r=>request.targets.some(t=>t.sessionId===r.sessionId&&t.meetingId===r.meetingId));
-    return {schemaVersion:1,recordings,missingSessionIds:request.targets.filter(t=>!recordings.some(r=>r.sessionId===t.sessionId)).map(t=>t.sessionId)};
+    return ready({schemaVersion:1,recordings,missingSessionIds:request.targets.filter(t=>!recordings.some(r=>r.sessionId===t.sessionId)).map(t=>t.sessionId)});
   },(_reading,error)=>{errors.push(error);});
   async function advance(ms:number){const end=at+ms;await flush();let runs=0;while(true){
     const next=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;
@@ -47,11 +48,11 @@ test("only unfinished owners are read and polling stops after authoritative empt
 test("events coalesce and invalidation during a hung read is replayed without overlap",async()=>{
   const h=harness();h.hold();h.s.start(false);await h.advance(0);
   h.s.invalidate();await h.advance(100);h.s.invalidate();await h.advance(2000);assert.equal(h.calls.length,1);
-  h.release(page([]));await h.advance(0);assert.equal(h.calls.length,2);assert.equal(h.calls[1].request.after,null);
+  h.release(ready(page([])));await h.advance(0);assert.equal(h.calls.length,2);assert.equal(h.calls[1].request.after,null);
   h.s.invalidate();await h.advance(100);h.s.invalidate();await h.advance(149);assert.equal(h.calls.length,2);await h.advance(1);assert.equal(h.calls.length,3);
 });
 test("pause fences late reads; resume starts fresh without waiting for the idle deadline",async()=>{
-  const h=harness();h.hold();h.s.start(false);await h.advance(0);h.s.setBlocked(true);h.release(page([row(1)]));await h.advance(10_000);
+  const h=harness();h.hold();h.s.start(false);await h.advance(0);h.s.setBlocked(true);h.release(ready(page([row(1)])));await h.advance(10_000);
   assert.equal(h.c.targets().length,0);assert.equal(h.calls.length,1);
   h.s.setBlocked(false);h.setRows([row(2,false)]);await h.advance(0);assert.equal(h.calls.length,2);assert.equal(h.c.paint(10_000).views[0].sessionId,id(2));
 });
@@ -113,7 +114,7 @@ test("target disappearance fences outstanding callbacks without changing discove
 test("startup admission stays idle until unblocked, and disposal rejects held responses",async()=>{
   const h=harness([row(1)]);h.s.start(true);await h.advance(120_000);assert.equal(h.calls.length,0);
   h.hold();h.s.setBlocked(false);await h.advance(0);assert.equal(h.calls.length,1);
-  h.s.dispose();h.release(page([row(1)]));await h.advance(10_000);
+  h.s.dispose();h.release(ready(page([row(1)])));await h.advance(10_000);
   assert.equal(h.c.targets().length,0);assert.equal(h.timers.size,0);
 });
 test("a UI meeting list that lags discovery is not proof of removal",()=>{

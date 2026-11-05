@@ -26,7 +26,7 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
   includeUnregisteredRecorded: ["review", "restored_unavailable"].includes(phase) ? null : d.unknownCount > 0, pathCount: d.fileCount + 1,
   processedFiles: phase === "files" ? 1 : ["availability", "awaiting_ack"].includes(phase) ? d.fileCount : 0,
   audioFiles: d.fileCount, audioBytes: 20 * d.fileCount, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: d.unknownCount, unclassifiedFiles: 1,
-  retained: { analysisRevisions: 2, utterances: 105, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 4, jobs: 3, externalExportRecords: 1 },
+  retained: { analysisRevisions: 2, utterances: 105, minutesRevisions: 2, drafts: 2, jobs: 3, externalExportRecords: 1 },
   tracks: [{ id: "11111111-1111-4111-8111-111111111111", kind: "mic", state: "ready", chunks: 2, durationUs: 60000000 }, { id: "21111111-1111-4111-8111-111111111111", kind: "system", state: "ready", chunks: 2, durationUs: 60000000 }], priorDeletionCompleted: phase === "awaiting_ack" });
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
 d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
@@ -45,7 +45,7 @@ export const audioDeletionIPC = async (command, args) => {
     if (d.listFail) throw Error("模擬音声削除一覧失敗");
     return { items: structuredClone(d.items), writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? "音声削除のため書込停止" : null };
   }
-  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required" };
+  if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です", reasonCode: "relocation_restart_required", deletionAvailable: false, deletionReason: "保存先の切替後は終了して再起動が必要です", deletionReasonCode: "relocation_restart_required" };
   if (command === "get_current_analysis") { d.analysisReads++; return structuredClone(analysis); }
   if (command === "get_transcript_draft") { d.draftReads++; return stampFixtureDraft(d.draft); }
   if (command === "save_transcript_draft") {
@@ -54,12 +54,11 @@ export const audioDeletionIPC = async (command, args) => {
     d.draft = { ...d.draft, payload: structuredClone(args.payload), lockVersion: d.draft.lockVersion + 1 };
     return stampFixtureDraft(d.draft);
   }
-  if (command === "get_analysis_versions") return { meetingLockVersion: 0, currentId: analysis.id, previousId: null, draft: { id: d.draft.id, lockVersion: d.draft.lockVersion }, versions: [{ id: analysis.id, revisionNo: 1, contentHash: analysis.contentHash, publicationState: "committed", utteranceCount: 1, createdAt: 1791160000000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } }] };
+  if (command === "get_minutes_source") return { meetingLockVersion: 0, currentId: analysis.id, contentHash: analysis.contentHash, draft: { id: d.draft.id, lockVersion: d.draft.lockVersion } };
   if (command === "get_diarization_preferences") { const engine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 1000, windowShiftMilli: 500, minDurationOnMs: 0, minDurationOffMs: 0 }; return { id: "profiles", payload: { standard: engine, highAccuracy: engine }, lockVersion: 0 }; }
   if (command === "get_meeting_analysis_audio") return { tracks: d.deleted ? [] : [{ id: analysis.utterances[0].trackId, kind: "mic", startUs: 0, endUs: 1000000 }] };
   if (["get_analysis_jobs", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_flow") return null;
-  if (command === "get_minutes_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };
   if (command === "review_meeting_audio_deletion" || command === "review_pending_audio_deletion") {
     if(d.admissionHold){
       const id=crypto.randomUUID();

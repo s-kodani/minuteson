@@ -2,7 +2,7 @@
 use super::*;
 use crate::storage::backup::{
     ledger::BatchPlan,
-    publication::{self, Publication},
+    publication::Publication,
     restore_fixed::{workspace::seal::SealedWorkspace, FixedData},
     restore_ids::RestoreIds,
 };
@@ -20,7 +20,6 @@ fn native_record(target: &Storage, meeting: &str) -> String {
         restored::inspect_one(&db, &target.managed_anchor, &op).unwrap(),
         None
     );
-    assert_eq!(db.query_row("SELECT count(*) FROM restore_omitted_assets WHERE meeting_id=?1 AND reason='recreatable_pcm'", [meeting], |r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(
         db.query_row(
             "SELECT count(*) FROM maintenance_paths WHERE operation_id=?1",

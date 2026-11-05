@@ -13,11 +13,6 @@ pub(crate) struct DiarizationEnginePreferences {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::diarization::sensitivity::is_standard"
-    )]
-    pub speech_sensitivity_milli: i32,
 }
 impl DiarizationEnginePreferences {
     pub(crate) fn capture(
@@ -43,7 +38,6 @@ impl DiarizationEnginePreferences {
                 window_shift_milli: self.window_shift_milli,
                 min_duration_on_ms: self.min_duration_on_ms,
                 min_duration_off_ms: self.min_duration_off_ms,
-                speech_sensitivity_milli: self.speech_sensitivity_milli,
             },
             mode,
             cancelled,
@@ -62,7 +56,6 @@ impl Default for DiarizationEnginePreferences {
             window_shift_milli: 100,
             min_duration_on_ms: 0,
             min_duration_off_ms: 0,
-            speech_sensitivity_milli: 0,
         }
     }
 }
@@ -87,7 +80,6 @@ pub(super) fn validate(payload: &DiarizationPreferences) -> Result<(), String> {
             || !(1..=1000).contains(&engine.window_shift_milli)
             || engine.min_duration_on_ms > 60000
             || engine.min_duration_off_ms > 60000
-            || !crate::diarization::sensitivity::valid(engine.speech_sensitivity_milli)
         {
             return Err("話者分離のスレッド数・閾値・窓移動比率・区間長が不正です".into());
         }

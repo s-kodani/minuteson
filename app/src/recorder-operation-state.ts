@@ -1,8 +1,8 @@
-export const operationSources = ["window_action", "confirmation", "theme_read", "info_read", "session_read"] as const;
+export const operationSources = ["window_action", "confirmation"] as const;
 export type OperationSource = typeof operationSources[number];
 export interface OperationEntry { source: OperationSource; revision: number; eventId: string | null; message: string | null; dismissed: boolean }
 export interface OperationSnapshot { schemaVersion: 1; entries: OperationEntry[] }
-export const operationNames: Record<OperationSource, string> = { window_action: "録音パネルのウィンドウ操作", confirmation: "録音終了確認の接続・表示", theme_read: "録音パネルの表示設定", info_read: "録音パネルの説明表示", session_read: "録音状態の接続" };
+export const operationNames: Record<OperationSource, string> = { window_action: "録音パネルのウィンドウ操作", confirmation: "録音終了確認の接続・表示" };
 export const emptyOperations = (): OperationSnapshot => ({ schemaVersion: 1, entries: operationSources.map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false })) });
 export function checkedOperations(input: unknown): OperationSnapshot {
   const s = input as OperationSnapshot;

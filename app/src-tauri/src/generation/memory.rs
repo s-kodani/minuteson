@@ -366,7 +366,7 @@ fn largest_fitting(
 }
 
 /// Called immediately before launching a cold generation worker, including
-/// compatibility checks and frozen legacy jobs. Never changes their context.
+/// compatibility checks. Keeps the selected context.
 pub(super) fn guard(
     config: &LlamaConfig,
     device: Option<&str>,

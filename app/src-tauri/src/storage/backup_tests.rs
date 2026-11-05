@@ -105,20 +105,11 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
         )
         .unwrap();
     assert_eq!(markdown, body.markdown);
-    assert_eq!(
-        saved
-            .query_row("SELECT count(*) FROM minutes_revisions", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        saved
-            .query_row("SELECT count(*) FROM evidence_links", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    let obsolete_tables: bool = saved.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name IN ('minutes_revisions', 'evidence_links'))",
+        [], |r| r.get(0),
+    ).unwrap();
+    assert!(!obsolete_tables);
     drop(original);
     drop(saved);
     snapshot
@@ -408,7 +399,7 @@ fn symlinked_parent_and_file_are_rejected_even_if_bytes_and_hash_match() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
-        let (meeting, managed) = canonical_asset(&storage, "alias");
+        let (_, managed) = canonical_asset(&storage, "alias");
         let path = storage
             .managed_path(Path::new(&managed.relative_path))
             .unwrap();
@@ -429,7 +420,7 @@ fn symlinked_parent_and_file_are_rejected_even_if_bytes_and_hash_match() {
 }
 
 #[test]
-fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
+fn schema_vocabulary_and_staged_bytes_corruption_are_detected() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = storage.create_meeting("破損検知").unwrap();
@@ -477,7 +468,7 @@ fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
         .lock()
         .unwrap()
         .execute(
-            "UPDATE schema_migrations SET checksum=?1 WHERE version=20",
+            "UPDATE schema_migrations SET checksum=?1",
             params!["0".repeat(64)],
         )
         .unwrap();
@@ -485,7 +476,7 @@ fn migration_vocabulary_and_staged_bytes_corruption_are_detected() {
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .err()
         .unwrap()
-        .contains("migration"));
+        .contains("非対応の会議DB形式"));
     assert!(storage.create_meeting("再開").is_ok());
 }
 

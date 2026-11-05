@@ -71,14 +71,14 @@ async page => {
   for(const kind of ["diarization","minutes_generation"]){
     await boot();await start({kind,meetingId:"meeting-1",meetingTitle:"会議B"});await dismiss();
     await page.evaluate(kind=>window.monBrowserFixture.notificationPublication=kind==="minutes_generation"?"markdown":"committed",kind);
-    await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:kind==="diarization"?"diar-output":null,outputMinutesId:null});
+    await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:kind==="diarization"?"diar-output":null});
     await status(kind==="diarization"?"話者分離の結果を保存しました":"議事録を保存しました").waitFor();await noWork();
     results.push(kind+" verifies its own meeting and output format");
   }
 
   await boot();await start({kind:"minutes_generation"});await dismiss();
   await page.evaluate(()=>{const f=window.monBrowserFixture;f.notificationPublication="markdown";f.notificationWarnings=[];});
-  await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:null,outputMinutesId:null});
+  await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:null});
   const success=host().locator(".toast-success").filter({hasText:"議事録を保存しました"});await success.waitFor();
   check(await host().locator(".toast-warning").filter({hasText:"書式や根拠リンク"}).count()===0,"format check warning survived");
   check(await host().locator(".toast-error").count()===0,"free format appears as an error");

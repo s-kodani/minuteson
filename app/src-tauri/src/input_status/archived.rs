@@ -373,92 +373,6 @@ impl ArchivedInputs {
                 .as_ref()
                 .or(fallback)
                 .ok_or("通知履歴の所有がありません")?;
-            let imported = match storage.closed_input_snapshot(&row.meeting_id, &row.session_id) {
-                Ok(imported) => {
-                    super::diagnostics::read_result(
-                        "archived-snapshot",
-                        Some(&row.session_id),
-                        Some(&row.meeting_id),
-                        None,
-                    );
-                    imported
-                }
-                Err(error) => {
-                    super::diagnostics::read_result(
-                        "archived-snapshot",
-                        Some(&row.session_id),
-                        Some(&row.meeting_id),
-                        Some(&error),
-                    );
-                    recordings.push(Row {
-                        meeting_id: row.meeting_id,
-                        session_id: row.session_id,
-                        title: row.title,
-                        batch: None,
-                        issue: Some("unavailable".into()),
-                        history_save_issue: Some("unavailable".into()),
-                    });
-                    batch_times.push(Instant::now());
-                    lease.validate_active()?;
-                    continue;
-                }
-            };
-            if let Some(snapshot) = imported {
-                // A DB-bound destination writer, not a producer-directory
-                // migration. On failure retain diagnostics but offer no claim.
-                let (batch, issue) = match storage.restored_input_page(
-                    &row.meeting_id,
-                    &row.session_id,
-                    lease,
-                    visible,
-                ) {
-                    Ok(batch) => {
-                        super::diagnostics::read_result(
-                            "archived-restored-delivery",
-                            Some(&row.session_id),
-                            Some(&row.meeting_id),
-                            None,
-                        );
-                        (batch, None)
-                    }
-                    Err(error) => {
-                        super::diagnostics::read_result(
-                            "archived-restored-delivery",
-                            Some(&row.session_id),
-                            Some(&row.meeting_id),
-                            Some(&error),
-                        );
-                        let (batch, pending) = snapshot.retained_diagnostics(&row.session_id)?;
-                        let issue = if pending {
-                            "deliveryUnavailable"
-                        } else {
-                            "unavailable"
-                        };
-                        (if pending { batch } else { None }, Some(issue.into()))
-                    }
-                };
-                let saved_history = snapshot.history_save_issue();
-                super::diagnostics::read_result(
-                    "archived-restored-final",
-                    Some(&row.session_id),
-                    Some(&row.meeting_id),
-                    saved_history.as_ref().err().map(String::as_str),
-                );
-                let history_save_issue = saved_history
-                    .unwrap_or(Some("unavailable"))
-                    .map(str::to_owned);
-                recordings.push(Row {
-                    meeting_id: row.meeting_id,
-                    session_id: row.session_id,
-                    title: row.title,
-                    batch,
-                    issue,
-                    history_save_issue,
-                });
-                batch_times.push(Instant::now());
-                lease.validate_active()?;
-                continue;
-            }
             // Final producer durability remains independent of delivery errors.
             let mut history_save_issue = Some("unavailable".into());
             let result = (|| {
@@ -553,22 +467,6 @@ impl ArchivedInputs {
             AckAction::Render => Action::Render,
             AckAction::Close => Action::Close,
         };
-        if storage
-            .closed_input_snapshot(&request.meeting_id, &request.session_id)?
-            .is_some()
-        {
-            return storage.restored_input_acknowledge(
-                &request.meeting_id,
-                &request.session_id,
-                lease,
-                &request.notice_id,
-                &request.recipient_id,
-                request.generation,
-                action,
-                request.receive_id.as_deref(),
-                visible,
-            );
-        }
         let handle = self.entry(storage, lease, &request.meeting_id, &request.session_id)?;
         let mut entry = handle
             .lock()

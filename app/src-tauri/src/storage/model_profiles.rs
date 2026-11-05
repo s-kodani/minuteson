@@ -333,8 +333,6 @@ pub(crate) struct ApplyPreview {
     pub diarization_cluster_threshold_milli: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diarization_speech_sensitivity_milli: Option<i32>,
     pub review_digest: String,
 }
 fn heads(db: &Connection) -> Result<(Heads, i64), String> {
@@ -572,7 +570,6 @@ fn preview(
     diarization_threads: Option<u32>,
     diarization_cluster_threshold_milli: Option<u32>,
     whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
-    diarization_speech_sensitivity_milli: Option<i32>,
 ) -> Result<ApplyPreview, String> {
     let (before, version) = settings(db, name, record.manifest.engine)?;
     let mut binding = Binding {
@@ -583,23 +580,16 @@ fn preview(
         models_root: models_root.into(),
         settings: before.configured(record, models_root)?,
     };
-    let tuning = diarization_threads.is_some()
-        || diarization_cluster_threshold_milli.is_some()
-        || diarization_speech_sensitivity_milli.is_some();
+    let tuning = diarization_threads.is_some() || diarization_cluster_threshold_milli.is_some();
     if tuning {
         if diarization_threads.is_some_and(|n| !(1..=64).contains(&n))
             || diarization_cluster_threshold_milli.is_some_and(|n| n > 2000)
-            || diarization_speech_sensitivity_milli
-                .is_some_and(|n| !crate::diarization::sensitivity::valid(n))
             || before != binding.settings
         {
             return Err("使用中の話者モデルのCPU使用量・自動統合の強さを確認してください".into());
         }
         match &mut binding.settings {
             Settings::Sherpa(settings) => {
-                if let Some(sensitivity) = diarization_speech_sensitivity_milli {
-                    settings.speech_sensitivity_milli = sensitivity;
-                }
                 if let Some(threads) = diarization_threads {
                     settings.threads = threads;
                 }
@@ -673,7 +663,6 @@ fn preview(
         diarization_threads,
         diarization_cluster_threshold_milli,
         whisper_vad_options,
-        diarization_speech_sensitivity_milli,
         review_digest: String::new(),
     };
     preview.review_digest = digest(&preview)?;
@@ -783,28 +772,6 @@ impl Storage {
         diarization_cluster_threshold_milli: Option<u32>,
         whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
     ) -> Result<ApplyPreview, String> {
-        self.preview_model_profile_with_sensitivity(
-            name,
-            record,
-            directory,
-            check,
-            diarization_threads,
-            diarization_cluster_threshold_milli,
-            whisper_vad_options,
-            None,
-        )
-    }
-    pub(crate) fn preview_model_profile_with_sensitivity(
-        &self,
-        name: ProfileName,
-        record: &PlacementRecord,
-        directory: &Path,
-        check: &str,
-        diarization_threads: Option<u32>,
-        diarization_cluster_threshold_milli: Option<u32>,
-        whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
-        diarization_speech_sensitivity_milli: Option<i32>,
-    ) -> Result<ApplyPreview, String> {
         let root = directory.parent().ok_or("モデル管理領域がありません")?;
         if directory.file_name().and_then(|p| p.to_str()) != Some(&record.package_id) {
             return Err("モデル配置IDと実体が一致しません".into());
@@ -822,7 +789,6 @@ impl Storage {
             diarization_threads,
             diarization_cluster_threshold_milli,
             whisper_vad_options,
-            diarization_speech_sensitivity_milli,
         )
     }
     pub(crate) fn apply_model_profile(
@@ -900,7 +866,6 @@ impl Storage {
                 expected.diarization_threads,
                 expected.diarization_cluster_threshold_milli,
                 expected.whisper_vad_options,
-                expected.diarization_speech_sensitivity_milli,
             )? != *expected
         {
             return Err("確認後にモデル構成・解析設定が変わりました。再確認してください".into());
@@ -973,27 +938,6 @@ impl Storage {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn remove_schema_for_test(db: &Connection) {
-    portable::history::remove_schema_for_test(db);
-    super::jobs::remove_rebinding_schema_for_test(db);
-    if db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=25)",
-            [],
-            |r| r.get::<_, bool>(0),
-        )
-        .unwrap()
-    {
-        assert_eq!(
-            db.query_row("SELECT count(*) FROM model_profiles", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-        db.execute_batch("DROP TRIGGER model_profile_fixed; DROP TRIGGER model_profile_no_delete; DROP TRIGGER profile_component_insert; DROP TRIGGER profile_component_fixed; DROP TRIGGER profile_component_no_delete; DROP INDEX model_profile_version; DELETE FROM schema_migrations WHERE version=25;").unwrap();
-    }
-}
 #[cfg(all(test, unix))]
 pub(in crate::storage) mod tests;
 

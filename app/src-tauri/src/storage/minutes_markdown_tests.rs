@@ -79,7 +79,6 @@ fn generation_publishes_exact_markdown_and_success_without_candidates_evidence_o
     assert_eq!(published.operation_id, source.operation_id);
     let succeeded = storage.get_job(&job.id).unwrap();
     assert_eq!(succeeded.state, "succeeded");
-    assert_eq!(succeeded.output_minutes_id, None);
     let human = storage
         .save_minutes_markdown(request(
             &source.meeting_id,
@@ -107,9 +106,12 @@ fn generation_publishes_exact_markdown_and_success_without_candidates_evidence_o
     let db = storage.connection.lock().unwrap();
     for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
         assert_eq!(
-            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
+            db.query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
             0,
             "{table}"
         );
@@ -123,7 +125,6 @@ fn generation_publishes_exact_markdown_and_success_without_candidates_evidence_o
         .unwrap(),
         0
     );
-    assert_eq!(db.query_row("SELECT COUNT(*) FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.target_kind='minutes'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(
         db.query_row("SELECT COUNT(*) FROM minutes_markdown", [], |r| r
             .get::<_, i64>(0))
@@ -646,12 +647,15 @@ fn replacing_text_creates_no_minutes_revisions_evidence_drafts_or_old_text_copy(
         "minutes_revisions",
         "minutes_items",
         "evidence_links",
-        "working_drafts",
         "edit_operations",
     ] {
         assert_eq!(
-            db.query_row::<i64, _, _>(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-                .unwrap(),
+            db.query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0)
+            )
+            .unwrap(),
             0,
             "{table}"
         );

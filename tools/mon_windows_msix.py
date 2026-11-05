@@ -26,8 +26,8 @@ UAP = "http://schemas.microsoft.com/appx/manifest/uap/windows10"
 UAP10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
 RESCAP = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 MIN_OS = "10.0.26100.0"
-RUNTIME_FILES = ("catalog.json", "embedding-index.json", "runtime-index.json", "runtime.tar", "mon-speaker-embedding.exe")
-RUNTIME_DIRS = ("asr", "llama", "llama11960", "sherpa", "whisper", "workers")
+RUNTIME_FILES = ("catalog.json", "embedding-index.json", "runtime.tar", "mon-speaker-embedding.exe")
+RUNTIME_DIRS = ("asr", "llama", "sherpa", "whisper", "workers")
 BASE_LOGOS = ("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")
 APP_ICON_SIZES = (16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256)
 APP_ICON_LOGOS = tuple(f"Square44x44Logo.targetsize-{size}{form}.png"
@@ -235,9 +235,7 @@ def generate_resource_index(root, stage_path, config, work, makepri=None):
     return output
 
 
-def verify_payload(package, config, files, payload_version=1):
-    if payload_version not in (1, PAYLOAD_VERSION):
-        raise ValueError("Unsupported MSIX payload version")
+def verify_payload(package, config, files):
     expected = {}
     for entry in files:
         if (not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256"}
@@ -253,8 +251,7 @@ def verify_payload(package, config, files, payload_version=1):
         expected[name] = entry
     required = {"AppxManifest.xml", "mon-desktop.exe", "mon-windows-capture.exe", "THIRD_PARTY_NOTICES.txt", "third-party-inventory.json", "notices/nlohmann-json-MIT.txt",
                 *("Assets/" + n for n in BASE_LOGOS), *("windows-runtime/" + n for n in RUNTIME_FILES)}
-    if payload_version == PAYLOAD_VERSION:
-        required.update({"resources.pri", *("Assets/" + n for n in APP_ICON_LOGOS)})
+    required.update({"resources.pri", *("Assets/" + n for n in APP_ICON_LOGOS)})
     if not required <= expected.keys():
         raise ValueError("Required MSIX payload is missing")
     with zipfile.ZipFile(package) as archive:
@@ -291,7 +288,7 @@ def finish(root, snapshot_path, stage_path, package, config, output):
     if snapshot.get("schemaVersion") != 1 or snapshot["source"] != evidence.source_identity(root):
         raise ValueError("Build source changed; previous MSIX retained")
     files = inventory(root, stage_path)
-    verify_payload(package, config, files, PAYLOAD_VERSION)
+    verify_payload(package, config, files)
     result = {**snapshot, "kind": "windows-store-msix", "payloadVersion": PAYLOAD_VERSION,
               "completedAt": evidence.utc_now(), "identity": config,
               "package": artifact(root, package), "files": files, "signing": "microsoft-store-pending",
@@ -324,8 +321,9 @@ def verify(root, manifest_path, package=None, require_current_source=False):
             raise ValueError("MSIX package differs from its build evidence")
     if actual.stat().st_size != expected["bytes"] or evidence.sha256_file(actual) != expected["sha256"]:
         raise ValueError("Published MSIX differs from its build evidence")
-    # Historical evidence predates qualified icons/PRI and remains verifiable.
-    verify_payload(actual, manifest["identity"], manifest["files"], manifest.get("payloadVersion", 1))
+    if manifest.get("payloadVersion") != PAYLOAD_VERSION:
+        raise ValueError("Unsupported MSIX payload version")
+    verify_payload(actual, manifest["identity"], manifest["files"])
     if require_current_source and manifest["identity"] != configuration(root):
         raise ValueError("Store configuration differs from this build")
     return {"currentSourceMatches": matches, "packageSha256": expected["sha256"], "payloadFiles": len(manifest["files"])}

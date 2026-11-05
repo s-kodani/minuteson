@@ -43,26 +43,6 @@ pub(crate) struct Preview {
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PathView {
-    pub relative_path: String,
-    pub directory: bool,
-    pub registered: bool,
-    pub missing: bool,
-    pub changed: bool,
-    pub stage_hint: Option<String>,
-    pub bytes: Option<u64>,
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PathPage {
-    pub confirmation_id: String,
-    pub offset: usize,
-    pub total: usize,
-    pub next_offset: Option<usize>,
-    pub entries: Vec<PathView>,
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct Receipt {
     pub operation_id: String,
     pub meeting_id: String,
@@ -392,6 +372,7 @@ impl Prepared {
             check,
         )
     }
+    #[cfg(test)]
     pub(crate) fn fresh(
         storage: &Storage,
         meeting: &str,
@@ -420,45 +401,6 @@ impl Prepared {
     }
     pub(crate) fn preview(&self) -> Preview {
         self.preview.clone()
-    }
-    pub(crate) fn page(&self, confirmation: &str, offset: usize) -> Result<PathPage, String> {
-        if confirmation != self.preview.confirmation_id {
-            return Err("削除対象の確認が変更されています".into());
-        }
-        let entries = &self.target.fixed().0.entries;
-        if offset > entries.len() || !offset.is_multiple_of(50) {
-            return Err("削除対象一覧の位置が不正です".into());
-        }
-        let end = offset.saturating_add(50).min(entries.len());
-        Ok(PathPage {
-            confirmation_id: confirmation.into(),
-            offset,
-            total: entries.len(),
-            next_offset: (end < entries.len()).then_some(end),
-            entries: entries[offset..end]
-                .iter()
-                .map(|e| PathView {
-                    relative_path: e.path.clone(),
-                    directory: e.directory,
-                    registered: e.registered.is_some(),
-                    missing: e.proof.is_none(),
-                    changed: e.registered.as_ref().is_some_and(|a| {
-                        e.proof.as_ref().is_some_and(|p| {
-                            p.size != a.size as u64
-                                || e.sha256.as_deref() != Some(a.sha256.as_str())
-                        })
-                    }),
-                    stage_hint: e.stage_hint.clone(),
-                    // Directory proof size is filesystem metadata, not file
-                    // content bytes. Keep its identity proof server-side.
-                    bytes: if e.directory {
-                        None
-                    } else {
-                        e.proof.as_ref().map(|p| p.size)
-                    },
-                })
-                .collect(),
-        })
     }
     pub(crate) fn refresh(
         &mut self,

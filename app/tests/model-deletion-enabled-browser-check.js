@@ -56,21 +56,17 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
   results.push("notification maintenance does not block the independent model deletion lane");
   for(const reason of ["AI処理中","モデル準備中","録音・音声保存中","保存先切替中"]){
-    await page.evaluate(reason=>{window.modelAdmissionFixture.availability={available:false,reason:"録音通知履歴の確認・更新中",deletionAvailable:false,deletionReason:reason};},reason);
+    await page.evaluate(reason=>{window.modelAdmissionFixture.availability={available:false,reason:"録音通知履歴の確認・更新中",reasonCode:"operation_active",deletionAvailable:false,deletionReason:reason,deletionReasonCode:"operation_active"};},reason);
     await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
     await page.getByText(`${reason}のため削除できません。`,{exact:true}).waitFor();
     await assertNoAvailabilityRetry();
   }
-  await page.evaluate(()=>{window.modelAdmissionFixture.availability={available:true,reason:null,deletionAvailable:true,deletionReason:null};});
+  await page.evaluate(()=>{window.modelAdmissionFixture.availability={available:true,reason:null,reasonCode:null,deletionAvailable:true,deletionReason:null,deletionReasonCode:null};});
   await page.waitForFunction(()=>!document.querySelector(".deletion-trigger").disabled);
   await page.evaluate(()=>{window.modelAdmissionFixture.recordingActive=true;window.modelAdmissionFixture.render();});
   await page.waitForFunction(()=>document.querySelector(".deletion-trigger").disabled);
   await page.getByText("録音・音声保存が完了すると削除できます。",{exact:true}).waitFor();
   results.push("AI, model preparation, recording and exclusive blockers retain their actual reasons");
-  await boot("&admission=legacy");
-  await button().click();
-  await expand(); await page.getByRole("region",{name:"進行中の処理",exact:true}).getByText("モデルの削除対象を確認中",{exact:true}).waitFor();
-  results.push("older native admission replies remain compatible");
   await boot();
   await page.evaluate(async()=>{
     const f=window.modelAdmissionFixture;

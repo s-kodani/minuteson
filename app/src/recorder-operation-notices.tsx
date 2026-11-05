@@ -1,4 +1,3 @@
-import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -48,15 +47,6 @@ export function useRecorderOperationPublisher(source: OperationSource, message: 
   }, [source, message, settled, resolved]);
   return error;
 }
-export function RecorderOperationDetails() {
-  const state = useRecorderOperations(), causes = state.snapshot.entries.filter(e => e.message);
-  return <section className="recorder-operation-details" aria-label="録音パネルの操作の要対応">
-    {state.error && <p role="alert">通知の読込は要確認：{state.error}</p>}
-    {causes.length > 0 && <><h3>操作の要対応：{causes.length}件</h3><p>通知を閉じても原因は消えません。メインを開く・停止確認は録音パネルの元の操作から再確認してください。ここから録音の停止やデータ変更は行いません。</p>
-      <ul>{causes.map(e => <li key={e.source}><h4>{operationNames[e.source]}</h4><p>{e.message}</p>{e.dismissed && <small>通知は閉じました。原因は確認待ちです。</small>}</li>)}</ul></>}
-    <IconButton label="通知の状態だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={!isTauri()} onClick={() => void state.refresh()} />
-  </section>;
-}
 export function RecorderOperationNotifications() {
   const state = useRecorderOperations();
   const dismiss = async (source: OperationSource, expectedRevision: number, eventId: string) => {
@@ -64,6 +54,6 @@ export function RecorderOperationNotifications() {
     catch { await state.refresh(); }
   };
   return <>
-    {state.snapshot.entries.filter(e=>e.source!=="theme_read"&&e.source!=="session_read").map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
+    {state.snapshot.entries.map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
   </>;
 }

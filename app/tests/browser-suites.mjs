@@ -1,6 +1,5 @@
 // Shared manifest for local and CI synthetic-browser regression tests.
 export const browserSuites = [
-  ["startup-notices", "startup-notices-browser-fixture.tsx", "startup-notices-browser-check.js"],
   ["prototype-markdown", null, "prototype-markdown-browser-check.js"],
   ["scrollbars", "scrollbars-browser-fixture.tsx", "scrollbars-browser-check.js"],
   ["compact-progress", "browser-fixture.js", "compact-progress-browser-check.js"],
@@ -68,7 +67,6 @@ export const browserSuites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["recorder-panel", null, "recorder-panel-browser-check.js"],
   ["recorder-waveform", null, "recorder-waveform-browser-check.js"],
-  ["recorder-info", null, "recorder-info-browser-check.js"],
   ["recorder-operations", null, "recorder-operation-browser-check.js"],
   ["startup-attention", null, "startup-attention-browser-check.js"],
   ["startup-instance", "startup-attention-browser-fixture.js", "startup-instance-browser-check.js"],

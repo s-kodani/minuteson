@@ -80,7 +80,7 @@ async (page, capturePath = name => name) => {
     check(await callCount("plugin:window|close")===1,`close unavailable during ${phase}`);
     check(await callCount("get_ui_preferences")===0,"startup titlebar read storage preferences");
   }
-  for(const query of ["label=recorder","label=recorder-info","label=recording-confirmation","platform=MacIntel","native=false"]) {
+  for(const query of ["label=recorder","label=recording-confirmation","platform=MacIntel","native=false"]) {
     await boot(query); await page.locator(".app-layout").waitFor();
     check(await chrome().count()===0,`titlebar appeared for ${query}`);
     check(await callCount("plugin:window|title")===0,`native titlebar calls for ${query}`);

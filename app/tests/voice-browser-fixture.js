@@ -35,13 +35,11 @@ bridge.invoke=async(command,args={})=>{
   if(command==="start_voice_job"){
     if(state.failStart)return {state:"rejected",message:"合成の登録失敗"};
     let job=data.jobs.find(j=>j.operationId===args.request.operationId);
-    if(!job){state.requests.push(copy(args.request));job={id:crypto.randomUUID(),meetingId:"meeting-0",meetingTitle:"会議A",kind:args.request.speakerId?"voice_registration":"voice_matching",state:"queued",operationId:args.request.operationId,inputHash:"a".repeat(64),specHash:"b".repeat(64),completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,outputMinutesId:null,pauseReason:null,retryOfJobId:null,attempt:1,createdAt:Date.now()};data.jobs.push(job);}
+    if(!job){state.requests.push(copy(args.request));job={id:crypto.randomUUID(),meetingId:"meeting-0",meetingTitle:"会議A",kind:args.request.speakerId?"voice_registration":"voice_matching",state:"queued",operationId:args.request.operationId,inputHash:"a".repeat(64),specHash:"b".repeat(64),completedUnits:0,totalUnits:1,errorCode:null,outputAnalysisId:null,pauseReason:null,retryOfJobId:null,attempt:1,createdAt:Date.now()};data.jobs.push(job);}
     if(state.loseResponse){state.loseResponse=false;throw Error("合成の受付応答欠落");}return {state:"accepted",job:copy(job)};
   }
   if(command==="retry_voice_audio_storage") {
     data.calls.push({command,args:copy(args)});
-    if(state.failAudioStorage)throw Error("合成の音声保存失敗");
-    for(const p of state.people)for(const s of p.samples)if(["pending","failed"].includes(s.audioStorageState))Object.assign(s,{audioStorageState:"ready",audioAvailable:true,audioStorageError:null});
     state.cleanupPending=false;return;
   }
   if(command==="manage_voice_person"){
@@ -62,7 +60,7 @@ bridge.invoke=async(command,args={})=>{
 state.complete=()=>{
   const job=data.jobs.find(j=>j.state==="queued"&&(j.kind==="voice_registration"||j.kind==="voice_matching"));
   if(!job)throw Error("no voice job");
-  if(job.kind==="voice_registration")state.people.push({id:"person-a",name:state.requests.at(-1).personName??"登録者",version:1,samples:[{id:"sample-a",modelHash:"a".repeat(64),extractorVersion:"test",sourceMeetingId:"meeting-0",sourceAvailable:true,audioAvailable:true,audioStorageState:"ready",audioStorageError:null,startUs:0,endUs:15e6,createdAt:0}]});
+  if(job.kind==="voice_registration")state.people.push({id:"person-a",name:state.requests.at(-1).personName??"登録者",version:1,samples:[{id:"sample-a",modelHash:"a".repeat(64),extractorVersion:"test",sourceMeetingId:"meeting-0",sourceAvailable:true,audioAvailable:true,audioStorageState:"ready",startUs:0,endUs:15e6,createdAt:0}]});
   else state.matches=[{id:"match-a",speakerId:"speaker-a",personId:"person-a",nameSnapshot:state.people[0].name,state:"candidate",similarity:0.98,modelHash:"a".repeat(64)}];
   job.state="succeeded";job.completedUnits=1;
 };

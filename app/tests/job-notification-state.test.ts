@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JobNotificationTracker, jobFailureDetail, assertNotificationJobs, verifiedJobOutput, type NotificationJob } from "../src/job-notification-state.ts";
-const job = (patch: Partial<NotificationJob> = {}): NotificationJob => ({ id: "job", kind: "transcription", meetingId: "meeting", meetingTitle: "会議A", operationId: "operation", inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: 100, updatedAt: 100, attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
+const job = (patch: Partial<NotificationJob> = {}): NotificationJob => ({ id: "job", kind: "transcription", meetingId: "meeting", meetingTitle: "会議A", operationId: "operation", inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: 100, updatedAt: 100, attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, ...patch });
 test("direct Markdown success needs an exact receipt and never announces a candidate",()=>{
   const tracker=new JobNotificationTracker(50);tracker.ingest([job({kind:"minutes_generation"})]);
   const done=job({kind:"minutes_generation",state:"succeeded",completedUnits:2,updatedAt:102});tracker.ingest([done]);
@@ -16,7 +16,7 @@ test("superseded Markdown generation is acknowledged silently without replacing 
   assert.equal(tracker.ingest([done]).pending.length,0);
 });
 test("Markdown receipt cannot pass for another kind, incomplete units or a revision candidate",()=>{
-  for(const done of [job({state:"succeeded",completedUnits:2}),job({kind:"minutes_generation",state:"succeeded",completedUnits:1}),job({kind:"minutes_generation",state:"succeeded",completedUnits:2,outputMinutesId:"candidate"})]) {
+  for(const done of [job({state:"succeeded",completedUnits:2}),job({kind:"minutes_generation",state:"succeeded",completedUnits:1}),job({kind:"minutes_generation",state:"succeeded",completedUnits:2,outputAnalysisId:"candidate"})]) {
     assert.throws(()=>verifiedJobOutput(done,{job:done,contentHash:"c".repeat(64),publicationState:"markdown"}));
   }
 });
@@ -71,16 +71,16 @@ test("stale progress does not replace newer state; malformed and changed identit
   const tracker = new JobNotificationTracker(50); tracker.ingest([job({ state: "running", updatedAt: 110 })]);
   assert.equal(tracker.ingest([job({ updatedAt: 105 })]).events.length, 0);
   assert.throws(() => tracker.ingest([job({ operationId: "different" })]));
-  for (const patch of [{ state: "invented" }, { totalUnits: -1 }, { attempt: 0 }, { specHash: "wrong" }, { outputMinutesId: undefined }]) assert.throws(() => assertNotificationJobs([job(patch as never)]));
+  for (const patch of [{ state: "invented" }, { totalUnits: -1 }, { attempt: 0 }, { specHash: "wrong" }, { outputAnalysisId: undefined }]) assert.throws(() => assertNotificationJobs([job(patch as never)]));
   assert.throws(() => assertNotificationJobs([job(), job()]));
 });
 test("output proof binds exact meeting, job, operation, fixed input and saved version", () => {
-  for (const kind of ["transcription", "diarization", "minutes_generation"] as const) {
-    const completed = job({ kind, state: "succeeded", outputAnalysisId: kind === "minutes_generation" ? null : "saved", outputMinutesId: kind === "minutes_generation" ? "saved" : null });
+  for (const kind of ["transcription", "diarization"] as const) {
+    const completed = job({ kind, state: "succeeded", outputAnalysisId: "saved" });
     const proof = { job: completed, contentHash: "c".repeat(64), publicationState: "candidate" };
     assert.equal(verifiedJobOutput(completed, proof), "candidate");
     assert.equal(verifiedJobOutput(completed, { ...proof, publicationState: "committed" }), "committed");
-    for (const patch of [{ id: "other" }, { meetingId: "other" }, { kind: "transcript_cleanup" }, { operationId: "other" }, { inputHash: "d".repeat(64) }, { specHash: "e".repeat(64) }, { state: "running" }, { outputAnalysisId: "other", outputMinutesId: "other" }]) assert.throws(() => verifiedJobOutput(completed, { ...proof, job: { ...completed, ...patch } }));
+    for (const patch of [{ id: "other" }, { meetingId: "other" }, { kind: "transcript_cleanup" }, { operationId: "other" }, { inputHash: "d".repeat(64) }, { specHash: "e".repeat(64) }, { state: "running" }, { outputAnalysisId: "other" }]) assert.throws(() => verifiedJobOutput(completed, { ...proof, job: { ...completed, ...patch } }));
     for (const patch of [{ contentHash: "not-a-hash" }, { publicationState: "internal_snapshot" }, { job: null }]) assert.throws(() => verifiedJobOutput(completed, { ...proof, ...patch }));
   }
 });

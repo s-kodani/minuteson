@@ -1,24 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InspectionAttempt, inspectionLabel, placementLabel, modelBodyAvailable, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "../src/model-inspection-state.ts";
+import { placementLabel, modelBodyAvailable, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelPlacementReceipt, type ModelPlacementEntry } from "../src/model-inspection-state.ts";
 import { canReviewApplication } from "../src/model-profile-state.ts";
 
-const report: ModelInspectionReport = { manifest: { modelName: "fixture", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", target: "macos_aarch64", licenseRef: "test only", quantization: null }, manifestHash: "a".repeat(64), reviewHash: "r", files: [], totalBytes: 0, engineCompatibility: "not_verified", publisherAuthenticity: "not_verified", installed: false, ready: false };
-test("a preflight never labels file hashes as AI readiness or publisher authentication", () => {
-  assert.match(inspectionLabel(report), /未導入/);
-  for (const field of ["installed", "ready", "engineCompatibility", "publisherAuthenticity"]) {
-    assert.throws(() => inspectionLabel({ ...report, [field]: field === "installed" || field === "ready" ? true : "verified" } as unknown as ModelInspectionReport));
-  }
-});
-test("cancelled and superseded inspection results cannot be displayed", () => {
-  const attempt = new InspectionAttempt();
-  assert.equal(attempt.cancel(), null);
-  attempt.begin("first"); assert.ok(attempt.accepts("first"));
-  assert.equal(attempt.cancel(), "first"); assert.equal(attempt.accepts("first"), false);
-  attempt.begin("second"); assert.equal(attempt.accepts("first"), false);
-  assert.equal(attempt.finish("first"), false); assert.ok(attempt.accepts("second"));
-  assert.equal(attempt.finish("second"), true); assert.equal(attempt.accepts("second"), false);
-});
 test("placement is not readiness and its response must bind operation and reviewed bytes", () => {
   const receipt: ModelPlacementReceipt = { packageId: "operation", reviewHash: "review", totalBytes: 100, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
   assert.doesNotThrow(() => assertPlacementReceipt(receipt, "operation", "review"));
@@ -66,7 +50,4 @@ test("runtime responses must bind the selected bytes, operation, preset and term
   for (const patch of [{ operationId: entry.packageId }, { packageId: summary.operationId }, { reviewHash: "b".repeat(64) }, { reviewHash: "a".repeat(63) }, { adapterRevision: 2 }, { state: "preparing" }, { state: "interrupted", errorMessage: "reason" }, { state: "unknown" }, { errorMessage: "not success" }, { state: "failed" }, { state: "failed", errorMessage: "" }, { state: "failed", errorMessage: "x\0y" }, { state: "failed", errorMessage: "あ".repeat(1366) }]) {
     assert.throws(() => assertCompatibilitySummary({ ...summary, ...patch } as never, summary.operationId, entry));
   }
-  const attempt = new InspectionAttempt();
-  attempt.begin(summary.operationId); attempt.cancel();
-  assert.equal(attempt.accepts(summary.operationId), false, "late success cannot override cancellation");
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupTranscriptRows, transcriptFragmentSeparator } from "../src/transcript-groups.ts";
+import { groupTranscriptRows } from "../src/transcript-groups.ts";
 import { retainedTextRows } from "../src/transcript-edit-session.ts";
 import type { Utterance } from "../src/transcript-state.ts";
 
@@ -44,14 +44,6 @@ test("continuous monologues get a paragraph break after a minute", () => {
   const rows = Array.from({ length: 61 }, (_, i) => row(String(i), i * 1_000_000));
   const groups = groupTranscriptRows(rows, rows);
   assert.deepEqual(groups.map(group => group.length), [60, 1]);
-});
-
-test("Japanese joins naturally while Latin words retain a space and existing whitespace is preserved", () => {
-  assert.equal(transcriptFragmentSeparator("本日は", "晴れです。"), "");
-  assert.equal(transcriptFragmentSeparator("Hello", "world."), " ");
-  assert.equal(transcriptFragmentSeparator("item", "2"), " ");
-  assert.equal(transcriptFragmentSeparator("Hello ", "world"), "");
-  assert.equal(transcriptFragmentSeparator("", "続き"), "");
 });
 
 test('automatic identification scores remain on their original rows instead of being consolidated away',()=>{

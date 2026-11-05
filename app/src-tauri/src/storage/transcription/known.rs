@@ -313,7 +313,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
-        let source = read_analysis_audio_plan(&tx, meeting, None)?;
+        let source = read_audio_plan(&tx, meeting)?;
         let known = read(&tx, meeting, &source)?;
         Ok((source, Some(known)))
     }

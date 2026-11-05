@@ -51,8 +51,7 @@ pub(crate) struct Retained {
     /// Current Markdown documents; no historical structured minutes are counted.
     pub minutes_revisions: u64,
     pub drafts: u64,
-    pub edit_operations: u64,
-    pub evidence_links: u64,
+
     pub jobs: u64,
     pub external_export_records: u64,
 }
@@ -244,8 +243,7 @@ impl Snapshot {
             utterances: rows("utterances")?,
             minutes_revisions: rows("minutes_markdown")?,
             drafts: rows("working_drafts")?,
-            edit_operations: rows("edit_operations")?,
-            evidence_links: rows("evidence_links")?,
+
             jobs: rows("processing_jobs")?,
             external_export_records: rows("export_records")?,
         })
@@ -383,12 +381,7 @@ fn disposition(entry: &FileEntry, records: &Records) -> Result<Disposition, Stri
         Some("import")
             if matches!(
                 leaf,
-                "original.wav"
-                    | "original.mp3"
-                    | "original.m4a"
-                    | "original.flac"
-                    | "audio.flac"
-                    | "decoded.caf"
+                "original.wav" | "original.mp3" | "original.m4a" | "original.flac" | "decoded.caf"
             ) =>
         {
             Ok(Disposition::ProducerAudioLeftover)
@@ -534,8 +527,7 @@ impl Census {
             utterances: rows("utterances")?,
             minutes_revisions: rows("minutes_markdown")?,
             drafts: rows("working_drafts")?,
-            edit_operations: rows("edit_operations")?,
-            evidence_links: rows("evidence_links")?,
+
             jobs: rows("processing_jobs")?,
             external_export_records: rows("export_records")?,
         };

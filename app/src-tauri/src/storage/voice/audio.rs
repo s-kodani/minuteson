@@ -74,7 +74,7 @@ pub(super) struct Clip {
 }
 impl Clip {
     pub(super) fn insert(&self, db: &Connection) -> Result<(), String> {
-        db.execute("INSERT INTO voice_sample_audio(id,relative_path,size_bytes,content_hash,frame_count,state) VALUES(?1,?2,?3,?4,?5,'ready') ON CONFLICT(id) DO UPDATE SET relative_path=excluded.relative_path,size_bytes=excluded.size_bytes,content_hash=excluded.content_hash,frame_count=excluded.frame_count,state='ready',error_message=NULL", params![self.id,self.path,self.size,self.hash,self.frames]).map_err(|e|e.to_string())?;
+        db.execute("INSERT INTO voice_sample_audio(id,relative_path,size_bytes,content_hash,frame_count,state) VALUES(?1,?2,?3,?4,?5,'ready')", params![self.id,self.path,self.size,self.hash,self.frames]).map_err(|e|e.to_string())?;
         Ok(())
     }
 }
@@ -263,8 +263,7 @@ impl Storage {
                 .map(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
                 .transpose()?;
             if keep && kind == "install" {
-                self.saved_voice_playback(&sample, &|| false)?
-                    .ok_or("確定済みの登録音声がありません")?;
+                self.saved_voice_playback(&sample, &|| false)?;
             }
             if kind == "delete" || !keep {
                 if let Some(f) = dir.optional(&leaf, false)? {
@@ -311,7 +310,13 @@ impl Storage {
         }
         Ok(())
     }
-    pub(crate) fn preserve_voice_audio(
+    pub(crate) fn retry_voice_audio_cleanup(&self) -> Result<(), String> {
+        let _guard = self.lock_voice_audio()?;
+        self.require_data_writable()?;
+        self.recover_voice_audio()
+    }
+
+    pub(crate) fn prepare_preserved_voice_audio(
         &self,
         meeting: Option<&str>,
         cancelled: &impl Fn() -> bool,
@@ -319,119 +324,28 @@ impl Storage {
         let _guard = self.lock_voice_audio()?;
         self.require_data_writable()?;
         self.recover_voice_audio()?;
-        let audio_scope = crate::audio::reuse::Scope::join_or_enter()?;
-        let samples: Vec<(String, String, Option<String>, Option<String>, i64, i64)> = {
-            let db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            if self.maintenance.load(std::sync::atomic::Ordering::Acquire) {
-                return Err("保存領域の保守が進行中です".into());
-            }
-            let mut q=db.prepare("SELECT s.id,s.person_id,s.source_meeting_id,s.source_track_id,s.start_us,s.end_us FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE coalesce(a.state,'pending')!='ready' AND (?1 IS NULL OR s.source_meeting_id=?1) ORDER BY s.source_meeting_id,s.id").map_err(|e|e.to_string())?;
-            let rows = q
-                .query_map([meeting], |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                    ))
-                })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            rows
-        };
-        let mut errors = Vec::new();
-        for (id, person, source, track, start, end) in samples {
-            if cancelled() {
-                return Err("登録音声の保存を中断しました".into());
-            }
-            let source_missing = {
-                let db = self
-                    .connection
-                    .lock()
-                    .map_err(|_| "DBロックを取得できません")?;
-                let exists: bool = db
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1)",
-                        [&source],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                let known_missing:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM audio_chunks c JOIN file_assets f ON f.id=c.file_asset_id WHERE c.track_id=?1 AND c.meeting_id=?2 AND f.state='missing') AND NOT EXISTS(SELECT 1 FROM audio_chunks c JOIN file_assets f ON f.id=c.file_asset_id WHERE c.track_id=?1 AND c.meeting_id=?2 AND f.state!='missing')",params![track,source],|r|r.get(0)).map_err(|e|e.to_string())?;
-                !exists
-                    || known_missing
-                    || source.is_none()
-                    || track.is_none()
-                    || super::super::deletion::audio::source_deleted(
-                        &db,
-                        source.as_deref().unwrap_or(""),
-                    )?
-            };
-            if source_missing {
-                self.connection.lock().map_err(|_|"DBロックを取得できません")?.execute("INSERT INTO voice_sample_audio(id,state) VALUES(?1,'unavailable') ON CONFLICT(id) DO UPDATE SET state='unavailable',error_message=NULL",[&id]).map_err(|e|e.to_string())?;
-                continue;
-            }
-            let result = (|| {
-                let _work = self.begin_meeting_work(
-                    source.as_deref().ok_or("元会議がありません")?,
-                    "voice_audio",
-                    None,
-                )?;
-                let clip = self.stage_voice_clip(
-                    &person,
-                    &id,
-                    source.as_deref().unwrap(),
-                    track.as_deref().ok_or("元トラックがありません")?,
-                    start,
-                    end,
-                    cancelled,
-                )?;
-                let db = self
-                    .connection
-                    .lock()
-                    .map_err(|_| "DBロックを取得できません")?;
-                clip.insert(&db)
-            })();
-            if let Err(error) = result {
-                self.connection.lock().map_err(|_|"DBロックを取得できません")?.execute("INSERT INTO voice_sample_audio(id,state,error_message) VALUES(?1,'failed',?2) ON CONFLICT(id) DO UPDATE SET state='failed',error_message=excluded.error_message",params![id,error]).map_err(|e|e.to_string())?;
-                errors.push(error);
-            }
-            self.recover_voice_audio()?;
-        }
-        audio_scope.verify()?;
-        if errors.is_empty() {
-            let db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            self.verify_preserved_voice_audio(&db, meeting)
-        } else {
-            Err(format!(
-                "登録音声を保存できません。再試行してください: {}",
-                errors.join("; ")
-            ))
-        }
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify_preserved_voice_audio(&db, meeting, cancelled)
     }
     pub(in crate::storage) fn require_preserved_voice_audio(
         &self,
         db: &Connection,
         meeting: &str,
     ) -> Result<(), String> {
-        self.verify_preserved_voice_audio(db, Some(meeting))
+        self.verify_preserved_voice_audio(db, Some(meeting), &|| false)
     }
     fn verify_preserved_voice_audio(
         &self,
         db: &Connection,
         meeting: Option<&str>,
+        cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE (?1 IS NULL OR s.source_meeting_id=?1) AND coalesce(a.state,'pending') NOT IN ('ready','unavailable'))",[meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if pending {
-            return Err("登録音声の保存が完了していないため会議・音声を削除できません。ボイス一覧から保存を再試行してください".into());
+        let missing:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM voice_samples s LEFT JOIN voice_sample_audio a ON a.id=s.id WHERE (?1 IS NULL OR s.source_meeting_id=?1) AND a.id IS NULL)",[meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if missing {
+            return Err("登録音声の保存記録がありません".into());
         }
         let mut q=db.prepare("SELECT a.id,a.relative_path,a.size_bytes,a.content_hash,a.frame_count,s.start_us,s.end_us,s.person_id FROM voice_sample_audio a JOIN voice_samples s ON s.id=a.id WHERE (?1 IS NULL OR s.source_meeting_id=?1) AND a.state='ready'").map_err(|e|e.to_string())?;
         let mut rows = q.query([meeting]).map_err(|e| e.to_string())?;
@@ -447,7 +361,7 @@ impl Storage {
                 r.get(2).map_err(|e| e.to_string())?,
                 r.get(3).map_err(|e| e.to_string())?,
                 r.get(4).map_err(|e| e.to_string())?,
-                &|| false,
+                cancelled,
             )?;
         }
         Ok(())
@@ -478,7 +392,7 @@ impl Storage {
         &self,
         id: &str,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<Option<PreparedAudio>, String> {
+    ) -> Result<PreparedAudio, String> {
         let resolve = || -> Result<Option<(String, i64, String, i64, i64, i64, String)>, String> {
             let db = self
                 .connection
@@ -486,9 +400,10 @@ impl Storage {
                 .map_err(|_| "DBロックを取得できません")?;
             db.query_row("SELECT a.relative_path,a.size_bytes,a.content_hash,a.frame_count,s.start_us,s.end_us,s.person_id FROM voice_sample_audio a JOIN voice_samples s ON s.id=a.id WHERE a.id=?1 AND a.state='ready'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(|e|e.to_string())
         };
-        let Some(before) = resolve()? else {
-            return Ok(None);
-        };
+        if cancelled() {
+            return Err("登録音声の再生準備を取り消しました".into());
+        }
+        let before = resolve()?.ok_or("再生できる登録音声がありません")?;
         let (path, size, hash, frames, start, end, person) = before.clone();
         if path != relative(&person, id)? {
             return Err("登録音声の所属が一致しません".into());
@@ -500,7 +415,7 @@ impl Storage {
         if resolve()?.as_ref() != Some(&before) {
             return Err("音声準備中に登録した声の参照先が変更されました".into());
         }
-        Ok(Some(PreparedAudio {
+        Ok(PreparedAudio {
             sample_rate: 16000,
             channels: 1,
             start_us: start,
@@ -513,7 +428,7 @@ impl Storage {
                 frames: frames as u64,
             }],
             clock: None,
-        }))
+        })
     }
     pub(super) fn journal_voice_deletion(
         &self,
@@ -587,7 +502,7 @@ mod tests {
         s.connection.lock().unwrap().execute("INSERT INTO voice_audio_operations(id,sample_key,relative_path,kind) VALUES(?1,?2,?3,'delete')",params![operation,sample,path]).unwrap();
         assert!(s.voice_people().unwrap().is_empty());
         assert!(s.voice_audio_storage_state().unwrap().cleanup_pending);
-        assert!(s.preserve_voice_audio(None, &NEVER).is_err());
+        assert!(s.retry_voice_audio_cleanup().is_err());
         drop(s);
         let s = Storage::open(root.path().into()).unwrap();
         assert!(s.voice_people().unwrap().is_empty());
@@ -597,7 +512,7 @@ mod tests {
             "reading status must not perform recovery"
         );
         std::fs::remove_file(s.root().join(&path)).unwrap();
-        s.preserve_voice_audio(None, &NEVER).unwrap();
+        s.retry_voice_audio_cleanup().unwrap();
         assert!(!s.voice_audio_storage_state().unwrap().cleanup_pending);
     }
     #[test]
@@ -627,46 +542,9 @@ mod tests {
         assert!(s.root().join(path).exists());
     }
     #[test]
-    fn existing_audio_backfill_crops_exact_interval_and_is_idempotent() {
-        let (_root, s, m, _) = fixture();
-        let person = seed_person(&s, &m);
-        let id = s.voice_people().unwrap()[0].samples[0].id.clone();
-        s.connection
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE voice_samples SET start_us=250000,end_us=750000 WHERE id=?1",
-                [&id],
-            )
-            .unwrap();
-        s.preserve_voice_audio(None, &NEVER).unwrap();
-        let bytes = std::fs::read(s.root().join(relative(&person, &id).unwrap())).unwrap();
-        assert_eq!(bytes.len(), 44 + 8000 * 2);
-        let samples: Vec<i16> = bytes[44..]
-            .chunks_exact(2)
-            .map(|v| i16::from_le_bytes(v.try_into().unwrap()))
-            .collect();
-        assert!(samples[..4000].iter().all(|v| *v == 8192));
-        assert!(samples[4000..].iter().all(|v| *v == -16384));
-        s.preserve_voice_audio(None, &NEVER).unwrap();
-        assert_eq!(
-            std::fs::read(s.root().join(relative(&person, &id).unwrap())).unwrap(),
-            bytes
-        );
-        assert_eq!(
-            s.connection
-                .lock()
-                .unwrap()
-                .query_row("SELECT count(*) FROM voice_audio_operations", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-    }
-    #[test]
     fn incomplete_install_is_recovered_and_deleting_sample_removes_its_file() {
-        let (_root, s, m, _) = fixture();
-        let person = seed_person(&s, &m);
+        let (_root, s, m, speaker) = fixture();
+        let person = register(&s, &m, &speaker);
         let orphan = Uuid::new_v4().to_string();
         let clip = s
             .stage_voice_clip(&person, &orphan, &m, "track", 0, 500000, &NEVER)
@@ -674,7 +552,7 @@ mod tests {
         assert!(s.root().join(&clip.path).exists());
         s.recover_voice_audio().unwrap();
         assert!(!s.root().join(&clip.path).exists());
-        s.preserve_voice_audio(None, &NEVER).unwrap();
+        s.retry_voice_audio_cleanup().unwrap();
         let p = s.voice_people().unwrap().remove(0);
         let sample = &p.samples[0].id;
         let path = s.root().join(relative(&person, sample).unwrap());
@@ -687,27 +565,9 @@ mod tests {
         assert!(s.voice_people().unwrap()[0].samples.is_empty());
     }
     #[test]
-    fn preservation_failure_blocks_deletion_and_retry_saves_without_models() {
-        let (_root, s, m, _) = fixture();
-        seed_person(&s, &m);
-        std::fs::write(s.root().join("voices"), b"block creation").unwrap();
-        assert!(s.preserve_voice_audio(Some(&m), &NEVER).is_err());
-        assert_eq!(
-            s.voice_people().unwrap()[0].samples[0].audio_storage_state,
-            "failed"
-        );
-        assert!(s.reserve_meeting_deletion(&m).is_err());
-        assert!(s.get_meeting(&m).unwrap().is_some());
-        std::fs::remove_file(s.root().join("voices")).unwrap();
-        s.preserve_voice_audio(None, &NEVER).unwrap();
-        s.reserve_meeting_deletion(&m).unwrap();
-        s.release_meeting_deletion(&m).unwrap();
-    }
-    #[test]
     fn corrupt_owned_audio_is_rejected_and_source_missing_preserves_features() {
-        let (_root, s, m, _) = fixture();
-        let person = seed_person(&s, &m);
-        s.preserve_voice_audio(None, &NEVER).unwrap();
+        let (_root, s, m, speaker) = fixture();
+        let person = register(&s, &m, &speaker);
         let id = s.voice_people().unwrap()[0].samples[0].id.clone();
         let path = s.root().join(relative(&person, &id).unwrap());
         let mut bytes = std::fs::read(&path).unwrap();
@@ -719,7 +579,7 @@ mod tests {
         assert!(s.reserve_meeting_deletion(&m).is_err());
         let (_root, s, _, _) = fixture();
         seed_person(&s, "deleted-meeting");
-        s.preserve_voice_audio(None, &NEVER).unwrap();
+        s.retry_voice_audio_cleanup().unwrap();
         let sample = s.voice_people().unwrap().remove(0).samples.remove(0);
         assert_eq!(sample.audio_storage_state, "unavailable");
         assert!(!sample.audio_available);

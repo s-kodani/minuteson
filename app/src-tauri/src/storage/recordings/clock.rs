@@ -92,6 +92,9 @@ impl CaptureManifest {
         Ok(true)
     }
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
+        if self.backend == "wasapi" && self.clock_mapping_source.is_none() {
+            return Err("録音の時計対応の出所がありません".into());
+        }
         if let Some(source) = &self.clock_mapping_source {
             if source != "sealed_raw_v1"
                 || self.backend != "wasapi"

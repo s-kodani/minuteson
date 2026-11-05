@@ -35,7 +35,7 @@ fn split_transcript(storage: &Storage) -> String {
                 start_us: 500_000,
                 end_us: 1_000_000,
                 effective_text: "後半".into(),
-                speaker_ids: vec![speaker],
+                speaker_ids: vec![],
             },
         ],
     });
@@ -79,27 +79,28 @@ fn saved_split_transcript_becomes_one_current_baseline_without_edit_history() {
     );
     assert_eq!(view.speakers.len(), 1);
     assert_eq!(view.speakers[0].label, "手動話者");
-    assert!(view
-        .utterances
-        .iter()
-        .all(|u| u.speaker_ids == vec![view.speakers[0].id.clone()]));
+    assert_eq!(
+        view.utterances[0].speaker_ids,
+        vec![view.speakers[0].id.clone()]
+    );
+    assert!(view.utterances[1].speaker_ids.is_empty());
     assert!(target
         .load_transcript_draft(&receipt.meeting_ids[0])
         .unwrap()
         .is_none());
     let db = target.connection.lock().unwrap();
-    for table in [
-        "edit_operations",
-        "transcript_edit_recovery",
-        "processing_jobs",
-    ] {
-        assert_eq!(
-            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-    }
+    let tx = db.unchecked_transaction().unwrap();
+    let markers =
+        crate::storage::speaker_assignment_update::manual_lineages(&tx, &view.id).unwrap();
+    let lineages = crate::storage::minutes_input::lineage_map(&tx, "utterances", &view.id).unwrap();
+    assert_eq!(markers, lineages.into_values().collect());
+    tx.rollback().unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM processing_jobs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
     assert_eq!(
         db.query_row("SELECT count(*) FROM analysis_revisions", [], |r| r
             .get::<_, i64>(0))
