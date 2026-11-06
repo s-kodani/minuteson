@@ -98,12 +98,12 @@ async page=>{
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
     await seed({title:"保存済みの点検会議",count:0,both:true,loss:2,historySaveIssue:"failed"});
-    await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
-    // The previous source can remain until the bounded cursor traversal wraps
-    // and completes an authoritative new cycle. Wait for its normal removal;
-    // never dismiss a card or delete a receipt to make this check pass.
+    // Let the cursor complete a new cycle and retire the previous recording's
+    // live toasts before interacting with the notification history.
     await page.waitForFunction(()=>[...document.querySelectorAll(".toast-host .toast-card")].every(e=>! /終了した録音.*(?:マイク|PC音声)/u.test(e.textContent??"")));
+    await openHistory();
     const saved=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
+    await saved.waitFor();
     let savedText=await saved.innerText();
     check(savedText.includes("接続記録の保存処理でエラーが発生しました")&&savedText.includes("マイクの接続通知を2件残せませんでした")&&savedText.includes("PC音声の接続通知を2件残せませんでした"),"saved diagnosis/loss did not reach production review UI");
     check(!savedText.includes("過去の接続状況を確認できません"),"readable saved diagnosis was labelled unreadable");
