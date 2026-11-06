@@ -5,20 +5,24 @@ import { subscribeInvalidations } from "./native-snapshots";
 import { observeInvalidations } from "./snapshot-resource";
 import { browserFocus, browserSchedule } from "./snapshot-browser";
 import { useEffect, useRef, useState } from "react";
-import { flushPendingEdits } from "./draft-save";
+import { flushPendingEdits, TranscriptOperationBusy } from "./draft-save";
 import { IssueNotice } from "./toast";
 import type { AnalysisFlow } from "./analysis-flow-state";
 import { useActionConfirmation } from "./confirmation-service";
 import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import type { RegenerationRequest, RegenerationTarget } from "./transcription-regeneration";
 import { transcriptionAdmissions } from "./transcription-admission";
+import { LoadingOverlay } from "./loading-overlay";
+import { errorMessage } from "./app-error";
+
+type MeetingRead = <T>(step: "get_meeting" | "list_meetings", work: () => Promise<T>) => Promise<T>;
 
 /** Meeting actions contain no model settings, candidate review or adoption.
  * Native recording/import completion starts the global-settings flow.
  */
-export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost }: {
-  meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; recordingActive: boolean; locked: boolean;
-  onHeadChanged: () => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
+export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, visible, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost }: {
+  meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; recordingActive: boolean; locked: boolean; visible: boolean;
+  onHeadChanged: (read: MeetingRead) => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onReplaceGenerated: (flow: AnalysisFlow) => Promise<void>;
   onGenerationStarted?: () => void;
   actionsHost?: HTMLElement | null;
@@ -39,9 +43,27 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     if (!isTauri()) return;
     let disposed = false;
     let previousFlow: string | undefined;
+    const failures = new Map<string, string>();
+    const diagnose = async <T,>(
+      step: Parameters<MeetingRead>[0] | "subscribe_analysis_events" | "get_analysis_flow" | "flush_pending_transcript_edits",
+      work: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        const value = await work();
+        failures.delete(step);
+        return value;
+      } catch (cause) {
+        const message = (cause instanceof Error ? cause.message : errorMessage(cause)).trim().slice(0, 1024) || "詳細なし";
+        if (!disposed && failures.get(step) !== message) {
+          failures.set(step, message);
+          void invoke("record_meeting_open_failure", { meetingId, step, message }).catch(() => {});
+        }
+        throw cause;
+      }
+    };
     const resource = observeInvalidations({
       read: async () => {
-          const next = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
+          const next = await diagnose("get_analysis_flow", () => invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId }));
           if (disposed) return;
           // The first read is saved history, not a newly failed operation.
           // Only changes observed while this view is open announce a toast.
@@ -52,8 +74,21 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
           setFlow(next);
           const output = next?.stage === "review" ? next.diarizationJob?.outputAnalysisId : null;
           if (output && completed.current !== output) {
-            await flushPendingEdits("transcription");
-            await onHeadChanged();
+            const ready = await diagnose("flush_pending_transcript_edits", async () => {
+              try { await flushPendingEdits("transcription"); return true; }
+              catch (cause) {
+                if (cause instanceof TranscriptOperationBusy) return false;
+                throw cause;
+              }
+            });
+            if (disposed) return;
+            if (!ready) {
+              // The read succeeded. Retry the pending output on the next refresh
+              // without remounting an editor that is still applying an operation.
+              setRefreshError("");
+              return;
+            }
+            await onHeadChanged(diagnose);
             if (disposed) return;
             completed.current = output;
           }
@@ -61,7 +96,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
           // Otherwise a late failed poll survives a successful new generation.
           setRefreshError("");
       },
-      subscribe: notify => subscribeInvalidations(["analysis-flow-changed", "analysis-job-changed"], notify),
+      subscribe: notify => diagnose("subscribe_analysis_events", () => subscribeInvalidations(["analysis-flow-changed", "analysis-job-changed"], notify)),
       error: cause => { if (!disposed) setRefreshError(String(cause)); },
       intervalMs: 3000, schedule: browserSchedule, focus: browserFocus,
     });
@@ -155,7 +190,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   </>;
   return <>
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || flow?.errorMessage} historyOnly={!error && flowHistoryOnly} />
-    {refreshError && <p role="status">文字起こしの状態を確認中です。</p>}
+    <LoadingOverlay active={visible && !!refreshError} label="文字起こしの状態を確認中です。" />
     {actionsHost ? createPortal(actions, actionsHost) : <div className="analysis-actions">{actions}</div>}
   </>;
 }

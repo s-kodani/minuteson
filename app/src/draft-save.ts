@@ -119,6 +119,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
 }
 
 export type PendingEditReason = "leave" | "tab" | "transcription";
+export class TranscriptOperationBusy extends Error {}
 type FlushEdits = (reason: PendingEditReason) => Promise<void>;
 type HasPendingEdits = (reason: PendingEditReason) => boolean;
 const pendingEdits = new Map<FlushEdits, HasPendingEdits>();

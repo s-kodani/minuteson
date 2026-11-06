@@ -153,6 +153,7 @@ mockIPC(async (command, args) => {
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
+    case "record_meeting_open_failure": return null;
     case "get_storage_bootstrap": return {meetingRoot:"/synthetic/meetings",activeMeetingRoot:"/synthetic/meetings",restartRequired:false,modelsRoot:"/synthetic/models",bootstrapPath:"/synthetic/config/bootstrap.json",revision:0,origin:"default",pendingOperationId:null,pendingTarget:null,keptMoves:[]};
     case "get_minutes_markdown": return null;
     case "get_official_model_options": return [];

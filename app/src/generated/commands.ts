@@ -2,6 +2,7 @@
 export interface CommandArguments {
   "get_window_environment": Record<string, never>;
   "get_credits": Record<string, never>;
+  "record_meeting_open_failure": { "meetingId": string; "step": string; "message": string };
   "get_internal_logs": { "query": unknown };
   "get_recording_recovery": Record<string, never>;
   "get_startup_report": Record<string, never>;
@@ -168,6 +169,34 @@ export const commandContracts = {
     "response": {
       "type": "Result<Credits,mon_contracts::AppError>",
       "ok": "Credits",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "record_meeting_open_failure": {
+    "async": false,
+    "arguments": [
+      {
+        "name": "meeting_id",
+        "wireName": "meetingId",
+        "type": "String",
+        "optional": false
+      },
+      {
+        "name": "step",
+        "wireName": "step",
+        "type": "String",
+        "optional": false
+      },
+      {
+        "name": "message",
+        "wireName": "message",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
       "error": "mon_contracts::AppError"
     }
   },

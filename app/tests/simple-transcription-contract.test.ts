@@ -8,7 +8,7 @@ test("meeting UI has no candidates, model preferences or global editing options"
   const view = source("analysis.tsx") + source("transcript.tsx");
   assert.doesNotMatch(view, /adopt_analysis|restore_analysis|save_analysis_preferences|save_diarization_preferences|undo_transcript_edit|TranscriptRecovery|DiarizationPanel|文字起こしの編集オプション|編集オプション/);
   assert.match(source("analysis.tsx"), /regenerate_transcription/);
-  assert.match(source("analysis.tsx"), /await flushPendingEdits\("transcription"\)/);
+  assert.match(source("analysis.tsx"), /await flushPendingEdits\("transcription"\)[\s\S]*?if \(!ready\)[\s\S]*?return;[\s\S]*?await onHeadChanged\(diagnose\)/);
   assert.doesNotMatch(source("analysis.tsx"),/retryOperations|retry_transcription|retry_diarization|>再試行<\/button>/);
 });
 test("removed editing and candidate commands are not exposed by the application", () => {

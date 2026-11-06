@@ -150,6 +150,17 @@ pub(super) fn consolidate_copied_rows(
     let mut manual: std::collections::BTreeSet<String> =
         serde_json::from_value(config["manualAssignmentLineages"].clone())
             .map_err(|e| e.to_string())?;
+    let mut mark_manual = tx.prepare("UPDATE utterance_speakers SET assignment_source='manual' WHERE utterance_id=?1 AND analysis_revision_id=?2 AND EXISTS(SELECT 1 FROM utterance_speakers WHERE analysis_revision_id=?2 AND utterance_id IN (SELECT value FROM json_each(?3)) AND assignment_source='manual')").map_err(|e| e.to_string())?;
+    let mut merge_utterance = tx.prepare("UPDATE utterances SET lineage_id=?1,start_us=?2,end_us=?3,recognized_text=?4,effective_text=?5,confidence=NULL WHERE id=?6 AND analysis_revision_id=?7").map_err(|e| e.to_string())?;
+    let mut delete_assignments = tx
+        .prepare("DELETE FROM utterance_speakers WHERE utterance_id=?1 AND analysis_revision_id=?2")
+        .map_err(|e| e.to_string())?;
+    let mut delete_utterance = tx
+        .prepare("DELETE FROM utterances WHERE id=?1 AND analysis_revision_id=?2")
+        .map_err(|e| e.to_string())?;
+    let mut find_copy = tx
+        .prepare("SELECT id FROM utterances WHERE analysis_revision_id=?1 AND lineage_id=?2")
+        .map_err(|e| e.to_string())?;
     for group in groups {
         let originals = group
             .iter()
@@ -163,28 +174,37 @@ pub(super) fn consolidate_copied_rows(
         let targets = originals
             .iter()
             .map(|lineage| {
-                tx.query_row(
-                    "SELECT id FROM utterances WHERE analysis_revision_id=?1 AND lineage_id=?2",
-                    params![id, lineage],
-                    |r| r.get::<_, String>(0),
-                )
-                .map_err(|e| e.to_string())
+                find_copy
+                    .query_row(params![id, lineage], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
         let lineage = Uuid::new_v4().to_string();
-        tx.execute("UPDATE utterance_speakers SET assignment_source='manual' WHERE utterance_id=?1 AND analysis_revision_id=?2 AND EXISTS(SELECT 1 FROM utterance_speakers WHERE analysis_revision_id=?2 AND utterance_id IN (SELECT value FROM json_each(?3)) AND assignment_source='manual')",params![targets[0],id,serde_json::to_string(&targets).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
-        tx.execute("UPDATE utterances SET lineage_id=?1,start_us=?2,end_us=?3,recognized_text=?4,effective_text=?5,confidence=NULL WHERE id=?6 AND analysis_revision_id=?7",params![lineage,group[0].start_us,group.last().unwrap().end_us,joined(group,true),joined(group,false),targets[0],id]).map_err(|e|e.to_string())?;
+        mark_manual
+            .execute(params![
+                targets[0],
+                id,
+                serde_json::to_string(&targets).map_err(|e| e.to_string())?
+            ])
+            .map_err(|e| e.to_string())?;
+        merge_utterance
+            .execute(params![
+                lineage,
+                group[0].start_us,
+                group.last().unwrap().end_us,
+                joined(group, true),
+                joined(group, false),
+                targets[0],
+                id
+            ])
+            .map_err(|e| e.to_string())?;
         for removed in &targets[1..] {
-            tx.execute(
-                "DELETE FROM utterance_speakers WHERE utterance_id=?1 AND analysis_revision_id=?2",
-                params![removed, id],
-            )
-            .map_err(|e| e.to_string())?;
-            tx.execute(
-                "DELETE FROM utterances WHERE id=?1 AND analysis_revision_id=?2",
-                params![removed, id],
-            )
-            .map_err(|e| e.to_string())?;
+            delete_assignments
+                .execute(params![removed, id])
+                .map_err(|e| e.to_string())?;
+            delete_utterance
+                .execute(params![removed, id])
+                .map_err(|e| e.to_string())?;
         }
         let mut manually_assigned = false;
         for original in originals {
@@ -285,7 +305,7 @@ impl Storage {
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let (mut source, draft, title, created, started) =
+        let (source, draft, title, created, started) =
             super::minutes_input::current_working(&tx, &request.meeting_id)?;
         let stamp = draft.as_ref().map(|d| DraftStamp {
             id: d.id.clone(),
@@ -320,12 +340,16 @@ impl Storage {
         if source.content_hash != request.expected_content_hash || stamp != request.expected_draft {
             return Err("発言統合の前に編集内容が変更されています。再読込してください".into());
         }
+        let empty_payload = TranscriptDraftPayload::default();
         let payload = draft
             .as_ref()
-            .map(|d| d.payload.clone())
-            .unwrap_or_default();
-        let base = source.clone();
-        super::minutes_input::apply_edits(&mut source, &payload);
+            .map_or(&empty_payload, |draft| &draft.payload);
+        let edited = draft.as_ref().map(|_| {
+            let mut view = source.clone();
+            super::minutes_input::apply_edits(&mut view, payload);
+            view
+        });
+        let working_view = edited.as_ref().unwrap_or(&source);
         let gaps = {
             let mut q=tx.prepare("SELECT g.track_id,g.start_us,g.end_us FROM audio_gaps g JOIN audio_tracks t ON t.id=g.track_id WHERE t.meeting_id=?1 AND g.recovered=0 ORDER BY g.track_id,g.start_us").map_err(|e|e.to_string())?;
             let rows = q
@@ -336,27 +360,27 @@ impl Storage {
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?
         };
-        let groups = groups(&source.utterances, &gaps);
+        let groups = groups(&working_view.utterances, &gaps);
         let voice_busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE meeting_id=?1 AND input_analysis_id=?2 AND kind IN ('voice_registration','voice_matching','speaker_completion') AND state IN ('queued','running','pausing','paused','interrupted'))",params![request.meeting_id,source.id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if groups.is_empty() || voice_busy {
             return Ok(Reply {
-                analysis: base,
+                analysis: source,
                 draft,
                 changed: false,
             });
         }
         let working = super::minutes_input::working_hash(
             &tx,
-            &source,
+            working_view,
             &title,
             created,
             started,
-            Some(&payload),
+            Some(payload),
         )?;
         let id = super::minutes_input::copy_snapshot_with_consolidation(
             &tx,
-            &source,
-            &payload,
+            working_view,
+            payload,
             &title,
             created,
             started,
@@ -371,7 +395,14 @@ impl Storage {
         )
         .map_err(|e| e.to_string())?;
         tx.execute("UPDATE meetings SET current_analysis_id=?1,lock_version=lock_version+1,updated_at=?3 WHERE id=?4 AND current_analysis_id=?2",params![id,source.id,now_ms()?,request.meeting_id]).map_err(|e|e.to_string())?;
-        let hash = super::revisions::analysis_content_hash(&tx, &id)?;
+        // The snapshot writer finalized this hash in the same transaction.
+        let hash: String = tx
+            .query_row(
+                "SELECT content_hash FROM analysis_revisions WHERE id=?1 AND publication_state='committed'",
+                [&id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
         let analysis =
             super::analysis::read_analysis_content(&tx, &request.meeting_id, &id, &hash)?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -383,7 +414,7 @@ impl Storage {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     fn fixture() -> (tempfile::TempDir, Storage, Request) {
