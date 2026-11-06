@@ -79,12 +79,32 @@ async (page,capturePath)=>{
     const ids=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==='start_capture_test').map(c=>c.args.request.runId));
     check(ids[0]!==ids[1]&&await count('discard_capture_test')===1,'retest reused the capture identity');
     await page.evaluate(()=>window.closeFixture.testReady());await ready();
-    for(const width of [1200,390]){
-      await page.setViewportSize({width,height:800});
-      check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1),'cleanup dialog overflows');
-      await panel().screenshot({path:capturePath(`test-auto-cleanup-${width}.png`)});
+    await panel().getByRole('button',{name:'PCのテスト音声を再生',exact:true}).click();
+    const player=panel().locator('.capture-test-audio > .audio-player');
+    await player.getByRole('button',{name:'一時停止',exact:true}).click();
+    await page.mouse.move(0,0);
+    for(const width of [960,390]){
+      await page.setViewportSize({width,height:640});
+      check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1),'capture test dialog overflows horizontally');
+      check(await player.evaluate(e=>{
+        const style=getComputedStyle(e);
+        return e.scrollWidth<=e.clientWidth+1&&['Top','Right','Bottom','Left'].every(side=>
+          parseFloat(style[`padding${side}`])>=16&&parseFloat(style[`border${side}Width`])>0);
+      }),'playback panel overflows or lacks padding and a border on all four sides');
+      check(await panel().locator('.capture-test-audio > .card-actions').evaluate((e,stacked)=>{
+        const [mic,pc]=Array.from(e.children,child=>child.getBoundingClientRect());
+        return stacked?pc.top>=mic.bottom:Math.abs(pc.top-mic.top)<=1&&pc.left>=mic.right;
+      },width===390),'test audio choices do not fit the expected column layout');
+      await player.scrollIntoViewIfNeeded();
+      for(const theme of ['light','dark']){
+        await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+        await panel().screenshot({path:capturePath(`capture-test-playback-${width}-${theme}.png`)});
+      }
     }
-    await close().click();await panel().waitFor({state:'hidden'});await released();results.push('retest releases its predecessor and both dialog sizes fit');
+    await player.getByRole('button',{name:'再生',exact:true}).click();
+    await player.getByRole('button',{name:'一時停止',exact:true}).waitFor();
+    await close().click();await panel().waitFor({state:'hidden'});await released();
+    results.push('retest releases its predecessor and PC playback pauses, resumes, and fits both dialog sizes');
     await page.setViewportSize({width:1200,height:900});
     await page.evaluate(()=>{
       const meeting=window.dataFixture.meetings[0];meeting.lifecycle='recorded';meeting.sourceType='recording';
