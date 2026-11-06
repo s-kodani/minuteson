@@ -28,7 +28,7 @@ test("individual editing retains IME guards, selection, identity and retry barri
   assert.match(view, /result.baseAnalysisId !== analysisRef.current\?\.id/);
   assert.match(view, /JSON.stringify\(canonicalPayload\(result.payload\)\) !== JSON.stringify\(canonicalPayload\(payload\)\)/);
   assert.match(view, /saved.baseAnalysisId !== base.id/);
-  assert.match(view, /registerPendingEdits\(\(\) => barrier.current\(\)\)/);
+  assert.match(view, /registerPendingEdits\(\(\) => barrier.current\(\),/);
   assert.match(view, /addingRef.current\) throw Error/);
 });
 test("individual speaker controls save only explicit input", () => {

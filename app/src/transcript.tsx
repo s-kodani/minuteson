@@ -168,7 +168,11 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = queue.subscribe(() => { if (mounted.current) setSnapshot(queue.snapshot()); });
-    const unregister = registerPendingEdits(() => barrier.current());
+    const unregister = registerPendingEdits(() => barrier.current(), () => {
+      const current = queue.snapshot();
+      return current.dirty || current.saving || running.current || composingInput.current
+        || Object.keys(textRef.current).length > 0 || !!(nameRef.current || structureRef.current || assignmentRef.current || addingRef.current);
+    });
     if (isTauri()) void Promise.all([invoke<Analysis | null>("get_current_analysis", { meetingId }), invoke<Draft | null>("get_transcript_draft", { meetingId })]).then(([base, draft]) => {
       if (!mounted.current) return;
       if (base && base.meetingId !== meetingId || draft && (!base || draft.meetingId !== meetingId || draft.baseAnalysisId !== base.id)) throw Error("保存された文字起こしと編集が一致しません。");

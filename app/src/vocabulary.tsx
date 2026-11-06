@@ -42,6 +42,9 @@ export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef, re
     const unsubscribe = queue.subscribe(() => setState(queue.snapshot()));
     const unregister = registerPendingEdits(async () => {
       await queue.flush();
+    }, () => {
+      const current = queue.snapshot();
+      return current.dirty || current.saving;
     });
     if (isTauri()) void load().then((value) => {
       if (active) { queue.load(value.book); setCommon(value.common); setLoading(false); }

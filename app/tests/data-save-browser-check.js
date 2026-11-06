@@ -37,7 +37,7 @@ async (page) => {
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
   check(await page.getByRole("region", { name: "登録した声の自動適用", exact: true }).getByRole("spinbutton", { name: "類似度の下限", exact: true }).isDisabled(), "editing enabled during native work");
-  check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
+  check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).evaluate(button => button.disabled && getComputedStyle(button).cursor === "not-allowed"), "backup did not retain its navigation lock and cursor");
   check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
   const jobsNav=page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).getByRole("button",{name:"ジョブ一覧",exact:true});
   check(await jobsNav.isEnabled(),"jobs navigation locked during backup");await jobsNav.click();

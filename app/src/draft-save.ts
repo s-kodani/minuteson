@@ -119,13 +119,21 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
 }
 
 export type PendingEditReason = "leave" | "tab" | "transcription";
-const pendingEdits = new Set<(reason: PendingEditReason) => Promise<void>>();
+type FlushEdits = (reason: PendingEditReason) => Promise<void>;
+type HasPendingEdits = (reason: PendingEditReason) => boolean;
+const pendingEdits = new Map<FlushEdits, HasPendingEdits>();
 
-export function registerPendingEdits(flush: (reason: PendingEditReason) => Promise<void>): () => void {
-  pendingEdits.add(flush);
+export function registerPendingEdits(flush: FlushEdits, hasPending: HasPendingEdits = () => true): () => void {
+  pendingEdits.set(flush, hasPending);
   return () => { pendingEdits.delete(flush); };
 }
 
+// The probe controls presentation. Every registered flush still runs.
+export function hasPendingEdits(reason: PendingEditReason): boolean {
+  for (const hasPending of pendingEdits.values()) if (hasPending(reason)) return true;
+  return false;
+}
+
 export async function flushPendingEdits(reason: PendingEditReason = "leave"): Promise<void> {
-  for (const flush of pendingEdits) await flush(reason);
+  for (const flush of pendingEdits.keys()) await flush(reason);
 }

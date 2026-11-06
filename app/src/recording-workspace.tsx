@@ -57,7 +57,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       {test}
       {vocabulary}
       </div>
-      <button type="button" className="recording-settings-link" disabled={locked} onClick={onSettings}>AIモデルの設定<ActionIcon name="next"/></button>
+      <button type="button" className="recording-settings-link" data-screen-navigation="write" disabled={locked} onClick={onSettings}>AIモデルの設定<ActionIcon name="next"/></button>
     </>}
     {preparation?.submitted&&<p role="alert">開始要求を送信しました。応答が不明な場合も自動再送はしません。受付結果を確認してください。</p>}
     {preparation?.submitted&&<button type="button" className="secondary" disabled={locked} onClick={onConfirmResult}>録音の受付結果を確認</button>}

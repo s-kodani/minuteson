@@ -33,7 +33,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
             {job.snapshot.busy ? <button type="button" className="small-secondary" disabled={job.snapshot.phase === "cancelling"} onClick={() => void run(async () => { await invoke("cancel_data_operation", { token: job.snapshot.token! }); await data?.refresh(); })}>処理を取り消す</button> : <button type="button" className="small-secondary" onClick={onOpenData}>確認内容を開く</button>}
           </div> : null;
         })()}
-        {item.meetingId ? <button type="button" className="small-secondary" disabled={locked} onClick={() => void onOpenMeeting(item.meetingId!)}>会議を開く</button> : item.kind === "model" ? <button type="button" className="small-secondary" disabled={locked} onClick={onOpenModels}>モデル設定を開く</button> : null}
+        {item.meetingId ? <button type="button" className="small-secondary" data-screen-navigation disabled={locked} onClick={() => void onOpenMeeting(item.meetingId!)}>会議を開く</button> : item.kind === "model" ? <button type="button" className="small-secondary" data-screen-navigation disabled={locked} onClick={onOpenModels}>モデル設定を開く</button> : null}
       </li>)}</ul>
     </>}
     {ended.length > 0 && <><h2>バックアップ・復元の結果</h2><ul className="job-list-rows" aria-label="バックアップと復元の結果">{[...ended].reverse().map(job => {
@@ -43,7 +43,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
         <OperationProgressBar progress={dataJobProgress(job)} />
         {receipt && <p>会議 {receipt.meetingIds.length} 件を追加しました。{receipt.registry && `人物 ${receipt.registry.people} 人・声 ${receipt.registry.samples} 件・紐付き ${receipt.registry.links} 件。`}</p>}
         <div className="analysis-actions">
-          {receipt && <button type="button" className="small-secondary" disabled={locked} onClick={() => void run(() => onShowRestored?.(receipt.meetingIds) ?? Promise.resolve())}>復元した会議を開く</button>}
+          {receipt && <button type="button" className="small-secondary" data-screen-navigation disabled={locked} onClick={() => void run(() => onShowRestored?.(receipt.meetingIds) ?? Promise.resolve())}>復元した会議を開く</button>}
           {s.phase === "attention" && data?.snapshot?.token === s.token ? <button type="button" className="small-secondary" onClick={onOpenData}>結果を確認する</button> : <button type="button" className="small-secondary" onClick={() => void run(() => data!.dismissJob(s.token!))}>結果を閉じる</button>}
         </div>
       </li>;

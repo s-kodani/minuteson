@@ -30,7 +30,10 @@ export function MinutesPromptSettings({ visible, locked }: { visible: boolean; l
   };
   useEffect(() => {
     const unsubscribe = queue.subscribe(() => setState(queue.snapshot()));
-    const unregister = registerPendingEdits(flush);
+    const unregister = registerPendingEdits(flush, () => {
+      const current = queue.snapshot();
+      return current.dirty || current.saving || !!composition.current;
+    });
     return () => { unsubscribe(); unregister(); composition.current?.finish(); };
   }, [queue]);
   const load = async () => {

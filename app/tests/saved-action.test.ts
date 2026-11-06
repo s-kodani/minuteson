@@ -55,7 +55,7 @@ test("workspace reports the actual phase without removing busy and duplicate-ope
   assert.match(main, /if \(running.current\) return;\s*running.current = true/);
   assert.match(main, /await runAfterSaving\(\(\) => flushPendingEdits\(reason\), action, reportPhase\)/);
   assert.match(main, /reason === "transcription"\) flushSync\(\(\) => setPhase\(next\)\)/);
-  assert.match(main, /reason: "leave" \| "tab" \| "transcription" = "leave"/);
+  assert.match(main, /reason: PendingEditReason = "leave"/);
   assert.doesNotMatch(main, /編集の保存を確認中|操作を実行中|navigation-progress/);
   assert.doesNotMatch(main, /setNavigationBusy/);
 });
