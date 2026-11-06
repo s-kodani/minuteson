@@ -18,7 +18,7 @@ export default defineConfig({
   retries: 0,
   forbidOnly: !!process.env.CI,
   outputDir: `${output}/results`,
-  reporter: [["list"], ["html", { outputFolder: `${output}/report`, open: "never" }], ["json", { outputFile: `${output}/results.json` }]],
+  reporter: [...(process.env.GITHUB_ACTIONS ? [["github"]] : []), ["list"], ["html", { outputFolder: `${output}/report`, open: "never" }], ["json", { outputFile: `${output}/results.json` }]],
   // The runner records a full diagnostic trace only for failed cases, while
   // preserving the initial failure and its report. Successful cases avoid
   // thousands of DOM snapshots, including the 1,000-row log history.
