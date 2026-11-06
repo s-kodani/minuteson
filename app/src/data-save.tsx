@@ -15,10 +15,12 @@ import { bytesLabel } from "./import-state";
 import { assertStorageView, type StorageView } from "./storage-placement-state";
 import { topOpenModal } from "./modal-state";
 
+type DataProtection = "operation" | "navigation";
+
 export function DataSavePanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRestored, onShowMeetings }: {
   operation: DataOperation; visible: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
-  onProtectionChange: (active: boolean) => void;
+  onProtectionChange: (active: DataProtection | null) => void;
   onRestored: (receipt: RestoreReceipt) => Promise<void>;
   onShowMeetings: (ids: string[]) => Promise<void>;
 }) {
@@ -26,7 +28,8 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const latest = useRef(operation); latest.current = operation;
   const confirm = useActionConfirmation(false);
   const conditions = useRef({ locked, unknown: false, storage: null as StorageView | null });
-  const [rpcBusy, setRpcBusy] = useState(false);
+  const [rpcProtection, setRpcProtection] = useState<DataProtection | null>(null);
+  const rpcBusy = rpcProtection !== null;
   const rpcRunning = useRef(false);
   const [error, setError] = useState("");
   const [unknown, setUnknown] = useState(false);
@@ -56,13 +59,13 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     }).catch(cause => { if (!disposed) { setStorage(null); setStorageError(String(cause)); } });
     return () => { disposed = true; };
   }, [visible, s?.revision]);
-  useEffect(() => { onProtectionChange(rpcBusy || unknown || confirm.pending); }, [rpcBusy, unknown, confirm.pending, onProtectionChange]);
-  const run = async (action: () => Promise<void>, propagate = false) => {
+  useEffect(() => { onProtectionChange(unknown || confirm.pending ? "operation" : rpcProtection); }, [rpcProtection, unknown, confirm.pending, onProtectionChange]);
+  const run = async (action: () => Promise<void>, propagate = false, protection: DataProtection = "operation") => {
     if (rpcRunning.current) { if (propagate) throw Error("別のデータ操作が実行中です。処理は開始していません。"); return; }
-    rpcRunning.current = true; setRpcBusy(true); setError("");
+    rpcRunning.current = true; setRpcProtection(protection); setError("");
     try { await action(); }
     catch (cause) { setError(String(cause)); if (propagate) throw cause; }
-    finally { rpcRunning.current = false; setRpcBusy(false); }
+    finally { rpcRunning.current = false; setRpcProtection(null); }
   };
   const read = async () => { await latest.current.refresh(); };
   const send = async (request: DataRequest) => {
@@ -187,7 +190,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const restore = s?.restorePreview;
   const moving = s?.relocationPreview;
   const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && ((!!restore && restore.availableBytes >= restore.requiredBytes) || (!!moving?.resumeAllowed && moving.availableBytes >= moving.requiredBytes))));
-  const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); });
+  const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); }, false, "navigation");
   return <>
     <ToastNotice scope="data" type="save-result" eventId={toastEvent} message={toast} details={toastDetails} onClose={() => setToast("")} />
     <IssueNotice scope="data" type="save-operation" label="データの保存・復元" message={error || (s?.kind === "model_deletion" ? "" : operation.error) || (s?.kind && ["backup", "restore", "relocation"].includes(s.kind) ? s.errorMessage : "")} />
@@ -211,7 +214,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         {requestReady && !s?.busy && !unknown && <><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>確認内容を開く</button>{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void cancel()}>確認内容を破棄</button></>}
       </div>
       {s?.attentionRequired && s.kind !== "deletion" && s.kind !== "audio_deletion" && s.kind !== "model_deletion" && <p role="alert">{s.kind === "relocation" ? "保存先変更の確認が必要です。旧保存先と途中コピーを保持し、自動削除・再上書きは行いません。切替結果が未確定の場合は終了して再起動してください。" : "保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。"}</p>}
-      {s?.restoreReceipt && <>{s.restoreReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.restoreReceipt.deletedAudioMeetingCount} 件・音声資産 {s.restoreReceipt.deletedAudioAssetCount} 件は、保存済み文書と音声の欠落情報を復元しました。削除済み音声の再生・再解析はできません。</p>}<button type="button" disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
+      {s?.restoreReceipt && <>{s.restoreReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.restoreReceipt.deletedAudioMeetingCount} 件・音声資産 {s.restoreReceipt.deletedAudioAssetCount} 件は、保存済み文書と音声の欠落情報を復元しました。削除済み音声の再生・再解析はできません。</p>}<button type="button" data-screen-navigation={(!rpcBusy || rpcProtection === "navigation") && !unknown && !confirm.pending ? "write" : undefined} disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
       <ErrorNotice scope="data-save" type="open-result" active={!!(openError)}>{openError}</ErrorNotice>
     </section>}
     <CommonModal ref={dialog} open={open} blocked={rpcBusy || unknown || !!s?.busy} onDismiss={dismiss} restoreReady={!rpcBusy && !locked && !s?.busy && connected && !!availability?.available} restoreTarget={() => opener.current} className="import-dialog data-dialog" aria-labelledby="data-confirm-title">

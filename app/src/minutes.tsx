@@ -83,6 +83,12 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       // must not prompt or write the human's unfinished Markdown input.
       if (reason === "tab" && !controller.isComposing()) return;
       if (live.current.loaded) await confirmMarkdownLeave(controller, live.current.meetingTitle, read, confirmLeave);
+    }, reason => {
+      if (!live.current.loaded || reason === "transcription") return false;
+      if (controller.isComposing()) return true;
+      if (reason === "tab") return false;
+      const current = controller.snapshot();
+      return current.dirty || current.saving;
     });
     return () => { alive.current = false; unsubscribe(); unregister(); };
   }, [controller]);

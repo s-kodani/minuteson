@@ -449,11 +449,14 @@ class NativeCiTests(unittest.TestCase):
     def test_cargo_timing_collection_honors_relative_target_dir_on_failed_build(self):
         source = self.package / "custom-target/cargo-timings"
         source.mkdir(parents=True)
+        timing = source / "cargo-timing.html"
         report = self.root / "output/rust-tests/failure.json"
         def wait():
-            (source / "cargo-timing.html").write_text("failed compilation timing")
+            timing.write_text("failed compilation timing")
+            os.utime(timing, ns=(200, 200))
             return 101
-        with patch.dict(native.os.environ, {"CARGO_TARGET_DIR": "custom-target"}), self.cargo([]) as build:
+        with patch.dict(native.os.environ, {"CARGO_TARGET_DIR": "custom-target"}), self.cargo([]) as build, \
+                patch.object(native.time, "time_ns", return_value=100):
             build.return_value.wait.side_effect = wait
             self.assertEqual(native.run_native_tests(self.root, timings_json=report), 101)
         metrics = json.loads(report.read_text())
