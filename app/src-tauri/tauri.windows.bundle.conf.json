@@ -6,7 +6,13 @@
       "binaries/mon-windows-capture"
     ],
     "resources": {
-      "../../.cache/windows-runtime/package/": "windows-runtime/",
+      "../../.cache/windows-runtime/package/catalog.json": "windows-runtime/catalog.json",
+      "../../.cache/windows-runtime/package/embedding-index.json": "windows-runtime/embedding-index.json",
+      "../../.cache/windows-runtime/package/runtime.tar": "windows-runtime/runtime.tar",
+      "../../.cache/windows-runtime/package/mon-speaker-embedding.exe": "windows-runtime/mon-speaker-embedding.exe",
+      "../../.cache/windows-runtime/package/asr/notices/nlohmann-MIT.txt": "windows-runtime/asr/notices/nlohmann-MIT.txt",
+      "../../.cache/windows-runtime/package/whisper/notices/whisper-MIT.txt": "windows-runtime/whisper/notices/whisper-MIT.txt",
+      "../../.cache/windows-runtime/package/workers/": "windows-runtime/workers/",
       "../../.cache/windows-capture-headers/LICENSE.MIT": "notices/nlohmann-json-MIT.txt",
       "../../.cache/windows-third-party-notices/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt",
       "../../.cache/windows-third-party-notices/third-party-inventory.json": "third-party-inventory.json"
