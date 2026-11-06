@@ -59,7 +59,7 @@ npm.cmd --prefix app test
 npm.cmd --prefix app run tauri:windows:qa:build
 ```
 
-ビルドフックが固定資材を照合し、画面、Windows依存通知文、CPU／Vulkan推論ランタイム、ASR資材、WASAPI録音ヘルパーとRust本体を準備します。QAの識別子は`jp.mon.desktop.qa`で、WebView2のオフライン導入資材を含むユーザー単位のNSISを作ります。モデルの重みは設定からダウンロードします。
+ビルドフックが固定資材を照合し、画面、Windows依存通知文、CPU／Vulkan推論ランタイム、ASR資材、WASAPI録音ヘルパーとRust本体を準備します。QAの識別子は`jp.mon.desktop.qa`で、ユーザー単位のNSISを作ります。WebView2の導入方法は[WindowsのEXE配布](distribution-windows.md#webview2の導入と更新)を参照してください。モデルの重みは設定からダウンロードします。
 
 - 配布用QA：`output/windows-qa/MON-QA-setup.exe`
 - ソースと構築の証跡：`output/windows-qa-work/<build-id>-source.json`、`<build-id>-build.json`

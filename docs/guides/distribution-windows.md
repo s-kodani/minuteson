@@ -27,6 +27,12 @@ sources:
 
 未署名通常版は通常版と同じ機能・識別子を使い、QAへ切り替わるものではありません。発行元は未確認として表示されます。`-Qa`と`-Unsigned`の併用は拒否します。MSIXは別経路の[Store手順](distribution-store.md)を使います。
 
+## WebView2の導入と更新
+
+通常版・QA版のEXEは、WebView2 Evergreen Runtimeが未導入の端末でのみ、インストール時にMicrosoftから取得します。未導入のオフライン端末では、別の端末でx64のEvergreen Standalone Installerを入手し、MinutesOnより先にインストールします。[MicrosoftのWebView2配布ページ](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section)
+
+更新前に録音・解析・保存を終え、アプリを終了します。更新画面では旧版をアンインストールしてからインストールする経路を選びます。同じ版を入れ替える場合は、Windowsの設定から旧版をアンインストールして新しいEXEを実行します。アンインストール画面のアプリデータ削除欄を空欄にして、会議・設定・導入済みモデルを保持します。上書きだけの入れ替えでは、旧版の同梱ファイルが残る場合があります。
+
 ## 公開用の署名
 
 `MON_WINDOWS_CERTIFICATE_THUMBPRINT`へCurrentUser\MyのCode Signing証明書の完全な拇印、`MON_WINDOWS_TIMESTAMP_URL`へ証明書提供元のHTTPS RFC3161サービスを指定します。
@@ -52,3 +58,5 @@ python tools/mon_windows_build_evidence.py verify --manifest 'output/windows-qa-
 `currentSourceMatches`と`installed`の本体・ヘルパーを確認します。配布時の検査は`--require-current-source`を付け、元の構築物と現在のソースの一致も必須にします。過去のビルドを照合した結果を現在版の実行成功に流用しません。
 
 実機では起動、録音許可・拒否、音声取り込み・再生、モデル導入・CPU／Vulkan推論、トレイ・終了、二重起動、更新後の会議・設定保持を確認します。署名やハッシュ一致だけでこれらの実行結果を置き換えません。確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)で管理します。
+
+WebView2の導入検証では、Windows 11 x64の検証環境で、導入済み端末へのオフラインインストール、未導入端末へのオンラインインストール、未導入で通信に失敗した場合の案内を確認します。

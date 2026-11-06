@@ -3,6 +3,9 @@ resolver = "2"
 members = ["app/src-tauri", "crates/mon-contracts", "crates/mon-core", "crates/mon-native", "crates/mon-capture-ffi"]
 default-members = ["app/src-tauri"]
 
+[profile.release.package.mon-desktop]
+strip = "symbols"
+
 # Keep test-only symbol tables from inflating the native test launcher.
 # Normal dev/release builds and runtime checks are unchanged.
 [profile.test]

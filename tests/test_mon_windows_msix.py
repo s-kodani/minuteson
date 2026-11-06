@@ -17,6 +17,13 @@ spec = importlib.util.spec_from_file_location("mon_windows_msix", ROOT / "tools/
 msix = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(msix)
 
+LOOSE_RUNTIME_BINARIES = (
+    "asr/bin/mon-transducer-worker.exe",
+    "llama/llama.dll",
+    "sherpa/sherpa-onnx-c-api.dll",
+    "whisper/whisper-cli.exe",
+)
+
 
 class StorePackageTests(unittest.TestCase):
     def setUp(self):
@@ -33,7 +40,8 @@ class StorePackageTests(unittest.TestCase):
             self.put(".cache/windows-runtime/package/" + name, b"runtime:" + name.encode())
         for name in msix.RUNTIME_DIRS:
             self.put(".cache/windows-runtime/package/" + name + "/worker.dll", b"MZlibrary")
-        self.put(".cache/windows-runtime/package/asr/bin/mon-transducer-worker.exe", b"transducer worker")
+        for name in LOOSE_RUNTIME_BINARIES:
+            self.put(".cache/windows-runtime/package/" + name, b"MZbuild input")
         self.put(".cache/windows-runtime/package/mon-speaker-embedding.pdb", b"debug only")
         self.put(".cache/windows-runtime/package/workers/worker.pdb", b"debug only")
         for name in msix.LOGOS:
@@ -113,17 +121,37 @@ class StorePackageTests(unittest.TestCase):
                 msix.configuration(self.root)
         self.assertFalse((self.root / "output").exists())
 
-    def test_stage_keeps_vocabulary_dlls_notices_and_excludes_debug_files(self):
+    def test_stage_keeps_runtime_archive_workers_and_notices_without_loose_binaries(self):
         files = self.package_stage()
         names = {f["path"] for f in files}
-        self.assertIn("windows-runtime/asr/bin/mon-transducer-worker.exe", names)
-        self.assertIn("windows-runtime/llama/worker.dll", names)
+        self.assertTrue({
+            "windows-runtime/catalog.json",
+            "windows-runtime/runtime.tar",
+            "windows-runtime/embedding-index.json",
+            "windows-runtime/mon-speaker-embedding.exe",
+            "windows-runtime/workers/worker.dll",
+            "windows-runtime/asr/notices/nlohmann-MIT.txt",
+            "windows-runtime/whisper/notices/whisper-MIT.txt",
+        } <= names)
+        self.assertTrue(names.isdisjoint("windows-runtime/" + name for name in LOOSE_RUNTIME_BINARIES))
         self.assertIn("notices/nlohmann-json-MIT.txt", names)
         self.assertIn("resources.pri", names)
         self.assertEqual(len(msix.APP_ICON_LOGOS), 42)
         self.assertTrue({"Assets/" + name for name in msix.APP_ICON_LOGOS} <= names)
         self.assertFalse(any(n.endswith(".pdb") for n in names))
         msix.verify_payload(self.package, self.config, files)
+
+    def test_nsis_and_msix_use_the_same_runtime_inputs(self):
+        config = msix.read_json(ROOT / "app/src-tauri/tauri.windows.bundle.conf.json")
+        source_root = "../../.cache/windows-runtime/package/"
+        destination_root = "windows-runtime/"
+        nsis = {
+            source: destination
+            for source, destination in config["bundle"]["resources"].items()
+            if source.startswith(source_root) or destination.startswith(destination_root)
+        }
+        paths = (*msix.RUNTIME_FILES, *(name + "/" for name in msix.RUNTIME_DIRS))
+        self.assertEqual(nsis, {source_root + name: destination_root + name for name in paths})
 
     def test_current_payload_rejects_missing_pri_or_theme_variant(self):
         files = self.package_stage()

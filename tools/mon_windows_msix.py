@@ -26,8 +26,15 @@ UAP = "http://schemas.microsoft.com/appx/manifest/uap/windows10"
 UAP10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
 RESCAP = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 MIN_OS = "10.0.26100.0"
-RUNTIME_FILES = ("catalog.json", "embedding-index.json", "runtime.tar", "mon-speaker-embedding.exe")
-RUNTIME_DIRS = ("asr", "llama", "sherpa", "whisper", "workers")
+RUNTIME_FILES = (
+    "catalog.json",
+    "embedding-index.json",
+    "runtime.tar",
+    "mon-speaker-embedding.exe",
+    "asr/notices/nlohmann-MIT.txt",
+    "whisper/notices/whisper-MIT.txt",
+)
+RUNTIME_DIRS = ("workers",)
 BASE_LOGOS = ("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")
 APP_ICON_SIZES = (16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256)
 APP_ICON_LOGOS = tuple(f"Square44x44Logo.targetsize-{size}{form}.png"

@@ -106,7 +106,8 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertNotEqual(qa["identifier"], windows["identifier"])
         self.assertEqual(qa["bundle"]["targets"], ["nsis"])
         self.assertEqual(qa["bundle"]["windows"]["nsis"]["installMode"], "currentUser")
-        self.assertEqual(qa["bundle"]["windows"]["webviewInstallMode"]["type"], "offlineInstaller")
+        for config in (windows, qa):
+            self.assertEqual(config["bundle"]["windows"]["webviewInstallMode"]["type"], "downloadBootstrapper")
         self.assertFalse(qa["bundle"]["windows"]["allowDowngrades"])
         self.assertEqual({w["label"] for w in qa["app"]["windows"]},
                          {"main", "recorder", "recording-confirmation"})
