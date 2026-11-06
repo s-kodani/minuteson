@@ -6,7 +6,8 @@ async (page, capturePath = path => path) => {
   const recording = { revision: 1, phase: "recording", elapsedMs: 45000, microphoneConnected: true, systemAudioConnected: true, meetingId: "synthetic", sessionId: "00000000-0000-4000-8000-000000000001", errorMessage: null };
   const original = JSON.stringify(recording);
   let failOpen = true, failure = "合成ウィンドウ表示失敗：" + "長い原因説明を保持します。".repeat(30), lostPublish = false, failSession = false, failTheme = false;
-  await context.route("http://127.0.0.1:1420/__synthetic_recorder_operations", async route => {
+  const operationEndpoint = "http://127.0.0.1:1420/__synthetic_recorder_operations";
+  await context.route(operationEndpoint, async route => {
     const { command, args, label } = route.request().postDataJSON(); calls.push({ command, args, label });
     let value, error;
     if (command === "get_recorder_operation_notices") value = snapshot();
@@ -55,9 +56,16 @@ async (page, capturePath = path => path) => {
     check(await toast().count() === 0, "dismissed error returned after reader/remount");
     results.push("dismissal retains cause/event identity, and blank reloaded mini cannot fabricate resolution");
 
-    failOpen = false; await open().click();
-    await page.waitForFunction(() => !document.querySelector(".mini-open")?.disabled);
-    await toast().waitFor({state:"hidden"});
+    failOpen = false;
+    // The dismissed toast is already hidden when the retry starts. Wait for the shared notice update.
+    await Promise.all([
+      page.waitForResponse(response => {
+        if (response.url() !== operationEndpoint) return false;
+        const { command, args } = response.request().postDataJSON();
+        return command === "publish_recorder_operation_notice" && args.source === "window_action" && args.message === null;
+      }),
+      open().click(),
+    ]);
     check(entries[0].message === null && calls.filter(c => c.command === "open_main_window").length === 2, "explicit successful retry did not resolve exact operation");
     results.push("only an explicit successful original action resolves window-operation attention");
 
