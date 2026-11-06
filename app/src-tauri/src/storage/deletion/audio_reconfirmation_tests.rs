@@ -591,15 +591,37 @@ fn audio_reconfirmation_changed_original_seal_and_unowned_database_copy_do_not_a
     )
     .is_err());
     assert!(f.path.exists());
+    // VACUUM INTO ATTACHes the destination using this connection's open flags,
+    // including SQLITE_OPEN_NOFOLLOW. SQLite then rejects any unresolved
+    // symlink component (macOS temp dirs live under /var -> /private/var)
+    // with SQLITE_CANTOPEN. Canonicalize before ATTACH so the destination
+    // path has no remaining aliases. The explicit alias below reproduces that
+    // macOS tempfile layout on Unix CI that uses a real /tmp.
     let copy = tempfile::tempdir().unwrap();
+    let real = copy.path().join("unowned");
+    std::fs::create_dir(&real).unwrap();
+    let aliased = copy.path().join("aliased");
+    std::os::unix::fs::symlink(&real, &aliased).unwrap();
+    let root = aliased.canonicalize().unwrap();
     let db = f.storage.connection.lock().unwrap();
+    let aliased_db = aliased.join("meetings.sqlite3");
+    let error = db
+        .execute("VACUUM INTO ?1", params![aliased_db.to_str().unwrap()])
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::CannotOpen)
+        ),
+        "{error}"
+    );
     db.execute(
         "VACUUM INTO ?1",
-        params![copy.path().join("meetings.sqlite3").to_str().unwrap()],
+        params![root.join("meetings.sqlite3").to_str().unwrap()],
     )
     .unwrap();
     drop(db);
-    let copied = Storage::open(copy.path().to_owned()).unwrap();
+    let copied = Storage::open(root).unwrap();
     assert!(AnalysisController::default()
         .begin_audio_deletion_maintenance(
             &copied,
