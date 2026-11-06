@@ -13,16 +13,41 @@ export function browserOutputDirectory(port, diagnostic = false) {
   return diagnostic ? `${output}/diagnostics` : output;
 }
 
-export function failedBrowserTests(report) {
-  const names = new Set();
+function failureMessage(test) {
+  const result = test.results?.find(item => item.error?.message || item.errors?.some(error => error.message));
+  return result?.error?.message ?? result?.errors?.map(error => error.message).filter(Boolean).join("\n") ?? "";
+}
+
+export function failedBrowserDetails(report) {
+  const failures = new Map();
   const visit = suite => {
     for (const spec of suite.specs ?? []) {
-      if (spec.tests?.some(test => test.status === "unexpected")) names.add(spec.title);
+      const test = spec.tests?.find(item => item.status === "unexpected");
+      if (test && !failures.has(spec.title)) failures.set(spec.title, failureMessage(test));
     }
     for (const child of suite.suites ?? []) visit(child);
   };
   visit(report);
-  return [...names];
+  return [...failures].map(([title, message]) => ({ title, message }));
+}
+
+export function failedBrowserTests(report) {
+  return failedBrowserDetails(report).map(failure => failure.title);
+}
+
+// GitHub only promotes workflow commands to check annotations. The job log
+// itself is not readable from the checks API, so a bare exit code hides the
+// suite name. Keep this on one line; newlines and percents would be eaten.
+function encodeWorkflow(value) {
+  return value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+}
+
+export function browserFailureCommands(report) {
+  return failedBrowserDetails(report).map(failure => {
+    const detail = failure.message.replace(/\s+/g, " ").trim();
+    const text = (detail ? `${failure.title}: ${detail}` : failure.title).slice(0, 700);
+    return `::error title=Browser regression::${encodeWorkflow(text)}`;
+  });
 }
 
 export function runBrowserChecks(args, { spawn = spawnSync, read = readFileSync, remove = rmSync, env = process.env, log = console.error } = {}) {
@@ -40,7 +65,9 @@ export function runBrowserChecks(args, { spawn = spawnSync, read = readFileSync,
   if (run.status !== 0 && !args.includes("--list")) {
     let failed = [];
     try {
-      failed = failedBrowserTests(JSON.parse(read(report, "utf8")));
+      const parsed = JSON.parse(read(report, "utf8"));
+      failed = failedBrowserTests(parsed);
+      for (const command of browserFailureCommands(parsed)) log(command);
     } catch { /* Startup failures have no completed test report to replay. */ }
     if (failed.length) {
       log(`[browser] Capturing diagnostic traces for ${failed.join(", ")}; the original run remains failed.`);

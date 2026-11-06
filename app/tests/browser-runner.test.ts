@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { browserOutputDirectory, failedBrowserTests, runBrowserChecks } from "./run-browser-checks.mjs";
+import { browserFailureCommands, browserOutputDirectory, failedBrowserTests, runBrowserChecks } from "./run-browser-checks.mjs";
 
 const report = { suites: [{ suites: [{ specs: [
   { title: "meeting-mix-progress", tests: [{ status: "unexpected" }] },
@@ -15,16 +15,27 @@ test("diagnostics select only failed tests from nested Playwright reports", () =
   assert.equal(browserOutputDirectory(1432, true), "../output/playwright/port-1432/diagnostics");
 });
 
+test("failed suites are published as single-line GitHub annotations", () => {
+  const detailed = { suites: [{ specs: [{ title: "workspace", tests: [{ status: "unexpected", results: [{ error: { message: "Error: header moved\npageWidth 100%" } }] }] }] }] };
+  assert.deepEqual(browserFailureCommands(detailed), ["::error title=Browser regression::workspace: Error: header moved pageWidth 100%25"]);
+  assert.deepEqual(browserFailureCommands(report), [
+    "::error title=Browser regression::meeting-mix-progress",
+    "::error title=Browser regression::internal-logs-history",
+  ]);
+});
+
 test("a passing diagnostic replay cannot turn the original failure into success", () => {
   const calls: any[] = [];
+  const logged: string[] = [];
   const code = runBrowserChecks(["--only", "internal-logs", "--port", "1432", "--shard=1/2", "--repeat-each", "3", "--workers=2", "--output", "initial-artifacts"], {
     env: { CI: "true", MON_BROWSER_FAILED_TESTS: '["old-filter"]' },
     remove: () => {},
     read: () => JSON.stringify(report),
-    log: () => {},
+    log: message => logged.push(message),
     spawn: (...args: any[]) => { calls.push(args); return { status: calls.length === 1 ? 1 : 0 }; },
   });
   assert.equal(code, 1);
+  assert.deepEqual(logged.slice(0, 2), browserFailureCommands(report));
   assert.equal(calls.length, 2);
   assert.equal(calls[0][2].env.MON_BROWSER_DIAGNOSTIC, "0");
   assert.equal(calls[0][2].env.MON_BROWSER_FAILED_TESTS, undefined);
