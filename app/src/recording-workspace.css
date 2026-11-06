@@ -77,15 +77,26 @@
 .capture-test-dialog>.common-modal-body:not([hidden]){display:grid;gap:12px;min-width:0;}
 .capture-test-dialog .common-modal-body>p{margin:0;}
 .capture-test-dialog .common-modal-body>button{justify-self:start;}
-.capture-test-dialog .audio-player{border:0;border-top:1px solid var(--border);border-radius:0;padding:12px 0 0;}
 .capture-test-dialog h2{margin:0;font-size:20px;}
 .capture-test-dialog p{overflow-wrap:anywhere;}
 .capture-test-intro{color:var(--secondary-text);font-size:13px;}
 .capture-test-dialog .recording-track-status{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
 .capture-test-dialog .recording-track-status>div{padding-block:12px;border-block:1px solid var(--border);}
 .capture-test-dialog .recording-track-status dd{margin:8px 0 0;}
-.capture-test-audio .card-actions{flex-wrap:wrap;}
-.capture-test-audio .card-actions>div{flex:1 1 180px;min-width:0;}
+.capture-test-audio{display:grid;gap:12px;min-width:0;}
+.capture-test-audio .card-actions{gap:12px;margin:0;}
+.capture-test-audio>.card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+.capture-test-audio>.card-actions>div{display:grid;align-content:start;justify-items:start;gap:8px;}
+.capture-test-audio>.card-actions p{margin:0;font-size:13px;color:var(--secondary-text);}
+.capture-test-audio>.audio-player{display:grid;gap:12px;margin:0;padding:16px;border:1px solid var(--border);border-radius:12px;}
+.capture-test-audio>.audio-player>.card-actions{align-items:center;}
+.capture-test-audio>.audio-player strong{font-size:14px;}
+.capture-test-audio>.audio-player span{font-size:13px;color:var(--secondary-text);font-variant-numeric:tabular-nums;}
+.capture-test-audio>.audio-player>p{margin:0;}
+.capture-test-audio>.audio-player>.capture-test-error{color:var(--danger-text);}
+@media(max-width:520px){
+  .capture-test-audio>.card-actions{grid-template-columns:minmax(0,1fr);}
+}
 @media(max-width:760px){
   .recording-workspace{padding:16px;gap:16px;}
   .recording-workspace .capture-input-selection,.recording-preparation-options{grid-template-columns:minmax(0,1fr);gap:20px;}
