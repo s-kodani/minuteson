@@ -25,6 +25,7 @@ mod input_status;
 mod internal_logs;
 #[cfg(test)]
 mod ipc_acl;
+mod job_history;
 mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
@@ -69,6 +70,7 @@ mod startup_reset;
 mod storage;
 mod transcription;
 mod voice;
+mod voice_model_names;
 #[cfg(target_os = "windows")]
 mod window_chrome;
 mod window_environment;
@@ -168,6 +170,7 @@ fn get_model_profiles(
 async fn preview_model_profile_application(
     window: WebviewWindow,
     token: String,
+    history_operation_id: Option<String>,
     profile: storage::model_profiles::ProfileName,
     package_id: String,
     expected_review_hash: String,
@@ -188,25 +191,31 @@ async fn preview_model_profile_application(
             .map_err(|e| e.to_string())?
             .join("models");
         tauri::async_runtime::spawn_blocking(move || {
-            AnalysisController::with_model_preparation(
-                &app,
-                Some(&token),
-                &|| guard.cancelled(),
-                |lease| {
-                    model_application::preview_with_vad(
-                        &app.state::<Storage>(),
-                        &models_root,
-                        profile,
-                        &package_id,
-                        &expected_review_hash,
-                        &check_operation_id,
-                        diarization_threads,
-                        diarization_cluster_threshold_milli,
-                        whisper_vad_options,
-                        &|| guard.cancelled() || lease.cancelled(),
-                    )
-                },
-            )
+            let target = app
+                .state::<Storage>()
+                .history_model_name(&package_id)
+                .unwrap_or_default();
+            job_history::model_stage(history_operation_id.as_deref(), &target, false, || {
+                AnalysisController::with_model_preparation(
+                    &app,
+                    Some(&token),
+                    &|| guard.cancelled(),
+                    |lease| {
+                        model_application::preview_with_vad(
+                            &app.state::<Storage>(),
+                            &models_root,
+                            profile,
+                            &package_id,
+                            &expected_review_hash,
+                            &check_operation_id,
+                            diarization_threads,
+                            diarization_cluster_threshold_milli,
+                            whisper_vad_options,
+                            &|| guard.cancelled() || lease.cancelled(),
+                        )
+                    },
+                )
+            })
         })
         .await
         .map_err(|e| e.to_string())?
@@ -220,6 +229,7 @@ async fn preview_model_profile_application(
 async fn apply_model_profile_application(
     window: WebviewWindow,
     token: String,
+    history_operation_id: Option<String>,
     preview: storage::model_profiles::ApplyPreview,
 ) -> Result<storage::model_profiles::ProfileView, mon_contracts::AppError> {
     let result: Result<storage::model_profiles::ProfileView, String> = async move {
@@ -234,20 +244,26 @@ async fn apply_model_profile_application(
             .map_err(|e| e.to_string())?
             .join("models");
         tauri::async_runtime::spawn_blocking(move || {
-            AnalysisController::with_model_preparation(
-                &app,
-                Some(&token),
-                &|| guard.cancelled(),
-                |lease| {
-                    model_application::apply(
-                        &app.state::<Storage>(),
-                        &models_root,
-                        &token,
-                        &preview,
-                        &|| guard.cancelled() || lease.cancelled(),
-                    )
-                },
-            )
+            let target = app
+                .state::<Storage>()
+                .history_model_name(&preview.package_id)
+                .unwrap_or_default();
+            job_history::model_stage(history_operation_id.as_deref(), &target, true, || {
+                AnalysisController::with_model_preparation(
+                    &app,
+                    Some(&token),
+                    &|| guard.cancelled(),
+                    |lease| {
+                        model_application::apply(
+                            &app.state::<Storage>(),
+                            &models_root,
+                            &token,
+                            &preview,
+                            &|| guard.cancelled() || lease.cancelled(),
+                        )
+                    },
+                )
+            })
         })
         .await
         .map_err(|e| e.to_string())?
@@ -262,6 +278,7 @@ async fn apply_model_profile_application(
 async fn check_model_compatibility(
     window: WebviewWindow,
     token: String,
+    history_operation_id: Option<String>,
     package_id: String,
     expected_review_hash: String,
 ) -> Result<model_compatibility::CheckSummary, mon_contracts::AppError> {
@@ -277,21 +294,27 @@ async fn check_model_compatibility(
             .map_err(|e| e.to_string())?
             .join("models");
         tauri::async_runtime::spawn_blocking(move || {
-            AnalysisController::with_model_preparation(
-                &app,
-                Some(&token),
-                &|| guard.cancelled(),
-                |lease| {
-                    model_compatibility::check(
-                        &app.state::<Storage>(),
-                        &models_root,
-                        &token,
-                        &package_id,
-                        &expected_review_hash,
-                        &|| guard.cancelled() || lease.cancelled(),
-                    )
-                },
-            )
+            let target = app
+                .state::<Storage>()
+                .history_model_name(&package_id)
+                .unwrap_or_default();
+            job_history::model_stage(history_operation_id.as_deref(), &target, false, || {
+                AnalysisController::with_model_preparation(
+                    &app,
+                    Some(&token),
+                    &|| guard.cancelled(),
+                    |lease| {
+                        model_compatibility::check(
+                            &app.state::<Storage>(),
+                            &models_root,
+                            &token,
+                            &package_id,
+                            &expected_review_hash,
+                            &|| guard.cancelled() || lease.cancelled(),
+                        )
+                    },
+                )
+            })
         })
         .await
         .map_err(|e| e.to_string())?
@@ -867,6 +890,32 @@ fn get_ui_preferences(
         window.state::<Storage>().ui_preferences()
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("get_ui_preferences", message))
+}
+
+#[tauri::command]
+fn get_model_download_guidance(
+    window: WebviewWindow,
+) -> Result<storage::model_download_guidance::Guidance, mon_contracts::AppError> {
+    let result = (|| {
+        let app = minutes_app(&window)?;
+        app.state::<Storage>().model_download_guidance()
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_model_download_guidance", message)
+    })
+}
+
+#[tauri::command]
+fn dismiss_model_download_guidance(
+    window: WebviewWindow,
+) -> Result<storage::model_download_guidance::Guidance, mon_contracts::AppError> {
+    let result = (|| {
+        let app = minutes_app(&window)?;
+        app.state::<Storage>().dismiss_model_download_guidance()
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("dismiss_model_download_guidance", message)
+    })
 }
 
 #[tauri::command]
@@ -3092,6 +3141,7 @@ pub fn run() {
                     return Ok(());
                 }
             };
+            job_history::initialize(app.handle(), root.join("job-history"));
             #[cfg(any(target_os = "macos", windows))]
             {
                 let admission = app
@@ -3181,6 +3231,17 @@ pub fn run() {
             std::thread::spawn(move || {
                 let recovered = (|| -> Result<(), String> {
                     let storage = handle.state::<Storage>();
+                    if storage
+                        .model_download_guidance()
+                        .is_ok_and(|guide| guide.pending)
+                    {
+                        if let Err(error) = job_history::clear() {
+                            internal_logs::report_error("job_history", &error);
+                        }
+                    }
+                    if let Err(error) = job_history::backfill(&storage) {
+                        internal_logs::report_error("job_history", &error);
+                    }
                     #[cfg(any(unix, windows))]
                     if !storage.data_write_blocked() {
                         data_controller::finish_interrupted_deletions(&handle)?;
@@ -3191,6 +3252,7 @@ pub fn run() {
                     }
                     let errors = std::sync::Mutex::new(Vec::new());
                     storage.recover_recordings_observed(&|_| {}, &|item| {
+                        recording_recovery::observe_history(&handle, &item);
                         if item.phase == "failed" {
                             if let Some(error) = item.error {
                                 errors.lock().unwrap().push(error);
@@ -3323,6 +3385,9 @@ pub fn run() {
             }
             if let RunEvent::Exit = event {
                 residency::stopping(app);
+                if let Err(error) = job_history::flush() {
+                    internal_logs::report_error("job_history", &error);
+                }
                 internal_logs::phase("application", None, None, "stopped", None);
                 if let Some(logs) = app.try_state::<internal_logs::LogService>() {
                     logs.flush();

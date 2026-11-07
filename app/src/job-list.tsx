@@ -5,6 +5,7 @@ import { dataJobProgress } from "./operation-progress-state";
 import type { DataOperation } from "./data-operation";
 import { invoke } from "./ipc";
 import { useState } from "react";
+import { JobHistory } from "./job-history";
 
 export function JobCount() {
   const count = useProgressItems().length;
@@ -14,10 +15,14 @@ export function JobCount() {
 export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: DataOperation; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void> }) {
   const items = orderedProgress(useProgressItems()), read = useJobReadStatus();
   const [error, setError] = useState("");
+  const [view, setView] = useState<"active"|"history">("active");
   const run = async (action: () => Promise<unknown>) => { setError(""); try { await action(); } catch (cause) { setError(String(cause)); } };
-  const ended = data?.jobs.filter(job => ["completed", "failed", "cancelled", "attention"].includes(job.snapshot.phase) && !(job.snapshot.kind === "backup" && job.snapshot.phase === "completed")) ?? [];
+  const ended = data?.jobs.filter(job => job.snapshot.phase === "attention") ?? [];
   return <section className="job-list" aria-label="バックグラウンドのジョブ一覧">
-    <div className="page-heading heading-with-info"><h1>ジョブ一覧</h1><InfoPopover label="ジョブ一覧">処理中・待機中の作業と、バックアップ・復元の結果を確認できます。結果は閉じるかアプリを終了するまで表示します。</InfoPopover></div>
+    <div className="page-heading heading-with-info"><h1>ジョブ一覧</h1><InfoPopover label="ジョブ一覧">処理中・待機中の作業と、過去90日間の処理結果を確認できます。履歴はアプリを終了しても保持します。</InfoPopover></div>
+    <div className="job-list-tabs" role="tablist" aria-label="ジョブの表示">{(["active","history"] as const).map(tab=><button type="button" key={tab} role="tab" id={`job-${tab}-tab`} aria-controls={`job-${tab}-panel`} aria-selected={view===tab} tabIndex={view===tab?0:-1} onClick={()=>setView(tab)} onKeyDown={event=>{if(["ArrowLeft","ArrowRight","Home","End"].includes(event.key)){event.preventDefault();const next=event.key==="Home"?"active":event.key==="End"?"history":view==="active"?"history":"active";setView(next);document.getElementById(`job-${next}-tab`)?.focus();}}}>{tab==="active"?`進行中${items.length?` ${items.length}`:""}`:"履歴"}</button>)}</div>
+    <div id="job-history-panel" role="tabpanel" aria-labelledby="job-history-tab" hidden={view!=="history"}>{view==="history"&&<JobHistory locked={locked} onOpenMeeting={onOpenMeeting} onOpenModels={onOpenModels} onOpenData={onOpenData} onShowRestored={onShowRestored}/>}</div>
+    <div id="job-active-panel" role="tabpanel" aria-labelledby="job-active-tab" hidden={view!=="active"}>
     {read.state === "loading" && <p role="status">ジョブの状態を確認しています。</p>}
     {read.state === "error" && <p role="status">ジョブの状態を確認中です。表示は前回取得した状態です。</p>}
     {data?.jobsError && <p role="status">バックアップ・復元の状態を再確認しています。表示は前回取得した状態です。</p>}
@@ -48,5 +53,6 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
         </div>
       </li>;
     })}</ul></>}
+    </div>
   </section>;
 }

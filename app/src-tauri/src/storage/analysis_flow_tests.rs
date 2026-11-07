@@ -40,7 +40,9 @@ fn pending_fixture(root: &Path) -> (Storage, String) {
         embedding_model: proof(&emb),
         runtime_libraries: vec![library.clone()],
         threads: 1,
-        cluster_threshold_milli: 500,
+        cluster_threshold_milli: DiarizationPreferences::default()
+            .standard
+            .cluster_threshold_milli,
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,

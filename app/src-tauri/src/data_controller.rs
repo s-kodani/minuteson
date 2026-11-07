@@ -197,7 +197,82 @@ struct State {
     cancel: Arc<AtomicBool>,
     closing: bool,
     started_at_ms: i64,
+    history_operation: Option<HistoryOperation>,
     jobs: std::collections::BTreeMap<String, DataJob>,
+}
+
+struct HistoryOperation {
+    id: String,
+    meeting_id: Option<String>,
+    accepted_at: i64,
+}
+
+fn history_prefix(kind: Option<Kind>) -> Option<(&'static str, &'static str, &'static str)> {
+    match kind {
+        Some(Kind::Backup) => Some(("backup", "すべての会議", "backup")),
+        Some(Kind::Restore) => Some(("restore", "バックアップから復元", "restore")),
+        Some(Kind::Deletion) => Some(("deletion", "会議 1件", "deletion")),
+        Some(Kind::AudioDeletion) => Some(("audio_deletion", "会議の音声 1件", "audioDeletion")),
+        Some(Kind::ModelDeletion) => Some(("model_deletion", "モデル 1件", "modelDeletion")),
+        _ => None,
+    }
+}
+
+fn history_operation(snapshot: &Snapshot) -> Option<HistoryOperation> {
+    let (kind, _, prefix) = history_prefix(snapshot.kind)?;
+    let value = serde_json::to_value(snapshot).ok()?;
+    let preview = &value[format!("{prefix}Preview")];
+    let id = preview["operationId"]
+        .as_str()
+        .or_else(|| preview["batchId"].as_str())
+        .or(snapshot.token.as_deref())?;
+    Some(HistoryOperation {
+        id: id.into(),
+        meeting_id: (kind == "audio_deletion")
+            .then(|| preview["meetingId"].as_str().map(str::to_owned))
+            .flatten(),
+        accepted_at: chrono::Utc::now().timestamp_millis(),
+    })
+}
+
+fn history_entry(state: &State, snapshot: &Snapshot) -> Option<crate::job_history::Entry> {
+    if snapshot.token != state.snapshot.token
+        || ["idle", "ready", "choosing", "discarding"].contains(&snapshot.phase.as_str())
+    {
+        return None;
+    }
+    let operation = state.history_operation.as_ref()?;
+    let (kind, target, prefix) = history_prefix(snapshot.kind)?;
+    let outcome = match snapshot.phase.as_str() {
+        "completed" => "succeeded",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "attention" => "attention",
+        _ => "running",
+    };
+    let mut entry = crate::job_history::Entry::new(
+        kind,
+        &operation.id,
+        target,
+        operation.meeting_id.clone(),
+        outcome,
+    );
+    entry.accepted_at = Some(operation.accepted_at);
+    entry.detail = if ["deletion", "audio_deletion", "model_deletion"].contains(&kind) {
+        (outcome == "failed" || outcome == "attention")
+            .then(|| "削除結果の確認が必要です。設定から現在の状態を確認してください。".into())
+    } else {
+        snapshot.error_message.clone()
+    };
+    let value = serde_json::to_value(snapshot).ok()?;
+    let receipt = &value[format!("{prefix}Receipt")];
+    if let Some(ids) = receipt["meetingIds"].as_array() {
+        entry.target = format!("会議 {}件", ids.len());
+    }
+    if let Some(count) = receipt["meetingCount"].as_u64() {
+        entry.target = format!("会議 {count}件");
+    }
+    Some(entry)
 }
 
 /// Session-local job results. Durable publication/recovery remains in Storage.
@@ -307,6 +382,7 @@ impl DataController {
         };
         s.cancel = Arc::new(AtomicBool::new(false));
         s.request = None;
+        s.history_operation = None;
         Ok((s.snapshot.clone(), s.cancel.clone(), previous))
     }
 
@@ -528,6 +604,12 @@ impl DataController {
         s.snapshot.revision += 1;
         s.cancel = Arc::new(AtomicBool::new(false));
         s.request = Some(request.clone());
+        s.history_operation = matches!(
+            request.action,
+            Action::Publish | Action::DeleteIncludingUnregistered
+        )
+        .then(|| history_operation(&s.snapshot))
+        .flatten();
         Ok(Some((
             Work::Request(selection, request),
             s.cancel.clone(),
@@ -646,6 +728,17 @@ impl DataController {
     }
 
     fn emit(app: &AppHandle, snapshot: Snapshot) {
+        if let Ok(state) = app.state::<Self>().state.lock() {
+            if let Some(entry) = history_entry(&state, &snapshot) {
+                crate::job_history::record(entry);
+                #[cfg(any(unix, windows))]
+                if let Some(receipt) = &snapshot.deletion_receipt {
+                    if receipt.deleted {
+                        crate::job_history::remove_meeting(&receipt.meeting_id);
+                    }
+                }
+            }
+        }
         let category = snapshot
             .kind
             .map(|kind| format!("{kind:?}").to_lowercase())
@@ -1161,7 +1254,9 @@ impl DataController {
             s.snapshot.retry_allowed = false;
         }
         s.snapshot.revision += 1;
-        Self::emit(app, s.snapshot.clone());
+        let snapshot = s.snapshot.clone();
+        drop(s);
+        Self::emit(app, snapshot);
     }
 }
 

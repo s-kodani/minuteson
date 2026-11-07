@@ -1346,7 +1346,36 @@ pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> RecordingSnapshot {
+    let previous = app.state::<SessionStore>().snapshot();
     let snapshot = app.state::<SessionStore>().update(change);
+    if matches!(
+        snapshot.phase,
+        RecordingPhase::Stopping | RecordingPhase::Saving
+    ) || matches!(
+        previous.phase,
+        RecordingPhase::Stopping | RecordingPhase::Saving
+    ) {
+        if let Some(id) = snapshot
+            .session_id
+            .as_ref()
+            .or(previous.session_id.as_ref())
+        {
+            let state = match snapshot.phase {
+                RecordingPhase::Idle => "succeeded",
+                RecordingPhase::Error => "failed",
+                _ => "running",
+            };
+            let mut entry = crate::job_history::Entry::new(
+                "recording_save",
+                id,
+                "",
+                snapshot.meeting_id.clone().or(previous.meeting_id),
+                state,
+            );
+            entry.detail = snapshot.error_message.clone();
+            crate::job_history::record(entry);
+        }
+    }
     crate::internal_logs::phase(
         "recording",
         snapshot.session_id.clone(),

@@ -38,7 +38,7 @@ test("macOS clips only the two detached native windows using public selectors", 
 test("model selectors keep button metrics without WebKit native sizing", () => {
   const css = source("../src/prototype-alignment.css");
   assert.match(css, /\.model-selection-row select \{[^}]*height:40px[^}]*box-sizing:border-box[^}]*padding:9px 32px 9px 12px/);
-  assert.match(css, /\.capture-input-selection select,(?:\.active-microphone-selection select,)?\.model-selection-row select,\.voice-speaker select,\.speaker-count-fields select \{\s*-webkit-appearance:none; appearance:none/);
-  assert.match(css, /@media\(forced-colors:active\) \{\s*[^}]*\.model-selection-row select,\.voice-speaker select,\.speaker-count-fields select \{ -webkit-appearance:auto; appearance:auto; background-image:none/);
+  assert.match(css, /:root select:where\(:not\(\[multiple\]\)\) \{\s*-webkit-appearance:none; appearance:none/);
+  assert.match(css, /@media\(forced-colors:active\) \{\s*:root select:where\(:not\(\[multiple\]\)\) \{ -webkit-appearance:auto; appearance:auto; background-image:none/);
   assert.match(css, /\.model-selection-row>button,\.model-selection-row select \{ min-height:40px; font-family:inherit; font-size:13px; line-height:20px/);
 });

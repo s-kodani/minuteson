@@ -150,4 +150,7 @@ tauri::generate_handler![
     get_meeting_vocabulary,
     save_vocabulary_book,
     get_minutes_source,
+    get_model_download_guidance,
+    dismiss_model_download_guidance,
+    job_history::list_job_history,
 ]

@@ -24,7 +24,8 @@ Storeと同じ内容の署名済み検証用MSIXを導入し、Windows上の動�
 
 - Windows 11 24H2以降・x64、WebView2 Evergreen Runtime、録音用マイクとPC音声を用意します。
 - モデルを新規導入する場合は通信とモデル分の空き容量が必要です。
-- 用意された検証フォルダーを使用します。署名済みの`*-local-test.msix`、`test-signing-public.cer`、`test-manifest.json`、`test-plan.json`を同じフォルダーに置きます。
+- 用意された検証フォルダーを使用します。署名済みの`*-local-test.msix`、`test-signing-public.cer`、`test-manifest.json`、`test-plan.json`、`検証手順.md`を同じフォルダーに置きます。
+- 署名準備が成功すると、このガイドに今回のコミット・版・SHA256・証明書拇印・期限・パスを反映した`検証手順.md`が必ず生成されます。配布ZIPにもMarkdownの手順書を含めます。
 - `output/windows-store/`の未署名原本はStore提出用です。手元への導入には署名済み検証用コピーを使用します。
 - アプリを通常の終了操作で閉じ、録音・解析・取り込み・バックアップが終了していることを確認します。必要な実データはアプリの手動バックアップで保全します。
 
@@ -132,7 +133,22 @@ Start-Process ('shell:AppsFolder\' + $installed.PackageFamilyName + '!App')
 | CPU／Vulkan | 利用できる実行方式で処理が完了する。Vulkanが利用できない端末ではCPU経路と表示される理由を確認し、Vulkan成功とは記録しない。 |
 | 終了と再起動 | 録音・解析・保存を完了させ、通常の終了操作後に本体・録音ヘルパー・常駐ワーカーが残らない。再起動すると保存済みの会議を開ける。 |
 
-## 5. 今回のバックアップ修正を重点確認する
+### 初回案内・設定・履歴・ボイス表示の確認
+
+| 確認 | 操作と合格条件 |
+| --- | --- |
+| 初回モデル案内 | 未使用の検証ユーザーで初回起動すると、ローカルAIモデルの案内が表示される。「モデルの設定を開く」で設定へ進む。案内だけでダウンロードは始まらない。 |
+| 案内の終了保存 | 別の未使用の検証環境で「あとで」または右上の×・Escapeで閉じ、正常終了・再起動後に案内が再表示されない。既存の会議DBからの起動では初回案内を追加しない。既存データを消して初回状態を作らない。 |
+| 新規設定の初期値 | 設定未保存の環境で、自動話者統合が「まとめる」、登録した声の自動適用と未検出発言の話者補完の類似度下限が両方0.70である。値を変更して保存し、再起動しても保存した値が維持される。 |
+| ジョブ履歴 | 短い検証用の取り込み・解析・バックアップを実行し、「ジョブ一覧」の「履歴」で種類・結果・対象・日時・詳細を確認する。アプリ再起動後も残り、種類と結果で絞り込める。十分な件数がある場合は「さらに読み込む」で重複なく追加される。 |
+| モデル準備の履歴 | 取得・配置・動作確認・適用が一連のモデル準備として1件にまとまる。失敗後に明示的に再試行した場合は別の履歴になる。未確定の処理を完了と表示しない。 |
+| 関連履歴の削除 | 今回作った検証用会議だけを削除し、関連する履歴が消えることを確認する。削除操作には会議名を残さず、件数・日時・結果を表示する。 |
+| ボイスのモデル名 | 声を登録し、ボイス一覧の人物IDと登録モデル名、登録区間ごとのモデル名・短いモデルIDを確認する。登録時のモデル名が現在選択したモデルによって変わらない。 |
+| モーダルの配置と焦点 | 初回案内・履歴詳細・設定・確認画面で、タイトルと右上の×が上下中央に揃う。長いタイトル、ウィンドウ幅の縮小、100%・150%・200%倍率、本文スクロール後にも、Tabで表示したフォーカス枠が切れない。Escapeで閉じ、元の操作へフォーカスが戻る。 |
+
+90日間の保持境界、保存済み旧設定の維持、既知・未知のモデル名は自動テストでも確認します。実機で試せなかった項目は未実施として記録してください。版数を変えないため、既存の同版パッケージへの入替え確認と新規導入の確認を混同しません。
+
+## 5. バックアップと追加復元を確認する
 
 1. 検証用会議で、文字起こし本文・話者名・議事録を編集して保存します。用語を登録し、可能なら人物と声も登録します。最終的な本文を控えます。
 2. 設定のデータ管理から手動バックアップを作成し、完了を待ちます。
@@ -191,7 +207,7 @@ $expectedThumbprint = '今回案内された40文字の証明書拇印'
 if ($expectedThumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw '今回の証明書拇印を指定してください。' }
 $testTrustPath = 'Cert:\LocalMachine\TrustedPeople\' + $expectedThumbprint
 if (Test-Path -LiteralPath $testTrustPath) {
-    Remove-Item -LiteralPath $testTrustPath -Confirm -ErrorAction Stop
+    Remove-Item -Path $testTrustPath -Confirm -ErrorAction Stop
 }
 Test-Path -LiteralPath $testTrustPath
 ```
@@ -214,7 +230,7 @@ if (Test-Path -LiteralPath $testKeyPath) {
     if ($testSigner.FriendlyName -cne 'MinutesOn MSIX local test (persistent)') {
         throw '検証用署名証明書を確認できません。削除を中止しました。'
     }
-    Remove-Item -LiteralPath $testKeyPath -DeleteKey -Confirm -ErrorAction Stop
+    Remove-Item -Path $testKeyPath -DeleteKey -Confirm -ErrorAction Stop
 }
 Test-Path -LiteralPath $testKeyPath
 ```

@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn history_retains_operation_identity_and_meeting_after_failed_audio_deletion_loses_preview() {
+    let snapshot = Snapshot {
+        token: Some("request".into()),
+        kind: Some(Kind::AudioDeletion),
+        phase: "failed".into(),
+        error_message: Some("private meeting title and file path".into()),
+        ..Default::default()
+    };
+    let state = State {
+        snapshot: snapshot.clone(),
+        history_operation: Some(HistoryOperation {
+            id: "operation".into(),
+            meeting_id: Some("meeting".into()),
+            accepted_at: 100,
+        }),
+        ..Default::default()
+    };
+    let entry = history_entry(&state, &snapshot).unwrap();
+    assert_eq!(entry.id, "audio_deletion:operation");
+    assert_eq!(entry.meeting_id.as_deref(), Some("meeting"));
+    assert_eq!(entry.accepted_at, Some(100));
+    assert!(!entry.detail.unwrap().contains("private meeting"));
+    let mut stale = snapshot;
+    stale.token = Some("different-request".into());
+    assert!(history_entry(&state, &stale).is_none());
+}
+
+#[test]
 fn checked_close_rejects_changed_data_before_any_cancellation_or_cleanup() {
     let controller = DataController::default();
     let (snapshot, cancel, _) = controller.begin(Kind::Backup).unwrap();
@@ -367,6 +395,7 @@ fn restore_controller_refresh_response_loss_and_publication_do_not_duplicate_mee
     assert_eq!(target.list_meetings().unwrap().len(), 1);
     let refresh = request(&selected, Action::Refresh);
     let (work, _, started) = controller.begin_request(refresh.clone()).unwrap().unwrap();
+    assert!(controller.state.lock().unwrap().history_operation.is_none());
     let refreshed = finish_work(&controller, &started, &target, work);
     assert_ne!(
         refreshed.restore_preview.as_ref().unwrap().confirmation_id,
@@ -379,6 +408,21 @@ fn restore_controller_refresh_response_loss_and_publication_do_not_duplicate_mee
     assert!(controller.begin_request(refresh).unwrap().is_none());
     let publish = request(&refreshed, Action::Publish);
     let (work, _, started) = controller.begin_request(publish.clone()).unwrap().unwrap();
+    {
+        let state = controller.state.lock().unwrap();
+        let running = history_entry(&state, &started).unwrap();
+        let mut failed = started.clone();
+        failed.phase = "failed".into();
+        failed.restore_preview = None;
+        assert_eq!(history_entry(&state, &failed).unwrap().id, running.id);
+        assert_eq!(
+            running.id,
+            format!(
+                "restore:{}",
+                selected.restore_preview.as_ref().unwrap().batch_id
+            )
+        );
+    }
     let done = finish_work(&controller, &started, &target, work);
     assert_eq!(done.phase, "completed", "{:?}", done.error_message);
     assert_eq!(done.restore_receipt.as_ref().unwrap().meeting_ids.len(), 1);

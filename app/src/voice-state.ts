@@ -1,4 +1,6 @@
-export interface VoiceSample { id:string;modelHash:string;extractorVersion:string;sourceMeetingId:string|null;sourceAvailable:boolean;audioAvailable:boolean;audioStorageState:"ready"|"unavailable";startUs:number;endUs:number;createdAt:number }
+export interface VoiceSample { id:string;modelHash:string;modelName:string|null;extractorVersion:string;sourceMeetingId:string|null;sourceAvailable:boolean;audioAvailable:boolean;audioStorageState:"ready"|"unavailable";startUs:number;endUs:number;createdAt:number }
+export const voiceModelName=(sample:Pick<VoiceSample,"modelHash"|"modelName">)=>sample.modelName?.trim()||`モデル名不明（モデルID ${sample.modelHash.slice(0,8)}）`;
+export const voicePersonModels=(person:Pick<VoicePerson,"samples">)=>[...new Set(person.samples.map(voiceModelName))].join(" / ")||"登録モデルなし";
 export interface VoicePerson {id:string;name:string;version:number;samples:VoiceSample[]}
 export interface VoiceMatch {id:string;speakerId:string;personId:string|null;nameSnapshot:string;state:"candidate"|"automatic"|"confirmed"|"dismissed";similarity:number|null;modelHash:string}
 export interface VoiceWindow {speakerId:string;trackId:string;startUs:number;endUs:number}

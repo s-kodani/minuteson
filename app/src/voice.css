@@ -7,6 +7,8 @@
 .voice-speaker span,.voice-note,.voice-sample {font-size:.8rem}
 .voice-sample,.voice-job {display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;padding-block:6px}
 .voice-sample > span {flex:1;overflow-wrap:anywhere}
+.voice-person-models {flex:1 0 100%;overflow-wrap:anywhere;color:var(--muted);font-size:12px;line-height:1.7}
+.voice-sample .voice-sample-model {display:block;color:var(--text);margin-block:4px;font-size:12px;line-height:1.6}
 .voice-panel [role=alert],.voice-settings [role=alert] {overflow-wrap:anywhere}
 
 .common-modal.voice-dialog > .common-modal-body:not([hidden]) {

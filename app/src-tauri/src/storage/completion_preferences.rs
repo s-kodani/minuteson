@@ -8,7 +8,7 @@ pub(crate) struct CompletionPreferences {
 impl Default for CompletionPreferences {
     fn default() -> Self {
         Self {
-            similarity_threshold_milli: 800,
+            similarity_threshold_milli: 700,
             margin_threshold_milli: 100,
         }
     }

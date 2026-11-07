@@ -355,6 +355,26 @@ struct Fixture {
     file: PathBuf,
     other_file: PathBuf,
     marker: String,
+    settings: Vec<(String, String, String, i64, i64)>,
+}
+
+fn saved_settings(db: &Connection) -> Vec<(String, String, String, i64, i64)> {
+    db.prepare(
+        "SELECT key,value_json,content_hash,lock_version,updated_at FROM app_settings ORDER BY key",
+    )
+    .unwrap()
+    .query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+        ))
+    })
+    .unwrap()
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .unwrap()
 }
 impl Fixture {
     fn new() -> Self {
@@ -404,6 +424,7 @@ impl Fixture {
         )
         .unwrap();
         db.execute("UPDATE working_drafts SET payload_json=json_set(payload_json,'$.deletionProbe',?2) WHERE meeting_id=?1", params![f.meeting,marker.repeat(500)]).unwrap();
+        let settings = saved_settings(&db);
         drop(db);
         Self {
             f,
@@ -412,6 +433,7 @@ impl Fixture {
             file,
             other_file,
             marker,
+            settings,
         }
     }
     fn files(&self) -> removal::Receipt {
@@ -467,14 +489,13 @@ impl Fixture {
         );
         assert!(self.f.storage.get_meeting(&self.f.other).unwrap().is_some());
         let db = self.f.storage.connection.lock().unwrap();
-        for (table, n) in [("app_settings", 1), ("model_packages", 1)] {
-            assert_eq!(
-                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
-                n
-            );
-        }
+        assert_eq!(saved_settings(&db), self.settings);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM model_packages", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
         assert_eq!(
             db.query_row(
                 "SELECT count(*) FROM vocabulary_entries WHERE scope_id='global'",

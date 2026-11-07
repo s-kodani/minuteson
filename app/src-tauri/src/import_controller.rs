@@ -71,6 +71,7 @@ struct State {
     cancel: Arc<AtomicBool>,
     closing: bool,
     last_progress: Option<Instant>,
+    history_started_at: Option<i64>,
 }
 #[derive(Default)]
 pub(crate) struct ImportController {
@@ -122,6 +123,31 @@ impl ImportController {
         Ok(state.snapshot.clone())
     }
     fn emit(app: &AppHandle, snapshot: Snapshot) {
+        if let Ok(state) = app.state::<Self>().state.lock() {
+            if let (Some(request), Some(started)) = (&state.request, state.history_started_at) {
+                if snapshot.token.as_deref() == Some(request.token.as_str())
+                    && !["idle", "ready", "choosing", "inspecting"]
+                        .contains(&snapshot.phase.as_str())
+                {
+                    let outcome = match snapshot.phase.as_str() {
+                        "saved" => "succeeded",
+                        "failed" => "failed",
+                        "cancelled" => "cancelled",
+                        _ => "running",
+                    };
+                    let mut entry = crate::job_history::Entry::new(
+                        "audio_import",
+                        &request.token,
+                        &request.title,
+                        snapshot.saved.as_ref().map(|s| s.meeting_id.clone()),
+                        outcome,
+                    );
+                    entry.accepted_at = Some(started);
+                    entry.detail = snapshot.error_message.clone();
+                    crate::job_history::record(entry);
+                }
+            }
+        }
         crate::internal_logs::phase(
             "import",
             snapshot.token.clone(),
@@ -261,6 +287,7 @@ impl ImportController {
             }
             let selection = s.selected.take().ok_or("確認済みの音声がありません")?;
             s.request = Some(request.clone());
+            s.history_started_at = Some(chrono::Utc::now().timestamp_millis());
             s.cancel = Arc::new(AtomicBool::new(false));
             s.snapshot.busy = true;
             s.snapshot.phase = "waiting".into();

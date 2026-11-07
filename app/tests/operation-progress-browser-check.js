@@ -50,6 +50,10 @@ async (page, capturePath, { approveModelLicense }) => {
   await common().waitFor({ state: "hidden" });
   await models.getByText("使用中", { exact: true }).waitFor();
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === "start_model_download").length) === 1, "returning to settings restarted download");
+  check(await page.evaluate(() => {
+    const stages = window.modelDownloadFixture.calls.filter(call => ["start_model_download", "place_downloaded_model", "check_model_compatibility", "preview_model_profile_application", "apply_model_profile_application"].includes(call.command));
+    return stages.length >= 4 && stages.every(call => typeof call.args.historyOperationId === "string" && call.args.historyOperationId === stages[0].args.historyOperationId);
+  }), "one model preparation was split into separate history operations");
   results.push("download percentages, event binding, navigation continuity, verification and apply");
 
   await page.goto("http://127.0.0.1:1420/tests/operation-progress-browser.html");
