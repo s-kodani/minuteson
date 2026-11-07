@@ -261,7 +261,7 @@ button:disabled { opacity:.5; }
 .meeting-audio-settings-fields select { font:inherit; padding:8px; border:1px solid var(--border); border-radius:8px; }
 .meeting-audio-settings-fields p { color:var(--muted); margin:0; }
 /* The same two-column reading surface as the mock, even at 960px. */
-.content.meeting-detail-content { position:relative; padding:0; gap:0; overflow:visible; }
+.content.meeting-detail-content { --tab-header-padding-top:24px; --tab-content-padding-inline:32px; position:relative; padding:0; gap:0; overflow:visible; }
 /* Historical warnings expand in the workspace, never in a tiny scrollbox.
    Keep a usable editor viewport below them, reachable through workspace scroll. */
 .content.meeting-detail-content:has(>.archived-input-notices:not([hidden])) { overflow-y:auto; }
@@ -269,8 +269,9 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .transcript-card { padding:0; gap:0; }
 .meeting-detail-content .transcript-split { gap:0; }
 .speaker-panel-body { padding:24px 20px; }
+.meeting-detail-content .workspace-panel-side-content>.speaker-panel-body { padding-inline:var(--tab-content-padding-inline); }
 .workspace-panel-drawer-host > .speaker-panel-body { background:var(--surface); }
-.transcript-main { position:relative; padding:24px 32px; gap:12px; }
+.transcript-main { position:relative; padding:24px var(--tab-content-padding-inline); gap:12px; }
 .transcript-main>.transcript-actions:first-child { justify-content:flex-end; gap:8px 12px; }
 .transcript-heading-actions { display:flex; align-items:center; min-width:0; max-width:100%; }
 .transcript-main>.transcript-actions:first-child>.hint { color:var(--muted); }
@@ -298,7 +299,7 @@ button:disabled { opacity:.5; }
 .transcript-split[data-resizing],.transcript-split[data-resizing] * { cursor:col-resize!important; user-select:none!important; }
 @media(max-width:760px) {
   .transcript-divider { display:none; }
-  .transcript-main { padding:16px; }
+  .transcript-main { padding-block:16px; }
   .meeting-playback-dock { flex-wrap:wrap; }
   .meeting-playback-dock .audio-controls { flex-wrap:wrap; }
   .meeting-playback-dock .audio-player { grid-template-columns:minmax(0,1fr); }
@@ -355,7 +356,7 @@ button:disabled { opacity:.5; }
 
 /* Empty/loading states live outside the padded transcript split. */
 .transcript-state { margin:0; padding:24px 0; color:var(--muted); overflow-wrap:anywhere; }
-.meeting-detail-content .transcript-state { flex:none; padding:24px 32px; }
+.meeting-detail-content .transcript-state { flex:none; padding:24px var(--tab-content-padding-inline); }
 .preview-utterance-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; min-width:0; }
 .preview-utterance-meta>small { min-width:0; margin:0; overflow-wrap:anywhere; }
 .utterance-play-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:32px; height:32px; min-height:32px; padding:0; line-height:1; }
@@ -414,7 +415,7 @@ button:disabled { opacity:.5; }
   .theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select,.speaker-count-fields select { -webkit-appearance:auto; appearance:auto; background-image:none; }
 }
 .vocabulary-list input[type=checkbox] { margin:0; flex:none; }
-.meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
+.meeting-detail-content .minutes-card { padding:var(--tab-header-padding-top) var(--tab-content-padding-inline) 24px; gap:12px; }
 .meeting-detail-content .minutes-card>.card-head { gap:12px; }
 .transcript-main>.transcript-actions:first-child { min-height:32px; }
 .import-term label:has(>input[type=checkbox]) { flex-direction:row; align-items:center; gap:8px; }
@@ -576,7 +577,8 @@ button:disabled { opacity:.5; }
 .meeting-list-notice>button { flex:none; max-width:100%; }
 .common-modal .card-head>:is(h2,h3,h4) { min-width:0; margin:0; }
 @media(max-width:760px) {
-  .meeting-detail-content .transcript-split>.workspace-panel-shell { padding:12px 16px 0; }
+  .content.meeting-detail-content { --tab-header-padding-top:12px; --tab-content-padding-inline:16px; }
+  .meeting-detail-content .transcript-split>.workspace-panel-shell { padding:12px var(--tab-content-padding-inline) 0; }
   .meeting-detail-navigation { padding-inline:16px; }
   /* The fixed audio actions must not squeeze the description to one glyph
      per line and consume the transcript's remaining height. */
@@ -584,16 +586,15 @@ button:disabled { opacity:.5; }
   .meeting-playback-dock>.meeting-playback-content { flex-basis:100%; }
   .meeting-playback-dock .audio-controls { flex-wrap:wrap; }
   .meeting-playback-dock .meeting-audio-actions { flex-wrap:wrap; max-width:100%; }
-  .meeting-detail-content .transcript-state { padding:20px 16px; }
+  .meeting-detail-content .transcript-state { padding-block:20px; }
   .transcript-feedback { padding-inline:16px; }
   .common-modal.analysis-dialog { width:calc(100vw - 32px); }
   .common-modal.analysis-dialog .preview-columns { grid-template-columns:minmax(0,1fr); }
-  .meeting-detail-content .minutes-card { padding:16px; }
   .main-column:has(.meeting-detail-status)>.topbar { padding:10px 16px; gap:6px; min-height:56px; }
   .main-column:has(.meeting-detail-status)>.recorder-operation-notifications { --recorder-notice-gutter:16px; }
   .main-column:has(.meeting-detail-status)>.topbar>.header-recording { width:auto; min-width:0; justify-content:flex-end; }
   .meeting-detail-status { padding:12px 16px 8px; }
-  .meeting-detail-content .minutes-card { padding:12px 16px; gap:8px; }
+  .meeting-detail-content .minutes-card { padding-bottom:12px; gap:8px; }
   .meeting-detail-content .minutes-card>.card-head { gap:8px; align-items:center; }
   .meeting-playback-dock { padding-block:8px; }
 }
@@ -677,10 +678,10 @@ button:disabled { opacity:.5; }
 .speaker-structure-dialog .split-preview :is(h3,p) { margin:0; white-space:pre-wrap; }
 .speaker-structure-dialog .transcript-actions { justify-content:flex-end; }
 
-/* Share the search field's column so the jump button follows its right edge. */
+/* Span both search columns to align the jump button with the toolbar's right edge. */
 .transcript-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; gap:12px; flex:none; min-width:0; }
 .meeting-detail-content .transcript-toolbar > .transcript-actions { display:grid; grid-template-columns:subgrid; grid-column:1 / -1; column-gap:12px; }
-.transcript-heading-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px 12px; min-width:0; min-height:32px; }
+.transcript-heading-actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px 12px; min-width:0; min-height:32px; }
 .transcript-heading-actions > h2 { margin:0 auto 0 0; font-size:17px; }
 .transcript-toolbar > .transcript-actions > span { white-space:nowrap; }
 .transcript-toolbar .transcript-search > label { min-width:0; }
