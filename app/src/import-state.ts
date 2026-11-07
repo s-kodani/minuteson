@@ -1,10 +1,11 @@
 import { validVocabulary, type VocabularyEntry } from "./vocabulary-state.ts";
+import type { StageProgress } from "./stage-progress.ts";
 
 export interface AudioInfo { schemaVersion:number;detectedFormat:string;codec:string;sampleRate:number;channels:number;frames:number;durationUs:number }
 export interface ImportSnapshot {
   revision:number;phase:string;busy:boolean;recordingBlocked:boolean;token:string|null;
   fileName:string|null;info:AudioInfo|null;sourceBytes:number|null;requiredBytes:number|null;availableBytes:number|null;
-  completed:number;saved:{id:string;meetingId:string;state:string}|null;errorMessage:string|null;
+  completed:number;progress?:StageProgress|null;saved:{id:string;meetingId:string;state:string}|null;errorMessage:string|null;
 }
 export function acceptImport(current:ImportSnapshot|null,next:ImportSnapshot):ImportSnapshot {
   return current&&current.revision>next.revision?current:next;

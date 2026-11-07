@@ -83,6 +83,13 @@ pub(crate) fn stage(name: &str, total: Option<u64>, unit: &'static str) {
         }
     });
 }
+/// Observe a shared storage boundary only for the worker that requested it.
+pub(crate) fn stage_for(category: &str, name: &str, total: Option<u64>, unit: &'static str) {
+    let active = CURRENT.with(|c| c.borrow().as_ref().is_some_and(|o| o.category == category));
+    if active {
+        stage(name, total, unit);
+    }
+}
 /// Report an absolute worker count without restarting an unchanged stage.
 pub(crate) fn report(name: &str, completed: u64, total: u64, unit: &'static str) {
     let changed = CURRENT.with(|c| {
@@ -196,6 +203,18 @@ mod tests {
     use super::*;
     use std::rc::Rc;
     use std::time::Duration;
+
+    #[test]
+    fn category_scoped_boundaries_do_not_change_other_workers() {
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let captured = notifications.clone();
+        let _scope = Scope::enter("recording_save", move |p| captured.borrow_mut().push(p));
+        report("mixing_audio", 10, 10, "frames");
+        let before = notifications.borrow().clone();
+        stage_for("import", "import_verifying_audio", None, "bytes");
+        assert_eq!(*notifications.borrow(), before);
+        CURRENT.with(|c| assert_eq!(c.borrow().as_ref().unwrap().progress.stage, "mixing_audio"));
+    }
 
     #[test]
     fn absolute_progress_preserves_counts_and_throttles_until_final_frame() {

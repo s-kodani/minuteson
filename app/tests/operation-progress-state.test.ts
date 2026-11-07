@@ -60,6 +60,58 @@ test("old import replies cannot resurrect a completed progress bar", () => {
   assert.equal(importProgress(acceptImport(saved, importing)), null);
 });
 
+test("import save stages use only measured output WAV frames and remain running at 100 percent", () => {
+  const saving: ImportSnapshot = { ...importing, phase: "saving", completed: 50 };
+  for (const [completed, percent] of [[0, 0], [32000, 50], [64000, 100]]) {
+    const snapshot: ImportSnapshot = { ...saving, progress: { stage: "import_creating_wav", completed, total: 64000, unit: "frames" } };
+    const progress = importProgress(snapshot)!;
+    assert.equal(progress.label, "保存用WAVを作成中");
+    assert.equal(progressPercent(progress.completed, progress.total), percent);
+    assert.equal(progress.detail, `${completed.toLocaleString("ja-JP")} / 64,000 フレーム`);
+    assert.equal(progress.state, "running");
+    assert.equal(progress.id, "import:audio");
+    assert.equal(snapshot.busy, true);
+    assert.equal(snapshot.saved, null);
+  }
+  // A higher-rate source's frame count is not the WAV output total.
+  const resampled = importProgress({ ...saving, info: { ...importing.info!, sampleRate: 48000, frames: 192000 }, progress: { stage: "import_creating_wav", completed: 32000, total: 64000, unit: "frames" } })!;
+  assert.equal(progressPercent(resampled.completed, resampled.total), 50);
+  for (const total of [null, 0]) {
+    const progress = importProgress({ ...saving, progress: { stage: "import_creating_wav", completed: 0, total, unit: "frames" } })!;
+    assert.equal(progress.label, "保存用WAVを作成中");
+    assert.equal(progressPercent(progress.completed, progress.total), null);
+  }
+  for (const [stage, label] of [
+    ["import_checking_audio", "取り込み音声を検証中"],
+    ["import_verifying_audio", "保存内容を検証中"],
+    ["import_committing_audio", "保存結果を登録中"],
+    ["import_cleaning_intermediates", "中間ファイルを整理中"],
+  ]) {
+    const progress = importProgress({ ...saving, progress: { stage, completed: 50, total: 100, unit: "files" } })!;
+    assert.equal(progress.label, label);
+    assert.equal(progress.completed, null);
+    assert.equal(progress.total, null);
+    assert.equal(progress.detail, undefined);
+    assert.equal(progress.state, "running");
+  }
+  for (const progress of [undefined, null]) assert.equal(importProgress({ ...saving, progress })!.label, "保存を確定中");
+});
+
+test("saving progress cannot override cancellation, newer revisions or terminal states", () => {
+  const saving: ImportSnapshot = { ...importing, revision: 10, phase: "saving", progress: { stage: "import_creating_wav", completed: 64000, total: 64000, unit: "frames" } };
+  const cancelling: ImportSnapshot = { ...saving, revision: 11, phase: "cancelling" };
+  const progress = importProgress(cancelling)!;
+  assert.equal(progress.label, "安全に取消中");
+  assert.equal(progress.state, "pausing");
+  assert.equal(progress.total, null);
+  assert.equal(progress.detail, undefined);
+  assert.equal(acceptImport(cancelling, saving), cancelling);
+  for (const phase of ["saved", "cancelled", "failed"]) {
+    const terminal = { ...saving, revision: 12, phase, busy: false, progress: null };
+    assert.equal(importProgress(acceptImport(terminal, saving)), null);
+  }
+});
+
 test("transfer updates are bound to operation, recipe and transfer size, and never regress", () => {
   const event = { operationId: "operation-a", recipeHash: "hash", receivedBytes: 50, totalBytes: 200 };
   const accept = (value: unknown) => acceptTransferProgress(null, value, "operation-a", "hash", 200);

@@ -21,3 +21,14 @@ test("copy keeps raw multiline content, identifiers and stream without interpret
 test("elapsed time distinguishes missing values and durations", () => {
   assert.equal(logElapsed(null), "—"); assert.equal(logElapsed(0), "0 ms"); assert.equal(logElapsed(1500), "1.5 秒"); assert.equal(logElapsed(61500), "1 分 1 秒");
 });
+
+test("copy formats paths in message and source without mutating retrieved logs or identifiers", () => {
+  const source=String.raw`\\?\C:\実行 単位\worker.exe`,message=`開けません: ${JSON.stringify(String.raw`\\?\UNC\server\共有\会議`)}\n${String.raw`\\?\C:\会議\audio.wav`}`;
+  const original=Object.freeze(entry(1,{source,message,operationId:"operation-original"}));
+  const before=JSON.stringify(original),copied=copyLogText([original]);
+  assert.ok(copied.includes(String.raw`source=C:\実行 単位\worker.exe`));
+  assert.ok(copied.includes(JSON.stringify(String.raw`\\server\共有\会議`)));
+  assert.ok(copied.includes(String.raw`C:\会議\audio.wav`));
+  assert.match(copied,/operation=operation-original/);
+  assert.equal(JSON.stringify(original),before);
+});

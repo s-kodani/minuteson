@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { operationElapsed, orderedProgress, ProgressRegistry, progressPercent, type OperationProgress } from "./operation-progress-state";
 import { topOpenModal } from "./modal-state";
+import { displayNativePathsInText } from "./native-path";
 
 const registry = new ProgressRegistry();
 
@@ -29,7 +30,7 @@ export function OperationProgressBar({ progress, disclosure, children }: { progr
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [progress.startedAtMs, progress.finishedAtMs]);
-  const detail = [progress.detail, operationElapsed(progress, now)].filter(Boolean).join(" · ");
+  const detail = displayNativePathsInText([progress.detail, operationElapsed(progress, now)].filter(Boolean).join(" · "));
   const expanded = disclosure?.expanded ?? true;
   const controlled = [`${id}-heading`, ...(detail ? [`${id}-detail`] : []), ...(children ? [`${id}-footer`] : [])].join(" ");
   return <div className={`operation-progress${progress.paused ? " operation-progress-paused" : ""}${progress.state === "queued" ? " operation-progress-queued" : ""}`}>

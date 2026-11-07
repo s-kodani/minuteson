@@ -15,7 +15,10 @@ fn info() -> AudioInfo {
     }
 }
 fn wav() -> Vec<u8> {
-    let data: Vec<u8> = (0..64000)
+    wav_for(&info())
+}
+fn wav_for(info: &AudioInfo) -> Vec<u8> {
+    let data: Vec<u8> = (0..info.frames)
         .flat_map(|_| [8192_i16, -16384_i16])
         .flat_map(|n| n.to_le_bytes())
         .collect();
@@ -26,8 +29,8 @@ fn wav() -> Vec<u8> {
     h.extend_from_slice(&16_u32.to_le_bytes());
     h.extend_from_slice(&1_u16.to_le_bytes());
     h.extend_from_slice(&2_u16.to_le_bytes());
-    h.extend_from_slice(&16000_u32.to_le_bytes());
-    h.extend_from_slice(&64000_u32.to_le_bytes());
+    h.extend_from_slice(&info.sample_rate.to_le_bytes());
+    h.extend_from_slice(&(info.sample_rate * 4).to_le_bytes());
     h.extend_from_slice(&4_u16.to_le_bytes());
     h.extend_from_slice(&16_u16.to_le_bytes());
     h.extend_from_slice(b"data");
@@ -46,7 +49,15 @@ pub(in crate::storage) fn pending_configured(
     operation: &str,
     options: &audio_import::ImportOptions,
 ) -> (ImportSnapshot, PathBuf, ImportManifest) {
-    let bytes = wav();
+    pending_with_info(s, operation, options, info())
+}
+fn pending_with_info(
+    s: &Storage,
+    operation: &str,
+    options: &audio_import::ImportOptions,
+    info: AudioInfo,
+) -> (ImportSnapshot, PathBuf, ImportManifest) {
+    let bytes = wav_for(&info);
     let source = Fingerprint {
         path: s.root.join("not-permanent.wav"),
         size: bytes.len() as u64,
@@ -58,7 +69,7 @@ pub(in crate::storage) fn pending_configured(
             operation,
             "会議.wav",
             &source,
-            &info(),
+            &info,
             options,
         )
         .unwrap();
@@ -67,12 +78,12 @@ pub(in crate::storage) fn pending_configured(
     std::fs::write(base.join("original.wav"), &bytes).unwrap();
     s.audio_import_converting(&import.id).unwrap();
     let caf = caf_fixture(
-        16000,
+        info.sample_rate,
         2,
         3,
         32,
         4,
-        &(0..64000)
+        &(0..info.frames)
             .flat_map(|_| [0.25_f32, -0.5_f32])
             .flat_map(|n| n.to_le_bytes())
             .collect::<Vec<_>>(),
@@ -84,7 +95,7 @@ pub(in crate::storage) fn pending_configured(
         meeting_id: import.meeting_id.clone(),
         import_id: import.id.clone(),
         original_file_name: import.original_file_name.clone(),
-        info: info(),
+        info,
         original: FileEvidence {
             size: source.size,
             sha256: source.sha256,
@@ -100,6 +111,80 @@ pub(in crate::storage) fn pending_configured(
     )
     .unwrap();
     (s.audio_import(&import.id).unwrap(), base, manifest)
+}
+
+#[test]
+fn saving_observations_follow_boundaries_and_finish_short_output_frame_progress() {
+    use std::{cell::RefCell, rc::Rc};
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, manifest) = pending_with_info(
+        &s,
+        "progress",
+        &audio_import::ImportOptions::default(),
+        AudioInfo {
+            sample_rate: 48000,
+            frames: 480,
+            duration_us: 10_000,
+            ..info()
+        },
+    );
+    let notifications = Rc::new(RefCell::new(Vec::new()));
+    let captured = notifications.clone();
+    let observations = crate::operation_observation::Scope::enter("import", move |p| {
+        captured.borrow_mut().push(p)
+    });
+    let saved = s.finalize_audio_import(&import.id).unwrap();
+    assert_eq!(saved.state, "ready");
+    // Check the final frame before Scope::drop can flush any pending count.
+    let notifications = notifications.borrow();
+    let mut stages: Vec<_> = notifications.iter().map(|p| p.stage.as_str()).collect();
+    stages.dedup();
+    assert_eq!(
+        stages,
+        [
+            "import_checking_audio",
+            "import_creating_wav",
+            "import_verifying_audio",
+            "import_committing_audio",
+            "import_cleaning_intermediates",
+        ]
+    );
+    for stage in stages {
+        let first = notifications.iter().find(|p| p.stage == stage).unwrap();
+        assert_eq!(first.completed, 0, "{stage} retained the previous count");
+        assert_eq!(first.total, None);
+    }
+    let frames: Vec<_> = notifications
+        .iter()
+        .filter(|p| p.stage == "import_creating_wav" && p.total.is_some())
+        .collect();
+    assert_eq!(frames.first().unwrap().completed, 0);
+    let last = frames.last().unwrap();
+    assert_eq!(
+        (last.completed, last.total, last.unit),
+        (160, Some(160), "frames")
+    );
+    assert_ne!(last.total, Some(manifest.info.frames));
+    let final_frame = notifications
+        .iter()
+        .position(|p| p.stage == "import_creating_wav" && p.completed == 160)
+        .unwrap();
+    assert!(notifications[final_frame + 1..]
+        .iter()
+        .any(|p| p.stage == "import_cleaning_intermediates"));
+    drop(notifications);
+    drop(observations);
+    assert!(!base.join("original.wav").exists());
+    assert!(!base.join("decoded.caf").exists());
+    assert_eq!(
+        s.verify_canonical_audio(&import.meeting_id, &|| false)
+            .unwrap()
+            .tracks[0]
+            .chunks[0]
+            .frames,
+        160
+    );
 }
 fn count(s: &Storage, table: &str, meeting: &str) -> i64 {
     s.connection

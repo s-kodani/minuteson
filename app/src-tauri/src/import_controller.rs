@@ -28,6 +28,7 @@ pub(crate) struct Snapshot {
     pub required_bytes: Option<u64>,
     pub available_bytes: Option<u64>,
     pub completed: u64,
+    pub progress: Option<crate::operation_observation::Progress>,
     pub saved: Option<ImportSnapshot>,
     pub error_message: Option<String>,
 }
@@ -45,6 +46,7 @@ impl Default for Snapshot {
             required_bytes: None,
             available_bytes: None,
             completed: 0,
+            progress: None,
             saved: None,
             error_message: None,
         }
@@ -114,6 +116,7 @@ impl ImportController {
         change(&mut state);
         state.snapshot.revision += 1;
         if !state.snapshot.busy {
+            state.snapshot.progress = None;
             self.idle.notify_all();
         }
         Ok(state.snapshot.clone())
@@ -270,6 +273,16 @@ impl ImportController {
         std::thread::spawn(move || {
             let cancelled = || cancel.load(Ordering::Acquire);
             let mut prepared = false;
+            let progress_app = app.clone();
+            let progress_token = request.token.clone();
+            let observations = crate::operation_observation::Scope::enter("import", move |value| {
+                if let Some(snapshot) = progress_app
+                    .state::<Self>()
+                    .stage_progress(&progress_token, value)
+                {
+                    Self::emit(&progress_app, snapshot);
+                }
+            });
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<_, String> {
                     AnalysisController::prepare_import(&app, &cancelled)?;
@@ -283,7 +296,7 @@ impl ImportController {
                         &request.options,
                         &cancelled,
                         &|phase, n| {
-                            Self::progress(&app, phase, n);
+                            Self::progress(&app, &request.token, phase, n);
                         },
                     )
                 }))
@@ -293,6 +306,9 @@ impl ImportController {
                             .into(),
                     )
                 });
+            // Dropping the scope publishes its final observation. Do this while
+            // the operation is still active, before any terminal snapshot.
+            drop(observations);
             // Publish terminal state before allowing waiting recording/exit to proceed.
             if prepared {
                 AnalysisController::import_finished(&app);
@@ -315,9 +331,32 @@ impl ImportController {
         });
         Ok(snapshot)
     }
-    fn progress(app: &AppHandle, phase: &str, n: u64) {
+    fn stage_progress(
+        &self,
+        token: &str,
+        progress: crate::operation_observation::Progress,
+    ) -> Option<Snapshot> {
+        let mut s = self.state.lock().ok()?;
+        if s.snapshot.token.as_deref() != Some(token)
+            || !s.snapshot.busy
+            || s.snapshot.phase != "saving"
+            || s.cancel.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        s.snapshot.progress = Some(progress);
+        s.snapshot.revision += 1;
+        Some(s.snapshot.clone())
+    }
+    fn progress(app: &AppHandle, token: &str, phase: &str, n: u64) {
         let c = app.state::<Self>();
         let snapshot = if let Ok(mut s) = c.state.lock() {
+            if s.snapshot.token.as_deref() != Some(token)
+                || !s.snapshot.busy
+                || s.cancel.load(Ordering::Acquire)
+            {
+                return;
+            }
             if s.snapshot.phase == phase
                 && s.last_progress
                     .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
@@ -325,9 +364,10 @@ impl ImportController {
                 return;
             }
             s.last_progress = Some(Instant::now());
-            if !s.cancel.load(Ordering::Acquire) {
-                s.snapshot.phase = phase.into();
+            if s.snapshot.phase != phase {
+                s.snapshot.progress = None;
             }
+            s.snapshot.phase = phase.into();
             s.snapshot.completed = n;
             s.snapshot.revision += 1;
             s.snapshot.clone()
@@ -345,6 +385,7 @@ impl ImportController {
             return Err("取消対象が変更されました".into());
         }
         s.cancel.store(true, Ordering::Release);
+        s.snapshot.progress = None;
         s.selected = None;
         if s.snapshot.busy {
             s.snapshot.phase = "cancelling".into();
@@ -407,6 +448,7 @@ impl ImportController {
             }
             s.snapshot.recording_blocked = true;
             s.cancel.store(true, Ordering::Release);
+            s.snapshot.progress = None;
             if s.snapshot.busy {
                 s.snapshot.phase = "cancelling".into();
             }
@@ -461,6 +503,7 @@ impl ImportController {
         }
         s.closing = true;
         s.cancel.store(true, Ordering::Release);
+        s.snapshot.progress = None;
         s.selected = None;
         if s.snapshot.busy {
             s.snapshot.phase = "cancelling".into();
@@ -608,6 +651,58 @@ mod tests {
         );
     }
     use super::*;
+
+    fn measured(completed: u64) -> crate::operation_observation::Progress {
+        crate::operation_observation::Progress {
+            stage: "import_creating_wav".into(),
+            completed,
+            total: Some(10),
+            unit: "frames",
+        }
+    }
+
+    #[test]
+    fn saving_progress_is_revisioned_and_late_notifications_cannot_undo_cancellation() {
+        let c = ImportController::default();
+        let initial = c.begin("saving").unwrap();
+        let token = initial.token.as_deref().unwrap();
+        let progress = c.stage_progress(token, measured(10)).unwrap();
+        assert_eq!(progress.revision, initial.revision + 1);
+        assert_eq!(c.snapshot().unwrap().progress, Some(measured(10)));
+        assert_eq!(progress.phase, "saving");
+        assert!(progress.busy, "WAV 100% is not save completion");
+        let cancelling = c.cancel(token).unwrap();
+        assert_eq!(cancelling.phase, "cancelling");
+        assert!(cancelling.progress.is_none());
+        assert!(c.stage_progress(token, measured(10)).is_none());
+        assert_eq!(c.snapshot().unwrap().revision, cancelling.revision);
+    }
+
+    #[test]
+    fn terminal_and_foreign_operation_observations_are_ignored_and_progress_is_cleared() {
+        let c = ImportController::default();
+        let initial = c.begin("saving").unwrap();
+        let token = initial.token.as_deref().unwrap();
+        assert!(c.stage_progress("foreign", measured(1)).is_none());
+        assert_eq!(c.snapshot().unwrap().revision, initial.revision);
+        c.stage_progress(token, measured(10)).unwrap();
+        let terminal = c
+            .change(|s| {
+                s.snapshot.phase = "saved".into();
+                s.snapshot.busy = false;
+            })
+            .unwrap();
+        assert!(terminal.progress.is_none());
+        assert!(c.stage_progress(token, measured(10)).is_none());
+        assert_eq!(c.snapshot().unwrap().revision, terminal.revision);
+        let next = c.begin("saving").unwrap();
+        assert!(c.stage_progress(token, measured(10)).is_none());
+        assert_eq!(c.snapshot().unwrap().revision, next.revision);
+        assert_eq!(
+            serde_json::to_value(Snapshot::default()).unwrap()["progress"],
+            serde_json::Value::Null
+        );
+    }
 
     #[test]
     fn selection_tokens_reject_stale_cancel_without_mutating_current_work() {

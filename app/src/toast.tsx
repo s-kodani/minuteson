@@ -6,6 +6,7 @@ import { InfoPopover } from "./info-popover";
 import { ActionIcon } from "./action-icon";
 import { topOpenModal } from "./modal-state";
 import { ToastController, toastKey, type Toast, type ToastAction, type ToastLevel } from "./toast-state";
+import { displayNativePathsInText } from "./native-path";
 
 // Sonner shows new events; the menu retains their history separately.
 export const toasts = new ToastController();
@@ -62,8 +63,8 @@ function NotificationHistoryRow({notice,active,onOpen,locked,restoreFocus}:{noti
   const action=notice.action;
   return <section ref={element} className={`toast-card toast-${notice.level}`} data-history-id={notice.id}>
     <span className="toast-icon" aria-hidden="true">{icons[notice.level]}</span>
-    <div className="toast-body"><p><span className="toast-label">{labels[notice.level]}： </span>{notice.message}</p>
-      {notice.details && <p className="toast-details">{notice.details}</p>}
+    <div className="toast-body"><p><span className="toast-label">{labels[notice.level]}： </span>{displayNativePathsInText(notice.message)}</p>
+      {notice.details && <p className="toast-details">{displayNativePathsInText(notice.details)}</p>}
       {notice.meetingId&&onOpen?<button type="button" className="small-secondary" data-screen-navigation disabled={locked} onClick={()=>void onOpen(notice.meetingId!)}>会議を開く</button>:(active||notice.historyOnly)&&action?<button type="button" className="small-secondary" data-screen-navigation={action.kind === "open" || undefined} disabled={action.disabled||notice.actionBusy||locked} onClick={()=>void toasts.act(notice.key,notice.id,true).catch(cause=>toasts.show({key:toastKey(notice.key,"action-failed"),level:"error",message:String(cause)}))}>{notice.actionBusy?"実行中":action.label}</button>:null}
     </div>
     <button type="button" className="icon-button small-secondary" aria-label={`${labels[notice.level]}通知を削除`} title="通知を削除" disabled={notice.actionBusy} onClick={()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);restoreFocus();toasts.removeHistory(notice.id);}}><ActionIcon name="trash"/></button>
@@ -88,11 +89,11 @@ function ToastCard({ toast, restoreFocus, pendingCount }: { toast: Toast; restor
     onPointerEnter={() => toasts.pause(toast.key, "hover", true)} onPointerLeave={() => toasts.pause(toast.key, "hover", false)}
     onFocus={event => event.stopPropagation()} onBlur={event => event.stopPropagation()} onFocusCapture={() => toasts.pause(toast.key, "focus", true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) toasts.pause(toast.key, "focus", false); }}>
     <span className="toast-icon" aria-hidden="true">{icons[toast.level]}</span>
-    <div className="toast-body"><p role={toast.important ? "alert" : "status"} aria-atomic="true"><span className="toast-label">{labels[toast.level]}： </span>{toast.message}</p>
-      {toast.details && <p className="toast-details">{toast.details}</p>}
+    <div className="toast-body"><p role={toast.important ? "alert" : "status"} aria-atomic="true"><span className="toast-label">{labels[toast.level]}： </span>{displayNativePathsInText(toast.message)}</p>
+      {toast.details && <p className="toast-details">{displayNativePathsInText(toast.details)}</p>}
       {toast.action && <button type="button" className="small-secondary" data-screen-navigation={toast.action.kind === "open" || undefined} disabled={toast.action.disabled || toast.actionBusy} onClick={() => { void toasts.act(toast.key, toast.id).catch(cause => toasts.show({ key: toastKey(toast.key, "action-failed"), level: "error", message: `通知の操作を完了できませんでした: ${String(cause)}` })).finally(() => { if (document.activeElement === document.body) restoreFocus(); }); }}>{toast.actionBusy ? "実行中" : toast.action.label}</button>}
     </div>
-    <InfoPopover label={`${labels[toast.level]}通知の詳細`}>{toast.message}{toast.details && <p className="toast-details">{toast.details}</p>}{pendingCount > 0 ? `（ほか ${pendingCount} 件の通知が待機しています）` : ""}</InfoPopover>
+    <InfoPopover label={`${labels[toast.level]}通知の詳細`}>{displayNativePathsInText(toast.message)}{toast.details && <p className="toast-details">{displayNativePathsInText(toast.details)}</p>}{pendingCount > 0 ? `（ほか ${pendingCount} 件の通知が待機しています）` : ""}</InfoPopover>
     <button type="button" className="toast-close icon-button" aria-label={`${labels[toast.level]}通知を閉じる`} title="通知を閉じる" onClick={() => {if(noticeElementVisible(element.current))toasts.markRendered(toast.key,toast.id);if(element.current?.contains(document.activeElement))restoreFocus();toasts.dismiss(toast.key, toast.id);}}><ActionIcon name="close" /></button>
   </section>;
 }

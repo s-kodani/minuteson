@@ -55,6 +55,7 @@ export const browserSuites = [
   ["no-maintenance", "data-save-browser-fixture.js", "no-maintenance-browser-check.js"],
   ["data-layout", "data-save-browser-fixture.js", "data-save-layout-browser-check.js"],
   ["native-path-display", "data-save-browser-fixture.js", "native-path-browser-check.js"],
+  ["native-path-diagnostics", "native-path-diagnostics-browser-fixture.tsx", "native-path-diagnostics-browser-check.js"],
   ["notice-deletion", "audio-deletion-browser-fixture.js", "notice-deletion-browser-check.js"],
   ["capture-test-pc-only", null, "capture-test-pc-only-browser-check.js"],
   ["capture-test-unreceived", null, "capture-test-unreceived-browser-check.js"],
