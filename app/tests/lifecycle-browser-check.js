@@ -10,6 +10,8 @@ async(page,capturePath)=>{
   await themeSelect.waitFor();
   const sharedSelectStyle=await themeSelect.evaluate(selectStyle);
   await nav.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
+  await page.locator('#job-active-panel .job-list-empty').waitFor();
+  await page.screenshot({path:capturePath('job-list-empty.png')});
   await page.getByRole("tab",{name:"履歴",exact:true}).click();
   const history=page.getByRole("region",{name:"過去のジョブ履歴",exact:true});
   await page.waitForFunction(()=>document.querySelectorAll('.job-history-rows>li').length===50);

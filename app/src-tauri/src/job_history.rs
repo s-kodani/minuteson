@@ -166,8 +166,12 @@ fn open(root: &Path) -> Result<Connection, String> {
         std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    // macOS temporary/app-data paths may contain an OS-owned alias such as
+    // /var -> /private/var. Keep NOFOLLOW for the database itself while giving
+    // SQLite the physical directory path it requires on reopen.
+    let physical_root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
     let db = Connection::open_with_flags(
-        root.join("history.sqlite3"),
+        physical_root.join("history.sqlite3"),
         rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(|e| e.to_string())?;

@@ -1,5 +1,43 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn physical_directory_alias_reopens_but_database_links_remain_refused() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let physical = dir.path().canonicalize().unwrap();
+    let actual = physical.join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    let alias = physical.join("alias");
+    symlink(&actual, &alias).unwrap();
+    let root = alias.join("history");
+    let time = now();
+    {
+        let db = open(&root).unwrap();
+        upsert(&db, entry("saved", "succeeded", time), time).unwrap();
+    }
+    let db = open(&root).unwrap();
+    assert_eq!(
+        query(&db, Query::default(), &BTreeMap::new(), time)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    drop(db);
+    let link_root = physical.join("linked-root");
+    symlink(actual.join("history"), &link_root).unwrap();
+    assert!(open(&link_root).is_err());
+    let linked_db_root = physical.join("linked-db");
+    std::fs::create_dir(&linked_db_root).unwrap();
+    symlink(
+        actual.join("history/history.sqlite3"),
+        linked_db_root.join("history.sqlite3"),
+    )
+    .unwrap();
+    assert!(open(&linked_db_root).is_err());
+}
+
 #[test]
 fn model_check_outcome_uses_structured_state_before_message_wording() {
     let cancelled = Ok(serde_json::json!({"state":"cancelled","errorMessage":"operation stopped"}));

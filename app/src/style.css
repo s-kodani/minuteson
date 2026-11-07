@@ -418,7 +418,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .job-list-rows .operation-progress-heading span span { font-size:12px; }
 .job-list-rows .operation-progress { margin:12px 0 16px; }
 .job-list-rows .small-secondary { font-size:12px; }
-.job-list-empty { padding:32px 0; border-top:1px solid var(--border); }
+.job-list-empty { padding:32px 0; }
 .job-list-empty h2 { font-size:16px; margin:0 0 12px; }
 .job-list-empty p,.job-read-error { font-size:13px; color:var(--secondary-text); line-height:1.7; }
 @keyframes operation-progress-pulse { 0%,100% { background-position:0% 50%; } 50% { background-position:100% 50%; } }
