@@ -342,7 +342,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
         </section>}
 
         <div className="transcript-toolbar">
-          <div className="transcript-actions transcript-list-heading"><div className="transcript-heading-actions"><h2>発言一覧</h2><button type="button" className="small-secondary" disabled={!jumpRow||disabled||!visible} onClick={jumpToPlayback}>再生位置へ移動</button></div><span role="status">{snapshot.error ? "保存要確認" : snapshot.saving || busy ? "保存中" : Object.keys(texts).length || nameEditor || assignmentEditor || structureEditor || snapshot.dirty ? "編集中" : "保存済み"}</span></div>
+          <div className="transcript-actions transcript-list-heading"><div className="transcript-heading-actions"><h2>発言一覧</h2><button type="button" className="small-secondary" disabled={!jumpRow||disabled||!visible} onClick={jumpToPlayback}>再生位置へ移動</button></div></div>
           <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
         </div>
         <div className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>{shown.map(utterance=><article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${playingIds.has(utterance.id)?" utterance-playing":""}`} aria-current={playingIds.has(utterance.id)?"true":undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space" onKeyDown={event=>{

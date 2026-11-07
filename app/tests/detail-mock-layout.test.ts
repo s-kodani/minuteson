@@ -98,8 +98,10 @@ test("transcript loading and empty states retain responsive workspace insets", (
   const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
   assert.match(transcript,/loading && <p className="transcript-state" role="status"/);
   assert.match(transcript,/!loading && !analysis && !error && <p className="transcript-state"/);
-  assert.match(css,/\.meeting-detail-content \.transcript-state \{ flex:none; padding:24px 32px;/);
-  assert.match(css,/\.meeting-detail-content \.transcript-state \{ padding:20px 16px;/);
+  assert.match(css,/\.content\.meeting-detail-content \{ --tab-header-padding-top:24px; --tab-content-padding-inline:32px;/);
+  assert.match(css,/@media\(max-width:760px\) \{\s*\.content\.meeting-detail-content \{ --tab-header-padding-top:12px; --tab-content-padding-inline:16px;/);
+  assert.match(css,/\.meeting-detail-content \.transcript-state \{ flex:none; padding:24px var\(--tab-content-padding-inline\);/);
+  assert.match(css,/\.meeting-detail-content \.transcript-state \{ padding-block:20px;/);
   assert.match(css,/\.transcript-feedback \{ padding-inline:16px;/);
 });
 
@@ -123,8 +125,8 @@ test("mixed action rows and select fields align without removing wrapping or che
 
 test("minutes chrome keeps workspace insets and preview has one guarded dismiss action", () => {
   const css=source("prototype-alignment.css"), minutes=source("minutes.tsx");
-  assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding:24px 32px; gap:12px;/);
-  assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding:16px;/);
+  assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding:var\(--tab-header-padding-top\) var\(--tab-content-padding-inline\) 24px; gap:12px;/);
+  assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding-bottom:12px; gap:8px;/);
   assert.match(minutes,/<MinutesMarkdownEditor/);
   assert.doesNotMatch(minutes,/reviewContent|openPreview|議事録候補/);
 });
@@ -215,7 +217,7 @@ test("recording and capture settings reuse field metrics without doubling label 
 });
 
 test("the narrow speaker drawer opener has insets instead of touching the tabs and workspace edge", () => {
-  assert.match(source("prototype-alignment.css"), /@media\(max-width:760px\) \{\s*\.meeting-detail-content \.transcript-split>\.workspace-panel-shell \{ padding:12px 16px 0; \}/);
+  assert.match(source("prototype-alignment.css"), /@media\(max-width:760px\) \{\s*\.content\.meeting-detail-content \{[^}]*--tab-content-padding-inline:16px;[^}]*\}\s*\.meeting-detail-content \.transcript-split>\.workspace-panel-shell \{ padding:12px var\(--tab-content-padding-inline\) 0; \}/);
 });
 
 test("audio import uses spaced groups and the same field metrics as other settings", () => {
