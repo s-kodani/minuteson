@@ -1,7 +1,7 @@
 import { ErrorNotice, ToastHost } from "./toast";
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "./ipc.ts";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { acceptStartupReport, startupStageLabels, type StartupReport } from "./startup-attention-state";
 import { CommonModal } from "./common-modal";
 import { usePlatform } from "./platform";
@@ -49,6 +49,8 @@ function useStartupReport() {
   return { report, error, busy, quitting, retryUncertain, read, retry, quit };
 }
 export function StartupAttentionWindow() { return <StartupAttention state={useStartupReport()} />; }
+const StartupRecoveryPending = createContext(false);
+export const useStartupRecoveryPending = () => useContext(StartupRecoveryPending);
 export function StartupGate({ children }: { children: ReactNode }) {
   const state = useStartupReport();
   const platform = usePlatform();
@@ -56,7 +58,7 @@ export function StartupGate({ children }: { children: ReactNode }) {
   // Browser-only preview is not a native admission proof and cannot invoke
   // desktop operations. A desktop reader failure never mounts normal UI.
   return !isTauri() || state.report?.phase === "ready" ? <>
-    {state.report?.platform && platform !== "other" && state.report.platform !== platform ? <p role="alert">起動結果のOS情報が一致しません。</p> : children}
+    {state.report?.platform && platform !== "other" && state.report.platform !== platform ? <p role="alert">起動結果のOS情報が一致しません。</p> : <StartupRecoveryPending value={!!state.report?.recovery && !recoveryDismissed}>{children}</StartupRecoveryPending>}
     {state.report?.recovery && <CommonModal portal open={!recoveryDismissed} onDismiss={() => setRecoveryDismissed(true)} dismissLabel="閉じる" dismissText="復旧結果を閉じる" restoreTarget={() => document.querySelector<HTMLElement>(".sidebar button:not(:disabled)")} aria-labelledby="startup-recovery-title" aria-describedby="startup-recovery-description">
       <h2 id="startup-recovery-title">{state.report.recovery.reviewRequired ? "中断操作の再確認が必要です" : "保存先の情報を修復しました"}</h2>
       {state.report.recovery.reviewRequired ? <>

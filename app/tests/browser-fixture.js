@@ -17,7 +17,7 @@ const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".r
 ] };
 const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: "b".repeat(64), utterances: analysis.utterances.map((item) => ({ ...item, id: `${item.id}-new`, effectiveText: `${item.effectiveText}（候補）` })) };
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
-const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
+const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 1100, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
   showToast: input => toasts.show(input),
   notifications: () => toasts.getSnapshot().map(({key,id,message})=>({key,id,message})),
@@ -156,6 +156,9 @@ mockIPC(async (command, args) => {
     case "record_meeting_open_failure": return null;
     case "get_storage_bootstrap": return {meetingRoot:"/synthetic/meetings",activeMeetingRoot:"/synthetic/meetings",restartRequired:false,modelsRoot:"/synthetic/models",bootstrapPath:"/synthetic/config/bootstrap.json",revision:0,origin:"default",pendingOperationId:null,pendingTarget:null,keptMoves:[]};
     case "get_minutes_markdown": return null;
+    case "get_model_download_guidance": return {pending:false};
+    case "dismiss_model_download_guidance": return {pending:false};
+    case "list_job_history": return {items:[],nextCursor:null,storageError:null};
     case "get_official_model_options": return [];
     case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
     case "capture_available": return false;
@@ -311,7 +314,7 @@ mockIPC(async (command, args) => {
       if (fixture.lostPublicationResponse) { fixture.lostPublicationResponse = false; throw Error("模擬復元応答喪失"); }
       return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
-    case "get_speaker_completion_preferences": return structuredClone(fixture.speakerCompletionPreferences??={id:"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}});
+    case "get_speaker_completion_preferences": return structuredClone(fixture.speakerCompletionPreferences??={id:"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:700,marginThresholdMilli:100}});
     case "save_speaker_completion_preferences": {
       const current=fixture.speakerCompletionPreferences;
       if(!current||current.lockVersion!==args.expectedLockVersion)throw Error("話者補完設定の競合");
@@ -321,7 +324,7 @@ mockIPC(async (command, args) => {
       if(fixture.loseCompletionPreferencesReply){fixture.loseCompletionPreferencesReply=false;throw Error("合成の話者補完設定応答喪失");}
       return structuredClone(current);
     }
-    case "get_voice_matching_preferences": return structuredClone(fixture.voiceMatchingPreferences??={id:"voice_matching",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}});
+    case "get_voice_matching_preferences": return structuredClone(fixture.voiceMatchingPreferences??={id:"voice_matching",lockVersion:0,payload:{similarityThresholdMilli:700,marginThresholdMilli:100}});
     case "save_voice_matching_preferences": {
       const current=fixture.voiceMatchingPreferences;
       if(!current||current.lockVersion!==args.expectedLockVersion)throw Error("声の設定の競合");

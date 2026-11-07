@@ -8,16 +8,21 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
+from urllib.parse import quote, urlsplit, urlunsplit
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_FILES = {"AppxBlockMap.xml", "[Content_Types].xml"}
 SIGNING_FILES = {"AppxSignature.p7x", "AppxMetadata/CodeIntegrity.cat"}
 METADATA_TAGS = {"AXBM": "AppxBlockMap.xml", "AXCT": "[Content_Types].xml", "AXCI": "AppxMetadata/CodeIntegrity.cat"}
+VALIDATION_GUIDE = "検証手順.md"
+GUIDE_SAMPLE_DIRECTORY = r"C:\path\to\windows-store-test\今回の検証フォルダー"
+GUIDE_SAMPLE_THUMBPRINT = "今回案内された40文字の証明書拇印"
 sys.dont_write_bytecode = True
 
 
@@ -130,6 +135,63 @@ def verify_signed_payload(package, files, metadata_hashes, original_blockmap_sha
     return len(files)
 
 
+def render_validation_guide(msix, workspace, plan, result):
+    """Make the canonical Markdown guide usable with this exact signed copy."""
+    guide_path = workspace / "docs/guides/testing-windows-msix.md"
+    try:
+        source = msix.regular(workspace, guide_path).read_text(encoding="utf-8-sig")
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Canonical MSIX validation guide is unavailable: {guide_path}") from error
+    header = re.match(r"\A---\n.*?\n---\n", source, re.DOTALL)
+    body = source[header.end():].lstrip() if header else ""
+    if (not body.startswith("# ") or GUIDE_SAMPLE_DIRECTORY not in body
+            or GUIDE_SAMPLE_THUMBPRINT not in body or "```powershell" not in body):
+        raise ValueError("Canonical MSIX validation guide has invalid Markdown or missing substitution fields")
+    test_directory = str(Path(plan["testPackage"]).parent).replace("'", "''")
+    body = body.replace(GUIDE_SAMPLE_DIRECTORY, test_directory)
+    body = body.replace(GUIDE_SAMPLE_THUMBPRINT, result["certificate"]["thumbprint"])
+
+    def pin_document_link(match):
+        target = urlsplit(match[2])
+        if target.scheme or target.netloc or not target.path:
+            return match[0]
+        path = posixpath.normpath(posixpath.join("docs/guides", target.path))
+        if path == ".." or path.startswith("../"):
+            raise ValueError("Canonical MSIX guide link traverses outside the repository")
+        pinned = urlunsplit(("https", "github.com", "/s-kodani/minuteson/blob/"
+                            + result["buildCommit"] + "/" + quote(path, safe="/"), target.query, target.fragment))
+        return f"[{match[1]}]({pinned})"
+
+    body = re.sub(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)", pin_document_link, body)
+    fields = [
+        ("ビルドコミット", result["buildCommit"]),
+        ("MSIXバージョン", result["testVersion"]),
+        ("CPU", plan["identity"]["architecture"]),
+        ("署名済みMSIX", Path(result["signedTestPackage"]).name),
+        ("署名済みMSIXのSHA256", result["signedTestSha256"]),
+        ("公開証明書のSHA256", result["certificate"]["publicCertificateSha256"]),
+        ("証明書拇印", result["certificate"]["thumbprint"]),
+        ("証明書期限（UTC）", result["certificate"]["notAfter"]),
+        ("検証フォルダー", str(Path(plan["testPackage"]).parent)),
+        ("未署名原本", result["originalPackage"]),
+        ("未署名原本のSHA256", result["originalSha256"]),
+        ("ビルド証跡", result["buildManifest"]),
+    ]
+    def code(value):
+        value = str(value).replace("\r", " ").replace("\n", " ")
+        fence = "`" * (max((len(run) for run in re.findall(r"`+", value)), default=0) + 1)
+        return f"{fence} {value} {fence}"
+    metadata = "\n".join(f"- {label}: {code(value)}" for label, value in fields)
+    title, remainder = body.split("\n", 1)
+    return (f"{title}\n\n## 今回の成果物\n\n{metadata}\n\n"
+            f"署名の暗号学的検証と原本からの全{result['payloadFiles']}ペイロード・版数の一致を確認済みです。\n"
+            "信頼登録・インストール・アプリ停止・実機機能確認・後片付けは未実施です。\n"
+            "署名鍵は作成者のCurrentUser\\Myに保持し、秘密鍵は配布しません。\n\n"
+            "このMarkdownはビルド元の検証ガイドから自動生成しました。別端末では各コード例の"
+            "`$testDirectory`をコピー先へ変更してください。削除コマンドは手順のみで自動実行しません。\n\n"
+            + remainder.lstrip())
+
+
 def finish(args):
     plan_path = output_path(args.plan)
     plan = read_json(plan_path)
@@ -169,8 +231,13 @@ def finish(args):
         "persistentSigningKeyRetained": True, "osDisplayVerification": "pending", "storeTransitionVerified": False,
         "certificateTrustImported": False, "packageInstalled": False, "applicationStopped": False,
     }
+    guide = render_validation_guide(msix, workspace, plan, result)
+    guide_path = plan_path.parent / VALIDATION_GUIDE
+    with guide_path.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(guide)
     save_new(plan_path.parent / "test-manifest.json", result)
     print(f"Verified signed copy: {count} byte-identical payload files; version {result['testVersion']}; no install or trust changes")
+    print(f"Validation guide: {guide_path}")
 
 
 def main():

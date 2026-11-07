@@ -273,6 +273,33 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     element.addEventListener("keydown",handle);
     return () => element.removeEventListener("keydown",handle);
   }, [externalContent,ref,owned?.id,owned?.phase,effectiveBlocked]);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!open || !element || element.classList.contains("workspace-drawer") || !element.querySelector(":scope > .common-modal-dismiss-row")) return;
+    let title: HTMLElement | null = null;
+    // Titles remain in their original view so retained inputs and native
+    // accessibility ownership survive settings/confirmation replacements.
+    const measure = () => {
+      if (title) element.style.setProperty("--common-modal-title-height", `${title.getBoundingClientRect().height}px`);
+    };
+    const size = new ResizeObserver(measure);
+    const update = () => {
+      const next = element.open ? visibleModalTarget(element, "h2, h3") : null;
+      if (next === title) return;
+      if (title) { size.unobserve(title); title.removeAttribute("data-modal-title"); }
+      title = next;
+      element.toggleAttribute("data-modal-header", !!title);
+      if (title) { title.setAttribute("data-modal-title", ""); size.observe(title); measure(); }
+      else element.style.removeProperty("--common-modal-title-height");
+    };
+    const views = new MutationObserver(update);
+    views.observe(element, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "open"] });
+    update();
+    return () => {
+      views.disconnect(); size.disconnect(); title?.removeAttribute("data-modal-title");
+      element.removeAttribute("data-modal-header"); element.style.removeProperty("--common-modal-title-height");
+    };
+  }, [open, ref, hideDismissButton, owned?.id, replacement?.key]);
   const dialog = <dialog {...attributes} ref={ref} data-common-modal aria-label={owned || replacement ? undefined : attributes["aria-label"]} aria-labelledby={owned ? `${owned.id}-title` : replacement?.labelledBy ?? attributes["aria-labelledby"]} className={`common-modal ${className} ${replacement?.className ?? ""}`}
     onCancel={event => { event.preventDefault(); dismiss(); }}
     onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}

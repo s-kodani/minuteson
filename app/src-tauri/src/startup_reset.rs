@@ -364,6 +364,11 @@ pub(crate) fn start_startup_reset(
                     )
                 })();
                 let state = app.state::<Reset>();
+                if result.is_ok() {
+                    if let Err(error) = crate::job_history::clear() {
+                        crate::internal_logs::report_error("job_history", &error);
+                    }
+                }
                 if let Ok(mut inner) = state.inner.lock() {
                     inner.snapshot.busy = false;
                     inner.snapshot.completed = result.is_ok();

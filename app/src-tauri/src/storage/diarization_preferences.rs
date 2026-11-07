@@ -52,7 +52,7 @@ impl Default for DiarizationEnginePreferences {
             embedding_model_path: String::new(),
             runtime_library_paths: vec![],
             threads: 4,
-            cluster_threshold_milli: 500,
+            cluster_threshold_milli: 1100,
             window_shift_milli: 100,
             min_duration_on_ms: 0,
             min_duration_off_ms: 0,

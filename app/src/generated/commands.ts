@@ -16,18 +16,18 @@ export interface CommandArguments {
   "hide_main_to_background": Record<string, never>;
   "get_official_model_options": Record<string, never>;
   "get_model_license_review": { "target": unknown };
-  "start_model_download": { "token": string; "definition": string; "expectedRecipeHash": string };
+  "start_model_download": { "token": string; "historyOperationId"?: (string) | null; "definition": string; "expectedRecipeHash": string };
   "get_model_download_lifetime": { "token": string };
   "get_model_download_catalog": { "token": string };
   "read_model_download": { "token": string; "downloadId": string; "expectedRecipeHash": string };
-  "place_downloaded_model": { "token": string; "packageId"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
+  "place_downloaded_model": { "token": string; "historyOperationId"?: (string) | null; "packageId"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
   "get_downloaded_model_placement_result": { "packageId": string; "token"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
   "cancel_model_inspection": { "token": string };
   "get_model_placements": Record<string, never>;
   "get_model_profiles": Record<string, never>;
-  "preview_model_profile_application": { "token": string; "profile": unknown; "packageId": string; "expectedReviewHash": string; "checkOperationId": string; "diarizationThreads"?: (number) | null; "diarizationClusterThresholdMilli"?: (number) | null; "whisperVadOptions"?: (unknown) | null };
-  "apply_model_profile_application": { "token": string; "preview": unknown };
-  "check_model_compatibility": { "token": string; "packageId": string; "expectedReviewHash": string };
+  "preview_model_profile_application": { "token": string; "historyOperationId"?: (string) | null; "profile": unknown; "packageId": string; "expectedReviewHash": string; "checkOperationId": string; "diarizationThreads"?: (number) | null; "diarizationClusterThresholdMilli"?: (number) | null; "whisperVadOptions"?: (unknown) | null };
+  "apply_model_profile_application": { "token": string; "historyOperationId"?: (string) | null; "preview": unknown };
+  "check_model_compatibility": { "token": string; "historyOperationId"?: (string) | null; "packageId": string; "expectedReviewHash": string };
   "get_audio_import": Record<string, never>;
   "select_audio_import": { "path"?: (unknown) | null };
   "start_audio_import": { "request": unknown };
@@ -150,6 +150,9 @@ export interface CommandArguments {
   "get_meeting_vocabulary": { "meetingId": string };
   "save_vocabulary_book": { "meetingId"?: (string) | null; "expectedLockVersion": number; "payload": Array<unknown> };
   "get_minutes_source": { "meetingId": string };
+  "get_model_download_guidance": Record<string, never>;
+  "dismiss_model_download_guidance": Record<string, never>;
+  "list_job_history": { "query": unknown };
 }
 export type CommandName = keyof CommandArguments;
 export type CommandArgs<C extends CommandName> = CommandArguments[C];
@@ -361,6 +364,12 @@ export const commandContracts = {
         "optional": false
       },
       {
+        "name": "history_operation_id",
+        "wireName": "historyOperationId",
+        "type": "Option<String>",
+        "optional": true
+      },
+      {
         "name": "definition",
         "wireName": "definition",
         "type": "String",
@@ -447,6 +456,12 @@ export const commandContracts = {
         "wireName": "token",
         "type": "String",
         "optional": false
+      },
+      {
+        "name": "history_operation_id",
+        "wireName": "historyOperationId",
+        "type": "Option<String>",
+        "optional": true
       },
       {
         "name": "package_id",
@@ -563,6 +578,12 @@ export const commandContracts = {
         "optional": false
       },
       {
+        "name": "history_operation_id",
+        "wireName": "historyOperationId",
+        "type": "Option<String>",
+        "optional": true
+      },
+      {
         "name": "profile",
         "wireName": "profile",
         "type": "storage::model_profiles::ProfileName",
@@ -621,6 +642,12 @@ export const commandContracts = {
         "optional": false
       },
       {
+        "name": "history_operation_id",
+        "wireName": "historyOperationId",
+        "type": "Option<String>",
+        "optional": true
+      },
+      {
         "name": "preview",
         "wireName": "preview",
         "type": "storage::model_profiles::ApplyPreview",
@@ -641,6 +668,12 @@ export const commandContracts = {
         "wireName": "token",
         "type": "String",
         "optional": false
+      },
+      {
+        "name": "history_operation_id",
+        "wireName": "historyOperationId",
+        "type": "Option<String>",
+        "optional": true
       },
       {
         "name": "package_id",
@@ -2757,6 +2790,40 @@ export const commandContracts = {
     "response": {
       "type": "Result<storage::MinutesSource,mon_contracts::AppError>",
       "ok": "storage::MinutesSource",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_model_download_guidance": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<storage::model_download_guidance::Guidance,mon_contracts::AppError>",
+      "ok": "storage::model_download_guidance::Guidance",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "dismiss_model_download_guidance": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<storage::model_download_guidance::Guidance,mon_contracts::AppError>",
+      "ok": "storage::model_download_guidance::Guidance",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "list_job_history": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "query",
+        "wireName": "query",
+        "type": "Query",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<Page,mon_contracts::AppError>",
+      "ok": "Page",
       "error": "mon_contracts::AppError"
     }
   }

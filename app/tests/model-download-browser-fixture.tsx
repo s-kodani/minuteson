@@ -52,7 +52,7 @@ f.profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profil
 f.entries = [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
 f.settingsByEngine = {
   "whisper.cpp": { executablePath: "", modelPath: "", vadModelPath: null, threads: 2, useGpu: false },
-  "sherpa-onnx": { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 2, clusterThresholdMilli: 500, windowShiftMilli: 10000, minDurationOnMs: 300, minDurationOffMs: 500 },
+  "sherpa-onnx": { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 2, clusterThresholdMilli: 1100, windowShiftMilli: 10000, minDurationOnMs: 300, minDurationOffMs: 500 },
   "llama.cpp": { executablePath: "", modelPath: "", threads: 2, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 },
 };
 f.preferenceVersions = { "whisper.cpp": 0, "sherpa-onnx": 0, "llama.cpp": 0 };

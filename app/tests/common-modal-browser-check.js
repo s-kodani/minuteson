@@ -3,9 +3,26 @@ async (page) => {
   const dialog = () => page.getByRole("dialog", { name: "対象の変更確認", exact: true });
   const open = async () => { await page.getByRole("button", { name: "確認を開く", exact: true }).click(); await dialog().waitFor(); await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "確認をキャンセル"); };
   const closed = async () => { await dialog().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "確認を開く"); };
+  const alignedHeader = async () => page.waitForFunction(() => {
+    const review = document.querySelector('dialog[open][data-modal-header]');
+    const heading = review?.querySelector('[data-modal-title]')?.getBoundingClientRect();
+    const close = review?.querySelector('.common-modal-dismiss-row button')?.getBoundingClientRect();
+    return heading && close && Math.abs(heading.top + heading.height / 2 - close.top - close.height / 2) <= 1 && heading.right + 8 <= close.left;
+  }).catch(async () => { throw Error(`modal header is not aligned: ${await page.evaluate(() => {
+    const review = document.querySelector('dialog[open]');
+    return JSON.stringify([...review.querySelectorAll('[data-modal-title], .common-modal-dismiss-row, .common-modal-dismiss-row button')].map(element => ({tag:element.tagName,rect:element.getBoundingClientRect().toJSON(),height:getComputedStyle(element).height,minHeight:getComputedStyle(element).minHeight,margin:getComputedStyle(element).margin,padding:getComputedStyle(element).padding,boxSizing:getComputedStyle(element).boxSizing}))) + '; ' + review.outerHTML.slice(0,500);
+  })}`); });
+  const focusFrameFits = async locator => locator.evaluate(element => {
+    const bounds = element.getBoundingClientRect(), dialog = element.closest('dialog').getBoundingClientRect(), style = getComputedStyle(element);
+    const extent = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+    return style.outlineStyle !== 'none' && extent > 0 && bounds.top - extent >= dialog.top + 1 && bounds.left - extent >= dialog.left + 1 && bounds.right + extent <= dialog.right - 1 && bounds.bottom + extent <= dialog.bottom - 1;
+  });
   try {
   check(await page.evaluate(() => [...document.querySelectorAll("dialog")].every(element => !element.hasAttribute("aria-modal"))), "closed dialogs declare independent modality");
   await open();
+  await alignedHeader();
+  await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+  check(await focusFrameFits(dialog().locator('.common-modal-dismiss-row button')), "initial close focus frame is clipped");
   check(await dialog().evaluate(element => element.matches(":modal") && !element.hasAttribute("aria-modal")), "native modal semantics missing");
   results.push("showModal exposes native modality without permanent ARIA on closed or queued dialogs");
   await page.keyboard.press("Enter"); await closed();
@@ -65,14 +82,31 @@ async (page) => {
     check(await dialog().evaluate(e => e.scrollWidth <= e.clientWidth + 1), "modal content overflowed horizontally");
     const cancel = await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).boundingBox();
     check(cancel.y >= box.y && cancel.y + cancel.height <= box.y + box.height, "initial cancellation hidden by long review");
+    await alignedHeader();
+    await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+    check(await focusFrameFits(dialog().locator('.common-modal-dismiss-row button')), "close focus frame is clipped at narrow width");
     await page.screenshot({ path: `common-modal-${width}.png` });
+    await dialog().evaluate(element => { element.scrollTop = element.scrollHeight; });
+    check(await focusFrameFits(dialog().locator('.common-modal-dismiss-row button')), "sticky close focus frame is clipped after scrolling");
+    await page.screenshot({ path: `common-modal-scrolled-${width}.png` });
     await page.keyboard.press("Escape"); await closed();
   }
   check(await page.getByRole("textbox", { name: "背景の入力" }).inputValue() === "保持する内容", "background content changed");
   results.push("480px review and small window margins, body scroll, visible cancellation, untouched background content");
+  await open();
+  await dialog().getByRole('heading', {name:'対象の変更確認', exact:true}).evaluate(element => { element.textContent = '長いモーダルタイトルも折り返して右上の閉じるボタンと上下中央に揃えて表示します'; });
+  await alignedHeader();
+  const longReview = page.locator('dialog[aria-labelledby="fixture-title"]');
+  await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+  check(await focusFrameFits(longReview.locator('.common-modal-dismiss-row button')), "wrapped title clips close focus frame");
+  await page.screenshot({path:'common-modal-wrapped-title.png'});
+  await longReview.locator('#fixture-title').evaluate(element => { element.textContent = '対象の変更確認'; });
+  await page.keyboard.press('Escape'); await closed();
+  results.push("titles share the close control's vertical center at wide/narrow widths and after wrapping; focus frames fit before and after scrolling");
   await page.getByRole("button", { name: "確認を開く", exact: true }).focus();
   await page.evaluate(() => window.modalFixture.openBlocked()); await dialog().waitFor();
   check(await dialog().getByRole("heading", { name: "対象の変更確認", exact: true }).evaluate(e => e === document.activeElement), "busy opening lacks safe heading focus");
+  check(await focusFrameFits(dialog().getByRole('heading', {name:'対象の変更確認', exact:true})), "busy heading focus frame is clipped");
   await page.evaluate(() => window.modalFixture.finish());
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "確認をキャンセル");
   await page.keyboard.press("Enter"); await closed();
@@ -88,6 +122,7 @@ async (page) => {
   await open();
   await page.getByRole("button", { name: "同じ確認内の用語設定を開く", exact: true }).click();
   await page.getByRole("textbox", { name: "切り替えで保持する用語", exact: true }).fill("点検日・入力保持");
+  await alignedHeader();
   check(await page.locator("dialog[open]").count() === 1, "persistent settings introduced another native modal");
   await page.getByRole("button", { name: "切り替え設定内で確認を開く", exact: true }).click();
   check(await page.locator("dialog[open]").count() === 1, "persistent settings confirmation stacked native modals");

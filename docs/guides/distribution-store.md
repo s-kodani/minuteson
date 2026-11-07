@@ -55,6 +55,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-st
 
 準備ツールは原本をコピーして署名し、元の版数・マニフェスト・全ペイロードが一致することを検査します。出力は`output/windows-store-test/<準備ID>/`で、`test-manifest.json`の`payloadChanges`が空、`originalVersion`と`testVersion`が一致することを確認します。秘密鍵は出力しません。
 
+署名準備が成功すると、今回の成果物情報と導入・検証・後片付けをまとめた`検証手順.md`を同じフォルダーへ必ず自動生成します。検証手順はMarkdown（`.md`）で渡し、検証一式のZIPにも含めます。
+
 準備だけでは信頼登録・インストール・アプリ停止・データ変更は行いません。初回の公開証明書の拇印を確認して検証端末のLocalMachine\TrustedPeopleへ登録します。アプリを正常終了してから署名済みコピーを`Add-AppxPackage -Path '<署名済みMSIX>' -ErrorAction Stop`で導入し、スタートメニューから確認します。
 
 同じ版数で内容が違うパッケージを通常更新として使わず、データを保つ更新では同一Identityのまま版数を上げます。ローカル署名とStore再署名の同一版への切替が拒否される場合は、バックアップと別環境、または後続の高いStore版による切替を計画します。アンインストールやリセットで回避しません。

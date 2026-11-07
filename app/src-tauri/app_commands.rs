@@ -151,4 +151,7 @@ pub const COMMANDS: &[&str] = &[
     "get_meeting_vocabulary",
     "save_vocabulary_book",
     "get_minutes_source",
+    "get_model_download_guidance",
+    "dismiss_model_download_guidance",
+    "list_job_history",
 ];

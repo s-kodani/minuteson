@@ -145,7 +145,15 @@ fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_mo
         assert_eq!(count(&db, name), 0, "{name}");
     }
     assert_eq!(count(&db, "model_packages"), 1);
-    assert_eq!(count(&db, "app_settings"), 1);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM app_settings WHERE key='delete-test'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(count(&db, "vocabulary_entries"), 1);
     assert_eq!(
         db.query_row("SELECT term FROM vocabulary_entries", [], |r| r

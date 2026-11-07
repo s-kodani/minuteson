@@ -52,7 +52,26 @@ impl Recovery {
 }
 fn publish(app: &tauri::AppHandle, change: impl FnOnce(&mut Snapshot)) {
     let s = app.state::<Recovery>().update(change);
+    for item in &s.items {
+        observe_history(app, item);
+    }
     let _ = app.emit_to("main", "recording-recovery-changed", s);
+}
+pub(crate) fn observe_history(app: &tauri::AppHandle, item: &Item) {
+    if !["queued", "running", "succeeded", "failed"].contains(&item.phase.as_str()) {
+        return;
+    }
+    let run = app.state::<Recovery>().snapshot().run_id;
+    let mut entry = crate::job_history::Entry::new(
+        "recording_recovery",
+        &format!("{run}:{}", item.session_id),
+        &item.meeting_title,
+        Some(item.meeting_id.clone()),
+        &item.phase,
+    );
+    entry.accepted_at = item.started_at_ms;
+    entry.detail = item.error.clone();
+    crate::job_history::record(entry);
 }
 pub(crate) fn run(app: &tauri::AppHandle) {
     let progress_app = app.clone();

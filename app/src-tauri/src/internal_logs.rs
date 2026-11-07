@@ -440,6 +440,7 @@ pub(crate) fn runtime(value: &impl Serialize) {
 }
 
 pub(crate) fn job(job: &crate::storage::JobSnapshot) {
+    crate::job_history::analysis(job);
     transition(
         Context {
             category: job.kind.to_string(),

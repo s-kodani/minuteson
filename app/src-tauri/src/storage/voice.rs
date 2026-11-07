@@ -22,6 +22,7 @@ pub(crate) struct AudioStorageState {
 pub(crate) struct SampleView {
     pub id: String,
     pub model_hash: String,
+    pub model_name: Option<String>,
     pub extractor_version: String,
     pub source_meeting_id: Option<String>,
     pub source_available: bool,
@@ -107,6 +108,7 @@ fn people(db: &Connection) -> Result<Vec<Person>, String> {
                 Ok(SampleView {
                     id: r.get(0)?,
                     model_hash: r.get(1)?,
+                    model_name: crate::voice_model_names::name(&r.get::<_, String>(1)?),
                     extractor_version: r.get(2)?,
                     source_meeting_id: r.get(3)?,
                     source_available,

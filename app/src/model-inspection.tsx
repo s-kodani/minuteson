@@ -26,7 +26,7 @@ import { assertModelLicenseReview, sameModelLicenseTarget, type ModelLicenseRevi
 import type { ModelChoice } from "./model-selection-state";
 
 type PlacementInput = { packageId: string; downloadId: string; recipeHash: string; reviewHash: string; totalBytes: number };
-type Pending = { token: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; placement?: PlacementInput; verifying?: boolean; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
+type Pending = { token: string; historyOperationId?: string; startedAtMs: number; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; placement?: PlacementInput; verifying?: boolean; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 type LicenseRequest = { id: number; engine: string; value: string; target: ModelLicenseTarget; summary?: ModelLicenseSummary; actionLabel: string; confirmation: boolean; review: ModelLicenseReview | null; loading: boolean; error: string; acknowledged: boolean; confirming: boolean; opener: HTMLElement | null };
 function licenseTarget(choice: ModelChoice): ModelLicenseTarget | null {
   return choice.option ? { recipeHash: choice.option.review.recipeHash } : choice.entry ? { packageId: choice.entry.packageId, expectedReviewHash: choice.entry.reviewHash } : null;
@@ -67,6 +67,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const mustStop = recordingActive || (stopRequested ?? locked);
   const mounted = useRef(true), running = useRef(false), blocked = useRef(mustStop);
   blocked.current = mustStop;
+  const historyOperation = useRef(unresolved?.historyOperationId ?? crypto.randomUUID());
   const startedAt = useRef(unresolved?.startedAtMs);
   const progress = busy || pending ? modelProgress(target, pending?.stage === "place" && pending.verifying ? "place_verify" : pending?.stage, transfer, !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
   usePublishProgress("model", [progress]);
@@ -128,6 +129,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const run = async (label: string, action: () => Promise<void>) => {
     if (running.current || locked || blocked.current || !isTauri()) return;
     startedAt.current = unresolved?.startedAtMs ?? Date.now();
+    historyOperation.current = unresolved?.historyOperationId ?? crypto.randomUUID();
     running.current = true; failure.current = null; setBusy(label); setWaitingToken(null); setError("");
     try { await action(); return true; }
     catch (cause) { if (unresolved) failure.current = cause; else if (mounted.current) setError(modelPreparationError(cause)); return false; }
@@ -135,7 +137,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   };
   const step = async <T,>(stage: Pending["stage"], action: (token: string) => Promise<T>, context: Omit<Pending, "token" | "stage" | "startedAtMs"> = {}): Promise<T> => {
     if (!mounted.current || blocked.current || unresolved) throw Error("モデルの準備を中断しました。");
-    const token = crypto.randomUUID(); setTransfer(null); setWaitingToken(null); retain({ token, stage, ...context, startedAtMs: startedAt.current! });
+    const token = crypto.randomUUID(); setTransfer(null); setWaitingToken(null); retain({ token, stage, historyOperationId: historyOperation.current, ...context, startedAtMs: startedAt.current! });
     const value = await action(token);
     if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
     retain(null); return value;
@@ -149,7 +151,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const apply = async (entry: ModelPlacementEntry, diarizationThreads?: number, diarizationClusterThresholdMilli?: number, whisperVadOptions?: VadOptions) => {
     if (!canReviewApplication(entry)) {
       await step("check", async token => {
-        const result = await invoke<ModelCompatibilitySummary>("check_model_compatibility", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
+        const result = await invoke<ModelCompatibilitySummary>("check_model_compatibility", { token, historyOperationId: historyOperation.current, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
         assertCompatibilitySummary(result, token, entry);
         if (result.state !== "succeeded") throw Error(result.errorMessage || "このモデルは使用できません。");
         return result;
@@ -160,11 +162,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }
     const current = (await load()).catalog.find(item => item.name === "standard")!;
     const preview = await step("preview", async token => {
-      const value = await invoke<ModelApplicationPreview>("preview_model_profile_application", { token, profile: "standard", packageId: entry.packageId, expectedReviewHash: entry.reviewHash, checkOperationId: entry.compatibility!.operationId, ...(whisperVadOptions === undefined ? {} : { whisperVadOptions }), ...(diarizationThreads === undefined ? {} : { diarizationThreads }), ...(diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli }) });
+      const value = await invoke<ModelApplicationPreview>("preview_model_profile_application", { token, historyOperationId: historyOperation.current, profile: "standard", packageId: entry.packageId, expectedReviewHash: entry.reviewHash, checkOperationId: entry.compatibility!.operationId, ...(whisperVadOptions === undefined ? {} : { whisperVadOptions }), ...(diarizationThreads === undefined ? {} : { diarizationThreads }), ...(diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli }) });
       assertApplicationPreview(value, entry, "standard", current, diarizationThreads, diarizationClusterThresholdMilli, whisperVadOptions); return value;
     }, { entry });
     await step("apply", async token => {
-      const value = await invoke<ModelProfileView>("apply_model_profile_application", { token, preview });
+      const value = await invoke<ModelProfileView>("apply_model_profile_application", { token, historyOperationId: historyOperation.current, preview });
       assertApplicationResult(value, token, preview);
       if (diarizationThreads !== undefined || diarizationClusterThresholdMilli !== undefined) assertAppliedPreferences(await invoke("get_diarization_preferences"), preview);
       if (whisperVadOptions !== undefined) assertAppliedPreferences(await invoke("get_asr_preferences"), preview);
@@ -177,7 +179,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (active && mounted.current && event.payload.operationId === token && event.payload.recipeHash === placement.recipeHash && event.payload.phase === "verifying" && unresolved?.token === token) retain({ ...unresolved, verifying: true });
     });
     try {
-      const result = await invoke<ModelPlacementReceipt>("place_downloaded_model", { token, packageId: placement.packageId, downloadId: placement.downloadId, expectedRecipeHash: placement.recipeHash, expectedReviewHash: placement.reviewHash });
+      const result = await invoke<ModelPlacementReceipt>("place_downloaded_model", { token, historyOperationId: historyOperation.current, packageId: placement.packageId, downloadId: placement.downloadId, expectedRecipeHash: placement.recipeHash, expectedReviewHash: placement.reviewHash });
       assertPlacementReceipt(result, placement.packageId, placement.reviewHash); return result;
     } finally { active = false; unlisten(); }
   }, { option, placement });
@@ -233,7 +235,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
             try {
               if (!mounted.current || blocked.current) throw Error("モデルの準備を中断しました。");
               setTransfer(current => current ?? { receivedBytes: 0, totalBytes: option.review.downloadBytes });
-              const result = await assertDownloadReceipt(await invoke("start_model_download", { token, definition: option.definition, expectedRecipeHash: option.review.recipeHash }), token, option.review);
+              const result = await assertDownloadReceipt(await invoke("start_model_download", { token, historyOperationId: historyOperation.current, definition: option.definition, expectedRecipeHash: option.review.recipeHash }), token, option.review);
               downloads.set(option.review.recipeHash, result); return result;
             } finally { active = false; unlisten(); }
           }, { option });

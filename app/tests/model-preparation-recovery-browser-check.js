@@ -33,6 +33,10 @@ async (page, capturePath, { approveModelLicense }) => {
   await row().getByRole("button", { name: "使用中", exact: true }).waitFor();
   await common().waitFor({ state: "hidden" });
   check(await count("start_model_download") === 1 && await count("place_downloaded_model") === 2 && await count("apply_model_profile_application") === 1, "recovery redownloaded or skipped the explicit retry");
+  check(await page.evaluate(() => {
+    const placements = window.modelDownloadFixture.calls.filter(call => call.command === "place_downloaded_model");
+    return placements.every(call => typeof call.args.historyOperationId === "string") && placements[0].args.historyOperationId !== placements[1].args.historyOperationId;
+  }), "explicit model retry reused the previous history operation");
   check(await count("get_downloaded_model_placement_result") === 1, "failed placement was retried before its original result was fenced");
   results.push("placement failure reconciles in the background after navigating away; retry reuses the Qwen download");
 

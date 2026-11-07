@@ -14,7 +14,7 @@ function checkedSnapshot(value: Snapshot): Snapshot {
 }
 export function SpeakerCompletionSettings({ locked = false, embedded = false }: { locked?: boolean; embedded?: boolean }) {
   const [saved, setSaved] = useState<Snapshot | null>(null);
-  const [similarity, setSimilarity] = useState("0.80"), [margin, setMargin] = useState("0.10");
+  const [similarity, setSimilarity] = useState("0.70"), [margin, setMargin] = useState("0.10");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [uncertain, setUncertain] = useState(false);
   const inFlight = useRef(false), mounted = useRef(true);
   const accept = (s: Snapshot) => {

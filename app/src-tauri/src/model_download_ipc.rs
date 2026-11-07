@@ -66,6 +66,7 @@ where
 pub(crate) async fn start_model_download(
     window: WebviewWindow,
     token: String,
+    history_operation_id: Option<String>,
     definition: String,
     expected_recipe_hash: String,
 ) -> Result<serde_json::Value, mon_contracts::AppError> {
@@ -83,6 +84,7 @@ pub(crate) async fn start_model_download(
         crate::model_license::validate_download_policy(&recipe.manifest)?;
         let operation = token.clone();
         prepare(window, token, move |app, cancelled| {
+            crate::job_history::model_stage(history_operation_id.as_deref(), &recipe.manifest.model_name, false, || {
             use tauri::Emitter;
             let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("model-downloads");
             let mut last = None::<std::time::Instant>;
@@ -98,6 +100,7 @@ pub(crate) async fn start_model_download(
                 }
             })?;
             json(receipt)
+            })
         }).await
     }
 
@@ -190,6 +193,7 @@ pub(crate) async fn read_model_download(
 pub(crate) async fn place_downloaded_model(
     window: WebviewWindow,
     token: String,
+    history_operation_id: Option<String>,
     package_id: Option<String>,
     download_id: String,
     expected_recipe_hash: String,
@@ -207,6 +211,7 @@ pub(crate) async fn place_downloaded_model(
             id(&package)?;
             let progress_token = token.clone();
             prepare(window, token, move |app, cancelled| {
+                crate::job_history::model_stage(history_operation_id.as_deref(), "", false, || {
                 let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
                 json(crate::model_download::place_with_progress(
                     &app.state::<Storage>(),
@@ -219,6 +224,7 @@ pub(crate) async fn place_downloaded_model(
                     &|| cancelled(),
                     &|| { let _ = app.emit("model-placement-progress", serde_json::json!({"operationId": progress_token, "recipeHash": expected_recipe_hash, "phase": "verifying"})); },
                 )?)
+                })
             })
             .await
         }

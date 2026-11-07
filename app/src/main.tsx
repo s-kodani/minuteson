@@ -37,6 +37,7 @@ import { flushPendingEdits } from "./draft-save";
 import { useSavedNavigation } from "./saved-navigation";
 import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
+import { ModelDownloadGuidance } from "./model-download-guidance";
 import { CommonOperationProgress, usePublishProgress } from "./operation-progress";
 import { RecordingRecoveryNotifications, useRecordingRecovery } from "./recording-recovery";
 import { recoveryMeetingState } from "./recording-recovery-state";
@@ -501,6 +502,7 @@ function MainWindow() {
         <div className="dialog-actions"><button type="button" className="secondary" disabled={meetingBusy} onClick={() => setRenameOpen(false)}>キャンセル</button><button type="submit" disabled={meetingBusy || writeLocked || !renameTitle.trim()}>保存</button></div>
       </form>
     </CommonModal>
+    <ModelDownloadGuidance locked={writeLocked} onOpenModels={async () => { await navigate(() => setScreen("settings")); }} />
     </MeetingAudioProvider>
     </MeetingPlaybackSurface>
   );
