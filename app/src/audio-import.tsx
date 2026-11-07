@@ -12,6 +12,8 @@ import { IssueNotice, ToastNotice } from "./toast";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect,useRef,useState } from "react";
+import { createPortal } from "react-dom";
+import "./audio-import.css";
 import { acceptImport,bytesLabel,canStartImport,droppedAudio,importLabel,type ImportSnapshot } from "./import-state";
 import { effectiveVocabulary,validVocabulary,type VocabularyEntry } from "./vocabulary-state";
 import { formatElapsed } from "./session";
@@ -20,8 +22,9 @@ import { importProgress } from "./operation-progress-state";
 import { SpeakerCountSelect } from "./speaker-count-select";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
-export function AudioImportPanel({locked,recordingActive,visible,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
+export function AudioImportPanel({locked,recordingActive,visible,overlayHost,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
   locked:boolean;recordingActive:boolean;visible:boolean;showNewRecording?:boolean;
+  overlayHost:HTMLElement|null;
   withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void | "cancelled">;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void|Promise<void>;
 }) {
   const confirm = useActionConfirmation(locked || recordingActive);
@@ -47,6 +50,8 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   useEffect(()=>{
     mounted.current=true;
     if(!isTauri())return;
+    const clearHover=()=>setHover(false);
+    window.addEventListener("blur",clearHover);
     let disposed=false;const stops:(()=>void)[]=[];
     const observation = observeSnapshots<ImportSnapshot>({
       read: async () => { const value = await invoke<ImportSnapshot>("get_audio_import"); if(!disposed) accept(value); },
@@ -62,7 +67,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
       }
     }).then(stop=>{if(disposed)stop();else stops.push(stop);}).catch(cause=>setError(`音声ドロップを接続できません: ${String(cause)}`));
     // Catch missed events and lost RPC responses using revisioned native state.
-    return ()=>{disposed=true;mounted.current=false;observation.stop();stops.forEach(stop=>stop());};
+    return ()=>{disposed=true;mounted.current=false;window.removeEventListener("blur",clearHover);observation.stop();stops.forEach(stop=>stop());};
   },[]);
   useEffect(()=>{
     const id=snapshot?.saved?.meetingId;
@@ -142,7 +147,23 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   return <>
     <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
     <ToastNotice scope="audio-import" type="saved" eventId={snapshot?.saved?.id} message={snapshot?.phase === "saved" && snapshot.saved ? "音声を保存しました。文字起こしを進めます。" : ""} action={snapshot?.saved ? { kind: "open", label: "保存した会議を開く", disabled, run: async () => { const saved = snapshotRef.current?.saved; if (!disabled && saved) await openSaved(saved.meetingId); } } : undefined} />
-    {visible&&<div className={`import-entry ${hover?"drag-over":""}`}>{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
+    {visible&&<div className="import-entry">{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
+    {hover&&!disabled&&!open&&overlayHost&&createPortal(<div className="audio-drop-overlay" role="status">
+      <div className="audio-drop-card">
+        <div className="audio-drop-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+            <path d="M36 7H16a4 4 0 0 0-4 4v42a4 4 0 0 0 4 4h26a4 4 0 0 0 4-4V17L36 7Z" />
+            <path d="M35 7v12h11M20 32v8m6-14v20m6-24v28m6-20v12" />
+            <circle cx="49" cy="49" r="12" fill="var(--secondary-text)" stroke="var(--surface)" />
+            <path d="M49 42v14m-5-5 5 5 5-5" stroke="var(--surface)" />
+          </svg>
+        </div>
+        <h2>ここにドロップして<br />音声を取り込む</h2>
+        <p className="audio-drop-description">音声ファイルを1件ドロップ</p>
+        <p className="audio-drop-formats">WAV · MP3 · M4A · FLAC</p>
+        <p className="audio-drop-note">ドロップ後に取り込み内容を確認できます</p>
+      </div>
+    </div>,overlayHost)}
     <IssueNotice scope="audio-import" type="operation" label="音声の取り込み" message={error||snapshot?.errorMessage} />
     {!open&&snapshot?.busy&&<button type="button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}
     {!open&&openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
