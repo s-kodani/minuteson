@@ -12,6 +12,9 @@ const f = window.monImportFixture = {
   global:{id:"global",payload:[{id:crypto.randomUUID(),term:"MON",reading:null,note:null,enabled:true}],lockVersion:1},
   meetings:[{id:"existing",title:"既存会議",lifecycle:"draft",sourceType:"recording",createdAt:1791115200000,updatedAt:1791115200000,lockVersion:0}],books:{},
   drop:paths=>emit("tauri://drag-drop",{paths,position:{x:30,y:30}}),
+  hover:()=>emit("tauri://drag-enter",{paths:["/private/tmp/qa-synthetic-dropped-meeting.wav"],position:{x:300,y:200}}),
+  over:()=>emit("tauri://drag-over",{position:{x:400,y:300}}),
+  leave:()=>emit("tauri://drag-leave",{}),
   changed:async(patch)=>{f.import={...f.import,...patch,revision:f.import.revision+1};await emit("audio-import-changed",structuredClone(f.import));},
 };
 window.isTauri=true;mockWindows("main");
