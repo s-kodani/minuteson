@@ -10,14 +10,14 @@ async page => {
   const margin=region.getByRole('spinbutton',{name:'次点との差の下限',exact:true});
   check(await region.getByRole('spinbutton').count()===2,'only review thresholds are configurable');
   const apply=region.getByRole('button',{name:'適用',exact:true});
-  check(await similarity.inputValue()==='0.80','similarity default');
+  check(await similarity.inputValue()==='0.70','similarity default');
   check(await margin.inputValue()==='0.10','margin default');
   await similarity.fill('0.73');await margin.fill('0.06');await apply.click();
   await page.waitForFunction(()=>window.monBrowserFixture.speakerCompletionPreferences?.lockVersion===1);
   check(await apply.isDisabled(),'saved apply button');
   const payload=await page.evaluate(()=>window.monBrowserFixture.speakerCompletionPreferences.payload);
   check(JSON.stringify(payload)===JSON.stringify({similarityThresholdMilli:730,marginThresholdMilli:60}),'saved values');
-  check(await page.getByRole('region',{name:'登録した声の自動適用',exact:true}).getByRole('spinbutton',{name:'類似度の下限',exact:true}).inputValue()==='0.80','independent voice settings');
+  check(await page.getByRole('region',{name:'登録した声の自動適用',exact:true}).getByRole('spinbutton',{name:'類似度の下限',exact:true}).inputValue()==='0.70','independent voice settings');
   await similarity.fill('0.731');check(await apply.isDisabled(),'fractional similarity rejected');
   await similarity.fill('0.74');
   await page.evaluate(()=>{window.monBrowserFixture.loseCompletionPreferencesReply=true;});await apply.click();

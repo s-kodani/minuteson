@@ -37,6 +37,7 @@ import { flushPendingEdits } from "./draft-save";
 import { useSavedNavigation } from "./saved-navigation";
 import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
+import { ModelDownloadGuidance } from "./model-download-guidance";
 import { CommonOperationProgress, usePublishProgress } from "./operation-progress";
 import { RecordingRecoveryNotifications, useRecordingRecovery } from "./recording-recovery";
 import { recoveryMeetingState } from "./recording-recovery-state";
@@ -387,7 +388,7 @@ function MainWindow() {
         <div className="brand"><span className="brand-mark" aria-hidden="true"><img src={appIconUrl} alt="" /></span><span className="brand-name">{appName}</span></div>
         <nav aria-label="メインナビゲーション">
           <button type="button" className="new-recording-nav" data-screen-navigation={isTauri() && state.kind === "ready" && ["idle", "error"].includes(state.snapshot.phase) ? "write" : undefined} aria-label="新しい録音" title="新しい録音" disabled={!isTauri() || writeLocked || state.kind !== "ready" || !["idle","error"].includes(state.snapshot.phase)} onClick={() => void navigate(prepareNewRecording)}><span className="nav-glyph" aria-hidden="true">＋</span><span className="nav-label">新しい録音</span></button>
-          <button type="button" aria-label="会議一覧" title="会議一覧" aria-current={screen === "meetings" || screen === "overview" ? "page" : undefined} className={`nav-item ${screen === "meetings" || screen === "overview" ? "selected" : ""}`} data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => { setSelectedMeeting(null);  setRestoredFilter(null); setScreen("meetings"); })}><span className="nav-glyph" aria-hidden="true">▤</span><span className="nav-label">会議一覧</span></button>
+          <button type="button" aria-label="会議一覧" title="会議一覧" aria-current={screen === "meetings" || screen === "overview" ? "page" : undefined} className={`nav-item ${screen === "meetings" || screen === "overview" ? "selected" : ""}`} data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => { setSelectedMeeting(null);  setRestoredFilter(null); setScreen("meetings"); })}><span className="nav-glyph" aria-hidden="true"><ActionIcon name="table" /></span><span className="nav-label">会議一覧</span></button>
           <button type="button" aria-label="ジョブ一覧" title="ジョブ一覧" aria-current={screen === "jobs" ? "page" : undefined} className={`nav-item ${screen === "jobs" ? "selected" : ""}`} data-screen-navigation disabled={navigationLocked && !dataWorkActive} onClick={showJobs}><span className="nav-glyph" aria-hidden="true"><ActionIcon name="list" /></span><span className="nav-label">ジョブ一覧</span><JobCount /></button>
           <button type="button" aria-label="ボイス一覧" title="ボイス一覧" aria-current={screen === "voices" ? "page" : undefined} className={`nav-item ${screen === "voices" ? "selected" : ""}`} data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => {  setScreen("voices"); })}><span className="nav-glyph" aria-hidden="true"><ActionIcon name="voice" /></span><span className="nav-label">ボイス一覧</span></button>
           <button type="button" aria-label="プロンプト" title="プロンプト" aria-current={screen === "prompts" ? "page" : undefined} className={`nav-item ${screen === "prompts" ? "selected" : ""}`} data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => {  setScreen("prompts"); })}><span className="nav-glyph" aria-hidden="true"><ActionIcon name="edit" /></span><span className="nav-label">プロンプト</span></button>
@@ -501,6 +502,7 @@ function MainWindow() {
         <div className="dialog-actions"><button type="button" className="secondary" disabled={meetingBusy} onClick={() => setRenameOpen(false)}>キャンセル</button><button type="submit" disabled={meetingBusy || writeLocked || !renameTitle.trim()}>保存</button></div>
       </form>
     </CommonModal>
+    <ModelDownloadGuidance locked={writeLocked} onOpenModels={async () => { await navigate(() => setScreen("settings")); }} />
     </MeetingAudioProvider>
     </MeetingPlaybackSurface>
   );

@@ -25,7 +25,7 @@ test("one action verifies download, placement, CPU and saved global selection", 
 test("uncertain model writers are retained until cancellation and durable readback", () => {
   const view = source("model-inspection.tsx");
   assert.match(view, /let unresolved: Pending \| null = null/);
-  assert.match(view, /retain\(\{ token, stage, \.\.\.context, startedAtMs: startedAt.current! \}\)/);
+  assert.match(view, /retain\(\{ token, stage, historyOperationId: historyOperation.current, \.\.\.context, startedAtMs: startedAt.current! \}\)/);
   assert.match(view, /if \(lifetime.active\) throw new ModelPreparationWaiting/);
   assert.match(view, /if \(!lifetime.cancelled\) throw Error/);
   assert.match(view, /item.packageId === placement.packageId && item.reviewHash === placement.reviewHash && item.placementRecorded/);

@@ -290,7 +290,7 @@ fn preferences_are_versioned_frozen_and_validated() {
         margin_threshold_milli: 60,
     };
     let initial = s.speaker_completion_preferences().unwrap();
-    assert_eq!(initial.payload.similarity_threshold_milli, 800);
+    assert_eq!(initial.payload.similarity_threshold_milli, 700);
     s.save_speaker_completion_preferences(0, p).unwrap();
     assert!(s.save_speaker_completion_preferences(0, p).is_err());
     assert!(s

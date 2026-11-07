@@ -8,7 +8,7 @@ import {stopAllPlayback} from "./playback-barrier";
 import {useEffect,useRef,useState} from "react";
 import {CommonModal} from "./common-modal";
 import {flushPendingEdits} from "./draft-save";
-import {voiceMatchLabel,voiceStartRequest,voiceWindowKey,initialVoiceSelection,type VoiceContext,type VoicePerson,type VoiceWindow} from "./voice-state";
+import {voiceMatchLabel,voiceStartRequest,voiceWindowKey,initialVoiceSelection,voiceModelName,voicePersonModels,type VoiceContext,type VoicePerson,type VoiceWindow} from "./voice-state";
 import type {Speaker} from "./transcript-state";
 import type {AnalysisJob} from "./analysis-state";
 import "./voice.css";
@@ -159,11 +159,11 @@ export function VoicePeopleSettings({locked=false,standalone=false}:{locked?:boo
     <div className="voice-library-actions"><span>{loaded?`${people.length}人` : busy?"読み込み中…":""}</span><IconButton label="ボイス一覧を再読込" icon="refresh" disabled={locked||busy} onClick={()=>void run(async()=>{})}/></div>
     {cleanupPending&&<div className="voice-audio-recovery" role="status"><p>登録音声の削除が完了していません。</p><button className="small-secondary" disabled={locked||busy} onClick={()=>void run(async()=>{await invoke<void>("retry_voice_audio_storage");})}>再試行</button></div>}
     {loaded&&!people.length&&!error&&<p>登録した話者はいません。</p>}
-    {people.map(p=><section className="voice-person" key={p.id} aria-label={p.name}><strong>{p.name}</strong><small>識別子 {p.id.slice(0,8)} · {p.samples.length}区間</small>
+    {people.map(p=><section className="voice-person" key={p.id} aria-label={p.name}><strong>{p.name}</strong><small className="voice-person-models">人物ID {p.id.slice(0,8)} · {p.samples.length}区間<br/>{p.samples.length?`登録モデル ${voicePersonModels(p)}`:"登録モデルなし"}</small>
       <button className="small-secondary" disabled={locked||busy} onClick={e=>{opener.current=e.currentTarget;setEditing(p);setName(p.name);}}>名前を変更</button>
       <button className="small-secondary" disabled={locked||busy} onClick={e=>{opener.current=e.currentTarget;setDeleting(p);}}>人物と声を削除</button>
       {p.samples.map((s,index)=><div className="voice-sample" key={s.id}>
-        <span>登録区間 {index+1} · {s.startUs/1e6}秒〜{s.endUs/1e6}秒 · モデル {s.modelHash.slice(0,8)}<small>{s.audioStorageState==="ready"?"登録音声は保存済みです。元の会議を削除しても再生できます。":"登録元の音声がないため再生できません。"}</small></span>
+        <span>登録区間 {index+1} · {s.startUs/1e6}秒〜{s.endUs/1e6}秒<small className="voice-sample-model">{s.modelName?`モデル ${voiceModelName(s)}（${s.modelHash.slice(0,8)}）`:voiceModelName(s)}</small><small>{s.audioStorageState==="ready"?"登録音声は保存済みです。元の会議を削除しても再生できます。":"登録元の音声がないため再生できません。"}</small></span>
         <button className="small-secondary" disabled={locked||busy||!s.audioAvailable} aria-label={`${p.name}の登録区間${index+1}を再生`} onClick={()=>void audio.start("",s.id,{voiceSampleId:s.id,expectedStartUs:s.startUs,expectedEndUs:s.endUs})}>登録音声を再生</button>
         <button className="small-secondary" disabled={locked||busy} onClick={()=>void run(()=>manage(p,null,s.id))}>この声を削除</button>
         {audio.selected===s.id&&<div className="voice-sample-player">{audio.controls}</div>}

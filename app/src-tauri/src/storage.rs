@@ -31,6 +31,7 @@ mod generation_tests;
 pub(crate) mod imports;
 #[cfg(test)]
 mod initialization_tests;
+mod job_history;
 mod jobs;
 pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
@@ -69,6 +70,7 @@ mod windows_tests;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
 pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
+pub(crate) mod model_download_guidance;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub(crate) mod voice;
@@ -480,7 +482,7 @@ impl Storage {
         }
         #[cfg(any(unix, windows))]
         let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
-        initialize_database(&mut connection)
+        initialize_database_with_guidance(&mut connection, true)
             .map_err(|e| format!("会議DBの初期化に失敗しました: {e:?}"))?;
         #[cfg(any(unix, windows))]
         deletion::startup::inspect(&connection, &managed_anchor, &native_models_root)?;
@@ -920,6 +922,13 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
 }
 
 pub(crate) fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
+    initialize_database_with_guidance(connection, false)
+}
+
+fn initialize_database_with_guidance(
+    connection: &mut Connection,
+    guidance: bool,
+) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
         return Ok(());
     }
@@ -929,6 +938,9 @@ pub(crate) fn initialize_database(connection: &mut Connection) -> Result<(), Box
         return Ok(());
     }
     transaction.execute_batch(SCHEMA_SQL)?;
+    if guidance {
+        model_download_guidance::seed(&transaction)?;
+    }
     transaction.execute(
         "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
         params![SCHEMA_VERSION as i64, schema_checksum(), now_ms()?],

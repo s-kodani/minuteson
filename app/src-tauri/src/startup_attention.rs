@@ -218,6 +218,8 @@ impl Startup {
                         | "get_analysis_preparations"
                         | "get_meeting_analysis_audio"
                         | "get_ui_preferences"
+                        | "get_model_download_guidance"
+                        | "list_job_history"
                         | "get_asr_preferences"
                         | "get_asr_backends"
                         | "get_diarization_preferences"

@@ -152,6 +152,9 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_meeting_vocabulary" => matches!(role, "main"),
         "save_vocabulary_book" => matches!(role, "main"),
         "get_minutes_source" => matches!(role, "main"),
+        "get_model_download_guidance" => matches!(role, "main"),
+        "dismiss_model_download_guidance" => matches!(role, "main"),
+        "list_job_history" => matches!(role, "main"),
         _ => false,
     }
 }

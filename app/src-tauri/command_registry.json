@@ -328,6 +328,12 @@
             "optional": false
           },
           {
+            "name": "history_operation_id",
+            "wireName": "historyOperationId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
             "name": "definition",
             "wireName": "definition",
             "type": "String",
@@ -442,6 +448,12 @@
             "wireName": "token",
             "type": "String",
             "optional": false
+          },
+          {
+            "name": "history_operation_id",
+            "wireName": "historyOperationId",
+            "type": "Option<String>",
+            "optional": true
           },
           {
             "name": "package_id",
@@ -593,6 +605,12 @@
             "optional": false
           },
           {
+            "name": "history_operation_id",
+            "wireName": "historyOperationId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
             "name": "profile",
             "wireName": "profile",
             "type": "storage::model_profiles::ProfileName",
@@ -658,6 +676,12 @@
             "optional": false
           },
           {
+            "name": "history_operation_id",
+            "wireName": "historyOperationId",
+            "type": "Option<String>",
+            "optional": true
+          },
+          {
             "name": "preview",
             "wireName": "preview",
             "type": "storage::model_profiles::ApplyPreview",
@@ -685,6 +709,12 @@
             "wireName": "token",
             "type": "String",
             "optional": false
+          },
+          {
+            "name": "history_operation_id",
+            "wireName": "historyOperationId",
+            "type": "Option<String>",
+            "optional": true
           },
           {
             "name": "package_id",
@@ -3672,6 +3702,61 @@
         "response": {
           "type": "Result<storage::MinutesSource,mon_contracts::AppError>",
           "ok": "storage::MinutesSource",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_model_download_guidance",
+      "handler": "get_model_download_guidance",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::model_download_guidance::Guidance,mon_contracts::AppError>",
+          "ok": "storage::model_download_guidance::Guidance",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "dismiss_model_download_guidance",
+      "handler": "dismiss_model_download_guidance",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::model_download_guidance::Guidance,mon_contracts::AppError>",
+          "ok": "storage::model_download_guidance::Guidance",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "list_job_history",
+      "handler": "job_history::list_job_history",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "query",
+            "wireName": "query",
+            "type": "Query",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Page,mon_contracts::AppError>",
+          "ok": "Page",
           "error": "mon_contracts::AppError"
         }
       }

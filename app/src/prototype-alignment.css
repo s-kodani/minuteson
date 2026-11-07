@@ -400,19 +400,20 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .transcript-search input[type=search] { min-height:40px; padding:9px 12px; font-size:13px; line-height:20px; }
 .meeting-form-row { align-items:center; flex-wrap:wrap; }
 .theme-choice { flex-wrap:wrap; }
-.theme-choice select,.common-modal select,.capture-input-selection select,.active-microphone-selection select,.voice-speaker select,.speaker-count-fields select { min-height:40px; max-width:100%; min-width:0; padding:9px 12px; font:inherit; font-size:13px; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
+/* Default every select to the shared field style; new screens need no allowlist entry. */
+:root select { min-height:40px; max-width:100%; min-width:0; padding:9px 12px; font:inherit; font-size:13px; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 .audio-controls label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
 .audio-controls select { box-sizing:border-box; height:var(--action-height,40px); min-height:var(--action-height,40px); padding:5px 8px; font:inherit; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 /* WebKit's native select ignores padding/min-height. Retain the native select
    semantics while drawing the field and its theme-aware chevron ourselves. */
-.theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select,.speaker-count-fields select {
+:root select:where(:not([multiple])) {
   -webkit-appearance:none; appearance:none; padding-right:32px;
   background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
   background-position:right 16px center,right 11px center;
   background-size:5px 5px; background-repeat:no-repeat;
 }
 @media(forced-colors:active) {
-  .theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select,.speaker-count-fields select { -webkit-appearance:auto; appearance:auto; background-image:none; }
+  :root select:where(:not([multiple])) { -webkit-appearance:auto; appearance:auto; background-image:none; }
 }
 .vocabulary-list input[type=checkbox] { margin:0; flex:none; }
 .meeting-detail-content .minutes-card { padding:var(--tab-header-padding-top) var(--tab-content-padding-inline) 24px; gap:12px; }
