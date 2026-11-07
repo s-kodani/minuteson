@@ -308,6 +308,48 @@ fn require_main(label: &str) -> Result<(), String> {
     }
 }
 #[tauri::command]
+pub(crate) fn record_meeting_open_failure(
+    window: WebviewWindow,
+    meeting_id: String,
+    step: String,
+    message: String,
+) -> Result<(), mon_contracts::AppError> {
+    let result = (|| {
+        require_main(window.label())?;
+        if uuid::Uuid::parse_str(&meeting_id).is_err()
+            || !matches!(
+                step.as_str(),
+                "subscribe_analysis_events"
+                    | "get_analysis_flow"
+                    | "flush_pending_transcript_edits"
+                    | "get_meeting"
+                    | "list_meetings"
+            )
+            || message.is_empty()
+            || message.len() > 4096
+        {
+            return Err("会議を開く際の診断ログの対象または内容が不正です".into());
+        }
+        detail(
+            Context {
+                category: "meeting_open_diagnostics".into(),
+                meeting_id: Some(meeting_id),
+                operation_id: Some(step.clone()),
+                ..Context::default()
+            },
+            "failed",
+            "error",
+            Duration::ZERO,
+            &format!("{step}: {message}"),
+        );
+        Ok(())
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("record_meeting_open_failure", message)
+    })
+}
+
+#[tauri::command]
 pub(crate) async fn get_internal_logs(
     window: WebviewWindow,
     query: Query,

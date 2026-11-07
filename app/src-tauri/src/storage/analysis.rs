@@ -176,7 +176,7 @@ pub(super) fn read_stored_analysis_content(
     };
     let assignment_map: HashMap<String, Vec<String>> = {
         let mut statement = connection.prepare(
-                "SELECT utterance_id, speaker_id FROM utterance_speakers WHERE analysis_revision_id = ?1 ORDER BY utterance_id, CASE role WHEN 'primary' THEN 0 ELSE 1 END, speaker_id",
+                "SELECT a.utterance_id, a.speaker_id FROM utterances u CROSS JOIN utterance_speakers a ON a.utterance_id=u.id AND a.analysis_revision_id=u.analysis_revision_id WHERE u.analysis_revision_id=?1 ORDER BY u.id, CASE a.role WHEN 'primary' THEN 0 ELSE 1 END, a.speaker_id",
             ).map_err(|e| e.to_string())?;
         let rows = statement
             .query_map(params![id], |row| {

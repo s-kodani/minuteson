@@ -11,7 +11,7 @@ test("analysis polling resolves read failures without hiding action or native fl
   assert.match(panel,/await refreshRef\.current\(\); \}\s*catch \(cause\) \{ if \(!\(cause instanceof SavedEditsCancelled\)\) setError\(String\(cause\)\); \}/);
   assert.match(panel,/message=\{error \|\| flow\?\.errorMessage\}/);
   assert.match(panel,/historyOnly=\{!error && flowHistoryOnly\}/);
-  assert.match(panel,/refreshError && <p role="status">/);
+  assert.match(panel,/<LoadingOverlay active=\{visible && !!refreshError\}/);
   assert.match(panel,/if \(previousFlow === undefined\) setFlowHistoryOnly\(true\)/);
   assert.match(panel,/else if \(previousFlow !== receipt\) setFlowHistoryOnly\(false\)/);
 });

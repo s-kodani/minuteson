@@ -36,6 +36,41 @@
       }
     },
     {
+      "name": "record_meeting_open_failure",
+      "handler": "internal_logs::record_meeting_open_failure",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "step",
+            "wireName": "step",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "message",
+            "wireName": "message",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_internal_logs",
       "handler": "internal_logs::get_internal_logs",
       "roles": [

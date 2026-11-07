@@ -641,13 +641,38 @@ pub(super) fn copy_snapshot_with_update(
                 .map(move |p| (p.id.as_str(), s.source_utterance_id.as_str()))
         })
         .collect();
+    let mut insert_split = tx.prepare("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL)").map_err(|e| e.to_string())?;
+    let mut copy_utterance = tx.prepare("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,?7,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6").map_err(|e| e.to_string())?;
+    let mut insert_manual_assignment = tx.prepare("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES (?1,?2,?3,?4,'manual')").map_err(|e| e.to_string())?;
+    let mut copy_assignment = tx.prepare("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) SELECT ?1,?2,?3,role,assignment_source FROM utterance_speakers WHERE utterance_id = ?4 AND speaker_id = ?5 AND analysis_revision_id = ?6").map_err(|e| e.to_string())?;
     for (sequence, utterance) in source.utterances.iter().enumerate() {
         let new_id = Uuid::new_v4().to_string();
-        let changed=if split_sources.contains_key(utterance.id.as_str()) {
-            tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL)",params![new_id,source.meeting_id,id,utterance.track_id,utterance.id,sequence as i64,utterance.start_us,utterance.end_us,utterance.recognized_text,utterance.effective_text,utterance.attribution_state])
+        let changed = if split_sources.contains_key(utterance.id.as_str()) {
+            insert_split.execute(params![
+                new_id,
+                source.meeting_id,
+                id,
+                utterance.track_id,
+                utterance.id,
+                sequence as i64,
+                utterance.start_us,
+                utterance.end_us,
+                utterance.recognized_text,
+                utterance.effective_text,
+                utterance.attribution_state
+            ])
         } else {
-            tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,?7,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,utterance.effective_text,utterance.attribution_state,utterance.id,source.id,sequence as i64])
-        }.map_err(|e|e.to_string())?;
+            copy_utterance.execute(params![
+                new_id,
+                id,
+                utterance.effective_text,
+                utterance.attribution_state,
+                utterance.id,
+                source.id,
+                sequence as i64
+            ])
+        }
+        .map_err(|e| e.to_string())?;
         if changed != 1 {
             return Err("発言の固定入力保存に失敗しました".into());
         }
@@ -656,9 +681,25 @@ pub(super) fn copy_snapshot_with_update(
                 .get(old_speaker)
                 .ok_or("話者の対応付けが不正です")?;
             if manual_lineages.contains(lineages.get(&utterance.id).unwrap_or(&utterance.id)) {
-                tx.execute("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) VALUES (?1,?2,?3,?4,'manual')", params![new_id,new_speaker,id,if index == 0 {"primary"} else {"overlap"}]).map_err(|e| e.to_string())?;
+                insert_manual_assignment
+                    .execute(params![
+                        new_id,
+                        new_speaker,
+                        id,
+                        if index == 0 { "primary" } else { "overlap" }
+                    ])
+                    .map_err(|e| e.to_string())?;
             } else {
-                tx.execute("INSERT INTO utterance_speakers (utterance_id,speaker_id,analysis_revision_id,role,assignment_source) SELECT ?1,?2,?3,role,assignment_source FROM utterance_speakers WHERE utterance_id = ?4 AND speaker_id = ?5 AND analysis_revision_id = ?6", params![new_id,new_speaker,id,utterance.id,old_speaker,source.id]).map_err(|e| e.to_string())?;
+                copy_assignment
+                    .execute(params![
+                        new_id,
+                        new_speaker,
+                        id,
+                        utterance.id,
+                        old_speaker,
+                        source.id
+                    ])
+                    .map_err(|e| e.to_string())?;
             }
         }
     }
@@ -677,12 +718,21 @@ pub(super) fn copy_snapshot_with_update(
     if segments.len() > 500_000 {
         return Err("話者区間の件数が大きすぎます".into());
     }
+    let mut copy_segment = tx.prepare("INSERT INTO speaker_segments (id,meeting_id,analysis_revision_id,track_id,speaker_id,start_us,end_us,overlap_group_id,confidence) SELECT ?1,meeting_id,?2,track_id,?3,start_us,end_us,overlap_group_id,confidence FROM speaker_segments WHERE id = ?4 AND analysis_revision_id = ?5").map_err(|e| e.to_string())?;
     for (segment, speaker) in segments {
         let mapped = speaker
             .as_ref()
             .map(|old| speaker_ids.get(old).ok_or("話者区間の参照が不正です"))
             .transpose()?;
-        tx.execute("INSERT INTO speaker_segments (id,meeting_id,analysis_revision_id,track_id,speaker_id,start_us,end_us,overlap_group_id,confidence) SELECT ?1,meeting_id,?2,track_id,?3,start_us,end_us,overlap_group_id,confidence FROM speaker_segments WHERE id = ?4 AND analysis_revision_id = ?5", params![Uuid::new_v4().to_string(),id,mapped,segment,source.id]).map_err(|e| e.to_string())?;
+        copy_segment
+            .execute(params![
+                Uuid::new_v4().to_string(),
+                id,
+                mapped,
+                segment,
+                source.id
+            ])
+            .map_err(|e| e.to_string())?;
     }
     if let Some((request, groups)) = consolidation {
         super::transcript_consolidation::consolidate_copied_rows(

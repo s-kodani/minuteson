@@ -268,7 +268,8 @@ button:disabled { opacity:.5; }
 .meeting-detail-content:has(>.archived-input-notices details[open])>.workspace-tab-panel { flex:1 0 min(480px,60dvh); }
 .meeting-detail-content .transcript-card { padding:0; gap:0; }
 .meeting-detail-content .transcript-split { gap:0; }
-.speaker-panel-body { padding:24px 20px; background:var(--surface); }
+.speaker-panel-body { padding:24px 20px; }
+.workspace-panel-drawer-host > .speaker-panel-body { background:var(--surface); }
 .transcript-main { position:relative; padding:24px 32px; gap:12px; }
 .transcript-main>.transcript-actions:first-child { justify-content:flex-end; gap:8px 12px; }
 .transcript-heading-actions { display:flex; align-items:center; min-width:0; max-width:100%; }

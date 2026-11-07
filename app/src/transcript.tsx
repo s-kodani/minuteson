@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";
 import { IconButton } from "./action-icon";
 import { IssueNotice, ToastNotice } from "./toast";
-import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
+import { DraftSaveQueue, registerPendingEdits, TranscriptOperationBusy } from "./draft-save";
 import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
 import { IdentificationBadge } from "./speaker-identification";
 import { WorkspacePanel } from "./workspace-panel";
@@ -34,9 +34,9 @@ export function timeLabel(microseconds: number): string {
   const seconds = Math.floor(microseconds / 1_000_000);
   return [Math.floor(seconds / 3600), Math.floor(seconds % 3600 / 60), seconds % 60].map(value => String(value).padStart(2, "0")).join(":");
 }
-export function TranscriptEditor({ meetingId, locked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
+export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
   actionsHost?: HTMLElement | null;
-  meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean) => void; onConsolidated?: () => Promise<void>;
+  meetingId: string; sourceEpoch?: number; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean) => void; onConsolidated?: () => Promise<void>;
 }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const analysisRef = useRef(analysis); analysisRef.current = analysis;
@@ -156,7 +156,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
     if (name && nameRef.current?.id === name.id && nameRef.current.value === name.value) setNameEditor(null);
   };
   barrier.current = async () => {
-    if (running.current) throw Error("文字起こしを保存中です。完了後に操作してください。");
+    if (running.current) throw new TranscriptOperationBusy("文字起こしを保存中です。完了後に操作してください。");
     if (structureRef.current) throw Error("分割・統合を保存するか、閉じてから操作してください。");
     if (assignmentRef.current) throw Error("話者の変更を保存するか、閉じてから操作してください。");
     if (addingRef.current) throw Error("話者の作成を保存するか、閉じてから操作してください。");
@@ -274,7 +274,8 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
       startUs:utterance.startUs, endUs:utterance.endUs });
   };
   const [transcriptRefresh,setTranscriptRefresh]=useState(0);
-  const appliedRefresh=useRef(0);
+  const refreshKey=`${sourceEpoch}:${transcriptRefresh}`;
+  const appliedRefresh=useRef(refreshKey);
   const reloadVoice=async()=>{setTranscriptRefresh(value=>value+1);};
   useEffect(()=>{
     if(!isTauri())return;
@@ -287,7 +288,7 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
   useEffect(()=>{
     // Completion publishes a new immutable revision. Keep its notification
     // pending until the editor is idle; never flush unconfirmed inputs here.
-    if(transcriptRefresh===appliedRefresh.current||loading||busy||locked||!visible||running.current
+    if(refreshKey===appliedRefresh.current||loading||busy||locked||!visible||running.current
       ||snapshot.dirty||snapshot.saving||snapshot.error||Object.keys(texts).length||nameEditor||adding||assignmentEditor||structureEditor)return;
     let disposed=false;
     const current=queue.snapshot();
@@ -298,13 +299,12 @@ export function TranscriptEditor({ meetingId, locked = false, visible = true, ac
         ||latest.dirty||latest.saving||latest.error||Object.keys(textRef.current).length||nameRef.current||addingRef.current||assignmentRef.current||structureRef.current)return;
       if(!base||base.meetingId!==meetingId||!/^[a-f0-9]{64}$/.test(base.contentHash)
         ||draft&&(draft.meetingId!==meetingId||draft.baseAnalysisId!==base.id))throw Error("保存された文字起こしと編集が一致しません。再読込してください。");
-      appliedRefresh.current=transcriptRefresh;
-      consolidationAttempt.current="";
+      appliedRefresh.current=refreshKey;
       if(base.id!==analysis?.id)setSpeakerFilter("");
-      setAnalysis(base);queue.load(draft);
-    }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=transcriptRefresh;setError(String(cause));}});
+      setAnalysis(base);queue.load(draft);onAnalysisLoaded?.(true);
+    }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=refreshKey;setError(String(cause));}});
     return()=>{disposed=true;};
-  },[transcriptRefresh,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
+  },[refreshKey,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
   return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
     {actionsHost ? createPortal(copyAction, actionsHost) : <div className="transcript-actions">{copyAction}</div>}
     <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />

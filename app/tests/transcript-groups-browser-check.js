@@ -6,14 +6,37 @@ async (page,capturePath) => {
   const body=editor.getByRole('region',{name:'発言本文',exact:true});
   await page.evaluate(()=>{
     const row=(id,startUs,text,speakerIds=['speaker-a'])=>({id,trackId:'microphone',startUs,endUs:startUs+1_000_000,recognizedText:text,effectiveText:text,speakerIds,attributionState:'assigned'});
-    window.monBrowserFixture.setUtterances([
+    const fixture=window.monBrowserFixture;
+    fixture.setUtterances([
       row('speech-a',0,'本日は'),row('speech-c',1_000_000,'点検日です。'),row('speech-d',3_000_000,'よろしくお願いします。'),
       row('speech-b',4_000_000,'はい。',['speaker-b']),row('speech-e',5_000_000,'続いて確認します。')
     ]);
+    fixture.seedRegeneration();
+    fixture.analysisFlow.diarizationJob={state:"succeeded",outputAnalysisId:fixture.currentId};
+    let beginConsolidation;
+    const consolidationStarted=new Promise(resolve=>{beginConsolidation=resolve;});
+    const invoke=window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke=async (command,args)=>{
+      if(command==="consolidate_transcript"&&!fixture.releaseOpenConsolidation){
+        await new Promise(resolve=>{fixture.releaseOpenConsolidation=resolve;beginConsolidation();});
+      }
+      if(command==="get_analysis_flow"){
+        await consolidationStarted;
+        fixture.openFlowReads=(fixture.openFlowReads??0)+1;
+      }
+      return invoke(command,args);
+    };
   });
   await page.getByRole('button',{name:'会議A',exact:true}).click();
+  await page.waitForFunction(()=>window.monBrowserFixture.openFlowReads>=2);
+  const verifying=page.getByRole('status').filter({hasText:'文字起こしの状態を確認中です。'});
+  check(await verifying.count()===0,'automatic consolidation was shown as a read failure');
+  check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(({command,args})=>command==='record_meeting_open_failure'&&args.step==='flush_pending_transcript_edits')),'expected busy state was logged as a failure');
+  await page.evaluate(()=>window.monBrowserFixture.releaseOpenConsolidation());
   await page.waitForFunction(()=>window.monBrowserFixture.consolidationHistory?.length===1&&document.querySelectorAll('[data-utterance-id]').length===3);
   await editor.getByText('保存済み',{exact:true}).waitFor();
+  await page.waitForFunction(()=>window.monBrowserFixture.openFlowReads>=3);
+  check(await verifying.count()===0,'analysis refresh did not recover after consolidation');
   check(await editor.getByRole('button',{name:/区間を表示|区間をまとめる/}).count()===0,'retired disclosure remains');
   check(await body.locator('.utterance-group-heading,.utterance-group-fragment').count()===0,'display still retains fragment rows');
   check((await body.innerText()).includes('本日は点検日です。よろしくお願いします。'),'consolidation lost source text');
