@@ -1,0 +1,13 @@
+.settings-footer { display:flex; flex-wrap:wrap; justify-content:center; gap:4px 20px; margin:32px 0 12px; }
+.settings-footer-link { border:0; background:none; padding:6px; color:var(--muted); font:inherit; font-size:13px; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.settings-footer-link:hover { color:var(--text); }
+.common-modal.settings-info-modal { width:min(560px,calc(100% - 48px)); max-width:560px; }
+.common-modal.disclaimer-modal { width:min(640px,calc(100% - 48px)); max-width:640px; }
+.settings-info-modal h2 { margin:0 0 24px; }
+.settings-info-modal h3 { margin:20px 0 8px; font-size:15px; }
+.settings-info-modal p { font-size:13px; line-height:1.8; color:var(--secondary-text); }
+.settings-info-modal .about-app-name { margin:0 0 12px; font-size:24px; font-weight:700; color:var(--text); }
+.about-metadata { display:grid; grid-template-columns:auto minmax(0,1fr); margin:24px 0; font-size:13px; }
+.about-metadata dt,.about-metadata dd { margin:0; padding:12px 8px; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.about-metadata dt { font-weight:600; padding-right:28px; }
+.settings-info-modal .about-copyright { margin:24px 0 0; color:var(--muted); font-size:12px; text-align:center; }
