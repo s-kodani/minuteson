@@ -111,11 +111,11 @@ test("mixed action rows and select fields align without removing wrapping or che
   assert.match(css,/\.analysis-actions>span,[^{]*\{ align-self:center;/);
   assert.match(css,/\.card-actions \{ flex-wrap:wrap;/);
   assert.match(css,/\.meeting-form-row \{ align-items:center; flex-wrap:wrap;/);
-  assert.match(css,/\.theme-choice select,\.common-modal select,\.capture-input-selection select(?:,\.active-microphone-selection select)?,\.voice-speaker select,\.speaker-count-fields select \{ min-height:40px;[^}]*border-radius:8px;/);
+  assert.match(css,/:root select \{ min-height:40px;[^}]*border-radius:8px;/);
   assert.match(css,/\.audio-controls label \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px;/);
-  assert.match(css,/\.theme-choice select,\.common-modal select,\.audio-controls select,(?:\.internal-logs-filters select,)?\.capture-input-selection select,(?:\.active-microphone-selection select,)?\.model-selection-row select,\.voice-speaker select,\.speaker-count-fields select \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
+  assert.match(css,/:root select:where\(:not\(\[multiple\]\)\) \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
   assert.match(css,/background-size:5px 5px; background-repeat:no-repeat;/);
-  assert.match(css,/@media\(forced-colors:active\) \{\s*\.theme-choice select,\.common-modal select,\.audio-controls select,(?:\.internal-logs-filters select,)?\.capture-input-selection select,(?:\.active-microphone-selection select,)?\.model-selection-row select,\.voice-speaker select,\.speaker-count-fields select \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
+  assert.match(css,/@media\(forced-colors:active\) \{\s*:root select:where\(:not\(\[multiple\]\)\) \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
   assert.match(css,/\.action-error:has\(>button\) \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;/);
   assert.match(css,/\.vocabulary-list \.analysis-actions label \{ gap:8px;/);
   assert.match(css,/\.transcript-main>\.transcript-actions:first-child \{ min-height:32px;/);

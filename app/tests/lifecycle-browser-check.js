@@ -1,10 +1,57 @@
 async(page,capturePath)=>{
   const results=[],check=(ok,text)=>{if(!ok)throw Error(text);};
   const nav=page.getByRole("navigation",{name:"メインナビゲーション",exact:true});
+  const selectStyle=node=>{
+    const style=getComputedStyle(node);
+    return Object.fromEntries(["appearance","fontSize","lineHeight","borderRadius","borderTopWidth","borderTopColor","backgroundColor","backgroundImage","backgroundSize","paddingTop","paddingRight","paddingBottom","paddingLeft"].map(key=>[key,style[key]]));
+  };
+  await nav.getByRole("button",{name:"設定",exact:true}).click();
+  const themeSelect=page.getByRole("region",{name:"表示設定",exact:true}).getByRole("combobox",{name:"表示モード",exact:true});
+  await themeSelect.waitFor();
+  const sharedSelectStyle=await themeSelect.evaluate(selectStyle);
   await nav.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
   await page.getByRole("tab",{name:"履歴",exact:true}).click();
   const history=page.getByRole("region",{name:"過去のジョブ履歴",exact:true});
   await page.waitForFunction(()=>document.querySelectorAll('.job-history-rows>li').length===50);
+  const firstSelect=history.getByRole("combobox",{name:"履歴の種類",exact:true});
+  check(JSON.stringify(await firstSelect.evaluate(selectStyle))===JSON.stringify(sharedSelectStyle),"history select differs from the existing settings select");
+  const viewport=page.viewportSize(),originalTheme=await page.evaluate(()=>document.documentElement.dataset.theme);
+  for(const theme of ["light","dark"]){
+    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    for(const width of [1200,760,390]){
+      await page.setViewportSize({width,height:900});
+      const layout=await history.evaluate(section=>{
+        const measure=node=>{
+          const s=getComputedStyle(node);
+          return {height:node.getBoundingClientRect().height,font:s.fontSize,line:s.lineHeight,radius:s.borderRadius,appearance:s.appearance,image:s.backgroundImage,padding:s.padding,border:s.border,background:s.backgroundColor};
+        };
+        // A new select with no screen class must inherit the same defaults.
+        const added=document.createElement('select');added.innerHTML='<option>新規の選択欄</option>';added.style.position='absolute';added.style.left='-10000px';document.body.append(added);
+        try{
+          const selects=[...section.querySelectorAll('.job-history-filters select')].map(measure);
+          const text=section.querySelector('.job-history-actions>span').getBoundingClientRect(),button=section.querySelector('.job-history-actions>button').getBoundingClientRect();
+          return {selects,added:measure(added),centerDifference:Math.abs(text.top+text.height/2-button.top-button.height/2),overflow:document.documentElement.scrollWidth>innerWidth};
+        }finally{added.remove();}
+      });
+      check(layout.selects.every(select=>JSON.stringify(select)===JSON.stringify(layout.added)),`shared select styling missed a new field or history override at ${theme}/${width}`);
+      check(layout.added.height===40&&layout.added.font==="13px"&&layout.added.appearance==="none"&&layout.added.image!=="none",`shared select metrics/chevron missing at ${theme}/${width}`);
+      check(layout.centerDifference<=1,`retention label is not centered on refresh at ${theme}/${width}`);
+      check(!layout.overflow,`history toolbar overflows at ${theme}/${width}`);
+      if(width===1200||width===390)await page.screenshot({path:capturePath(`job-history-controls-${theme}-${width}.png`)});
+    }
+  }
+  await page.emulateMedia({forcedColors:"active"});
+  check(await firstSelect.evaluate(node=>getComputedStyle(node).appearance==="auto"&&getComputedStyle(node).backgroundImage==="none"),"forced colors did not restore the native select");
+  await page.emulateMedia({forcedColors:"none"});
+  await page.evaluate(theme=>{if(theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=theme;},originalTheme);
+  await page.setViewportSize(viewport);
+  await firstSelect.focus();await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
+  check(await firstSelect.evaluate(node=>getComputedStyle(node).outlineStyle!=="none"),"select keyboard focus is invisible");
+  const meetingIcon=nav.getByRole("button",{name:"会議一覧",exact:true}).locator('.nav-glyph svg');
+  const jobIcon=nav.getByRole("button",{name:"ジョブ一覧",exact:true}).locator('.nav-glyph svg');
+  const iconStyle=node=>({viewBox:node.getAttribute('viewBox'),stroke:node.getAttribute('stroke'),width:node.getAttribute('stroke-width'),cap:node.getAttribute('stroke-linecap'),join:node.getAttribute('stroke-linejoin'),size:[node.getAttribute('width'),node.getAttribute('height')]});
+  check(JSON.stringify(await meetingIcon.evaluate(iconStyle))===JSON.stringify(await jobIcon.evaluate(iconStyle)),"meeting list icon differs from the shared navigation icon style");
+  results.push("history selects inherit shared defaults, retention text is vertically centered across themes/widths, forced colors and focus remain usable, and meeting navigation uses the shared SVG icon");
   const historyReads=()=>page.evaluate(()=>window.lifecycleFixture.calls.filter(c=>c.command==="list_job_history").length);
   let reads=await historyReads();
   await page.evaluate(()=>window.lifecycleFixture.changed());
