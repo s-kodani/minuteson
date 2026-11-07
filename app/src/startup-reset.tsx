@@ -4,6 +4,7 @@ import { CommonModal } from "./common-modal";
 import { checkedResetPreview, checkedResetSnapshot, resetRequest, type ResetAvailability, type ResetPreview, type ResetSnapshot } from "./startup-reset-state";
 import { StartupResetForm } from "./startup-reset-form";
 import { useAppName } from "./window-environment";
+import { displayNativePathsInText } from "./native-path";
 
 export function StartupReset({ availability, onBusy }: { availability?: ResetAvailability; onBusy: (busy: boolean) => void }) {
   const appName = useAppName();
@@ -49,11 +50,11 @@ export function StartupReset({ availability, onBusy }: { availability?: ResetAva
   return <section className="status-card" aria-label="データの初期化">
     <h2>データを初期化して起動する</h2>
     <p>会議・モデル・設定を初期化して、現在の保存先で起動し直せます。</p>
-    {allowed?.available === false && <p role="status">利用できない理由：{allowed.reason}</p>}
+    {allowed?.available === false && <p role="status">利用できない理由：{displayNativePathsInText(allowed.reason ?? "")}</p>}
     <button type="button" ref={opener} disabled={busy || loading || selecting || !!snapshot?.operationId} onClick={() => void prepare()}>{allowed?.available === false ? "初期化の可否を再確認" : "データを初期化"}</button>
-    {!preview && snapshot?.message && <p role="status">{snapshot.message}</p>}
+    {!preview && snapshot?.message && <p role="status">{displayNativePathsInText(snapshot.message)}</p>}
     {snapshot?.operationId && !snapshot.busy && <button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>{appName}を再起動</button>}
-    {!preview && (error || snapshot?.error) && <p role="alert">{error || snapshot?.error}</p>}
+    {!preview && (error || snapshot?.error) && <p role="alert">{displayNativePathsInText(error || snapshot?.error || "")}</p>}
     <CommonModal open={!!preview?.availability.available} blocked={busy || selecting || loading} hideDismissButton onDismiss={() => { if (!busy && !selecting) setPreview(null); }} restoreTarget={() => opener.current} aria-labelledby="startup-reset-title" aria-describedby="startup-reset-description">
       {preview && <StartupResetForm productName={appName} preview={preview} archive={archive} busy={busy} accepted={!!snapshot?.operationId} selecting={selecting} message={snapshot?.message ?? ""} error={snapshot?.error || error} onArchive={setArchive} onChoose={() => void choose()} onCancel={() => setPreview(null)} onStart={() => { if (snapshot?.operationId) void invoke("retry_startup").catch(cause => setError(String(cause))); else void start(); }} />}
     </CommonModal>

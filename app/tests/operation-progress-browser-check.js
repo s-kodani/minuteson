@@ -78,6 +78,34 @@ async (page, capturePath, { approveModelLicense }) => {
   await dialog.getByText("25%", { exact: true }).waitFor();
   await page.evaluate(() => window.monImportFixture.changed({ phase: "decoding", completed: 0 }));
   check(await dialog.getByRole("progressbar").getAttribute("value") === null, "decode used a fake percentage");
+  const sharedImportProgress = async (label, percent = null) => {
+    await dialog.getByText(label, { exact: true }).waitFor();
+    await page.waitForFunction(({ label, percent }) => {
+      const modal = document.querySelector('dialog[open] progress');
+      const common = document.querySelector('.common-operation-progress progress');
+      const text = percent === null ? label : `${percent}% · ${label}`;
+      return modal?.getAttribute('aria-valuetext') === text && common?.getAttribute('aria-valuetext') === text
+        && modal.getAttribute('value') === (percent === null ? null : String(percent))
+        && common.getAttribute('value') === (percent === null ? null : String(percent));
+    }, { label, percent });
+    for (const name of ["取り込む", "音声を選び直す", "閉じる", "確認をキャンセル"])
+      check(await dialog.getByRole("button", { name, exact: true }).isDisabled(), `${label}: import control enabled before save completion: ${name}`);
+    check(await dialog.getByRole("textbox", { name: "会議名", exact: true }).isDisabled(), `${label}: editable during save`);
+  };
+  await page.evaluate(() => window.monImportFixture.changed({ phase: "saving", progress: { stage: "import_checking_audio", completed: 0, total: null, unit: "files" } }));
+  await sharedImportProgress("取り込み音声を検証中");
+  for (const [completed, percent] of [[0, 0], [32000, 50], [64000, 100]]) {
+    await page.evaluate(completed => window.monImportFixture.changed({ progress: { stage: "import_creating_wav", completed, total: 64000, unit: "frames" } }), completed);
+    await sharedImportProgress("保存用WAVを作成中", percent);
+    check(await page.evaluate(() => window.monImportFixture.import.busy && !window.monImportFixture.import.saved), "WAV progress established success before final validation and cleanup");
+  }
+  await page.evaluate(() => window.monImportFixture.changed({ progress: { stage: "import_creating_wav", completed: 0, total: null, unit: "frames" } }));
+  await sharedImportProgress("保存用WAVを作成中");
+  for (const [stage, label] of [["import_verifying_audio", "保存内容を検証中"], ["import_committing_audio", "保存結果を登録中"], ["import_cleaning_intermediates", "中間ファイルを整理中"]]) {
+    await page.evaluate(stage => window.monImportFixture.changed({ progress: { stage, completed: 0, total: null, unit: "files" } }), stage);
+    await sharedImportProgress(label);
+  }
+  results.push("import modal/common share all saving stages and measured WAV 0/50/100 percent; unknown totals stay indeterminate and validation/registration/cleanup retain operation locks");
   await page.evaluate(() => window.monImportFixture.changed({ phase: "cancelling" }));
   await dialog.getByText("安全に取消中", { exact: true }).waitFor();
   await page.evaluate(() => window.monImportFixture.changed({ phase: "cancelled", busy: false }));

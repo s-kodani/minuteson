@@ -1,4 +1,5 @@
 import { ErrorNotice, ToastNotice } from "./toast";
+import { displayNativePathsInText } from "./native-path";
 import { InfoPopover } from "./info-popover";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "./ipc.ts";
@@ -166,7 +167,7 @@ export function InternalLogs() {
     </div>
     <ToastNotice scope="internal-logs" type="clipboard" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     <ErrorNotice scope="internal-logs" type="InternalLogs-operation" active={!!(error)}>{error}{entries.length > 0 && " 前回取得したログを表示しています。"}</ErrorNotice>
-    {pageStatus?.storageError && <p role="status" className="internal-logs-notice">ログの保存・収集で問題が発生しました：{pageStatus.storageError}</p>}
+    {pageStatus?.storageError && <p role="status" className="internal-logs-notice">ログの保存・収集で問題が発生しました：{displayNativePathsInText(pageStatus.storageError)}</p>}
     {!!pageStatus?.droppedEntries && <p role="status" className="internal-logs-notice">この起動中に保存失敗・過負荷により{pageStatus.droppedEntries}件のログを記録できませんでした。</p>}
     {(gap || pageStatus?.historyTruncated) && <p role="status" className="internal-logs-notice">保持期間または容量上限により、古いログの一部は残っていません。</p>}
     {trimmed && <p role="status" className="internal-logs-notice">画面の上限1,000件を超えたため、一部のログを表示から外しました。「最新ログへ移動」で読み直せます。</p>}
@@ -194,10 +195,10 @@ export function InternalLogs() {
           <td>{logCategories[entry.category] ?? entry.category}</td>
           <td>{entry.kind === "engine" ? entry.stream : <>{logStates[entry.state] ?? entry.state}<small className={`internal-log-level internal-log-level-${entry.level}`}>{levels[entry.level] ?? entry.level}</small></>}</td>
           <td>{logElapsed(entry.elapsedMs)}</td>
-          <td className="internal-log-message"><pre>{entry.message.slice(0, 240)}</pre></td>
+          <td className="internal-log-message"><pre>{displayNativePathsInText(entry.message).slice(0, 240)}</pre></td>
           <td><InfoPopover label="ログ詳細" triggerText="詳細" triggerLabel={`${dateTime(entry.timestamp)}のログ詳細 ${entry.id}`} popupClassName="internal-log-detail" maxWidth={680} openOnFocus lazy>
             <dl><dt>日時</dt><dd>{dateTime(entry.timestamp)}</dd><dt>会議ID</dt><dd>{entry.meetingId ?? "—"}</dd><dt>ジョブID</dt><dd>{entry.jobId ?? "—"}</dd><dt>操作ID</dt><dd>{entry.operationId ?? "—"}</dd><dt>起動ID</dt><dd>{entry.sessionId}</dd>
-            <dt>実行単位</dt><dd>{entry.source ?? "—"}</dd><dt>出力元</dt><dd>{entry.stream ?? "—"}</dd><dt>状態</dt><dd>{entry.state}</dd><dt>経過時間</dt><dd>{logElapsed(entry.elapsedMs)}</dd></dl><pre>{entry.message}</pre>
+            <dt>実行単位</dt><dd>{displayNativePathsInText(entry.source ?? "—")}</dd><dt>出力元</dt><dd>{entry.stream ?? "—"}</dd><dt>状態</dt><dd>{entry.state}</dd><dt>経過時間</dt><dd>{logElapsed(entry.elapsedMs)}</dd></dl><pre>{displayNativePathsInText(entry.message)}</pre>
           </InfoPopover></td>
         </tr>)}</tbody>
       </table>

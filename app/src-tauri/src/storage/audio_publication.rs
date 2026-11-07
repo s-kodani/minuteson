@@ -63,6 +63,12 @@ impl Storage {
             };
             let track = &plan.tracks[0];
             let c = &track.chunks[0];
+            crate::operation_observation::stage_for(
+                "import",
+                "import_verifying_audio",
+                None,
+                "bytes",
+            );
             self.verify_meeting_asset_cancellable(meeting, &c.asset_id, &c.hash, cancelled)?;
             let path = self.meeting_mix_path(meeting, track)?;
             let mut cleanup = Vec::new();
@@ -70,6 +76,12 @@ impl Storage {
             if cancelled() {
                 return Err("音声保存を中断しました。原音声は保持しています".into());
             }
+            crate::operation_observation::stage_for(
+                "import",
+                "import_committing_audio",
+                None,
+                "files",
+            );
             let mut db = self
                 .connection
                 .lock()
@@ -83,6 +95,12 @@ impl Storage {
             tx.execute("UPDATE audio_tracks SET processing_config_json=json_set(processing_config_json,'$.policy',?2) WHERE id=?1",params![track.id,super::meeting_audio::POLICY]).map_err(|e|e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
+        crate::operation_observation::stage_for(
+            "import",
+            "import_cleaning_intermediates",
+            None,
+            "files",
+        );
         self.finish_single_wav_cleanup(meeting, cancelled)
     }
 

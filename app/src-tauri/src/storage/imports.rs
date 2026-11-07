@@ -248,12 +248,13 @@ impl Storage {
         id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<ImportSnapshot, String> {
+        crate::operation_observation::stage("import_checking_audio", None, "bytes");
         if cancelled() {
             return Err("取り込み保存の検証を停止しました".into());
         }
         let before = self.audio_import(id)?;
         if before.state == "ready" {
-            self.publish_single_wav(&before.meeting_id, cancelled, &|_, _| {})?;
+            self.publish_import_wav(&before.meeting_id, cancelled)?;
             return Ok(before);
         }
         if before.state != "converting"
@@ -375,8 +376,18 @@ impl Storage {
         let result = read(&tx, id)?;
         tx.commit().map_err(|e| e.to_string())?;
         drop(db);
-        self.publish_single_wav(&before.meeting_id, cancelled, &|_, _| {})?;
+        self.publish_import_wav(&before.meeting_id, cancelled)?;
         Ok(result)
+    }
+    fn publish_import_wav(
+        &self,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        crate::operation_observation::stage("import_creating_wav", None, "frames");
+        self.publish_single_wav(meeting, cancelled, &|completed, total| {
+            crate::operation_observation::report("import_creating_wav", completed, total, "frames");
+        })
     }
     fn checked_import_file(
         &self,

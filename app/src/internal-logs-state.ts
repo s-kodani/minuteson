@@ -1,3 +1,5 @@
+import { displayNativePathsInText } from "./native-path.ts";
+
 export interface InternalLogEntry {
   id: number;
   timestamp: number;
@@ -59,6 +61,6 @@ export function copyLogText(entries: InternalLogEntry[]) {
   return entries.map(entry => {
     const related = [["source", entry.source], ["meeting", entry.meetingId], ["job", entry.jobId], ["operation", entry.operationId], ["session", entry.sessionId]]
       .filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join(" ");
-    return `[${new Date(entry.timestamp).toISOString()}] [${entry.kind}/${entry.level}] ${entry.category} ${entry.state} ${entry.elapsedMs === null ? "" : `elapsed=${entry.elapsedMs}ms `}${entry.stream ? `${entry.stream} ` : ""}${related}\n${entry.message}${entry.message.endsWith("\n") ? "" : "\n"}`;
+    return displayNativePathsInText(`[${new Date(entry.timestamp).toISOString()}] [${entry.kind}/${entry.level}] ${entry.category} ${entry.state} ${entry.elapsedMs === null ? "" : `elapsed=${entry.elapsedMs}ms `}${entry.stream ? `${entry.stream} ` : ""}${related}\n${entry.message}${entry.message.endsWith("\n") ? "" : "\n"}`);
   }).join("\n");
 }

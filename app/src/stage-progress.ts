@@ -13,6 +13,8 @@ export function stageLabel(p: StageProgress | null | undefined): string | undefi
   if (!p) return undefined;
   return ({publishing_restore:"復元する会議を追加中",copying_backup:"バックアップ音声をコピー中",copying_restore:"復元する音声をコピー中",checking_source:"保存元を再確認中",checking_restore:"復元する内容を検証中",collecting_meetings:"現在の会議内容を収集中",building_meetings:"会議・用語・声の対応を構築中",writing_backup:"バックアップを書き込み中",reading_backup:"バックアップを読み込み中",verifying_backup:"バックアップを検証中",waiting:"使用中の処理・モデルの解放を待機中",preparing:"処理を準備中",checking_audio:"原音声を確認中",
     converting_audio:"音声を変換中",mixing_audio:"会議音声を生成中",verifying_audio:"生成音声を検証中",committing_audio:"音声の保存結果を登録中",
+    import_checking_audio:"取り込み音声を検証中",import_creating_wav:"保存用WAVを作成中",import_verifying_audio:"保存内容を検証中",
+    import_committing_audio:"保存結果を登録中",import_cleaning_intermediates:"中間ファイルを整理中",
     verifying_model_delete_scope:"モデルの削除対象を確認中",fixing_model_delete_scope:"モデル削除の要求を受け付けています",
     model_delete_scope_fixed:"モデルの削除を準備中",deleting_model_files:"モデルを削除中",
     deleting_files:"確認した項目を削除中",verifying_audio_delete_scope:"音声の削除対象を確認中",

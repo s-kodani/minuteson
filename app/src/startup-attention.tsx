@@ -9,6 +9,7 @@ import { StartupReset } from "./startup-reset";
 import { ResidencyNotifications } from "./residency-notifications";
 import { StartupLoading } from "./startup-loading";
 import { useAppName } from "./window-environment";
+import { displayNativePathsInText } from "./native-path";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
@@ -60,7 +61,7 @@ export function StartupGate({ children }: { children: ReactNode }) {
       <h2 id="startup-recovery-title">{state.report.recovery.reviewRequired ? "中断操作の再確認が必要です" : "保存先の情報を修復しました"}</h2>
       {state.report.recovery.reviewRequired ? <>
         <p id="startup-recovery-description">中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
-        <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+        <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{displayNativePathsInText(reason)}</li>)}</ul>
       </> : <p id="startup-recovery-description">保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
@@ -82,8 +83,8 @@ function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport
     {f && <section className="status-card" aria-label="起動を続けられない理由">
       <h2>保存先の検証に失敗したため、通常の起動を中止しました</h2>
       <p>停止した段階：{startupStageLabels[f.stage]}</p>
-      <dl><dt>選択された会議保存先</dt><dd>{f.meetingRoot ?? "選択先は未確定です。エラー本文から推測しません。"}</dd><dt>起動設定の保存先</dt><dd>{f.configRoot ?? "保存先を取得できていません。"}</dd></dl>
-      <h3>診断内容</h3><pre aria-label="保持した起動診断">{f.message || "詳細はありません。原因を推測しません。"}</pre>
+      <dl><dt>選択された会議保存先</dt><dd>{displayNativePathsInText(f.meetingRoot ?? "選択先は未確定です。エラー本文から推測しません。")}</dd><dt>起動設定の保存先</dt><dd>{displayNativePathsInText(f.configRoot ?? "保存先を取得できていません。")}</dd></dl>
+      <h3>診断内容</h3><pre aria-label="保持した起動診断">{displayNativePathsInText(f.message || "詳細はありません。原因を推測しません。")}</pre>
       {f.messageTruncated && <p role="status">長い診断の先頭だけを表示しています。完全な診断ではありません。</p>}
       <h3>データを守るための確認</h3>
       <p>起動停止時点のDB・台帳・起動設定・音声は、初期化を実行するまで保持します。空の保存先への自動切替や、ロックファイルの削除は行いません。</p>

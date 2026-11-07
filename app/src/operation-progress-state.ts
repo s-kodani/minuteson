@@ -69,13 +69,16 @@ export function operationElapsed(progress: OperationProgress, nowMs: number): st
 
 export function importProgress(snapshot: ImportSnapshot | null): OperationProgress | null {
   if (!snapshot?.busy) return null;
-  const total = snapshot.phase === "copying" ? snapshot.sourceBytes : snapshot.phase === "converting" ? snapshot.info?.frames ?? null : null;
-  const known = progressPercent(snapshot.completed, total) !== null;
+  const saving = snapshot.phase === "saving" ? snapshot.progress : null;
+  const creatingWav = saving?.stage === "import_creating_wav" && saving.unit === "frames";
+  const completed = creatingWav ? saving.completed : snapshot.completed;
+  const total = creatingWav ? saving.total : snapshot.phase === "copying" ? snapshot.sourceBytes : snapshot.phase === "converting" ? snapshot.info?.frames ?? null : null;
+  const known = progressPercent(completed, total) !== null;
   return {
     id: `import:${snapshot.token ?? "selection"}`, target: snapshot.fileName ?? "音声取り込み",
     kind: "audio_import", state: snapshot.phase === "waiting" ? "queued" : snapshot.phase === "cancelling" ? "pausing" : "running",
-    label: importLabel(snapshot.phase), completed: known ? snapshot.completed : null, total: known ? total : null,
-    detail: known ? snapshot.phase === "copying" ? `${bytesLabel(snapshot.completed)} / ${bytesLabel(total)}` : `${snapshot.completed.toLocaleString("ja-JP")} / ${total!.toLocaleString("ja-JP")} フレーム` : undefined,
+    label: stageLabel(saving) ?? importLabel(snapshot.phase), completed: known ? completed : null, total: known ? total : null,
+    detail: known ? snapshot.phase === "copying" ? `${bytesLabel(completed)} / ${bytesLabel(total)}` : `${completed.toLocaleString("ja-JP")} / ${total!.toLocaleString("ja-JP")} フレーム` : undefined,
   };
 }
 

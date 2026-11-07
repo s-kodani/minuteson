@@ -239,6 +239,7 @@ impl Storage {
             })()
         };
         let expected = result?;
+        crate::operation_observation::stage_for("import", "import_verifying_audio", None, "bytes");
         pending.complete(expected.clone())?;
         let temporary = pending.path();
         let asset = self.register_analysis_artifact(meeting, &temporary, "audio/wav")?;
