@@ -40,8 +40,8 @@ export function Credits() {
     finally {requesting.current=false;if(alive.current)setLoading(false);}
   };
   const show=()=>{setOpen(true);if(!data)void load();};
-  return <footer className="settings-credits">
-    <button ref={trigger} type="button" className="credits-link" aria-haspopup="dialog" aria-expanded={open} onClick={show}>クレジット</button>
+  return <>
+    <button ref={trigger} type="button" className="settings-footer-link" aria-haspopup="dialog" aria-expanded={open} onClick={show}>クレジット</button>
     <CommonModal portal open={open} onDismiss={()=>setOpen(false)} restoreTarget={()=>trigger.current} dismissLabel="閉じる" dismissText="クレジットを閉じる" aria-label="クレジット" className="credits-modal">
       <h2>クレジット</h2>
       {loading&&<p role="status">クレジットを読み込んでいます。</p>}
@@ -53,5 +53,5 @@ export function Credits() {
         <section aria-label="ライセンス・通知文"><h3>ライセンス・通知文</h3><p className="credits-description">このアプリに同梱されているライセンスと通知文です。</p>{data.notices.map((notice,index)=><NoticeText key={`${notice.title}:${index}`} notice={notice}/>)}</section>
       </div>}
     </CommonModal>
-  </footer>;
+  </>;
 }

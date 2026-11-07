@@ -5,7 +5,7 @@ import { ModelDeletionDialog, useModelDeletion } from "./model-deletion";
 import { VoicePeopleSettings } from "./voice";
 import { MinutesPromptSettings } from "./minutes-prompt-settings";
 import { InternalLogs } from "./internal-logs";
-import { Credits } from "./credits";
+import { SettingsFooter } from "./settings-footer";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import { usePlatform } from "./platform";
 import { ResidencyNotifications } from "./residency-notifications";
@@ -436,7 +436,7 @@ function MainWindow() {
           <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
           {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
           <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={showRestored} />
-          {screen === "settings" && <Credits />}
+          {screen === "settings" && <SettingsFooter />}
           <ModelDeletionDialog operation={dataOperation} control={modelDeletion} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
