@@ -106,6 +106,7 @@ function MainWindow() {
   const [transcriptCopyHost, setTranscriptCopyHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => { setDetailTab("transcript"); }, [selectedMeeting?.id]);
   const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
+  const [audioDropHost, setAudioDropHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const column = playbackHost?.parentElement,header = column?.querySelector<HTMLElement>(".topbar");
     if(!playbackHost || !column || !header) return;
@@ -417,11 +418,12 @@ function MainWindow() {
             if (target) { event.preventDefault(); document.getElementById(`meeting-tab-${target}`)?.focus(); }
           }}>{tab === "transcript" ? "文字起こし" : "議事録"}</button>)}
         </div><div className="meeting-detail-actions"><RowMenu label="会議の操作" disabled={navigationLocked}><MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, selectedMeeting!.id)?.phase === "running"} meeting={selectedMeeting!} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} /></RowMenu></div></div>}
+        <div className="workspace-surface">
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
           <ArchivedInputNotices meetingIds={meetings.map(meeting=>meeting.id)} locked={navigationLocked} paused={!dataOperation.connected||dataPending||!!dataOperation.snapshot?.busy||dataOperation.snapshot?.phase==="ready"||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
-          <AudioImportPanel visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
+          <AudioImportPanel overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);
             if(!meeting)throw Error("保存した会議が見つかりません。");
@@ -487,6 +489,8 @@ function MainWindow() {
           }} /></div>}
           </>}
         </main>
+        <div ref={setAudioDropHost} className="audio-drop-host" />
+        </div>
         <div ref={setPlaybackHost} className="meeting-playback-dock" role="region" aria-label="会議の共通音声プレーヤー" hidden={!selectedMeeting || screen === "settings" || screen === "recording" || screen === "jobs" || screen === "logs" || screen === "voices" || screen === "prompts"} />
       </div>
     </div>

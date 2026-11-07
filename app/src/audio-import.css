@@ -1,0 +1,31 @@
+/* The overlay is a sibling of the scrollport so long lists never move it. */
+.workspace-surface { position:relative; display:flex; flex:1; min-width:0; min-height:0; }
+.audio-drop-host { position:absolute; inset:8px; z-index:20; pointer-events:none; }
+.audio-drop-overlay {
+  display:grid; place-items:center; width:100%; height:100%; padding:24px;
+  border:1.5px dashed var(--secondary-text); border-radius:16px;
+  background:color-mix(in srgb,var(--surface) 80%,transparent);
+  color:var(--text);
+}
+.audio-drop-card {
+  width:min(100%,470px); max-height:100%; overflow:auto; padding:28px 24px 20px;
+  border:1px solid var(--border); border-radius:16px; background:var(--surface);
+  box-shadow:var(--floating-shadow); text-align:center;
+}
+.audio-drop-icon {
+  display:grid; place-items:center; width:88px; height:88px; margin:0 auto 20px;
+  border-radius:22px; background:var(--raised); color:var(--secondary-text);
+}
+.audio-drop-icon svg { display:block; width:64px; height:64px; }
+.audio-drop-card h2 { margin:0; font-size:26px; line-height:1.5; font-weight:650; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.audio-drop-card p { color:var(--muted); font-size:14px; line-height:1.7; }
+.audio-drop-description { margin:14px 0 4px; }
+.audio-drop-formats { margin:0; letter-spacing:.03em; }
+.audio-drop-card .audio-drop-note { margin:20px 0 0; padding-top:16px; border-top:1px solid var(--border); font-size:12px; }
+@media(max-width:760px), (max-height:560px) {
+  .audio-drop-overlay { padding:16px; }
+  .audio-drop-card { padding:20px 16px 16px; }
+  .audio-drop-card h2 { font-size:20px; }
+  .audio-drop-icon { width:64px; height:64px; margin-bottom:16px; border-radius:16px; }
+  .audio-drop-icon svg { width:48px; height:48px; }
+}
