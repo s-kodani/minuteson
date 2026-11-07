@@ -4,6 +4,7 @@ async (page,capturePath) => {
   const nav=page.getByRole('navigation',{name:'メインナビゲーション',exact:true});
   const editor=page.getByRole('region',{name:'文字起こし編集',exact:true});
   const body=editor.getByRole('region',{name:'発言本文',exact:true});
+  const waitUntilEditable=()=>page.waitForFunction(()=>document.querySelector('.transcript-body-edit')?.getAttribute('aria-disabled')==='false');
   await page.evaluate(()=>{
     const row=(id,startUs,text,speakerIds=['speaker-a'])=>({id,trackId:'microphone',startUs,endUs:startUs+1_000_000,recognizedText:text,effectiveText:text,speakerIds,attributionState:'assigned'});
     const fixture=window.monBrowserFixture;
@@ -34,7 +35,7 @@ async (page,capturePath) => {
   check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(({command,args})=>command==='record_meeting_open_failure'&&args.step==='flush_pending_transcript_edits')),'expected busy state was logged as a failure');
   await page.evaluate(()=>window.monBrowserFixture.releaseOpenConsolidation());
   await page.waitForFunction(()=>window.monBrowserFixture.consolidationHistory?.length===1&&document.querySelectorAll('[data-utterance-id]').length===3);
-  await editor.getByText('保存済み',{exact:true}).waitFor();
+  await waitUntilEditable();
   await page.waitForFunction(()=>window.monBrowserFixture.openFlowReads>=3);
   check(await verifying.count()===0,'analysis refresh did not recover after consolidation');
   check(await editor.getByRole('button',{name:/区間を表示|区間をまとめる/}).count()===0,'retired disclosure remains');
@@ -97,7 +98,7 @@ async (page,capturePath) => {
   await merge.getByRole('button',{name:'統合して保存',exact:true}).click();
   await merge.waitFor({state:'hidden'});
   await page.waitForFunction(()=>window.monBrowserFixture.consolidationHistory.length===2&&document.querySelectorAll('[data-utterance-id]').length===1);
-  await editor.getByText('保存済み',{exact:true}).waitFor();
+  await waitUntilEditable();
   check(await editor.getByRole('button',{name:'田中の名前を変更',exact:true}).count()===0&&await editor.getByRole('button',{name:'佐藤の名前を変更',exact:true}).count()===1,'persisting turns resurrected the merged source speaker');
   results.push('a saved speaker merge can combine adjacent turns without resurrecting the source speaker');
 
@@ -106,7 +107,7 @@ async (page,capturePath) => {
   const split=page.getByRole('dialog',{name:'発言の手動分割',exact:true});
   await split.getByRole('button',{name:'分割して保存',exact:true}).click();await split.waitFor({state:'hidden'});await dialog.waitFor({state:'hidden'});
   await page.waitForFunction(()=>document.querySelectorAll('[data-utterance-id^="split:"]').length===2);
-  await editor.getByText('保存済み',{exact:true}).waitFor();
+  await waitUntilEditable();
   check(await body.getByRole('article').count()===2&&await page.evaluate(()=>window.monBrowserFixture.consolidationHistory.length)===2,'manual parts with the same speaker were automatically remerged');
   results.push('manual splitting remains available on a consolidated utterance and its two saved parts stay separate');
 
@@ -125,7 +126,7 @@ async (page,capturePath) => {
   await page.waitForFunction(expected=>window.monBrowserFixture.consolidationHistory.length===expected,before+1);
   await retry.waitFor();await retry.click();
   await page.waitForFunction(()=>document.querySelectorAll('[data-utterance-id]').length===1);
-  await editor.getByText('保存済み',{exact:true}).waitFor();
+  await waitUntilEditable();
   check(await page.evaluate(expected=>window.monBrowserFixture.consolidationHistory.length===expected,before+1),'lost receipt created duplicate stored revisions');
   results.push('failed consolidation keeps the originals; a lost receipt retries the same operation without duplicating revisions');
   return {passed:results.length,results};
