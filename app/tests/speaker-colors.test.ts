@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { speakerPalette,speakerTone } from "../src/speaker-colors.ts";
 import { transcriptTrackKinds } from "../src/transcript-track-kinds.ts";
 
-test("speaker colors depend on stable meeting and speaker IDs, not names, order, visibility or array indexes",()=>{
+test("speaker colors depend on stable meeting and color keys, not names, order, visibility or array indexes",()=>{
   const before=new Map(["a","b","manual:123","日本語"].map(id=>[id,speakerTone("meeting",id)]));
   for(const id of ["日本語","manual:123","b","a"])assert.equal(speakerTone("meeting",id),before.get(id));
   for(let index=0;index<1000;index++)assert.ok(speakerTone("meeting",String(index))>=0&&speakerTone("meeting",String(index))<speakerPalette.length);

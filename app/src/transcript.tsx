@@ -9,30 +9,27 @@ import { CommonModal } from "./common-modal";
 import { IconButton } from "./action-icon";
 import { IssueNotice, ToastNotice } from "./toast";
 import { DraftSaveQueue, registerPendingEdits, TranscriptOperationBusy } from "./draft-save";
-import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
-import { IdentificationBadge } from "./speaker-identification";
+import { SpeakerLabel } from "./speaker-label";
+import { TranscriptRows, timeLabel, type TranscriptRowActions } from "./transcript-rows";
+import { TranscriptScrollRegion } from "./transcript-scroll-region";
 import { WorkspacePanel } from "./workspace-panel";
 import { TranscriptSplit } from "./transcript-split";
 import { useMeetingAudio } from "./meeting-audio";
 import { playingRows, playbackTimeline } from "./playback-follow";
 import { usePlaybackHighlights } from "./playback-highlights";
 import { useTranscriptTrackKinds } from "./transcript-track-kinds-hook";
-import { appShortcut, overlayOpen } from "./keyboard";
+import { overlayOpen } from "./keyboard";
 import { canonicalPayload, projectTranscript, filterUtterances, activeSpeakers, addSpeaker, assignSpeakers, mergeSpeaker, splitUtterance, splitPosition, textPieces, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
 import { retainedTextRows } from "./transcript-edit-session";
 import { stopAllPlayback } from "./playback-barrier";
 import { groupTranscriptRows } from "./transcript-groups";
 import "./transcript-groups.css";
-import { shouldOpenTranscriptBody, shouldOpenTranscriptBodyFromKey } from "./transcript-body-activation";
+export { timeLabel } from "./transcript-rows";
 export type { Analysis, DraftPayload } from "./transcript-state";
 
 export interface Draft {
   id: string; meetingId: string; baseAnalysisId: string; payload: DraftPayload;
   lockVersion: number; contentHash: string; updatedAt: number;
-}
-export function timeLabel(microseconds: number): string {
-  const seconds = Math.floor(microseconds / 1_000_000);
-  return [Math.floor(seconds / 3600), Math.floor(seconds % 3600 / 60), seconds % 60].map(value => String(value).padStart(2, "0")).join(":");
 }
 export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
   actionsHost?: HTMLElement | null;
@@ -82,9 +79,16 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
   const audio = useMeetingAudio(meetingId);
   const matching = !!analysis && snapshot.draft?.baseAnalysisId === analysis.id;
   const view = useMemo(() => analysis ? projectTranscript(analysis, matching ? snapshot.payload : null) : null, [analysis, matching, snapshot.payload]);
-  const speakers = view ? activeSpeakers(view, snapshot.payload) : [];
+  const speakers = useMemo(() => view ? activeSpeakers(view, snapshot.payload) : [], [view, snapshot.payload]);
+  const speakerCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of view?.utterances ?? []) {
+      for (const id of row.speakerIds.length ? row.speakerIds : ["unknown"]) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [view]);
   const filtered = useMemo(() => view ? filterUtterances(view, speakerFilter, query) : [], [view, speakerFilter, query]);
-  const shown = retainedTextRows(view?.utterances ?? [], filtered, Object.keys(texts)).rows;
+  const shown = useMemo(() => retainedTextRows(view?.utterances ?? [], filtered, Object.keys(texts)).rows, [view, filtered, texts]);
   const consolidationPossible=useMemo(()=>!!view&&groupTranscriptRows(view.utterances,view.utterances).some(group=>group.length>1),[view]);
   const consolidationAttempt=useRef("");
   const consolidationOperation=useRef<{key:string;id:string}|null>(null);
@@ -194,12 +198,17 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
       setConsolidationError("");
       try {
         await stopAllPlayback();
-        const result=await invoke<{analysis:Analysis;draft:Draft|null;changed:boolean}>("consolidate_transcript",{request:{meetingId,analysisId:analysis.id,expectedContentHash:analysis.contentHash,expectedDraft:snapshot.draft?{id:snapshot.draft.id,lockVersion:snapshot.draft.lockVersion}:null,operationId}});
+        const result=await invoke<{analysis:Analysis;draft:Draft|null;changed:boolean;speakerIdMap:Record<string,string>;speakerColorKeys:Record<string,string>}>("consolidate_transcript",{request:{meetingId,analysisId:analysis.id,expectedContentHash:analysis.contentHash,expectedDraft:snapshot.draft?{id:snapshot.draft.id,lockVersion:snapshot.draft.lockVersion}:null,operationId}});
         if(!mounted.current)return;
         if(!result||result.analysis.meetingId!==meetingId||!/^[a-f0-9]{64}$/.test(result.analysis.contentHash)
           ||result.changed&&(result.analysis.id===analysis.id||result.draft!==null||result.analysis.utterances.length>=view.utterances.length)
           ||!result.changed&&(result.analysis.id!==analysis.id||result.analysis.contentHash!==analysis.contentHash))throw Error("発言統合の保存結果が一致しません。再読込してください。");
-        if(result.changed){setSpeakerFilter("");setAnalysis(result.analysis);queue.load(result.draft);await onConsolidated?.();}
+        if(result.changed){
+          if(speakers.some(speaker=>!result.analysis.speakers.some(next=>next.id===result.speakerIdMap?.[speaker.id])))throw Error("発言統合後の話者の対応を確認できません。再試行してください。");
+          if(result.analysis.speakers.some(speaker=>!result.speakerColorKeys?.[speaker.id]))throw Error("発言統合後の話者の表示を確認できません。再試行してください。");
+          setSpeakerFilter(current=>current===""||current==="unknown"?current:result.speakerIdMap[current]??current);
+          setAnalysis({...result.analysis,speakerColorKeys:result.speakerColorKeys});queue.load(result.draft);await onConsolidated?.();
+        }
       } catch(cause) {if(mounted.current)setConsolidationError(String(cause));}
     });
   },[analysis,view,consolidationPossible,loading,busy,locked,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
@@ -305,6 +314,25 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=refreshKey;setError(String(cause));}});
     return()=>{disposed=true;};
   },[refreshKey,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
+  const rowActions = useRef<TranscriptRowActions>(null!);
+  rowActions.current = {
+    play: (utterance, toggle) => {
+      if (disabled || running.current || !visible || !audio?.canPlay || audio.locked) return;
+      if (toggle && audio.selected === utterance.id && audio.available && !audio.atEnd) audio.toggle();
+      else play(utterance);
+    },
+    openText: utterance => { if (visible && !running.current) openText(utterance); },
+    changeText: (id, text) => { if (editable && visible && !running.current) setTexts(current => ({ ...current, [id]: text })); },
+    saveText: id => {
+      if (!disabled && visible && !snapshot.error && Object.hasOwn(textRef.current, id)) void run(() => saveInputs({ [id]: textRef.current[id] }, null));
+    },
+    cancelText: id => { if (visible && !running.current) cancelText(id); },
+    assign: (utterance, opener) => {
+      if (!editable || running.current || !visible || snapshot.error || !analysis) return;
+      assignmentOpener.current = opener; setError("");
+      setAssignmentEditor({ utteranceId:utterance.id, analysisId:analysis.id, startUs:utterance.startUs, speakerIds:[...utterance.speakerIds] });
+    },
+  };
   return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
     {actionsHost ? createPortal(copyAction, actionsHost) : <div className="transcript-actions">{copyAction}</div>}
     <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
@@ -318,13 +346,13 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
         }}>話者を統合</button>
         <div className="speaker-filters" aria-label="話者一覧から絞り込み">
           <button type="button" className="speaker-filter" aria-pressed={!speakerFilter} onClick={() => setSpeakerFilter("")}>すべての発言 <span>{view?.utterances.length ?? 0}</span></button>
-          {view?.utterances.some(item => !item.speakerIds.length) && <button type="button" className="speaker-filter" aria-pressed={speakerFilter === "unknown"} onClick={() => setSpeakerFilter("unknown")}>話者不明の発言 <span>{view.utterances.filter(item => !item.speakerIds.length).length}</span></button>}
+          {!!speakerCounts.get("unknown") && <button type="button" className="speaker-filter" aria-pressed={speakerFilter === "unknown"} onClick={() => setSpeakerFilter("unknown")}>話者不明の発言 <span>{speakerCounts.get("unknown")}</span></button>}
         </div>
         <div className="speaker-grid">{speakers.map(speaker => {
           const name = speaker.displayName || speaker.label;
           return <div key={speaker.id} className="speaker-list-row" data-selected={speakerFilter === speaker.id} role="group" aria-label={name}>
-            <button type="button" className="speaker-name-button" aria-label={name + "の名前を変更"} aria-haspopup="dialog" disabled={!editable} onClick={event => openName(speaker.id, event.currentTarget)}><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} name={name} /></button>
-            <button type="button" className="speaker-count-filter" aria-label={name + "の発言で絞り込み"} aria-pressed={speakerFilter === speaker.id} onClick={() => setSpeakerFilter(speaker.id)}>{view?.utterances.filter(item => item.speakerIds.includes(speaker.id)).length ?? 0}発言</button>
+            <button type="button" className="speaker-name-button" aria-label={name + "の名前を変更"} aria-haspopup="dialog" disabled={!editable} onClick={event => openName(speaker.id, event.currentTarget)}><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} colorKey={view?.speakerColorKeys?.[speaker.id]} name={name} /></button>
+            <button type="button" className="speaker-count-filter" aria-label={name + "の発言で絞り込み"} aria-pressed={speakerFilter === speaker.id} onClick={() => setSpeakerFilter(speaker.id)}>{speakerCounts.get(speaker.id) ?? 0}発言</button>
           </div>;
         })}</div>
         <VoicePanel meetingId={meetingId} speakers={speakers} revision={`${analysis.id}:${analysis.contentHash}:${snapshot.draft?.contentHash??""}`} locked={disabled||!!snapshot.error||!visible} beforeOperation={()=>barrier.current()} onChanged={reloadVoice} onPlay={async window=>{
@@ -345,27 +373,11 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
           <div className="transcript-actions transcript-list-heading"><div className="transcript-heading-actions"><h2>発言一覧</h2><button type="button" className="small-secondary" disabled={!jumpRow||disabled||!visible} onClick={jumpToPlayback}>再生位置へ移動</button></div></div>
           <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
         </div>
-        <div className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>{shown.map(utterance=><article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${playingIds.has(utterance.id)?" utterance-playing":""}`} aria-current={playingIds.has(utterance.id)?"true":undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space" onKeyDown={event=>{
-          if(event.target!==event.currentTarget||appShortcut(event.nativeEvent)!=="playback"||overlayOpen()||disabled||!audio||!audio.canPlay||audio.locked)return;
-          event.preventDefault();if(audio.selected===utterance.id&&audio.available&&!audio.atEnd)audio.toggle();else play(utterance);
-        }}>
-          <div className="utterance-meta"><SpeakerLabels meetingId={meetingId} speakerIds={utterance.speakerIds} speakers={speakers} /><button type="button" className="utterance-stamp" aria-label="音声を再生" title={timeLabel(utterance.startUs) + "–" + timeLabel(utterance.endUs)} disabled={disabled || !audio || !audio.canPlay || audio.locked} onClick={() => play(utterance)}><time>{timeLabel(utterance.startUs)}</time></button></div>
-          <IdentificationBadge value={utterance.speakerIdentification}/>
-          {Object.hasOwn(texts, utterance.id) ? <div className="utterance-text-edit">
-            <textarea autoFocus aria-label={timeLabel(utterance.startUs) + "の発言"} rows={2} maxLength={20000} disabled={disabled} value={texts[utterance.id]} onChange={event => setTexts(current => ({ ...current, [utterance.id]: event.target.value }))} onKeyDown={event => {
-              if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void run(() => saveInputs({ [utterance.id]: textRef.current[utterance.id] }, null)); }
-              if (event.key === "Escape") { event.preventDefault(); cancelText(utterance.id); }
-            }} />
-            <div className="transcript-actions"><button type="button" disabled={disabled || !!snapshot.error} onClick={() => void run(() => saveInputs({ [utterance.id]: textRef.current[utterance.id] }, null))}>保存</button><button type="button" className="small-secondary" disabled={disabled || !!snapshot.error || snapshot.dirty} onClick={() => cancelText(utterance.id)}>キャンセル</button></div>
-          </div> : <div className="utterance-text"><span role="button" className="transcript-body-edit" aria-label={timeLabel(utterance.startUs) + "の発言を編集"} aria-disabled={!editable} tabIndex={editable ? 0 : -1} onKeyDown={event => { if (shouldOpenTranscriptBodyFromKey(event.nativeEvent)) { event.preventDefault(); openText(utterance); } }} onClick={event => { const body = event.currentTarget; if (shouldOpenTranscriptBody(event.detail, body.ownerDocument.getSelection(), node => body.contains(node))) openText(utterance); }}>{utterance.effectiveText}</span></div>}
-          <div className="utterance-edit-tools options-modal" hidden={!visible}>
-            <IconButton className="options-modal-trigger" label={timeLabel(utterance.startUs) + "の話者を変更"} icon="more" aria-haspopup="dialog" disabled={!editable || !!snapshot.error} onClick={event => {
-              assignmentOpener.current = event.currentTarget; setError("");
-              setAssignmentEditor({ utteranceId:utterance.id, analysisId:analysis.id, startUs:utterance.startUs, speakerIds:[...utterance.speakerIds] });
-            }} />
-          </div>
-        </article>)}</div>
+        {view && <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={disabled}>
+          <TranscriptRows rows={shown} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
+            colorKeys={view?.speakerColorKeys}
+            canPlay={!!audio?.canPlay} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
+        </TranscriptScrollRegion>}
         {!filtered.length && <p>条件に一致する発言はありません。</p>}
     </TranscriptSplit>}
     <IssueNotice scope={meetingId} type="transcript-consolidation" label="発言の統合" message={consolidationError}/>

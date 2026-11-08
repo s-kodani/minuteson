@@ -21,7 +21,7 @@ test("removed editing and candidate commands are not exposed by the application"
   for (const file of ["browser-fixture.js", "audio-deletion-browser-fixture.js"]) assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), "utf8"), /get_speaker_reviews/);
 });
 test("individual editing retains IME guards, selection, identity and retry barriers", () => {
-  const view = source("transcript.tsx");
+  const view = source("transcript.tsx") + source("transcript-rows.tsx");
   assert.match(view, /shouldOpenTranscriptBody\(event.detail, body.ownerDocument.getSelection/);
   assert.match(view, /event.nativeEvent.isComposing \|\| event.nativeEvent.keyCode === 229/);
   assert.match(view, /result.lockVersion !== expectedLockVersion \+ 1/);
@@ -35,7 +35,7 @@ test("individual speaker controls save only explicit input", () => {
   const view = source("transcript.tsx");
   assert.match(view, /className="speaker-name-button"[^\n]*openName\(speaker.id, event.currentTarget\)/);
   assert.match(view, /restoreTarget=\{\(\) => nameOpener.current\}/);
-  assert.match(view, /className="utterance-edit-tools options-modal"/);
+  assert.match(source("transcript-rows.tsx"), /className="utterance-edit-tools options-modal"/);
   assert.match(view, /assignSpeakers\(analysis, payload, \[editing.utteranceId\]/);
   assert.match(view, /await ensureDraft\(\); queue.edit\(payload => addSpeaker/);
   assert.match(view, /await queue.retry\(\); if \(mounted.current\) setAdding\(false\)/);

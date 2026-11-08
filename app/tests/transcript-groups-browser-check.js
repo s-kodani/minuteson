@@ -4,7 +4,10 @@ async (page,capturePath) => {
   const nav=page.getByRole('navigation',{name:'メインナビゲーション',exact:true});
   const editor=page.getByRole('region',{name:'文字起こし編集',exact:true});
   const body=editor.getByRole('region',{name:'発言本文',exact:true});
-  const waitUntilEditable=()=>page.waitForFunction(()=>document.querySelector('.transcript-body-edit')?.getAttribute('aria-disabled')==='false');
+  const waitUntilEditable=()=>page.waitForFunction(()=>{
+    const body=document.querySelector('.transcript-body-edit');
+    return body && !body.closest('[inert]');
+  });
   await page.evaluate(()=>{
     const row=(id,startUs,text,speakerIds=['speaker-a'])=>({id,trackId:'microphone',startUs,endUs:startUs+1_000_000,recognizedText:text,effectiveText:text,speakerIds,attributionState:'assigned'});
     const fixture=window.monBrowserFixture;

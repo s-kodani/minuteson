@@ -20,6 +20,34 @@ pub(crate) struct Reply {
     pub analysis: AnalysisView,
     pub draft: Option<TranscriptDraft>,
     pub changed: bool,
+    pub speaker_id_map: HashMap<String, String>,
+    pub speaker_color_keys: HashMap<String, String>,
+}
+
+// Row/speaker UUIDs belong to an immutable revision. Carry the persistent
+// lineage correspondence to the UI rather than matching editable names/labels.
+fn speaker_id_map(
+    db: &Connection,
+    source: &str,
+    target: &str,
+) -> Result<HashMap<String, String>, String> {
+    let old = super::minutes_input::lineage_map(db, "speakers", source)?;
+    let new: HashMap<_, _> = super::minutes_input::lineage_map(db, "speakers", target)?
+        .into_iter()
+        .map(|(id, lineage)| (lineage, id))
+        .collect();
+    let mut result: HashMap<_, _> = old
+        .into_iter()
+        .filter_map(|(id, lineage)| new.get(&lineage).map(|next| (id, next.clone())))
+        .collect();
+    // Draft-only speakers use their manual ID as lineage. This also rebuilds
+    // their mapping on receipt replay after the committed draft was deleted.
+    for (lineage, id) in new {
+        if lineage.starts_with("manual:") {
+            result.insert(lineage, id);
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -330,6 +358,10 @@ impl Storage {
                 && draft.is_none()
             {
                 return Ok(Reply {
+                    speaker_color_keys: super::minutes_input::lineage_map(
+                        &tx, "speakers", &source.id,
+                    )?,
+                    speaker_id_map: speaker_id_map(&tx, &request.analysis_id, &source.id)?,
                     analysis: source,
                     draft: None,
                     changed: true,
@@ -364,6 +396,8 @@ impl Storage {
         let voice_busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE meeting_id=?1 AND input_analysis_id=?2 AND kind IN ('voice_registration','voice_matching','speaker_completion') AND state IN ('queued','running','pausing','paused','interrupted'))",params![request.meeting_id,source.id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if groups.is_empty() || voice_busy {
             return Ok(Reply {
+                speaker_color_keys: super::minutes_input::lineage_map(&tx, "speakers", &source.id)?,
+                speaker_id_map: speaker_id_map(&tx, &source.id, &source.id)?,
                 analysis: source,
                 draft,
                 changed: false,
@@ -405,8 +439,12 @@ impl Storage {
             .map_err(|error| error.to_string())?;
         let analysis =
             super::analysis::read_analysis_content(&tx, &request.meeting_id, &id, &hash)?;
+        let speaker_id_map = speaker_id_map(&tx, &source.id, &id)?;
+        let speaker_color_keys = super::minutes_input::lineage_map(&tx, "speakers", &id)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(Reply {
+            speaker_color_keys,
+            speaker_id_map,
             analysis,
             draft: None,
             changed: true,
@@ -506,8 +544,37 @@ mod tests {
     fn consolidation_persists_one_record_with_complete_text_and_bounds_and_keeps_old_revision() {
         let (_root, s, r) = fixture();
         let original = s.load_current_analysis(&r.meeting_id).unwrap().unwrap();
+        let original_display = s
+            .load_current_analysis_presentation(&r.meeting_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(original_display.analysis, original);
+        let wire = serde_json::to_value(&original_display).unwrap();
+        assert_eq!(wire["id"], original.id);
+        assert_eq!(
+            wire["speakerColorKeys"].as_object().unwrap().len(),
+            original.speakers.len()
+        );
+        assert!(serde_json::to_value(&original)
+            .unwrap()
+            .get("speakerColorKeys")
+            .is_none());
         let reply = s.consolidate_transcript(&r).unwrap();
         assert!(reply.changed);
+        for speaker in &original.speakers {
+            let next = reply
+                .analysis
+                .speakers
+                .iter()
+                .find(|s| s.id == reply.speaker_id_map[&speaker.id])
+                .unwrap();
+            assert_eq!(next.label, speaker.label);
+            assert_ne!(next.id, speaker.id);
+            assert_eq!(
+                reply.speaker_color_keys[&next.id],
+                original_display.speaker_color_keys[&speaker.id]
+            );
+        }
         assert_ne!(reply.analysis.id, r.analysis_id);
         assert!(reply.draft.is_none());
         assert_eq!(reply.analysis.utterances.len(), 2);
@@ -558,6 +625,14 @@ mod tests {
         let reopened = Storage::open(_root.path().into()).unwrap();
         assert_eq!(
             reopened
+                .load_current_analysis_presentation(&r.meeting_id)
+                .unwrap()
+                .unwrap()
+                .speaker_color_keys,
+            reply.speaker_color_keys
+        );
+        assert_eq!(
+            reopened
                 .load_current_analysis(&r.meeting_id)
                 .unwrap()
                 .unwrap(),
@@ -578,6 +653,14 @@ mod tests {
         assert!(s.consolidate_transcript(&wrong).is_err());
         let first = s.consolidate_transcript(&r).unwrap();
         assert_eq!(
+            s.consolidate_transcript(&r).unwrap().speaker_color_keys,
+            first.speaker_color_keys
+        );
+        assert_eq!(
+            s.consolidate_transcript(&r).unwrap().speaker_id_map,
+            first.speaker_id_map
+        );
+        assert_eq!(
             s.consolidate_transcript(&r).unwrap().analysis,
             first.analysis
         );
@@ -595,6 +678,74 @@ mod tests {
         wrong.meeting_id = s.create_meeting("別の会議").unwrap().id;
         assert!(s.consolidate_transcript(&wrong).is_err());
     }
+    #[test]
+    fn consolidation_maps_manual_speakers_with_duplicate_names_even_on_receipt_replay() {
+        let (_root, s, mut request) = fixture();
+        let before = s
+            .load_current_analysis(&request.meeting_id)
+            .unwrap()
+            .unwrap();
+        let draft = s
+            .create_transcript_draft(&request.meeting_id, &request.analysis_id)
+            .unwrap();
+        let manual = format!("manual:{}", Uuid::new_v4());
+        let mut payload = draft.payload;
+        payload
+            .manual_speakers
+            .push(super::super::drafts::ManualSpeaker {
+                id: manual.clone(),
+                label: "手動話者1".into(),
+            });
+        for id in before
+            .speakers
+            .iter()
+            .map(|s| &s.id)
+            .chain(std::iter::once(&manual))
+        {
+            payload
+                .speaker_names
+                .push(super::super::drafts::SpeakerNameEdit {
+                    speaker_id: id.clone(),
+                    display_name: Some("同じ表示名".into()),
+                });
+        }
+        let saved = s.save_transcript_draft(&draft.id, 0, payload).unwrap();
+        request.expected_draft = Some(DraftStamp {
+            id: saved.id,
+            lock_version: saved.lock_version,
+        });
+        let reply = s.consolidate_transcript(&request).unwrap();
+        assert!(reply.changed);
+        assert_eq!(
+            reply.speaker_color_keys[&reply.speaker_id_map[&manual]],
+            manual
+        );
+        assert_eq!(
+            s.consolidate_transcript(&request)
+                .unwrap()
+                .speaker_color_keys,
+            reply.speaker_color_keys
+        );
+        for id in before
+            .speakers
+            .iter()
+            .map(|s| &s.id)
+            .chain(std::iter::once(&manual))
+        {
+            let mapped = &reply.speaker_id_map[id];
+            assert_ne!(mapped, id);
+            assert!(reply
+                .analysis
+                .speakers
+                .iter()
+                .any(|s| &s.id == mapped && s.display_name.as_deref() == Some("同じ表示名")));
+        }
+        assert_eq!(
+            s.consolidate_transcript(&request).unwrap().speaker_id_map,
+            reply.speaker_id_map
+        );
+    }
+
     #[test]
     fn consolidation_keeps_saved_edits_and_manual_splits_remain_separate() {
         let (_root, s, mut r) = fixture();

@@ -89,6 +89,16 @@ pub struct AnalysisView {
     pub utterances: Vec<AnalysisUtterance>,
 }
 
+// UI metadata stays outside AnalysisView: its serialization participates in
+// existing voice-job working hashes and must not change for a color fix.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnalysisPresentation {
+    #[serde(flatten)]
+    pub analysis: AnalysisView,
+    pub speaker_color_keys: HashMap<String, String>,
+}
+
 pub(super) fn read_analysis_content(
     connection: &Connection,
     meeting_id: &str,
@@ -266,7 +276,21 @@ pub(super) fn read_stored_analysis_content(
 
 impl Storage {
     pub fn load_current_analysis(&self, meeting_id: &str) -> Result<Option<AnalysisView>, String> {
-        self.load_analysis_view(meeting_id, None)
+        self.load_analysis_view(meeting_id, None, |_, view| Ok(view))
+    }
+
+    pub(crate) fn load_current_analysis_presentation(
+        &self,
+        meeting_id: &str,
+    ) -> Result<Option<AnalysisPresentation>, String> {
+        self.load_analysis_view(meeting_id, None, |db, analysis| {
+            let speaker_color_keys =
+                super::minutes_input::lineage_map(db, "speakers", &analysis.id)?;
+            Ok(AnalysisPresentation {
+                analysis,
+                speaker_color_keys,
+            })
+        })
     }
 
     pub(crate) fn load_visible_analysis(
@@ -274,14 +298,15 @@ impl Storage {
         meeting_id: &str,
         revision_id: &str,
     ) -> Result<Option<AnalysisView>, String> {
-        self.load_analysis_view(meeting_id, Some(revision_id))
+        self.load_analysis_view(meeting_id, Some(revision_id), |_, view| Ok(view))
     }
 
-    fn load_analysis_view(
+    fn load_analysis_view<T>(
         &self,
         meeting_id: &str,
         revision_id: Option<&str>,
-    ) -> Result<Option<AnalysisView>, String> {
+        present: impl FnOnce(&Connection, AnalysisView) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -299,7 +324,8 @@ impl Storage {
         if super::revisions::analysis_content_hash(&transaction, &id)? != content_hash {
             return Err("解析版の内容が変更されています".into());
         }
-        read_analysis_content(&transaction, meeting_id, &id, &content_hash).map(Some)
+        let analysis = read_analysis_content(&transaction, meeting_id, &id, &content_hash)?;
+        present(&transaction, analysis).map(Some)
     }
 
     // Called by a local analysis worker after its output has been parsed. A
