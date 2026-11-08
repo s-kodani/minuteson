@@ -1,6 +1,7 @@
 #pragma once
 #include "json.hpp"
 #include "packet_clock.h"
+#include "voice_pcm.h"
 #include "packet_queue.h"
 #include "input_preparation.h"
 #include "loopback_scope.h"
@@ -156,6 +157,7 @@ class Lane {
  public:
   fs::path path;UINT32 channels;std::uint64_t frames=0,packets=0,first=0;double rms=0,peak=0;UINT32 window_frames=0;std::uint64_t measured=0;PacketClock clock;
   Handle file;
+  std::uint64_t converted_epoch=0;
   bool started=false,holding_for_window=false;std::uint64_t window_start=0,window_end=0;
   Binding binding;
   std::unique_ptr<RawSegments> raw;
@@ -194,19 +196,21 @@ class Lane {
     Json entry={{"packet",++observed},{"streamEpoch",clock.stream_epoch},{"rawQpc100ns",raw},{"previousRawQpc100ns",previous},{"devicePositionFrames",position},{"previousDevicePositionFrames",previous_position},{"previousMappedEnd100ns",previous_end},{"flags",flags},{"arrivalQpc100ns",arrival},{"packetFrames",original_count},{"mappedStart100ns",packet.start},{"mappedEnd100ns",packet.end},{"source",packet.source},{"reason",packet.reason},{"selectedFrames",count},{"skippedFrames",skipped}};
     if(recent.size()==32)recent.erase(recent.begin());recent.push_back(entry);
     if(std::string_view(packet.reason)!="none"&&anomalies.size()<16)anomalies.push_back(entry);
-    if(!count)return;if(!first)first=time;if(file.value==INVALID_HANDLE_VALUE)begin_file();
+    if(!count)return;if(!first)first=time;if(!this->raw&&file.value==INVALID_HANDLE_VALUE)begin_file();
     std::vector<float> zeros;if(silent){zeros.assign(std::size_t(count)*channels,0);samples=zeros.data();}
     double sum=0,maximum=0;for(std::size_t i=0;i<std::size_t(count)*channels;++i){if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid captured PCM amplitude");sum+=double(samples[i])*samples[i];maximum=std::max(maximum,double(std::abs(samples[i])));}
+    const auto previous_maps=clock.parts.size();
     clock.append(frames,count,time,packet.boundary);
-    if(this->raw)this->raw->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary);
-    write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
+    if(this->raw)this->raw->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch);
+    converted_epoch=clock.stream_epoch;
+    if(!this->raw)write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
   }
   void pump(std::uint64_t budget=4800){if(!reader)return;std::uint64_t frames_written=0;while(frames_written<budget){auto packet=reader->queue.pop();if(!packet)break;append(packet->samples.data(),packet->frames,packet->time,packet->position,packet->flags,packet->arrival);frames_written+=packet->frames;}}
   bool queued(){return reader&&reader->queue.pending_frames()!=0;}
   Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
-  void close(){cancel_preparation();if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}started=false;}if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
+  void close(){cancel_preparation();if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}started=false;}if(raw)raw->drain();if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
   bool acquisition_closed() const{return !preparation||preparation->finished();}
-  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);return Json{{"frames",frames},{"sampleRate",frames?Json(48000):Json(nullptr)},{"channels",frames?Json(channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
+  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);return Json{{"frames",raw?raw->saved_frames:frames},{"sampleRate",frames?Json(raw?16000:48000):Json(nullptr)},{"channels",frames?Json(raw?1:channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}
 };
 #include "capture_options.h"

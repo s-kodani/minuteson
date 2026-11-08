@@ -30,6 +30,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let outputURL: URL
   private let lock = NSLock()
   private var file: AVAudioFile?
+  private var captureFormat: AVAudioFormat?
   private var normalizer: MicrophonePCMNormalizer?
   private var conversionAllowedUID: String?
   private var tapInstalled = false
@@ -235,7 +236,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
       throw ProbeError.capture("microphone has no usable audio format")
     }
     try lock.withLock {
-      if let file {
+      if rawSegments != nil {
+        captureFormat = format
+        stats.sampleRate = format.sampleRate
+        stats.channels = format.channelCount
+        normalizer = nil
+      } else if let file {
         if MicrophonePCMFormat.matches(file.processingFormat, format),
           stats.sampleRate == format.sampleRate,
           stats.channels == format.channelCount
@@ -257,8 +263,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
         stats.channels = format.channelCount
         normalizer = nil
       }
-      guard let file,
-        normalizer != nil || MicrophonePCMFormat.matches(file.processingFormat, format)
+      guard
+        rawSegments != nil
+          || (file.map {
+            normalizer != nil || MicrophonePCMFormat.matches($0.processingFormat, format)
+          } ?? false)
       else {
         throw RebindError.formatChanged
       }
@@ -350,6 +359,27 @@ final class MicrophoneRecorder: @unchecked Sendable {
           // Keep the trimmed first frame on the same proven capture clock.
           // Do not substitute callback arrival time for hardware timestamps.
           observation = selected.observation
+        }
+        if let rawSegments = self.rawSegments {
+          guard let captureFormat = self.captureFormat,
+            self.stats.acceptsMicrophonePCM(buffer, at: when, processingFormat: captureFormat)
+          else {
+            self.recovery?.interrupt("format_changed", unavailable: true)
+            self.configurationChanged = true
+            self.stats.inputLevel.invalidate()
+            return
+          }
+          let sourceFrame = when.isSampleTimeValid ? when.sampleTime + sourceFrameOffset : nil
+          try rawSegments.enqueue(
+            buffer, observation: observation, sourceFrame: sourceFrame, sourceEpoch: token.epoch)
+          if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
+          self.stats.callbackCount += 1
+          self.stats.frames += Int64(buffer.frameLength)
+          if self.normalAdmission == token {
+            try self.recovery?.activate(token)
+            self.normalAdmission = nil
+          }
+          return
         }
         guard let file = self.file else {
           throw ProbeError.capture("microphone CAF writer is closed")
@@ -852,6 +882,6 @@ final class MicrophoneRecorder: @unchecked Sendable {
     result.inputEventHistory = recovery?.history
     result.rawSegments = rawSegments?.snapshot()
     if result.captureFailure != nil { result.inputLevel.invalidate() }
-    return result
+    return rawSegments?.applyingSavedAudio(to: result) ?? result
   }
 }

@@ -82,7 +82,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
     std::fs::write(&path, &original).unwrap();
     let saved = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved.duration_us, 42_000_000);
-    fn verify(storage: &Storage, meeting: &str) {
+    fn verify(storage: &Storage, meeting: &str, has_capture_source: bool) {
         let source_json: String = storage
             .connection
             .lock()
@@ -93,19 +93,27 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
                 |r| r.get(0),
             )
             .unwrap();
-        let original: crate::storage::RecordedAudioPlan =
-            serde_json::from_str(&source_json).unwrap();
-        assert_eq!(original.tracks.len(), 2);
-        for track in &original.tracks {
-            assert_eq!(
-                track
-                    .chunks
-                    .iter()
-                    .map(|c| c.clock_segments.len())
-                    .sum::<usize>(),
-                2048
-            );
-            assert_eq!(track.chunks.iter().map(|c| c.frames).sum::<i64>(), 983_040);
+        if has_capture_source {
+            let original: crate::storage::RecordedAudioPlan =
+                serde_json::from_str(&source_json).unwrap();
+            assert_eq!(original.tracks.len(), 2);
+            for track in &original.tracks {
+                // Physical compact-segment boundaries may split one known run;
+                // every measured gap must still survive the roundtrip.
+                assert!(
+                    track
+                        .chunks
+                        .iter()
+                        .map(|c| c.clock_segments.len())
+                        .sum::<usize>()
+                        >= 2048
+                );
+                assert_eq!(track.chunks.iter().map(|c| c.frames).sum::<i64>(), 327_680);
+            }
+        } else {
+            // Portable backups contain the canonical WAV; retired native
+            // workspace provenance intentionally is not a restore dependency.
+            assert_eq!(source_json, "{}");
         }
         let (source, known) = storage.recorded_analysis_input(meeting).unwrap();
         known.unwrap().validate(&source).unwrap();
@@ -144,7 +152,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
         assert!(store.read(&info.token, 320).is_ok());
         store.close(&info.token).unwrap();
     }
-    verify(&storage, &meeting.id);
+    verify(&storage, &meeting.id, true);
     let archives = tempfile::tempdir().unwrap();
     let archive = archives.path().join("dense.monbackup");
     storage
@@ -165,12 +173,12 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
         )
         .unwrap();
     assert_ne!(receipt.meeting_ids[0], meeting.id);
-    verify(&restored, &receipt.meeting_ids[0]);
+    verify(&restored, &receipt.meeting_ids[0], false);
     assert!(restored.get_meeting(&existing.id).unwrap().is_some());
     assert_eq!(std::fs::read(&path).unwrap(), original);
     drop(storage);
     let cold = Storage::open(root.path().into()).unwrap();
     assert!(cold.recover_completed_recordings().unwrap().is_empty());
-    verify(&cold, &meeting.id);
+    verify(&cold, &meeting.id, true);
     assert_eq!(std::fs::read(path).unwrap(), original);
 }

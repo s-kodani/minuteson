@@ -372,7 +372,7 @@ struct CaptureTrackTiming {
 
   mutating func recordSaved(
     frames: Int64, observation: CaptureClockObservation, sourceFrame: Int64?,
-    sourceEpoch epoch: UInt64 = 0
+    sourceEpoch epoch: UInt64 = 0, captureEndNanoseconds: Int64? = nil
   ) throws {
     guard case .timestamp(let start) = observation else {
       if case .invalid(let message) = observation { throw ProbeError.capture(message) }
@@ -382,8 +382,9 @@ struct CaptureTrackTiming {
       throw ProbeError.capture("capture buffer length is invalid")
     }
     let duration = frames * 1_000_000_000 / map.sampleRate
-    let (end, overflow) = start.addingReportingOverflow(duration)
-    guard !overflow else { throw ProbeError.capture("capture buffer end overflows") }
+    let (nominalEnd, overflow) = start.addingReportingOverflow(duration)
+    let end = captureEndNanoseconds ?? nominalEnd
+    guard !overflow, end > start else { throw ProbeError.capture("capture buffer end overflows") }
     guard epoch <= 9_007_199_254_740_991,
       sourceEpoch.map({ epoch >= $0 }) ?? true
     else { throw ProbeError.capture("capture source epoch is reversed or outside bounds") }

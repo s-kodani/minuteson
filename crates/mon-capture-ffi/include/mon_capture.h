@@ -11,6 +11,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+struct VoiceConverter;
+
+/**
+ * PCM and timestamps are borrowed during the callback. Returning false makes
+ * the converter terminal; native IO failures must never drop audio silently.
+ */
+typedef bool (*MonVoiceWrite)(void*, const int16_t*, size_t, int64_t, int64_t);
 
 /**
  * Shared lifecycle reducer. Native drivers separately own asynchronous OS
@@ -40,6 +47,22 @@ typedef struct MonRawPrefix {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+struct VoiceConverter *mon_voice_new(uint32_t rate, uint32_t channels);
+
+void mon_voice_free(struct VoiceConverter *value);
+
+bool mon_voice_push(struct VoiceConverter *value,
+                    const float *samples,
+                    size_t count,
+                    int64_t start_ns,
+                    int64_t end_ns,
+                    void *context,
+                    MonVoiceWrite write);
+
+bool mon_voice_finish(struct VoiceConverter *value, void *context, MonVoiceWrite write);
+
+ptrdiff_t mon_voice_caf_header(uint64_t frames, uint8_t *output, size_t capacity);
 
 uint32_t mon_capture_abi_version(void);
 

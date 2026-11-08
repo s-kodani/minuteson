@@ -20,7 +20,7 @@ final class SystemPCMWriter: @unchecked Sendable {
       var result = savedStats
       result.rawSegments = rawSegments?.snapshot()
       if result.captureFailure != nil { result.inputLevel.invalidate() }
-      return result
+      return rawSegments?.applyingSavedAudio(to: result) ?? result
     }
   }
 
@@ -76,6 +76,17 @@ final class SystemPCMWriter: @unchecked Sendable {
       formatChanged = true
       throw AppendError.formatChanged
     }
+    if let rawSegments {
+      sourceFormat = format
+      savedStats.sampleRate = asbd.mSampleRate
+      savedStats.channels = asbd.mChannelsPerFrame
+      try rawSegments.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
+      savedStats.callbackCount += 1
+      savedStats.frames += Int64(sample.numSamples)
+      if levelsEnabled { savedStats.inputLevel.receive(sample, at: receivedAt) }
+      accepted = true
+      return
+    }
     let contiguous = try continuousPCMSample(
       sample, frameOffset: savedStats.frames, sampleRate: asbd.mSampleRate)
     if writer == nil {
@@ -119,6 +130,24 @@ final class SystemPCMWriter: @unchecked Sendable {
   }
 
   func finish(allowUnreceivedAudio: Bool = false) async throws {
+    if let rawSegments {
+      try lock.withLock {
+        try savedStats.requireWritable(raw: rawSegments.snapshot())
+        if closed {
+          if let finishFailure { throw ProbeError.capture(finishFailure) }
+          return
+        }
+        if savedStats.frames == 0 && !allowUnreceivedAudio {
+          throw ProbeError.capture("no system audio samples were received")
+        }
+        closed = true
+      }
+      do { try rawSegments.finish() } catch {
+        lock.withLock { finishFailure = String(describing: error) }
+        throw error
+      }
+      return
+    }
     let pending = try lock.withLock { () -> AVAssetWriter? in
       if closed {
         if let finishFailure { throw ProbeError.capture(finishFailure) }

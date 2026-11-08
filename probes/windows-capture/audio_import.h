@@ -6,6 +6,7 @@
 #include <mferror.h>
 #include <cstring>
 #include "m4a_container.h"
+#include "voice_pcm.h"
 namespace audio_import {
 using Json=nlohmann::json;
 struct Output {
@@ -55,7 +56,10 @@ inline int run(int argc,wchar_t** argv){
     check(decoded->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Audio),"select audio");check(decoded->SetGUID(MF_MT_SUBTYPE,MFAudioFormat_Float),"select float PCM");
     check(decoded->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,rate),"retain sample rate");check(decoded->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,channels),"retain channels");check(decoded->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,32),"select PCM width");
     check(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM,nullptr,decoded.Get()),"configure decoder");
-    Output output;if(target!=L"-"){output.file=CreateFileW(target.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(output.file==INVALID_HANDLE_VALUE)throw std::runtime_error("音声変換先を新規作成できません");auto h=caf(rate,channels,0);output.write(h.data(),h.size());}
+    Output output;if(target!=L"-"){output.file=CreateFileW(target.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(output.file==INVALID_HANDLE_VALUE)throw std::runtime_error("音声変換先を新規作成できません");auto h=VoicePCM::header(0);output.write(h.data(),h.size());}
+    std::unique_ptr<VoicePCM> compact;if(output.file!=INVALID_HANDLE_VALUE)compact=std::make_unique<VoicePCM>(rate,channels);
+    std::uint64_t saved_frames=0;
+    auto save=[&](const std::int16_t* pcm,std::size_t count,std::int64_t,std::int64_t){output.write(pcm,count*2);saved_frames+=count;};
     std::uint64_t frames=0;auto started=GetTickCount64();
     while(true){
       if(WaitForSingleObject(parent.value,0)!=WAIT_TIMEOUT||GetTickCount64()-started>3600000)throw std::runtime_error("音声取り込みが中断されたか時間上限を超えました");
@@ -65,13 +69,22 @@ inline int run(int argc,wchar_t** argv){
         struct Unlock{IMFMediaBuffer* b;~Unlock(){b->Unlock();}} unlock{buffer.Get()};
         if(count>64*1024*1024||count%(channels*4))throw std::runtime_error("M4AのPCM区間が不正です");
         for(DWORD i=0;i<count;i+=4){float v;std::memcpy(&v,bytes+i,4);if(!std::isfinite(v))throw std::runtime_error("M4Aに非有限のPCM値があります");}
-        frames+=count/(channels*4);if(frames>std::uint64_t(rate)*14400)throw std::runtime_error("音声は4時間以内にしてください");if(output.file!=INVALID_HANDLE_VALUE)output.write(bytes,count);
+        const auto first=frames;frames+=count/(channels*4);if(frames>std::uint64_t(rate)*14400)throw std::runtime_error("音声は4時間以内にしてください");if(compact){
+          const auto sample_count=count/4;
+          // Native decoder blocks can be large; bound each shared conversion.
+          for(std::size_t offset=0;offset<sample_count;){const auto n=std::min<std::size_t>(4096*channels,sample_count-offset);const auto from=first+offset/channels;const auto to=from+n/channels;
+            std::vector<float> pcm(n);std::memcpy(pcm.data(),bytes+offset*4,n*4);
+            compact->push(pcm.data(),n,static_cast<std::int64_t>(from*1000000000/rate),static_cast<std::int64_t>(to*1000000000/rate),save);offset+=n;}
+        }
       }
       if(flags&MF_SOURCE_READERF_ENDOFSTREAM)break;
     }
+    if(compact)compact->finish(save);
     if(!frames)throw std::runtime_error("M4Aに音声がありません");
-    if(output.file!=INVALID_HANDLE_VALUE){LARGE_INTEGER zero={};if(!SetFilePointerEx(output.file,zero,nullptr,FILE_BEGIN))throw std::runtime_error("CAFの確定位置を設定できません");auto h=caf(rate,channels,frames);output.write(h.data(),h.size());if(!FlushFileBuffers(output.file))throw std::runtime_error("CAFを同期できません");CloseHandle(output.file);output.file=INVALID_HANDLE_VALUE;}
-    std::cout<<Json{{"schemaVersion",1},{"detectedFormat","m4a"},{"codec",codec},{"sampleRate",rate},{"channels",channels},{"frames",frames},{"durationUs",frames*1000000/rate}}.dump()<<std::endl;return 0;
+    if(output.file!=INVALID_HANDLE_VALUE){LARGE_INTEGER zero={};if(!SetFilePointerEx(output.file,zero,nullptr,FILE_BEGIN))throw std::runtime_error("CAFの確定位置を設定できません");auto h=VoicePCM::header(saved_frames);output.write(h.data(),h.size());if(!FlushFileBuffers(output.file))throw std::runtime_error("CAFを同期できません");CloseHandle(output.file);output.file=INVALID_HANDLE_VALUE;}
+    auto report=Json{{"schemaVersion",1},{"detectedFormat","m4a"},{"codec",codec},{"sampleRate",rate},{"channels",channels},{"frames",frames},{"durationUs",frames*1000000/rate}};
+    if(compact){if(saved_frames!=(frames*16000+rate-1)/rate)throw std::runtime_error("compact import frame mismatch");report["savedAudio"]=Json{{"policy","voice_pcm16_16000_mono_v1"},{"sampleRate",16000},{"channels",1},{"frames",saved_frames}};}
+    std::cout<<report.dump()<<std::endl;return 0;
   }catch(const std::exception& error){std::cout<<Json{{"errorMessage",error.what()}}.dump()<<std::endl;return 1;}
 }
 }

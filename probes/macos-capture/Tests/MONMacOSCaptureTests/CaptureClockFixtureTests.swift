@@ -54,7 +54,7 @@ final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
     try manifest.finalizeStoppedClock(
       clock, microphoneClosure: microphoneClosure, systemClosure: systemClosure)
     XCTAssertEqual(manifest.microphoneAudioUnreceived, true)
-    XCTAssertEqual(manifest.system.frames, 480)
+    XCTAssertEqual(manifest.system.frames, 160)
     XCTAssertFalse(
       FileManager.default.fileExists(atPath: root.appendingPathComponent("microphone.caf").path))
     try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))

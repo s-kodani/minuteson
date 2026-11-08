@@ -104,7 +104,9 @@ enum AudioImporter {
       ExtAudioFileSetProperty(
         source, kExtAudioFileProperty_ClientDataFormat,
         UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &client), "configure PCM")
-    var destination: AVAudioFile?
+    var destination: FileHandle?
+    var compact: VoicePCM?
+    var savedFrames: Int64 = 0
     if let output {
       guard output.isFileURL, output.standardizedFileURL != input.standardizedFileURL else {
         throw ProbeError.usage("a separate local CAF destination is required")
@@ -115,14 +117,9 @@ enum AudioImporter {
         throw ProbeError.capture("CAF destination already exists or is unavailable")
       }
       close(descriptor)
-      destination = try AVAudioFile(
-        forWriting: output,
-        settings: [
-          AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate,
-          AVNumberOfChannelsKey: channels, AVLinearPCMBitDepthKey: 32,
-          AVLinearPCMIsFloatKey: true, AVLinearPCMIsBigEndianKey: false,
-          AVLinearPCMIsNonInterleaved: false,
-        ], commonFormat: .pcmFormatFloat32, interleaved: true)
+      destination = try FileHandle(forWritingTo: output)
+      try destination?.write(contentsOf: VoicePCM.header(frames: 0))
+      compact = try VoicePCM(rate: UInt32(rate), channels: channels)
     }
     var frames: UInt64 = 0
     while true {
@@ -143,16 +140,38 @@ enum AudioImporter {
           throw ProbeError.capture("decoded PCM contains a non-finite sample")
         }
       }
+      let firstFrame = frames
       frames += UInt64(buffer.frameLength)
       guard frames <= UInt64(rate) * 14_400 else {
         throw ProbeError.usage("audio must be no longer than four hours")
       }
-      try destination?.write(from: buffer)
+      if let compact {
+        try compact.push(
+          VoicePCM.interleaved(buffer), start: Int64(firstFrame * 1_000_000_000 / UInt64(rate)),
+          end: Int64(frames * 1_000_000_000 / UInt64(rate))
+        ) { pcm, _, _ in
+          try destination?.write(contentsOf: pcm.withUnsafeBytes { Data($0) })
+          savedFrames += Int64(pcm.count)
+        }
+      }
     }
     guard frames > 0, frames == UInt64(declaredFrames) else {
       throw ProbeError.capture("decoded frame count does not match the audio file")
     }
-    destination = nil  // Close/finalize before publishing the report.
+    try compact?.finish { pcm, _, _ in
+      try destination?.write(contentsOf: pcm.withUnsafeBytes { Data($0) })
+      savedFrames += Int64(pcm.count)
+    }
+    if let destination {
+      guard savedFrames == Int64((frames * 16000 + UInt64(rate) - 1) / UInt64(rate)) else {
+        throw ProbeError.capture("compact CAF frame count mismatch")
+      }
+      try destination.seek(toOffset: 0)
+      try destination.write(contentsOf: VoicePCM.header(frames: savedFrames))
+      try destination.synchronize()
+      try destination.close()
+    }
+    destination = nil  // Finalize before publishing the report.
     return ImportedAudioInfo(
       schemaVersion: 1, detectedFormat: detected, codec: codec,
       sampleRate: UInt32(rate), channels: channels, frames: frames,
@@ -168,7 +187,15 @@ enum AudioImporter {
         input: URL(fileURLWithPath: arguments[1]),
         output: arguments[2] == "-" ? nil : URL(fileURLWithPath: arguments[2]),
         parentPID: parent)
-      FileHandle.standardOutput.write(try JSONEncoder().encode(info))
+      var report =
+        try JSONSerialization.jsonObject(with: JSONEncoder().encode(info)) as! [String: Any]
+      if arguments[2] != "-" {
+        report["savedAudio"] = [
+          "policy": "voice_pcm16_16000_mono_v1", "sampleRate": 16000, "channels": 1,
+          "frames": (info.frames * 16000 + UInt64(info.sampleRate) - 1) / UInt64(info.sampleRate),
+        ]
+      }
+      FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: report))
     } catch {
       let report = ["errorMessage": String(describing: error)]
       FileHandle.standardOutput.write(try JSONEncoder().encode(report))

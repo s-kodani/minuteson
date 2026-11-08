@@ -81,13 +81,124 @@ impl AudioInfo {
             .map(|n| n.div_ceil(u64::from(self.sample_rate)))
             .and_then(|n| n.checked_mul(2))
             .ok_or("音声保存に必要な容量が範囲外です")?;
-        self.frames
-            .checked_mul(u64::from(self.channels))
-            .and_then(|n| n.checked_mul(4))
-            .and_then(|n| n.checked_add(wav))
+        wav.checked_mul(2)
+            .and_then(|n| n.checked_add(136))
             .and_then(|n| n.checked_add(original))
             .and_then(|n| n.checked_add(128 * 1024 * 1024))
             .ok_or("音声保存に必要な容量が範囲外です".into())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct SavedAudio {
+    pub policy: String,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub frames: u64,
+}
+impl SavedAudio {
+    pub(crate) fn for_source(source: &AudioInfo) -> Result<Self, String> {
+        source.validate()?;
+        Ok(Self {
+            policy: mon_core::media::voice::POLICY.into(),
+            sample_rate: 16000,
+            channels: 1,
+            frames: mon_core::media::voice::frames(source.frames, source.sample_rate)
+                .ok_or("変換後のフレーム数が範囲外です")?,
+        })
+    }
+    pub(crate) fn matches(&self, format: &crate::audio::PcmFormat) -> bool {
+        format.is_compact_recording_segment()
+            && format.frames == self.frames
+            && format.sample_rate == self.sample_rate
+            && format.channels == self.channels
+    }
+}
+
+/// Writes compact CAF directly; no full-rate decoded file is ever created.
+pub(crate) struct VoiceCafWriter {
+    file: std::io::BufWriter<File>,
+    converter: mon_core::media::voice::VoiceConverter,
+    rate: u32,
+    channels: usize,
+    source_frames: u64,
+    saved_frames: u64,
+}
+impl VoiceCafWriter {
+    pub(crate) fn new(path: &Path, rate: u32, channels: u32) -> Result<Self, String> {
+        let mut options = File::options();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        crate::windows_files::set_private(path)?;
+        Self::from_file(file, rate, channels)
+    }
+    pub(crate) fn from_file(file: File, rate: u32, channels: u32) -> Result<Self, String> {
+        let mut file = std::io::BufWriter::new(file);
+        file.write_all(&mon_core::media::caf::voice_header(0).map_err(str::to_owned)?)
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            file,
+            converter: mon_core::media::voice::VoiceConverter::new(rate, channels)
+                .map_err(str::to_owned)?,
+            rate,
+            channels: channels as usize,
+            source_frames: 0,
+            saved_frames: 0,
+        })
+    }
+    pub(crate) fn push(&mut self, pcm: &[f32]) -> Result<(), String> {
+        let start = self.source_frames * 1_000_000_000 / u64::from(self.rate);
+        self.source_frames += (pcm.len() / self.channels) as u64;
+        let end = self.source_frames * 1_000_000_000 / u64::from(self.rate);
+        let file = &mut self.file;
+        let saved = &mut self.saved_frames;
+        let mut io_error = None;
+        let result = self
+            .converter
+            .push(pcm, start as i64, end as i64, &mut |pcm, _, _| {
+                let bytes: Vec<_> = pcm.iter().flat_map(|v| v.to_le_bytes()).collect();
+                if let Err(e) = file.write_all(&bytes) {
+                    io_error = Some(e.to_string());
+                    return Err("compact CAF write failed");
+                }
+                *saved += pcm.len() as u64;
+                Ok(())
+            });
+        result.map_err(|e| io_error.unwrap_or_else(|| e.into()))
+    }
+    pub(crate) fn finish(mut self) -> Result<(), String> {
+        let file = &mut self.file;
+        let saved = &mut self.saved_frames;
+        let mut io_error = None;
+        let result = self.converter.finish(&mut |pcm, _, _| {
+            let bytes: Vec<_> = pcm.iter().flat_map(|v| v.to_le_bytes()).collect();
+            if let Err(e) = file.write_all(&bytes) {
+                io_error = Some(e.to_string());
+                return Err("compact CAF write failed");
+            }
+            *saved += pcm.len() as u64;
+            Ok(())
+        });
+        result.map_err(|e| io_error.unwrap_or_else(|| e.into()))?;
+        if Some(self.saved_frames) != mon_core::media::voice::frames(self.source_frames, self.rate)
+        {
+            return Err("変換後のフレーム数が一致しません".into());
+        }
+        self.file.rewind().map_err(|e| e.to_string())?;
+        self.file
+            .write_all(
+                &mon_core::media::caf::voice_header(self.saved_frames).map_err(str::to_owned)?,
+            )
+            .map_err(|e| e.to_string())?;
+        self.file.flush().map_err(|e| e.to_string())?;
+        self.file.get_ref().sync_all().map_err(|e| e.to_string())
     }
 }
 
@@ -241,8 +352,23 @@ pub(crate) fn decode(
             .take(2048)
             .collect());
     }
-    let info: AudioInfo = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let saved = report
+        .as_object_mut()
+        .ok_or("音声検証の応答が不正です")?
+        .remove("savedAudio");
+    let info: AudioInfo = serde_json::from_value(report).map_err(|e| e.to_string())?;
     info.validate()?;
+    let expected = output.map(|_| SavedAudio::for_source(&info)).transpose()?;
+    let saved: Option<SavedAudio> = saved
+        .filter(|v| !v.is_null())
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    if saved != expected {
+        return Err("音声変換ヘルパーの保存形式が一致しません".into());
+    }
     Ok(info)
 }
 
@@ -287,12 +413,17 @@ pub(crate) struct ImportManifest {
     pub import_id: String,
     pub original_file_name: String,
     pub info: AudioInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_audio: Option<SavedAudio>,
     pub original: FileEvidence,
     pub audio: FileEvidence,
 }
 impl ImportManifest {
     pub(crate) fn validate_format(&self) -> Result<(), String> {
-        if self.schema_version == 2 && self.audio_format.as_deref() == Some("caf") {
+        if self.schema_version == 3
+            && self.audio_format.as_deref() == Some("caf")
+            && self.saved_audio.as_ref() == Some(&SavedAudio::for_source(&self.info)?)
+        {
             Ok(())
         } else {
             Err("取り込みmanifestの音声形式・形式版が不正です".into())
@@ -408,7 +539,7 @@ pub(crate) fn import_configured(
         if available_bytes(&base)? < selected.info.required_bytes(0)? {
             return Err("変換用音声を保存する容量が不足しています".into());
         }
-        let caf = base.join("decoded.caf");
+        let caf = base.join("decoded-voice.caf");
         progress("decoding", 0);
         let decoded = decode(helper, &original, Some(&caf), &base, cancelled)?;
         if decoded != selected.info {
@@ -422,10 +553,8 @@ pub(crate) fn import_configured(
             cancelled,
         )?;
         audio.require_caf()?;
-        if audio.format.frames != decoded.frames
-            || audio.format.sample_rate != decoded.sample_rate
-            || audio.format.channels != decoded.channels
-        {
+        let saved_audio = SavedAudio::for_source(&decoded)?;
+        if !saved_audio.matches(&audio.format) {
             return Err("解析用PCMの形式・長さが復号結果と一致しません".into());
         }
         drop(audio);
@@ -434,8 +563,9 @@ pub(crate) fn import_configured(
         progress("converting", decoded.frames);
         check_cancelled(cancelled)?;
         let manifest = ImportManifest {
-            schema_version: 2,
+            schema_version: 3,
             audio_format: Some("caf".into()),
+            saved_audio: Some(saved_audio),
             meeting_id: snapshot.meeting_id.clone(),
             import_id: snapshot.id.clone(),
             original_file_name: selected.file_name.clone(),

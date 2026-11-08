@@ -282,7 +282,7 @@ final class MicrophoneRecoveryTests: XCTestCase {
     let canonical = try XCTUnwrap(realpath(root.path, nil))
     defer { free(canonical) }
     let directory = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
-    let url = directory.appendingPathComponent("microphone.caf")
+    let url = directory.appendingPathComponent("source-format-fixture.caf")
     let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 2))
     var file: AVAudioFile? = try AVAudioFile(
       forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32,
@@ -336,7 +336,7 @@ final class MicrophoneRecoveryTests: XCTestCase {
           normal, token: token, sourceFrame: Int64(index) * 2000,
           at: 1_000_000_000 + Int64(index) * 250_000_000))
     }
-    XCTAssertEqual(raw.snapshot().sealedFrames, 32000)
+    XCTAssertEqual(raw.snapshot().sealedFrames, 64000)
     let prefixURL = directory.appendingPathComponent("raw-microphone-00000001.caf")
     let entryURL = directory.appendingPathComponent("raw-microphone-00000001.json")
     let tipURL = directory.appendingPathComponent("raw-microphone.json")
@@ -392,7 +392,7 @@ final class MicrophoneRecoveryTests: XCTestCase {
     XCTAssertEqual(stats.clockSegments?[1].timelineStartUs, 5_000_000)
     XCTAssertEqual(stats.clockSegments?[2].timelineStartUs, 6_000_000)
     XCTAssertEqual(stats.clockSegments?[4].timelineStartUs, 8_000_000)
-    XCTAssertEqual(raw.snapshot().sealedFrames, 42000)
+    XCTAssertEqual(raw.snapshot().sealedFrames, 84000)
     XCTAssertTrue(raw.snapshot().producerClosed)
     XCTAssertEqual(try Data(contentsOf: prefixURL), prefix)
     XCTAssertEqual(try Data(contentsOf: entryURL), entry)

@@ -1,3 +1,4 @@
+mod legacy;
 use super::*;
 use crate::audio::VerifiedAudio;
 use crate::audio_import::{AudioInfo, FileEvidence, ImportManifest, ImportOptions};
@@ -263,6 +264,7 @@ impl Storage {
             return Err("この取り込みは保存確定可能な状態ではありません".into());
         }
         let base = self.audio_import_directory(&before)?;
+        legacy::upgrade(self, &before, &base, cancelled)?;
         let manifest_path = base.join("manifest.json");
         let evidence = self.checked_import_file(&manifest_path, None, cancelled)?;
         if evidence.size > 16384 {
@@ -301,7 +303,7 @@ impl Storage {
         manifest.info.validate()?;
         let original_path = base.join(format!("original.{}", manifest.info.detected_format));
         self.checked_import_file(&original_path, Some(&manifest.original), cancelled)?;
-        let decoded_path = base.join("decoded.caf");
+        let decoded_path = base.join("decoded-voice.caf");
         self.checked_import_file(&decoded_path, Some(&manifest.audio), cancelled)?;
         let mut audio = VerifiedAudio::open_cancellable(
             File::open(&decoded_path).map_err(|e| e.to_string())?,
@@ -310,10 +312,11 @@ impl Storage {
             cancelled,
         )?;
         audio.require_caf()?;
-        if audio.format.frames != manifest.info.frames
-            || audio.format.sample_rate != manifest.info.sample_rate
-            || audio.format.channels != manifest.info.channels
-        {
+        let saved = manifest
+            .saved_audio
+            .as_ref()
+            .ok_or("取り込みの保存形式がありません")?;
+        if !saved.matches(&audio.format) {
             return Err("取り込み音声の実音声と固定条件が一致しません".into());
         }
         drop(audio);
@@ -369,8 +372,14 @@ impl Storage {
         tx.execute("UPDATE audio_import_commits SET manifest_asset_id=?2,manifest_hash=?3,error_message=NULL WHERE import_id=?1 AND manifest_asset_id IS NULL",params![id,manifest_id,evidence.sha256]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE audio_imports SET state='ready',original_asset_id=?2,converted_asset_id=?3,error_code=NULL,updated_at=?4 WHERE id=?1",params![id,original,converted,now]).map_err(|e|e.to_string())?;
         let track = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','caf',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
-        tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,?7,?8,'ready',?9)",params![Uuid::new_v4().to_string(),before.meeting_id,track,converted,manifest.info.duration_us,manifest.info.frames as i64,manifest.info.sample_rate,manifest.info.channels,now]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','caf',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,saved.sample_rate,saved.channels,now]).map_err(|e|e.to_string())?;
+        let chunk = Uuid::new_v4().to_string();
+        tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,?7,?8,'ready',?9)",params![chunk,before.meeting_id,track,converted,manifest.info.duration_us,saved.frames as i64,saved.sample_rate,saved.channels,now]).map_err(|e|e.to_string())?;
+        // The source duration can end between 16kHz frames. Bind all converted
+        // samples to the original endpoint explicitly instead of pretending
+        // that rounded output frames have the original sample geometry.
+        tx.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES(?1,?2,?3,0,?4,0,?5,'{\"schema_version\":1,\"method\":\"linear\"}')",
+            params![Uuid::new_v4().to_string(),track,chunk,saved.frames as i64,manifest.info.duration_us]).map_err(|e|e.to_string())?;
         if tx.execute("UPDATE meetings SET lifecycle='imported',duration_us=?2,lock_version=lock_version+1,updated_at=?3 WHERE id=?1 AND source_type='audio_import' AND lifecycle='draft'",params![before.meeting_id,manifest.info.duration_us,now]).map_err(|e|e.to_string())?!=1 { return Err("会議の取り込み状態が変更されています".into()); }
         super::analysis_flows::ensure_flow(&tx, &before.meeting_id)?;
         let result = read(&tx, id)?;
@@ -434,10 +443,11 @@ impl Storage {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name();
             let name = name.to_str().ok_or("取り込み物の名前が不正です")?;
-            let owned = matches!(name, "decoded.caf" | "manifest.json")
+            let owned = matches!(name, "decoded.caf" | "decoded-voice.caf" | "manifest.json")
                 || name == format!("original.{}", snapshot.info.detected_format)
                 || (name.starts_with(".mon-import-manifest-") && name.ends_with(".part"))
-                || name.starts_with(".mon-import-report-");
+                || name.starts_with(".mon-import-report-")
+                || (name.starts_with(".mon-import-voice-") && name.ends_with(".part"));
             if !owned || !entry.file_type().map_err(|e| e.to_string())?.is_file() {
                 return Err(
                     "取り込み領域に未確認のファイルがあります。削除せず保持しました".into(),

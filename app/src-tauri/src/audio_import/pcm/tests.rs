@@ -132,7 +132,7 @@ fn malformed_valid_bits_and_float_nonfinite_values_are_rejected() {
 }
 
 #[test]
-fn shared_decoder_publishes_valid24_in32_as_float_caf() {
+fn shared_decoder_publishes_valid24_in32_as_compact_caf() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().canonicalize().unwrap();
     let input = directory.join("valid24-in32.wav");
@@ -147,11 +147,17 @@ fn shared_decoder_publishes_valid24_in32_as_float_caf() {
     assert_eq!(info.frames, 4);
     assert_eq!(info.sample_rate, 48000);
     let caf = std::fs::read(&output).unwrap();
-    let expected: Vec<_> = [-1.0f32, -0.5, 0.0, 0.5]
-        .iter()
-        .flat_map(|s| s.to_le_bytes())
-        .collect();
-    assert!(caf.ends_with(&expected));
+    assert_eq!(caf.len(), 68 + 2 * 2);
+    let proof = Fingerprint::capture(&output, &|| false).unwrap();
+    let audio = VerifiedAudio::open_cancellable(
+        File::open(&output).unwrap(),
+        proof.size,
+        &proof.sha256,
+        &|| false,
+    )
+    .unwrap();
+    assert!(audio.format.is_compact_recording_segment());
+    assert_eq!(audio.format.frames, 2);
     assert_eq!(std::fs::read(&input).unwrap(), original);
     assert!(decode(&input, Some(&output), &|| false).is_err());
     assert_eq!(std::fs::read(&output).unwrap(), caf);
