@@ -67,6 +67,7 @@ mod speaker_features;
 mod startup_attention;
 mod startup_instance;
 mod startup_reset;
+mod startup_window;
 mod storage;
 mod transcription;
 mod voice;
@@ -3103,6 +3104,7 @@ pub fn run() {
                     .map_err(|e| e.to_string()),
             );
             app.manage(logs);
+            startup_window::initialize(app.handle());
             residency::initialize(app.handle());
             internal_logs::phase("application", None, None, "starting", None);
             #[cfg(target_os = "windows")]
