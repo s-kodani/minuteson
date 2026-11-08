@@ -29,6 +29,8 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
   showToast: input => toasts.show(input),
   notifications: () => toasts.getSnapshot().map(({key,id,message})=>({key,id,message})),
   notificationJobs: [], notificationWarnings: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
+  deletedAudioMeetingIds: JSON.parse(sessionStorage.getItem("MON_DELETED_AUDIO_FIXTURE") ?? "[]"),
+  unknownAudioMeetingIds: [],
   lostRetryResponse: false,
   diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
   vocabulary: { global: { id: "global", payload: [], lockVersion: 0 } }, failVocabulary: false,
@@ -160,6 +162,9 @@ mockIPC(async (command, args) => {
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
+    case "get_meeting_deletion_availability": return args.meetingIds.map(meetingId => ({
+      meetingId, available:true, audioDeleted:fixture.unknownAudioMeetingIds.includes(meetingId) ? null : fixture.deletedAudioMeetingIds.includes(meetingId), blockers:[],
+    }));
     case "record_meeting_open_failure": return null;
     case "get_storage_bootstrap": return {meetingRoot:"/synthetic/meetings",activeMeetingRoot:"/synthetic/meetings",restartRequired:false,modelsRoot:"/synthetic/models",bootstrapPath:"/synthetic/config/bootstrap.json",revision:0,origin:"default",pendingOperationId:null,pendingTarget:null,keptMoves:[]};
     case "get_minutes_markdown": return null;
@@ -184,6 +189,7 @@ mockIPC(async (command, args) => {
     case "get_model_placements": return structuredClone(fixture.modelPlacements ?? []);
     case "get_model_profiles": return structuredClone(fixture.modelProfiles ?? ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false })));
     case "get_meeting_audio_summary": {
+      if(fixture.deletedAudioMeetingIds.includes(args.meetingId)) throw Error("音声は削除済みのため再生・再解析できません。文字起こし・議事録・根拠は保持されています");
       if(fixture.meetingSummaryFailure) throw Error("模擬の保存音声確認失敗");
       const summary = {schemaVersion:1,durationUs:fixture.meetingDurations?.[args.meetingId]??fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??["mixed"]};
       if(fixture.holdMeetingSummaries) return new Promise(resolve => {

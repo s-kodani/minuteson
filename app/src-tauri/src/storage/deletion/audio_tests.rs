@@ -218,6 +218,76 @@ fn entry<'a>(preview: &'a Preview, suffix: &str) -> &'a Entry {
 }
 
 #[test]
+fn audio_only_deletion_keeps_documents_and_originals_after_reopen() {
+    use crate::analysis_worker::AnalysisController;
+    let fixture = Fixture::new();
+    fixture.documents();
+    let retained = fixture.file(
+        &format!("audio/{}/manifest.json", fixture.session),
+        Some("application/json"),
+    );
+    let retained_bytes = std::fs::read(&retained).unwrap();
+    let original = fixture.base.path().join("external-original.wav");
+    std::fs::write(&original, b"KEEP EXTERNAL ORIGINAL").unwrap();
+    let documents = || {
+        let db = fixture.storage.connection.lock().unwrap();
+        Scope::capture(&db, &fixture.meeting, "", &|| false)
+            .unwrap()
+            .tables
+            .into_iter()
+            .filter(|table| {
+                !["audio_chunks", "audio_tracks", "file_assets"].contains(&table.name.as_str())
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = documents();
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let operation = uuid::Uuid::new_v4().to_string();
+    intent::prepare(
+        &fixture.storage,
+        &operation,
+        &fixture.census(),
+        intent::Policy {
+            include_unregistered_audio: false,
+            retain_unclassified: true,
+        },
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    intent::removal::start(&fixture.storage, &operation, &lease, &|| false).unwrap();
+    assert!(
+        intent::removal::run(&fixture.storage, &operation, &lease, &|| false)
+            .unwrap()
+            .files_removed()
+    );
+    assert!(
+        intent::removal::completion::finish(&fixture.storage, &operation, &lease, &|| false)
+            .unwrap()
+            .completed()
+    );
+    assert_eq!(documents(), before);
+    assert!(!fixture.path.exists());
+    assert_eq!(std::fs::read(&retained).unwrap(), retained_bytes);
+    assert_eq!(std::fs::read(&original).unwrap(), b"KEEP EXTERNAL ORIGINAL");
+    drop(lease);
+    let fixture = fixture.reopen();
+    assert!(fixture
+        .storage
+        .get_meeting(&fixture.meeting)
+        .unwrap()
+        .is_some());
+    let availability = fixture
+        .storage
+        .meeting_deletion_availability(&[fixture.meeting.clone()])
+        .unwrap();
+    assert_eq!(availability[0].audio_deleted, Some(true));
+    assert!(!fixture.path.exists());
+}
+
+#[test]
 fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_without_payloads() {
     let f = Fixture::new();
     f.documents();

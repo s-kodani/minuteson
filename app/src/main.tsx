@@ -156,7 +156,7 @@ function MainWindow() {
   const [analysisEpoch, setAnalysisEpoch] = useState(0);
   const [transcriptMeeting, setTranscriptMeeting] = useState<string | null>(null);
   const priorPhase = useRef<string | null>(null);
-  const deletion = useMeetingDeletion({ operation: dataOperation, meetingIds: meetings.map(meeting => meeting.id), locked: captureTest.blocked || navigationBusy || dataPending || audioDeletionPending, withSavedEdits,
+  const deletion = useMeetingDeletion({ operation: dataOperation, meetingIds: [...new Set([...meetings.map(meeting => meeting.id), ...(selectedMeeting ? [selectedMeeting.id] : [])])], locked: captureTest.blocked || navigationBusy || dataPending || audioDeletionPending, withSavedEdits,
     onDeleted: async receipt => {
       if (selectedMeeting?.id === receipt.meetingId) {
         setSelectedMeeting(null);
@@ -382,6 +382,7 @@ function MainWindow() {
   return (
     <MeetingPlaybackSurface host={playbackHost} meetingId={selectedMeeting?.id ?? null} title={selectedMeeting?.title}>
     <MeetingAudioProvider meetingId={selectedMeeting?.id ?? null} sourceType={selectedMeeting?.sourceType} locked={writeLocked}
+      audioDeleted={selectedMeeting ? deletion.audioAvailability.rows.get(selectedMeeting.id)?.audioDeleted ?? null : null}
       active={!!selectedMeeting && !["settings", "recording", "jobs", "logs", "voices", "prompts"].includes(screen) && ["recorded", "imported", "archived"].includes(selectedMeeting.lifecycle) && !!selectedMeeting.sourceType}>
     <div className="app-layout" data-navigation-arrow={navigationArrow || undefined} data-write-navigation-arrow={writeNavigationArrow || undefined}>
       <aside className="sidebar">
@@ -456,7 +457,7 @@ function MainWindow() {
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onFinish={finishCaptureTest}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {selectedMeeting ? <AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} visible={detail && detailTab === "transcript"} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onHeadChanged={async read => {
+          {selectedMeeting ? <AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} visible={detail && detailTab === "transcript"} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} audioDeleted={deletion.audioAvailability.rows.get(selectedMeeting.id)?.audioDeleted ?? null} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} onHeadChanged={async read => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([
               read("get_meeting", () => invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id })),

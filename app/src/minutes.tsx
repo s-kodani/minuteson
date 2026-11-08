@@ -39,8 +39,11 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [exportedEvent, setExportedEvent] = useState("");
   const exportOpener = useRef<HTMLButtonElement|null>(null), returnExportFocus = useRef(false);
   const [source, setSource] = useState<MinutesSource | null>(null);
-  const [audioSummary, setAudioSummary] = useState<MeetingAudioSummary | null>(null);
+  const [storedAudioSummary, setAudioSummary] = useState<MeetingAudioSummary | null>(null);
   const audio = useMeetingAudio(meetingId);
+  const canInspectSource = audio?.canInspectSource ?? true;
+  const sourceAvailable = useRef(canInspectSource); sourceAvailable.current = canInspectSource;
+  const audioSummary = canInspectSource ? storedAudioSummary : null;
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -101,9 +104,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
               read(), invoke<MinutesSource>("get_minutes_source", { meetingId }),
               invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences"),
               invoke<Job[]>("get_analysis_jobs", { meetingId }),
-              // No token, file read, OS permission or automatic playback.
-              // Unavailable audio must not prevent human Markdown editing.
-              invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId }).then(validateAudioSummary).catch(() => null),
+              // Deletion is shared with the player; normal refreshes still
+              // observe changed durations/modes without remounting the editor.
+              sourceAvailable.current ? invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId }).then(validateAudioSummary).catch(() => null) : null,
             ]);
             if (disposed) return;
             setExternalChange(!controller.observe(saved));

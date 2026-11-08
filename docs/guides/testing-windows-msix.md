@@ -88,18 +88,47 @@ try {
 
 ## 3. 検証ユーザーへ導入し、今回の本体を確認する
 
-この例は初回導入用です。通常権限のWindows PowerShellで、手順1の変数を設定してから実行します。
+この例は初回導入用です。導入先の検証ユーザーの通常権限のWindows PowerShellで、以下のブロック全体を実行します。証明書登録用に開いた別アカウントの管理者ウィンドウでは実行しません。別端末へコピーした場合は`$testDirectory`をコピー先へ変更してください。
 
 ```powershell
-$existing = Get-AppxPackage -Name $plan.identity.identityName
-if ($existing) {
+$ErrorActionPreference = 'Stop'
+$testDirectory = 'C:\path\to\windows-store-test\今回の検証フォルダー'
+$report = Get-Content -LiteralPath (Join-Path $testDirectory 'test-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$plan = Get-Content -LiteralPath (Join-Path $testDirectory 'test-plan.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($plan.identity.identityName) -or [string]::IsNullOrWhiteSpace($report.testVersion)) {
+    throw '検証記録のパッケージ名または期待する版数がありません。手順1から照合してください。'
+}
+$package = Join-Path $testDirectory (Split-Path -Leaf $report.signedTestPackage)
+if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ine $report.signedTestSha256) {
+    throw '導入するMSIXのSHA256が検証記録と一致しません。'
+}
+$verificationUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Host ('導入先ユーザー: ' + $verificationUser)
+$existing = @(Get-AppxPackage -Name $plan.identity.identityName -ErrorAction Stop)
+if ($existing.Count -ne 0) {
     $existing | Select-Object Name, Version, PackageFullName
     throw '既存版があります。同版の検証は未導入の検証環境で実行してください。'
 }
 Add-AppxPackage -Path $package -ErrorAction Stop
-$installed = Get-AppxPackage -Name $plan.identity.identityName
-if (-not $installed -or $installed.Version.ToString() -ne $report.testVersion -or $installed.Status.ToString() -ne 'Ok') {
-    throw 'インストール済みパッケージの版数または状態が不正です。'
+$installedPackages = @(Get-AppxPackage -Name $plan.identity.identityName -ErrorAction Stop)
+Write-Host ('現在のユーザーで見つかった登録数: ' + $installedPackages.Count)
+if ($installedPackages.Count -eq 0) {
+    throw ('ユーザー ' + $verificationUser + ' にMinutesOnの登録が見つかりません。Add-AppxPackageの実行結果と、導入先ユーザーを確認してください。')
+}
+if ($installedPackages.Count -ne 1) {
+    $installedPackages | Format-List Name, Version, Status, PackageFullName
+    throw '検証対象の登録を1件に限定できません。'
+}
+$installed = $installedPackages[0]
+Write-Host ('期待する版数: ' + $report.testVersion + ' / 登録された版数: ' + $installed.Version + ' / 状態: ' + $installed.Status)
+if ($installed.Version.ToString() -ne $report.testVersion) {
+    throw '登録された版数が検証記録と一致しません。導入したMSIXを確認してください。'
+}
+if ($installed.Publisher -cne $plan.identity.publisher) {
+    throw '登録されたPublisherが検証記録と一致しません。'
+}
+if ($installed.Status.ToString() -ne 'Ok') {
+    throw ('登録されたパッケージの状態が正常ではありません: ' + $installed.Status)
 }
 foreach ($relative in @('mon-desktop.exe', 'mon-windows-capture.exe', 'windows-runtime/workers/mon-whisper-worker.exe')) {
     $expected = @($plan.files | Where-Object { $_.path -ceq $relative })
