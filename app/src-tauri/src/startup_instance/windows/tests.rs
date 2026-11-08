@@ -148,7 +148,11 @@ fn process_helper() {
         return;
     }
     if mode == "restart-successor" {
-        std::fs::write(root.join("successor-ready"), std::process::id().to_string()).unwrap();
+        // Existence is the parent's readiness signal. Publish only after the
+        // PID is fully written so it cannot observe a created-but-empty file.
+        let pending = root.join("successor-ready.pending");
+        std::fs::write(&pending, std::process::id().to_string()).unwrap();
+        std::fs::rename(pending, root.join("successor-ready")).unwrap();
         std::thread::sleep(Duration::from_secs(2));
         return;
     }
