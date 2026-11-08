@@ -118,19 +118,28 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
   }
   private func verifyAudio(_ url: URL, frames: Int64, rate: Double = 8000) throws {
     let file = try AVAudioFile(forReading: url)
-    XCTAssertEqual(file.length, frames)
-    XCTAssertEqual(file.fileFormat.sampleRate, rate)
-    XCTAssertEqual(file.fileFormat.channelCount, 2)
+    let compact = file.fileFormat.commonFormat == .pcmFormatInt16
+    let expectedFrames = compact ? Int64(ceil(Double(frames) * 16000 / rate)) : frames
+    XCTAssertEqual(file.length, expectedFrames)
+    XCTAssertEqual(file.fileFormat.sampleRate, compact ? 16000 : rate)
+    XCTAssertEqual(file.fileFormat.channelCount, compact ? 1 : 2)
     let output = try XCTUnwrap(
       AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096))
     var read: Int64 = 0
-    while read < frames {
-      try file.read(into: output, frameCount: AVAudioFrameCount(min(4096, frames - read)))
-      XCTAssertGreaterThan(output.frameLength, 0)
+    while read < expectedFrames {
+      try file.read(into: output, frameCount: AVAudioFrameCount(min(4096, expectedFrames - read)))
+      guard output.frameLength > 0 else {
+        XCTFail("unexpected end of CAF")
+        return
+      }
       let values = try XCTUnwrap(output.floatChannelData)
       for index in 0..<Int(output.frameLength) {
-        XCTAssertEqual(values[0][index], 0.25)
-        XCTAssertEqual(values[1][index], -0.5)
+        if compact {
+          XCTAssertEqual(values[0][index], -0.125, accuracy: 1.0 / 32768)
+        } else {
+          XCTAssertEqual(values[0][index], 0.25)
+          XCTAssertEqual(values[1][index], -0.5)
+        }
       }
       read += Int64(output.frameLength)
     }
@@ -144,7 +153,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       try append(writer, interleaved: interleaved)
       try waitForPrefix(writer)
       let tip = try value(root)
-      XCTAssertEqual(tip["sealedFrames"] as? Int64, 32_000)
+      XCTAssertEqual(tip["sealedFrames"] as? Int64, 64_000)
       XCTAssertEqual(tip["producerClosed"] as? Bool, false)
       XCTAssertEqual(tip["ownerId"] as? String, owner)
       let firstName = "raw-microphone-00000001.caf"
@@ -155,20 +164,20 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(first["sourceFrameStart"] as? Int, 0)
       let maps = try XCTUnwrap(first["clockSegments"] as? [[String: Any]])
       XCTAssertEqual(maps.count, 1)
-      XCTAssertEqual(maps[0]["sourceFrameEnd"] as? Int, 32_000)
+      XCTAssertEqual(maps[0]["sourceFrameEnd"] as? Int, 64_000)
       XCTAssertEqual(maps[0]["timelineEndUs"] as? Int, 4_000_000)
       let firstEntry = try Data(
         contentsOf: root.appendingPathComponent("raw-microphone-00000001.json"))
       XCTAssertEqual(tip["lastEntrySHA256"] as? String, hex(SHA256.hash(data: firstEntry)))
       try writer.finish()
       XCTAssertEqual(writer.snapshot().sealedSegments, 2)
-      XCTAssertEqual(writer.snapshot().sealedFrames, 34_000)
+      XCTAssertEqual(writer.snapshot().sealedFrames, 68_000)
       XCTAssertTrue(writer.snapshot().producerClosed)
       try writer.finish()
       XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(firstName)), firstData)
       try verifyAudio(root.appendingPathComponent("raw-microphone-00000002.caf"), frames: 2000)
       let second = try value(root, "raw-microphone-00000002.json")
-      XCTAssertEqual(second["sourceFrameStart"] as? Int, 32_000)
+      XCTAssertEqual(second["sourceFrameStart"] as? Int, 64_000)
       XCTAssertEqual(second["previousEntrySHA256"] as? String, hex(SHA256.hash(data: firstEntry)))
       XCTAssertEqual(second["captureOriginNanoseconds"] as? Int64, origin + 4_000_000_000)
       XCTAssertNil(second["acquisitionClosed"])
@@ -229,8 +238,8 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let tail = try XCTUnwrap(
       try value(root, "raw-microphone-00000002.json")["clockSegments"] as? [[String: Any]])
     XCTAssertEqual(tail.count, 2)
-    XCTAssertEqual(tail[0]["sourceFrameEnd"] as? Int, 2000)
-    XCTAssertEqual(tail[1]["sourceFrameStart"] as? Int, 2000)
+    XCTAssertEqual(tail[0]["sourceFrameEnd"] as? Int, 4000)
+    XCTAssertEqual(tail[1]["sourceFrameStart"] as? Int, 4000)
     XCTAssertGreaterThan(
       tail[1]["timelineStartUs"] as? Int ?? 0, tail[0]["timelineEndUs"] as? Int ?? 0)
   }
@@ -293,7 +302,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     try writer.finish()
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: audio.path), [])
     try verifyAudio(moved.appendingPathComponent("raw-microphone-00000001.caf"), frames: 32_000)
-    XCTAssertEqual(try value(moved)["sealedFrames"] as? Int, 34_000)
+    XCTAssertEqual(try value(moved)["sealedFrames"] as? Int, 68_000)
   }
 
   func testSourceCounterResetAndFormatChangePreserveConfirmedPrefixAndRejectSuccess() throws {
@@ -332,10 +341,10 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       try raw.drainAcceptedPCM()
     }
     try waitForPrefix(raw)
-    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 192_000)
+    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 64_000)
     try await writer.finish()
-    XCTAssertEqual(writer.stats.frames, 204_000)
-    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 204_000)
+    XCTAssertEqual(writer.stats.frames, 68_000)
+    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 68_000)
     XCTAssertEqual(writer.stats.rawSegments?.producerClosed, true)
     try verifyAudio(root.appendingPathComponent("system.caf"), frames: 204_000, rate: 48000)
     try verifyAudio(
@@ -419,7 +428,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
           XCTAssertThrowsError(try writer.drainAcceptedPCM())
         }
         XCTAssertThrowsError(try writer.finish())
-        XCTAssertEqual(writer.snapshot().sealedFrames, 32_000)
+        XCTAssertEqual(writer.snapshot().sealedFrames, 64_000)
         XCTAssertFalse(writer.snapshot().producerClosed)
         XCTAssertEqual(
           writer.snapshot().failure,
@@ -469,10 +478,10 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
           let snapshot = writer.snapshot()
           XCTAssertEqual(snapshot.failure, failureCode)
           XCTAssertFalse(snapshot.producerClosed)
-          XCTAssertEqual(snapshot.sealedFrames, closure ? 34_000 : 32_000)
+          XCTAssertEqual(snapshot.sealedFrames, closure ? 68_000 : 64_000)
           let visible = try value(root)
           XCTAssertEqual(
-            visible["sealedFrames"] as? Int, closure || point == .directorySync ? 34_000 : 32_000)
+            visible["sealedFrames"] as? Int, closure || point == .directorySync ? 68_000 : 64_000)
           XCTAssertEqual(visible["producerClosed"] as? Bool, closure && point == .directorySync)
           if !closure && point != .directorySync {
             XCTAssertEqual(try Data(contentsOf: tipPath), beforeTip)
@@ -555,8 +564,9 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     }
     XCTAssertThrowsError(try raw.drainAcceptedPCM())
     let frames = writer.stats.frames
-    XCTAssertEqual(frames, 216_000)
-    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 192_000)
+    XCTAssertGreaterThanOrEqual(frames, 64_000)
+    XCTAssertLessThan(frames, 72_000)
+    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 64_000)
     XCTAssertEqual(writer.stats.captureFailure, "raw_segment_storage_full")
     XCTAssertFalse(writer.ready)
     for _ in 0..<3 {
@@ -572,7 +582,6 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       XCTFail("storage failure cannot finalize successfully")
     } catch {}
     XCTAssertFalse(try value(root, "raw-system.json")["producerClosed"] as? Bool ?? true)
-    try verifyAudio(root.appendingPathComponent("system.caf"), frames: frames, rate: 48000)
     try verifyAudio(
       root.appendingPathComponent("raw-system-00000001.caf"), frames: 192_000, rate: 48000)
   }
@@ -646,7 +655,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(
       try Data(contentsOf: root.appendingPathComponent("raw-microphone.json")), committed)
     XCTAssertEqual(try value(root)["sealedSegments"] as? Int, 1)
-    XCTAssertEqual(try value(root)["sealedFrames"] as? Int, 32_000)
+    XCTAssertEqual(try value(root)["sealedFrames"] as? Int, 64_000)
     XCTAssertEqual(try value(root)["producerClosed"] as? Bool, false)
     XCTAssertNil(try value(root)["acquisitionClosed"])
     try verifyAudio(root.appendingPathComponent("raw-microphone-00000001.caf"), frames: 32_000)
@@ -716,7 +725,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       clock, microphoneClosure: micClosure, systemClosure: systemClosure)
     try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
     XCTAssertEqual(manifest.schemaVersion, 4)
-    XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, dense ? 983_040 : 204_000)
+    XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, dense ? 327_680 : 68_000)
     XCTAssertNotNil(manifest.microphone.rawSegments?.lastEntrySHA256)
     if dense {
       XCTAssertEqual(manifest.microphone.clockSegments?.count, 2048)

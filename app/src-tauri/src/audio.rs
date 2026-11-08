@@ -33,11 +33,20 @@ impl PcmFormat {
             && !self.float
             && self.little_endian
     }
-    pub(crate) fn is_raw_recording_segment(&self) -> bool {
+    pub(crate) fn is_compact_recording_segment(&self) -> bool {
         self.data_offset == 68
-            && self.bytes_per_frame == self.channels * 4
-            && self.float
+            && self.sample_rate == 16000
+            && self.channels == 1
+            && self.bytes_per_frame == 2
+            && !self.float
             && self.little_endian
+    }
+    pub(crate) fn is_raw_recording_segment(&self) -> bool {
+        self.is_compact_recording_segment()
+            || self.data_offset == 68
+                && self.bytes_per_frame == self.channels * 4
+                && self.float
+                && self.little_endian
     }
 }
 
@@ -275,6 +284,14 @@ impl VerifiedAudio {
             .read_exact(&mut input)
             .map_err(|e| e.to_string())?;
         self.check_unchanged()?;
+        if self.format.is_compact_recording_segment() {
+            return Ok(input
+                .chunks_exact(2)
+                .flat_map(|b| {
+                    (f32::from(i16::from_le_bytes(b.try_into().unwrap())) / 32768.0).to_le_bytes()
+                })
+                .collect());
+        }
         for sample in input.chunks_exact(4) {
             if !f32::from_le_bytes(sample.try_into().unwrap()).is_finite() {
                 return Err("原音声に非有限のPCM値が含まれています".into());

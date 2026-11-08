@@ -92,6 +92,7 @@ fn pending_with_info(
     let manifest = ImportManifest {
         schema_version: 2,
         audio_format: Some("caf".into()),
+        saved_audio: None,
         meeting_id: import.meeting_id.clone(),
         import_id: import.id.clone(),
         original_file_name: import.original_file_name.clone(),
@@ -630,8 +631,60 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
     assert!(info().required_bytes(u64::MAX).is_err());
     assert_eq!(
         info().required_bytes(44).unwrap(),
-        64000 * 2 * 4 + 64000 * 2 + 44 + 128 * 1024 * 1024
+        64000 * 2 * 2 + 136 + 44 + 128 * 1024 * 1024
     );
+}
+
+#[test]
+fn compact_import_upgrade_retains_old_pcm_until_commit_and_resumes_without_reencoding() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let source = AudioInfo {
+        sample_rate: 44100,
+        frames: 44107,
+        duration_us: 44107 * 1_000_000 / 44100,
+        ..info()
+    };
+    let (import, base, _) = pending_with_info(
+        &s,
+        "compact-upgrade",
+        &audio_import::ImportOptions::default(),
+        source.clone(),
+    );
+    let old = std::fs::read(base.join("decoded.caf")).unwrap();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER compact_fail BEFORE INSERT ON file_assets BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(s.finalize_audio_import(&import.id).is_err());
+    let manifest: ImportManifest =
+        serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest.schema_version, 3);
+    assert_eq!(manifest.info, source);
+    let saved = manifest.saved_audio.unwrap();
+    assert_eq!(
+        (saved.sample_rate, saved.channels, saved.frames),
+        (16000, 1, 16003)
+    );
+    let path = base.join("decoded-voice.caf");
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 68 + 16003 * 2);
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(std::fs::read(base.join("decoded.caf")).unwrap(), old);
+    assert_eq!(count(&s, "file_assets", &import.meeting_id), 0);
+    assert!(s.finalize_audio_import(&import.id).is_err());
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER compact_fail;")
+        .unwrap();
+    s.finalize_audio_import(&import.id).unwrap();
+    assert_eq!(s.audio_import(&import.id).unwrap().info, source);
+    assert!(!path.exists());
+    assert!(!base.join("decoded.caf").exists());
+    assert!(s
+        .verify_canonical_audio(&import.meeting_id, &|| false)
+        .is_ok());
 }
 
 #[cfg(unix)]

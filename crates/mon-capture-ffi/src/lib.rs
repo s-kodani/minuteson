@@ -2,7 +2,104 @@
 //! for the duration of a call. No allocator ownership crosses this boundary.
 use mon_core::capture::commit::RawPrefix;
 use mon_core::capture::{limits, request, supervisor::InputLifecycle};
+use mon_core::media::voice::VoiceConverter;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+/// PCM and timestamps are borrowed during the callback. Returning false makes
+/// the converter terminal; native IO failures must never drop audio silently.
+pub type VoiceWrite =
+    Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const i16, usize, i64, i64) -> bool>;
+
+#[no_mangle]
+pub extern "C" fn mon_voice_new(rate: u32, channels: u32) -> *mut VoiceConverter {
+    catch_unwind(|| {
+        VoiceConverter::new(rate, channels)
+            .map(|v| Box::into_raw(Box::new(v)))
+            .unwrap_or(std::ptr::null_mut())
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_voice_free(value: *mut VoiceConverter) {
+    if !value.is_null() {
+        drop(Box::from_raw(value));
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_voice_push(
+    value: *mut VoiceConverter,
+    samples: *const f32,
+    count: usize,
+    start_ns: i64,
+    end_ns: i64,
+    context: *mut std::ffi::c_void,
+    write: VoiceWrite,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (Some(value), Some(write)) = (value.as_mut(), write) else {
+            return false;
+        };
+        if samples.is_null() || count == 0 || count > mon_core::media::voice::MAX_INPUT_FRAMES * 8 {
+            return false;
+        }
+        let result = value.push(
+            std::slice::from_raw_parts(samples, count),
+            start_ns,
+            end_ns,
+            &mut |pcm, start, end| {
+                if write(context, pcm.as_ptr(), pcm.len(), start, end) {
+                    Ok(())
+                } else {
+                    Err("voice PCM sink failed")
+                }
+            },
+        );
+        if let Err(error) = result {
+            eprintln!("mon_voice_push: {error}; start={start_ns}; end={end_ns}; samples={count}");
+        }
+        result.is_ok()
+    }))
+    .unwrap_or(false)
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_voice_finish(
+    value: *mut VoiceConverter,
+    context: *mut std::ffi::c_void,
+    write: VoiceWrite,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (Some(value), Some(write)) = (value.as_mut(), write) else {
+            return false;
+        };
+        value
+            .finish(&mut |pcm, start, end| {
+                if write(context, pcm.as_ptr(), pcm.len(), start, end) {
+                    Ok(())
+                } else {
+                    Err("voice PCM sink failed")
+                }
+            })
+            .is_ok()
+    }))
+    .unwrap_or(false)
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_voice_caf_header(
+    frames: u64,
+    output: *mut u8,
+    capacity: usize,
+) -> isize {
+    if output.is_null() || capacity < 68 {
+        return -1;
+    }
+    match mon_core::media::caf::voice_header(frames) {
+        Ok(bytes) => {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, 68);
+            68
+        }
+        Err(_) => -1,
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn mon_capture_abi_version() -> u32 {

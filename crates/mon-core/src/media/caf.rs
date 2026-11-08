@@ -1,11 +1,24 @@
 /// Exact v1 CAF header for interleaved little-endian Float32 PCM. Header bytes
 /// are shared by both producers and Rust import; existing CAFs are unchanged.
 pub fn header(rate: u32, channels: u32, frames: u64) -> Result<[u8; 68], &'static str> {
+    pcm_header(rate, channels, frames, true)
+}
+
+pub fn voice_header(frames: u64) -> Result<[u8; 68], &'static str> {
+    pcm_header(16000, 1, frames, false)
+}
+
+fn pcm_header(
+    rate: u32,
+    channels: u32,
+    frames: u64,
+    float: bool,
+) -> Result<[u8; 68], &'static str> {
     if !(8000..=384000).contains(&rate) || !(1..=8).contains(&channels) {
         return Err("invalid CAF PCM geometry");
     }
     let length = frames
-        .checked_mul(u64::from(channels) * 4)
+        .checked_mul(u64::from(channels) * if float { 4 } else { 2 })
         .and_then(|n| n.checked_add(4))
         .and_then(|n| i64::try_from(n).ok())
         .ok_or("CAF PCM length exceeds capacity")?;
@@ -13,7 +26,13 @@ pub fn header(rate: u32, channels: u32, frames: u64) -> Result<[u8; 68], &'stati
     bytes.extend(32i64.to_be_bytes());
     bytes.extend(f64::from(rate).to_be_bytes());
     bytes.extend(b"lpcm");
-    for n in [3, channels * 4, 1, channels, 32] {
+    for n in [
+        if float { 3 } else { 2 },
+        channels * if float { 4 } else { 2 },
+        1,
+        channels,
+        if float { 32 } else { 16 },
+    ] {
         bytes.extend(n.to_be_bytes());
     }
     bytes.extend(b"data");

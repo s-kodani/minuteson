@@ -5,3 +5,5 @@ pub mod commit;
 pub mod limits;
 pub mod request;
 pub mod supervisor;
+
+pub mod legacy_pcm;

@@ -121,9 +121,11 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       let streamDescription: AudioStreamBasicDescription = try propertyValue(
         tapID, kAudioTapPropertyFormat)
       let format = try CoreAudioTapSample.format(streamDescription)
-      file = try AVAudioFile(
-        forWriting: outputURL, settings: format.settings,
-        commonFormat: .pcmFormatFloat32, interleaved: format.isInterleaved)
+      if rawSegments == nil {
+        file = try AVAudioFile(
+          forWriting: outputURL, settings: format.settings,
+          commonFormat: .pcmFormatFloat32, interleaved: format.isInterleaved)
+      }
       lock.withLock {
         stats.sampleRate = format.sampleRate
         stats.channels = format.channelCount
@@ -165,7 +167,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       var result = stats
       result.rawSegments = rawSegments?.snapshot()
       if result.captureFailure != nil { result.inputLevel.invalidate() }
-      return result
+      return rawSegments?.applyingSavedAudio(to: result) ?? result
     }
   }
 
@@ -283,11 +285,13 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
           return
         }
         do {
-          guard let file = self.file else { throw ProbeError.capture("tap CAF writer is closed") }
+          guard self.file != nil || self.rawSegments != nil else {
+            throw ProbeError.capture("tap CAF writer is closed")
+          }
           try self.stats.prepareSavedClock(
             queuedBuffer.observation, frames: Int64(queuedBuffer.value.frameLength),
             sourceFrame: queuedBuffer.sourceFrame)
-          try file.write(from: queuedBuffer.value)
+          try self.file?.write(from: queuedBuffer.value)
           self.stats.frames += Int64(queuedBuffer.value.frameLength)
           if let presentation = queuedBuffer.presentation, presentation.isFinite {
             if self.stats.firstPresentationTimeSeconds == nil {

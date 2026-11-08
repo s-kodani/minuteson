@@ -37,6 +37,8 @@ impl Default for RawPrefix {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Receipt {
     schema_version: u32,
+    #[serde(default)]
+    sample_encoding: Option<String>,
     owner_id: String,
     lane: String,
     sequence: u32,
@@ -187,8 +189,7 @@ impl RawPrefix {
             return Err(INVALID);
         }
         let entry: Receipt = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
-        if entry.schema_version != 2
-            || !valid_owner(&entry.owner_id)
+        if !valid_owner(&entry.owner_id)
             || !matches!(entry.lane.as_str(), "microphone" | "system")
             || entry.sequence != self.segments + 1
             || entry.source_frame_start != self.frames
@@ -198,11 +199,13 @@ impl RawPrefix {
             || entry.frames > limits::SAFE_INTEGER - self.frames
             || entry.frames > u64::from(entry.sample_rate) * 17 / 4
             || entry.audio_name != format!("raw-{}-{:08}.caf", entry.lane, entry.sequence)
-            || entry
-                .frames
-                .checked_mul(u64::from(entry.channels) * 4)
-                .and_then(|n| n.checked_add(68))
-                != Some(entry.audio_bytes)
+            || super::legacy_pcm::audio_bytes(
+                entry.schema_version,
+                entry.sample_encoding.as_deref(),
+                entry.sample_rate,
+                entry.channels,
+                entry.frames,
+            ) != Some(entry.audio_bytes)
             || !valid_hash(&entry.audio_sha256)
             || entry.previous_entry_sha256 != self.hash()
             || entry.clock_segments.len() != entry.clock_nanoseconds.len()
@@ -281,5 +284,30 @@ mod tests {
             ..plan.next
         };
         assert!(exhausted.prepare(&entry(&exhausted)).is_err());
+    }
+
+    #[test]
+    fn compact_receipts_bind_pcm16_geometry_without_reinterpreting_legacy_float() {
+        let prefix = RawPrefix::default();
+        let mut value: serde_json::Value = serde_json::from_slice(&entry(&prefix)).unwrap();
+        value["schemaVersion"] = 3.into();
+        value["sampleEncoding"] = "pcm16".into();
+        value["sampleRate"] = 16000.into();
+        value["audioBytes"] = 70.into();
+        assert!(prefix.prepare(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for (key, wrong) in [
+            ("sampleRate", serde_json::json!(48000)),
+            ("channels", serde_json::json!(2)),
+            ("audioBytes", serde_json::json!(72)),
+            ("sampleEncoding", serde_json::json!("float32")),
+            ("schemaVersion", serde_json::json!(2)),
+        ] {
+            let mut bad = value.clone();
+            bad[key] = wrong;
+            assert!(
+                prefix.prepare(&serde_json::to_vec(&bad).unwrap()).is_err(),
+                "{key}"
+            );
+        }
     }
 }
