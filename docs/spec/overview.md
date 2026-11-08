@@ -5,6 +5,7 @@ description: "公開前の機能範囲、対応環境と配布・評価の確認
 tags: ["product", "release"]
 status: "stable"
 sources:
+  - resource: "https://github.com/s-kodani/minuteson/blob/d251874f4b7d4a65238a1bb4248c89525f4f7a01/app/src-tauri/src/startup_window.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/app/src-tauri/tauri.conf.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/macos-distribution.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/windows-store-dpi-process-audit-2026-11-01.md"
@@ -34,6 +35,8 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 - [データ管理](storage.md)：手動バックアップ、追加復元、保存先変更、削除、異常終了からの回復。
 
 表示はモノトーン／パープルとシステム／ライト／ダークを独立して設定します。初期設定はモノトーン・システムです。保存した設定は補助ウィンドウと通知にも反映します。
+
+メインウィンドウは起動時に1280 × 820論理ピクセルを上限とし、OSの枠を含めて画面の作業領域の90%以内に収まるよう縮小して中央に表示します。通常の最小サイズは960 × 640ですが、小さい画面では必要な寸法だけ最小値を下げます。表示倍率と作業領域を取得して毎回プロセス起動時に計算し、常駐からの再表示では手動変更したサイズ・位置を維持します。前回プロセスのサイズ・位置は保存しません。通常版・QA版、macOS・Windowsで同じ方針を使います。
 
 ## 配布と評価の確認状況
 
