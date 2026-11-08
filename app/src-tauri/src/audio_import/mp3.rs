@@ -1,7 +1,7 @@
 //! Bounded MP3 decode; unused ID3 never reaches a metadata/image parser.
 use super::{check_cancelled, AudioInfo};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_MP3};
@@ -244,18 +244,8 @@ pub(super) fn decode(
         .make(&p, &DecoderOptions::default())
         .map_err(|e| e.to_string())?;
     let mut output = output
-        .map(|path| {
-            File::options()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .map_err(|e| e.to_string())
-        })
+        .map(|path| super::VoiceCafWriter::new(path, rate, channels))
         .transpose()?;
-    if let Some(file) = &mut output {
-        file.write_all(&caf_header(rate, channels, 0)?)
-            .map_err(|e| e.to_string())?;
-    }
     let mut raw_frames = 0;
     let mut frames = 0;
     loop {
@@ -281,17 +271,17 @@ pub(super) fn decode(
         if to > from {
             let first = ((from - raw_frames) * u64::from(channels)) as usize;
             let last = ((to - raw_frames) * u64::from(channels)) as usize;
-            let mut pcm = Vec::with_capacity((last - first) * 4);
+            let mut pcm = Vec::with_capacity(last - first);
             for value in &buffer.samples()[first..last] {
                 if !value.is_finite() {
                     return Err("MP3に非有限のPCM値があります".into());
                 }
                 if output.is_some() {
-                    pcm.extend_from_slice(&value.to_le_bytes());
+                    pcm.push(*value);
                 }
             }
             if let Some(file) = &mut output {
-                file.write_all(&pcm).map_err(|e| e.to_string())?;
+                file.push(&pcm)?;
             }
             frames += to - from;
         }
@@ -304,11 +294,8 @@ pub(super) fn decode(
         return Err("MP3の実フレーム数が保存情報と一致しません".into());
     }
     check_cancelled(cancelled)?;
-    if let Some(file) = &mut output {
-        file.rewind().map_err(|e| e.to_string())?;
-        file.write_all(&caf_header(rate, channels, frames)?)
-            .map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+    if let Some(file) = output {
+        file.finish()?;
     }
     let info = AudioInfo {
         schema_version: 1,
@@ -445,18 +432,43 @@ mod tests {
             let proof = Fingerprint::capture(&caf, &crate::test_support::never_cancelled).unwrap();
             let mut audio =
                 VerifiedAudio::open(File::open(&caf).unwrap(), proof.size, &proof.sha256).unwrap();
+            let mut converter =
+                mon_core::media::voice::VoiceConverter::new(rate, channels).unwrap();
+            let mut compact = Vec::new();
+            let mut sink = |pcm: &[i16], _, _| {
+                compact.extend_from_slice(pcm);
+                Ok(())
+            };
+            let mut first = 0;
+            for bytes in expected.chunks(4096 * channels as usize * 4) {
+                let samples: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                let last = first + samples.len() as u64 / u64::from(channels);
+                converter
+                    .push(
+                        &samples,
+                        (first * 1000000000 / u64::from(rate)) as i64,
+                        (last * 1000000000 / u64::from(rate)) as i64,
+                        &mut sink,
+                    )
+                    .unwrap();
+                first = last;
+            }
+            converter.finish(&mut sink).unwrap();
+            assert_eq!(audio.format.frames as usize, compact.len());
+            assert!(audio.format.is_compact_recording_segment());
             let mut offset = 0;
-            while offset < inspected.frames {
-                let n = (inspected.frames - offset).min(4096);
+            while offset < audio.format.frames {
+                let n = (audio.format.frames - offset).min(4096);
                 let samples = audio.read_frames(offset, n).unwrap();
                 for (i, sample) in samples.chunks_exact(4).enumerate() {
-                    let sample = f32::from_le_bytes(sample.try_into().unwrap());
-                    let first = (offset as usize * channels as usize + i) * 4;
-                    let expected =
-                        f32::from_le_bytes(expected[first..first + 4].try_into().unwrap());
+                    let actual = f32::from_le_bytes(sample.try_into().unwrap());
+                    let expected = f32::from(compact[offset as usize + i]) / 32768.0;
                     assert!(
-                        (sample - expected).abs() < 0.001,
-                        "{rate}: {sample} != {expected}"
+                        (actual - expected).abs() < 0.001,
+                        "{rate}: {actual} != {expected}"
                     );
                 }
                 offset += n;

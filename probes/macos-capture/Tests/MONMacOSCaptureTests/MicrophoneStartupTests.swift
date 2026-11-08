@@ -302,12 +302,16 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     try await recorder.start()
     control.settle(recorder)
     try old.emit(host: 1_000_000_000)
+    try raw.drainAcceptedPCM()
+    let firstSaved = recorder.snapshot().frames
+    XCTAssertGreaterThan(firstSaved, 0)
+    XCTAssertLessThanOrEqual(firstSaved, 160)
     catalog.setDefault("second")
     control.advance()
     recorder.maintain()
     XCTAssertEqual(factory.calls, 2)
     XCTAssertEqual(recorder.deviceUID, "second")
-    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().frames, firstSaved)
     XCTAssertFalse(old.isRunning)
     control.settle(recorder)
     time.set(1_030_000_000)
@@ -318,9 +322,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       try next.emit(frames: 441, sampleTime: Int64(index * 441), host: UInt64(host))
     }
     XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
-    XCTAssertGreaterThan(recorder.snapshot().frames, 9_900)
-    let recorded = recorder.snapshot().frames
+    try raw.drainAcceptedPCM()
+    XCTAssertGreaterThan(recorder.snapshot().frames, 3_100)
     recorder.stop()
+    let recorded = recorder.snapshot().frames
+    XCTAssertEqual(recorded, 3360)
     XCTAssertNil(raw.snapshot().failure)
     XCTAssertEqual(raw.snapshot().sealedFrames, recorded)
     let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))

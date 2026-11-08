@@ -32,7 +32,7 @@ final class AudioImportTests: XCTestCase {
     return url
   }
 
-  func testWAVContentDetectionAndAllStereoFramesSurviveCAFConversion() async throws {
+  func testWAVContentDetectionAndCompactMonoCAFPreservesDuration() async throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
     let source = try wav(root)
@@ -53,10 +53,13 @@ final class AudioImportTests: XCTestCase {
       AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 5000))
     try file.read(into: buffer)
     XCTAssertEqual(buffer.frameLength, 5000)
+    XCTAssertEqual(file.fileFormat.sampleRate, 16000)
+    XCTAssertEqual(file.fileFormat.channelCount, 1)
+    XCTAssertEqual(file.fileFormat.commonFormat, .pcmFormatInt16)
+    XCTAssertEqual(try Data(contentsOf: output).count, 68 + 5000 * 2)
     let samples = try XCTUnwrap(buffer.floatChannelData)
     for frame in 0..<5000 {
-      XCTAssertEqual(samples[0][frame * 2], 0.25)
-      XCTAssertEqual(samples[0][frame * 2 + 1], -0.5)
+      XCTAssertEqual(samples[0][frame], -0.125, accuracy: 1.0 / 32768)
     }
   }
 
@@ -149,7 +152,12 @@ final class AudioImportTests: XCTestCase {
       XCTAssertEqual(info.channels, 1)
       XCTAssertTrue((48000...49152).contains(info.frames))
       let pcm = try AVAudioFile(forReading: output)
-      XCTAssertEqual(UInt64(pcm.length), info.frames)
+      XCTAssertEqual(
+        UInt64(pcm.length),
+        (info.frames * 16000 + UInt64(info.sampleRate) - 1) / UInt64(info.sampleRate))
+      XCTAssertEqual(pcm.fileFormat.sampleRate, 16000)
+      XCTAssertEqual(pcm.fileFormat.channelCount, 1)
+      XCTAssertEqual(pcm.fileFormat.commonFormat, .pcmFormatInt16)
       XCTAssertEqual(try Data(contentsOf: input), before)
     }
   }

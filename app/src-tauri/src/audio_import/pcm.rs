@@ -1,7 +1,6 @@
 //! Shared streaming import for PCM WAV and strictly verified FLAC. The
 //! meeting-mix WAV reader intentionally remains restricted to its fixed format.
 use super::*;
-use std::io::BufWriter;
 use std::io::SeekFrom;
 struct Wave {
     rate: u32,
@@ -191,24 +190,8 @@ pub(super) fn decode(
     };
     info.validate()?;
     let mut writer = output
-        .map(|p| {
-            let mut options = File::options();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let f = options.open(p).map_err(|e| e.to_string())?;
-            #[cfg(windows)]
-            crate::windows_files::set_private(p)?;
-            Ok::<_, String>(BufWriter::new(f))
-        })
+        .map(|p| super::VoiceCafWriter::new(p, rate, channels))
         .transpose()?;
-    if let Some(w) = &mut writer {
-        w.write_all(&super::mp3::caf_header(rate, channels, frames)?)
-            .map_err(|e| e.to_string())?;
-    }
     let mut first = 0;
     while first < frames {
         check_cancelled(cancelled)?;
@@ -228,13 +211,16 @@ pub(super) fn decode(
             pcm
         };
         if let Some(w) = &mut writer {
-            w.write_all(&pcm).map_err(|e| e.to_string())?;
+            let samples: Vec<f32> = pcm
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            w.push(&samples)?;
         }
         first += count;
     }
-    if let Some(mut w) = writer {
-        w.flush().map_err(|e| e.to_string())?;
-        w.get_ref().sync_all().map_err(|e| e.to_string())?;
+    if let Some(w) = writer {
+        w.finish()?;
     }
     watch.verify()?;
     proof.verify(cancelled)?;

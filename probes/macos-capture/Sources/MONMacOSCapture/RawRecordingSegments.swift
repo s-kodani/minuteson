@@ -45,7 +45,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     let durationNanoseconds: Int64
   }
   private struct Entry: Encodable {
-    let schemaVersion = 2
+    let schemaVersion = 3
+    let sampleEncoding = "pcm16"
     let ownerId: String
     let lane: String
     let sequence: Int
@@ -109,6 +110,30 @@ final class RawRecordingSegments: @unchecked Sendable {
   private var previousHash: String? { prefix.hash }
   // Only accessed by the serial writer queue, including finish().
   private var active: Active?
+  private var converter: VoicePCM?
+  private var converterEpoch: UInt64?
+  private var sourceEnd: Int64?
+  private var sourceCaptureEnd: Int64?
+  private var continuous: Int32 = -1
+  private var compactStats = TrackStats()
+  private var outputEpoch: UInt64 = 0
+
+  /// Snapshot contains saved 16kHz frames, never native acquisition frames.
+  func applyingSavedAudio(to original: TrackStats) -> TrackStats {
+    lock.withLock {
+      var result = original
+      result.frames = compactStats.frames
+      result.sampleRate = compactStats.sampleRate
+      result.channels = compactStats.channels
+      result.timing = compactStats.timing
+      result.clockSegments = nil
+      result.rawSegments = RawSegmentStatus(
+        ownerId: owner, lane: lane, sealedSegments: sealedCount,
+        sealedFrames: sealedFrames, lastEntrySHA256: previousHash, producerClosed: closed,
+        failure: failure)
+      return result
+    }
+  }
 
   init(
     output: URL, owner: String, lane: String,
@@ -141,7 +166,10 @@ final class RawRecordingSegments: @unchecked Sendable {
       throw error
     }
   }
-  deinit { close(directory) }
+  deinit {
+    if continuous >= 0 { close(continuous) }
+    close(directory)
+  }
 
   func snapshot() -> RawSegmentStatus {
     lock.withLock {
@@ -230,7 +258,8 @@ final class RawRecordingSegments: @unchecked Sendable {
           }
           beforeAppend()
           guard lock.withLock({ failure == nil }) else { return }
-          do { try append(payload) } catch {
+          do { try appendSource(payload) } catch {
+            FileHandle.standardError.write(Data("mon_capture_compact_save: \(error)\n".utf8))
             lock.withLock {
               failure = Self.storageFailure(error, fallback: "raw_segment_write_or_sync_failed")
             }
@@ -266,10 +295,23 @@ final class RawRecordingSegments: @unchecked Sendable {
       }
       if lock.withLock({ closed }) { return }
       do {
+        try converter?.finish { [self] pcm, start, end in
+          try appendCompact(pcm, start: start, end: end)
+        }
+        converter = nil
         if let active {
           let maps = try active.timing.finish(
             originNanoseconds: active.origin, expectedFrames: active.frames)
           try seal(active, maps: maps)
+        }
+        if continuous >= 0 {
+          guard lseek(continuous, 0, SEEK_SET) == 0 else {
+            throw ProbeError.capture("compact CAF finalization seek failed")
+          }
+          try storageIO.write(VoicePCM.header(frames: compactStats.frames), continuous)
+          try storageIO.synchronize(continuous)
+          close(continuous)
+          continuous = -1
         }
         try pointer.replace(try tip(producerClosed: true))
         lock.withLock { closed = true }
@@ -290,28 +332,62 @@ final class RawRecordingSegments: @unchecked Sendable {
     else { throw ProbeError.capture("raw segment PCM format or callback size is invalid") }
   }
 
-  private func append(_ payload: Payload) throws {
-    let rate = Int64(payload.buffer.format.sampleRate)
-    let channels = Int(payload.buffer.format.channelCount)
+  private func appendSource(_ payload: Payload) throws {
+    guard case .timestamp(let start) = payload.observation else {
+      throw ProbeError.capture("missing compact capture clock")
+    }
+    let rate = UInt32(payload.buffer.format.sampleRate)
+    let channels = payload.buffer.format.channelCount
     let frames = Int64(payload.buffer.frameLength)
-    if let active {
-      guard active.rate == rate, active.channels == channels else {
-        // No normalization policy has been verified yet. Preserve existing
-        // raw files rather than pretending a changed format is the old track.
-        throw ProbeError.capture("raw segment source format changed")
+    let end = start + frames * 1_000_000_000 / Int64(rate)
+    let epochChanged = converterEpoch != nil && converterEpoch != payload.sourceEpoch
+    if !epochChanged, converter != nil,
+      converter?.rate != rate || converter?.channels != channels
+        || (payload.sourceFrame != nil && sourceEnd != nil && payload.sourceFrame! < sourceEnd!)
+    {
+      throw ProbeError.capture("source PCM format or counter changed without a retired binding")
+    }
+    let gap: Bool
+    if let previous = sourceEnd, let frame = payload.sourceFrame, !epochChanged {
+      gap = frame != previous
+    } else {
+      gap =
+        sourceCaptureEnd.map { start > $0 + (1_000_000_000 + Int64(rate) - 1) / Int64(rate) }
+        ?? false
+    }
+    if converter != nil
+      && (epochChanged || gap || converter?.rate != rate || converter?.channels != channels)
+    {
+      try converter?.finish { [self] pcm, start, end in
+        try appendCompact(pcm, start: start, end: end)
       }
-      if active.frames >= rate * 4 || active.timing.needsSegmentRollover {
-        let maps = try active.timing.finishBeforeNext(
-          frames: frames, observation: payload.observation, sourceFrame: payload.sourceFrame,
-          sourceEpoch: payload.sourceEpoch, originNanoseconds: active.origin,
-          expectedFrames: active.frames)
-        try seal(active, maps: maps)
-      }
+      converter = nil
+      outputEpoch += 1
+    }
+    if converter == nil { converter = try VoicePCM(rate: rate, channels: channels) }
+    converterEpoch = payload.sourceEpoch
+    sourceEnd = payload.sourceFrame.map { $0 + frames }
+    sourceCaptureEnd = end
+    let samples = try VoicePCM.interleaved(payload.buffer)
+    guard samples.allSatisfy({ abs($0) <= 16 }) else {
+      throw ProbeError.capture("invalid captured PCM amplitude")
+    }
+    try converter?.push(samples, start: start, end: end) { [self] pcm, start, end in
+      try appendCompact(pcm, start: start, end: end)
+    }
+  }
+
+  private func appendCompact(_ pcm: [Int16], start: Int64, end: Int64) throws {
+    guard !pcm.isEmpty else { return }
+    let frames = Int64(pcm.count)
+    if let active, active.frames + frames > 64_000 || active.timing.needsSegmentRollover {
+      let maps = try active.timing.finishBeforeNext(
+        frames: frames, observation: .timestamp(start),
+        sourceFrame: nil, sourceEpoch: outputEpoch, originNanoseconds: active.origin,
+        expectedFrames: active.frames)
+      try seal(active, maps: maps)
     }
     if active == nil {
-      guard case .timestamp(let origin) = payload.observation,
-        lock.withLock({ sealedCount < Self.maximumSegments })
-      else { throw ProbeError.capture("raw segment sequence capacity exceeded") }
       let name = String(format: "raw-%@-%08d.caf", lane, lock.withLock { sealedCount + 1 })
       let descriptor = try create(name)
       var identity = stat()
@@ -319,56 +395,57 @@ final class RawRecordingSegments: @unchecked Sendable {
         guard fstat(descriptor, &identity) == 0 else {
           throw ProbeError.capture("raw segment identity is unavailable")
         }
-        try storageIO.write(Self.header(rate: rate, channels: channels, frames: 0), descriptor)
+        try storageIO.write(VoicePCM.header(frames: 0), descriptor)
         active = try Active(
-          descriptor: descriptor, identity: identity, name: name, rate: rate, channels: channels,
-          origin: origin,
-          timing: CaptureTrackTiming(
-            sampleRate: Double(rate), maximumSegments: Self.maximumClockSegments))
+          descriptor: descriptor, identity: identity, name: name, rate: 16000, channels: 1,
+          origin: start,
+          timing: CaptureTrackTiming(sampleRate: 16000, maximumSegments: Self.maximumClockSegments))
       } catch {
         close(descriptor)
         throw error
       }
     }
-    guard let active, let data = payload.buffer.floatChannelData else {
-      throw ProbeError.capture("raw segment PCM is unavailable")
-    }
+    guard let active else { throw ProbeError.capture("compact raw writer unavailable") }
     var timing = active.timing
     try timing.recordSaved(
-      frames: frames, observation: payload.observation, sourceFrame: payload.sourceFrame,
-      sourceEpoch: payload.sourceEpoch)
-    let interleaved = payload.buffer.format.isInterleaved
-    for start in stride(from: 0, to: Int(frames), by: 4096) {
-      var bytes = Data(capacity: min(4096, Int(frames) - start) * channels * 4)
-      for frame in start..<min(start + 4096, Int(frames)) {
-        for channel in 0..<channels {
-          let value = data[interleaved ? 0 : channel][
-            interleaved ? frame * channels + channel : frame]
-          guard value.isFinite, abs(value) <= 16 else {
-            throw ProbeError.capture("raw segment PCM sample is invalid")
-          }
-          var bits = value.bitPattern.littleEndian
-          withUnsafeBytes(of: &bits) { bytes.append(contentsOf: $0) }
-        }
-      }
-      try storageIO.write(bytes, active.descriptor)
-      active.pcmHash.update(data: bytes)
+      frames: frames, observation: .timestamp(start), sourceFrame: nil,
+      sourceEpoch: outputEpoch, captureEndNanoseconds: end)
+    let bytes = pcm.withUnsafeBytes { Data($0) }
+    if continuous < 0 {
+      continuous = try create(lane == "microphone" ? "microphone.caf" : "system.caf")
+      var header = try VoicePCM.header(frames: 0)
+      header.replaceSubrange(56..<64, with: repeatElement(UInt8(255), count: 8))
+      try storageIO.write(header, continuous)
     }
+    try storageIO.write(bytes, continuous)
+    try storageIO.write(bytes, active.descriptor)
+    active.pcmHash.update(data: bytes)
     active.frames += frames
     active.timing = timing
+    try lock.withLock {
+      compactStats.sampleRate = 16000
+      compactStats.channels = 1
+      if compactStats.timing == nil {
+        compactStats.timing = try CaptureTrackTiming(
+          sampleRate: 16000, maximumSegments: maximumTotalClockSegments)
+      }
+      try compactStats.timing?.recordSaved(
+        frames: frames, observation: .timestamp(start), sourceFrame: nil,
+        sourceEpoch: outputEpoch, captureEndNanoseconds: end)
+      compactStats.frames += frames
+    }
   }
 
   private func seal(_ segment: Active, maps: [CapturedClockSegment]) throws {
     guard sealedClockSegments <= maximumTotalClockSegments - maps.count else {
       throw ProbeError.capture("raw segment total clock capacity exceeded")
     }
-    let header = try Self.header(
-      rate: segment.rate, channels: segment.channels, frames: segment.frames)
+    let header = try VoicePCM.header(frames: segment.frames)
     guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment header seek failed")
     }
     try storageIO.write(header, segment.descriptor)
-    let size = Int64(header.count) + segment.frames * Int64(segment.channels) * 4
+    let size = Int64(header.count) + segment.frames * 2
     try require(segment.descriptor, name: segment.name, identity: segment.identity, size: size)
     try storageIO.synchronize(segment.descriptor)
     guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {

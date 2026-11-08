@@ -103,6 +103,8 @@ struct Tip {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {
     schema_version: u32,
+    #[serde(default)]
+    sample_encoding: Option<String>,
     owner_id: String,
     lane: String,
     pub(crate) sequence: u32,
@@ -365,8 +367,7 @@ impl Entry {
         frames: u64,
         previous_hash: Option<&str>,
     ) -> Result<(), String> {
-        if self.schema_version != 2
-            || self.owner_id != owner
+        if self.owner_id != owner
             || self.lane != lane.name()
             || self.sequence != sequence
             || self.audio_name != lane.name_at(sequence, "caf")
@@ -378,7 +379,13 @@ impl Entry {
             || self.capture_origin_nanoseconds < 0
             || self.previous_entry_sha256.as_deref() != previous_hash
             || !valid_hash(&self.audio_sha256)
-            || self.audio_bytes != 68 + self.frames * u64::from(self.channels) * 4
+            || mon_core::capture::legacy_pcm::audio_bytes(
+                self.schema_version,
+                self.sample_encoding.as_deref(),
+                self.sample_rate,
+                self.channels,
+                self.frames,
+            ) != Some(self.audio_bytes)
             || self.clock_segments.is_empty()
             || self.clock_segments.len() > 1024
             || self.clock_nanoseconds.len() != self.clock_segments.len()
@@ -673,18 +680,26 @@ impl Prefix {
             entry.validate(owner, lane, sequence, frames, previous_hash.as_deref())?;
             // The native writer may seal before four physical seconds when
             // its 128-map entry budget reserves two pending/final boundary
-            // slots. Only that bounded density range is an early-seal reason;
-            // all PCM, measured endpoints, ownership and chain checks remain.
+            // slots. Compact producers may also seal before an indivisible
+            // converter packet (at most MAX_OUTPUT_FRAMES) exceeds four
+            // seconds. Do not accept arbitrary short intermediate segments.
+            let compact_packet_boundary = entry.schema_version == 3
+                && entry.frames
+                    > u64::from(entry.sample_rate) * 4
+                        - mon_core::media::voice::MAX_OUTPUT_FRAMES as u64;
             if sequence < tip.sealed_segments
                 && entry.frames < u64::from(entry.sample_rate) * 4
                 && !(126..=128).contains(&entry.clock_segments.len())
+                && !compact_packet_boundary
             {
                 return Err("原音声の途中のセグメントが確定条件を満たしていません".into());
             }
-            if format.is_some_and(|f| f != (entry.sample_rate, entry.channels)) {
+            if format
+                .is_some_and(|f| f != (entry.sample_rate, entry.channels, entry.schema_version))
+            {
                 return Err("原音声セグメントに未対応の入力形式変更があります".into());
             }
-            format = Some((entry.sample_rate, entry.channels));
+            format = Some((entry.sample_rate, entry.channels, entry.schema_version));
             if previous_end_ns.is_some_and(|end| end > entry.capture_origin_nanoseconds) {
                 return Err("原音声セグメントの取得時刻が重複または逆行しています".into());
             }
@@ -708,6 +723,8 @@ impl Prefix {
                 || pcm.sample_rate != entry.sample_rate
                 || pcm.channels != entry.channels
                 || !pcm.is_raw_recording_segment()
+                || (entry.schema_version == 3 && !pcm.is_compact_recording_segment())
+                || (entry.schema_version == 2 && pcm.is_compact_recording_segment())
             {
                 return Err("原音声セグメントの実音声が確定記録と一致しません".into());
             }
