@@ -35,7 +35,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const completed = useRef<string | null>(null), running = useRef(false);
   const regeneration = useRef<RegenerationRequest | null>(null);
   const sourceAvailable = useRef(audioDeleted === false); sourceAvailable.current = audioDeleted === false;
-  const sourceReason = audioDeleted === true ? "音声は削除済みのため、文字起こしの生成・再生成はできません。" : audioDeleted === null ? "音声の状態を確認しています。" : undefined;
+  const sourceReason = audioDeleted === true ? "音声は削除済みです。" : audioDeleted === null ? "音声の状態を確認しています。" : undefined;
   const confirm = useActionConfirmation(false);
   const alive = useRef(true);
   const refreshRef = useRef(async () => {});
@@ -182,7 +182,6 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     }, true);
   };
   const actions = <>
-      {audioDeleted === true && <span role="status">音声は削除済みです。</span>}
       {!resumeSpeakerHandoff && !hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || !recorded || audioDeleted !== false} onClick={() => void regenerate(true)}>文字起こしを生成</button>}
       {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || !recorded || pending || audioDeleted !== false} onClick={() => void regenerate()}>文字起こしを再生成</button>}
       {flow?.replacementReady && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void onReplaceGenerated(flow)}>生成結果に置き換える</button>}
