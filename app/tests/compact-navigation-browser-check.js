@@ -21,7 +21,8 @@ async page => {
     const job = element.querySelector('[aria-label="ジョブ一覧"]');
     const badge = job.querySelector('.job-nav-count');
     return {
-      rail:rect(element), icons:[...element.querySelectorAll('.nav-item')].map(button => ({ button:rect(button), icon:rect(button.querySelector('svg')) })),
+      rail:rect(element), scrollWidth:element.scrollWidth, clientWidth:element.clientWidth,
+      icons:[...element.querySelectorAll('.nav-item')].map(button => ({ button:rect(button), icon:rect(button.querySelector('svg')) })),
       job:rect(job.querySelector('svg')), badge:badge ? rect(badge) : null,
     };
   });
@@ -33,6 +34,7 @@ async page => {
     for (const count of [1,12,123]) {
       await setCount(count);
       const current = await measure();
+      check(current.scrollWidth <= current.clientWidth, `${width}px/${count} jobs created a horizontal sidebar scrollbar: ${JSON.stringify(current)}`);
       for (let index = 0; index < current.icons.length; index++) {
         const icon = current.icons[index].icon, baseline = before.icons[index].icon;
         check(Math.abs(icon.x-baseline.x) <= 1 && Math.abs(icon.y-baseline.y) <= 1, `${width}px/${count} jobs moved menu icon ${index}`);
@@ -53,6 +55,17 @@ async page => {
     results.push(`${width}px: 0/1/12/123 jobs preserve icon positions${width < 1280 ? ', centering, spacing and overlapping badge bounds' : ' and expanded navigation'}`);
   }
   await page.setViewportSize({ width:1200, height:900 });
+  // Exercise wider platform digit metrics on every engine, not only macOS.
+  const widerDigits = await page.addStyleTag({ content:'.sidebar .job-nav-count { font-family:monospace; font-size:12px; }' });
+  await setCount(0);
+  const beforeWiderDigits = await measure();
+  await setCount(123);
+  const afterWiderDigits = await measure();
+  check(afterWiderDigits.scrollWidth <= afterWiderDigits.clientWidth, 'wider badge digits created a horizontal sidebar scrollbar');
+  check(afterWiderDigits.badge.left >= afterWiderDigits.rail.left && afterWiderDigits.badge.right <= afterWiderDigits.rail.right, 'wider badge digits escaped the sidebar');
+  check(JSON.stringify(afterWiderDigits.icons) === JSON.stringify(beforeWiderDigits.icons), 'wider badge digits moved menu icons');
+  await widerDigits.evaluate(element => element.remove());
+  results.push('wider platform digit metrics keep the badge inside the rail without a horizontal scrollbar or menu movement');
   for (const theme of ['light','dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     for (const count of [1,123]) {

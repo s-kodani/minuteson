@@ -314,8 +314,8 @@ button:disabled { opacity:.5; }
   .sidebar { padding:20px 7px 18px; }
   .brand { padding:0 0 28px; }
   .nav-item { position:relative; justify-content:center; padding:10px 6px; }
-  /* Counts overlay the icon rather than participating in the centered flex row. */
-  .sidebar .job-nav-count { position:absolute; top:calc(50% - 16px); left:calc(50% + 2px); display:flex; align-items:center; justify-content:center; margin:0; min-width:20px; height:20px; padding:0 3px; border:2px solid var(--surface); border-radius:999px; background:var(--primary); color:var(--on-primary); font-size:11px; line-height:16px; font-weight:650; text-align:center; white-space:nowrap; pointer-events:none; }
+  /* Keep the badge's right edge inside the rail even with wider platform digits. */
+  .sidebar .job-nav-count { position:absolute; top:calc(50% - 16px); right:calc(50% - 22px); display:flex; align-items:center; justify-content:center; margin:0; min-width:20px; height:20px; padding:0 3px; border:2px solid var(--surface); border-radius:999px; background:var(--primary); color:var(--on-primary); font-size:11px; line-height:16px; font-weight:650; text-align:center; white-space:nowrap; pointer-events:none; }
   .new-recording-nav { padding:8px; }
   .content { padding:26px; }
 }
