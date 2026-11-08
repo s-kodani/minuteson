@@ -120,7 +120,7 @@ use recording_confirmation_window::{
 };
 use session::{RecordingSnapshot, SessionStore};
 use std::sync::atomic::{AtomicBool, Ordering};
-use storage::{AnalysisView, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
+use storage::{AnalysisPresentation, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
@@ -2890,15 +2890,16 @@ fn rename_meeting(
 async fn get_current_analysis(
     window: WebviewWindow,
     meeting_id: String,
-) -> Result<Option<AnalysisView>, mon_contracts::AppError> {
-    let result: Result<Option<AnalysisView>, String> = async move {
+) -> Result<Option<AnalysisPresentation>, mon_contracts::AppError> {
+    let result: Result<Option<AnalysisPresentation>, String> = async move {
         if window.label() != "main" {
             return Err("Only the main window can read analysis".into());
         }
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
-            app.state::<Storage>().load_current_analysis(&meeting_id)
+            app.state::<Storage>()
+                .load_current_analysis_presentation(&meeting_id)
         })
         .await
         .map_err(|e| e.to_string())?

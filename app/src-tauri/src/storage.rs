@@ -74,6 +74,7 @@ pub(crate) mod model_download_guidance;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub(crate) mod voice;
+pub(crate) use analysis::AnalysisPresentation;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]

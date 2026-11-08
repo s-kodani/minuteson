@@ -13,10 +13,10 @@ export const speakerPalette = [
   ["#065f46","#ecfdf5","#a7f3d0","#022c22"],
 ] as const;
 
-// Colors are presentation only, not a cross-track/cross-analysis identity.
-// Stable IDs keep the tone through renaming, filtering, sorting and restart.
-export function speakerTone(meetingId:string,speakerId:string):number {
+// Presentation only. The native UI projection supplies a persisted speaker
+// lineage as colorKey, so immutable revision UUID changes cannot change hue.
+export function speakerTone(meetingId:string,colorKey:string):number {
   let hash=2166136261;
-  for(const value of [meetingId,"\0",speakerId])for(let index=0;index<value.length;index++)hash=Math.imul(hash^value.charCodeAt(index),16777619)>>>0;
+  for(const value of [meetingId,"\0",colorKey])for(let index=0;index<value.length;index++)hash=Math.imul(hash^value.charCodeAt(index),16777619)>>>0;
   return hash%speakerPalette.length;
 }

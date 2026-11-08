@@ -1,5 +1,32 @@
 use super::*;
 
+fn isolated(test: &str) -> bool {
+    const CHILD: &str = "MON_RETIRED_JOURNAL_FIXTURE";
+    if std::env::var(CHILD).as_deref() == Ok(test) {
+        return true;
+    }
+    // Parallel tests may fork while a fixture's capture lease is held. Even
+    // CLOEXEC copies keep that writer lock alive until exec, so create every
+    // retired-root fixture only after exec in its own single-test process.
+    let name = format!("capture_test::journal::retired_tests::{test}");
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--test-threads=1"])
+        .env(CHILD, test)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "isolated retired-root fixture failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed; 0 failed") && stdout.contains(&name),
+        "the isolated retired-root test did not run: {stdout}"
+    );
+    false
+}
+
 // Simulate a remount without replacing any object. Historical fixture proofs
 // change together; production never rewrites these immutable records.
 fn old_device(root: &Path) {
@@ -75,6 +102,9 @@ fn fixture(removed: bool) -> (tempfile::TempDir, PathBuf, String) {
 
 #[test]
 fn retired_device_change_preserves_old_bytes_and_opens_a_new_owned_generation() {
+    if !isolated("retired_device_change_preserves_old_bytes_and_opens_a_new_owned_generation") {
+        return;
+    }
     let (parent, root, id) = fixture(true);
     let original_db = std::fs::read(root.join("ownership.sqlite3")).unwrap();
     let original_proof = std::fs::read(root.join("root-proof.json")).unwrap();
@@ -116,6 +146,9 @@ fn retired_device_change_preserves_old_bytes_and_opens_a_new_owned_generation() 
 
 #[test]
 fn retired_device_change_never_rotates_pending_audio_or_unknown_files() {
+    if !isolated("retired_device_change_never_rotates_pending_audio_or_unknown_files") {
+        return;
+    }
     for pending in [true, false] {
         let (parent, root, id) = fixture(!pending);
         let keep = if pending {
@@ -132,6 +165,9 @@ fn retired_device_change_never_rotates_pending_audio_or_unknown_files() {
 
 #[test]
 fn retired_device_change_requires_quiet_leases_and_unchanged_object_identities() {
+    if !isolated("retired_device_change_requires_quiet_leases_and_unchanged_object_identities") {
+        return;
+    }
     let (parent, root, id) = fixture(true);
     let lease = File::open(root.join(lease_name(&id))).unwrap();
     lock(&lease).unwrap();
@@ -147,6 +183,9 @@ fn retired_device_change_requires_quiet_leases_and_unchanged_object_identities()
 
 #[test]
 fn retired_device_change_preserves_sqlite_recovery_state_without_opening_it() {
+    if !isolated("retired_device_change_preserves_sqlite_recovery_state_without_opening_it") {
+        return;
+    }
     for wal in [true, false] {
         let (parent, root, _) = fixture(true);
         let database = root.join("ownership.sqlite3");

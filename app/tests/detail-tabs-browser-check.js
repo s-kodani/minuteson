@@ -22,6 +22,17 @@ async (page, capturePath, detailUI) => {
   await holdNavigation();
   await minutes.click();
   check(await checkArrow(minutes) && await checkArrow(settings), "clean tab switch shows a forbidden cursor");
+  check(await body.evaluate(list => !!list.closest("[inert]") && list.querySelector(".utterance-stamp").matches(":disabled")), "navigation did not disable row interactions");
+  const blocked = await body.evaluate(list => {
+    const before = window.monBrowserFixture.calls.length;
+    list.querySelector(".transcript-body-edit").click();
+    list.querySelector(".utterance-stamp").click();
+    list.querySelector(".options-modal-trigger").click();
+    return {before, after:window.monBrowserFixture.calls.length};
+  });
+  check(blocked.before === blocked.after && await body.locator("textarea").count() === 0
+    && await page.getByRole("dialog").count() === 0, "memoized row handlers bypassed the navigation lock");
+  results.push("native and programmatic row activation respect the current navigation lock");
   await settings.evaluate(button => button.click());
   await page.evaluate(() => window.releaseNavigationCheck());
   await page.waitForFunction(() => document.getElementById("meeting-tab-minutes")?.getAttribute("aria-selected") === "true");

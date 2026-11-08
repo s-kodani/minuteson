@@ -22,6 +22,8 @@ export const browserSuites = [
   ["recognition-review", "browser-fixture.js", "recognition-review-browser-check.js"],
   ["transcript-consolidation", "browser-fixture.js", "transcript-groups-browser-check.js"],
   ["speaker-assignment", "browser-fixture.js", "speaker-assignment-browser-check.js"],
+  ["speaker-assignment-scroll", "browser-fixture.js", "speaker-assignment-scroll-browser-check.js"],
+  ["speaker-color-stability", "browser-fixture.js", "speaker-color-stability-browser-check.js"],
   ["speaker-structure", "browser-fixture.js", "speaker-structure-browser-check.js"],
   ["meeting-vocabulary", "browser-fixture.js", "meeting-vocabulary-browser-check.js"],
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
@@ -101,6 +103,7 @@ export const browserSuites = [
   // Estimated-segment review and manual merges were removed from the product.
   ["playback-cancellation", "browser-fixture.js", "playback-cancellation-browser-check.js"],
   ["playback-highlights", "browser-fixture.js", "current-playback-highlights-browser-check.js"],
+  ["transcript-tab-performance", "browser-fixture.js", "transcript-tab-performance-browser-check.js"],
   // Advanced persisted Undo/bulk editor shortcuts were removed. Visible
   // individual editing, IME and keyboard focus are covered by keyboard-primary.
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],

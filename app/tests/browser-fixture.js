@@ -11,6 +11,13 @@ import { dataIdleRead } from "./data-idle-browser-fixture.js";
 import { stampFixtureDraft } from "./transcript-draft-fixture.js";
 
 const meetings = ["会議A", "会議B"].map((title, index) => ({ id: `meeting-${index}`, title, lifecycle: "recorded", sourceType:"recording", createdAt: 1791028800000, updatedAt: 1791028800000, lockVersion: 1 }));
+const analysisColorKeys = value => Object.fromEntries(value.speakers.map(s => [s.id,
+  value.speakerColorKeys?.[s.id] ?? (s.id.startsWith("manual:") ? s.id : `lineage:${s.id}`)]));
+const consolidationReply = (value, draft, changed, speakerIdMap) => {
+  const {speakerColorKeys, ...stored} = value;
+  return {analysis:structuredClone(stored),draft:structuredClone(draft),changed,
+    speakerIdMap:structuredClone(speakerIdMap),speakerColorKeys:analysisColorKeys(value)};
+};
 const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: "speaker-a", label: "話者A", displayName: "田中" }, { id: "speaker-b", label: "話者B", displayName: "佐藤" }], utterances: [
   { id: "speech-a", trackId: "microphone", startUs: 0, endUs: 15000000, recognizedText: "次の点検日は来週です。", effectiveText: "次の点検日は来週です。", attributionState: "assigned", speakerIds: ["speaker-a"] },
   { id: "speech-b", trackId: "system", startUs: 20000000, endUs: 25000000, recognizedText: "はい、確認します。", effectiveText: "はい、確認します。", attributionState: "overlap", speakerIds: ["speaker-a", "speaker-b"] },
@@ -225,6 +232,7 @@ mockIPC(async (command, args) => {
       return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
     case "get_current_analysis": {
       const result = args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
+      if(result)result.speakerColorKeys=analysisColorKeys(result);
       if (fixture.holdAnalysisRead) await new Promise(resolve => { fixture.releaseAnalysisRead = resolve; });
       return result;
     }
@@ -338,24 +346,26 @@ mockIPC(async (command, args) => {
       const receipt=fixture.consolidationReceipts?.[request.operationId];
       if(receipt){
         if(JSON.stringify(receipt.request)!==JSON.stringify(request)||fixture.currentId!==receipt.analysis.id||draft)throw Error("統合の確認対象が変更されています");
-        return {analysis:structuredClone(receipt.analysis),draft:null,changed:true};
+        return consolidationReply(receipt.analysis,null,true,receipt.speakerIdMap);
       }
       if(fixture.failConsolidation)throw Error("合成の発言統合失敗");
       if(request.meetingId!==base.meetingId||request.analysisId!==base.id||request.expectedContentHash!==base.contentHash||JSON.stringify(request.expectedDraft)!==JSON.stringify(draft?{id:draft.id,lockVersion:draft.lockVersion}:null))throw Error("統合前の内容が変更されています");
       const view=projectTranscript(structuredClone(base),draft?.payload??null),groups=groupTranscriptRows(view.utterances,view.utterances);
-      if(!groups.some(g=>g.length>1))return {analysis:structuredClone(base),draft:structuredClone(draft),changed:false};
+      if(!groups.some(g=>g.length>1))return consolidationReply(base,draft,false,Object.fromEntries(base.speakers.map(s=>[s.id,s.id])));
       const hidden=new Set(draft?.payload.speaker_merges?.map(m=>m.source_id)??[]);
       const active=view.speakers.filter(s=>!hidden.has(s.id));
       const before=structuredClone(base),speakerIds=new Map(active.map(s=>[s.id,crypto.randomUUID()]));
+      const sourceColorKeys=analysisColorKeys(view);
       const fragmentSeparator = (previous, next) => /[\p{Script=Latin}\p{N}]$/u.test(previous) && /^[\p{Script=Latin}\p{N}]/u.test(next) ? " " : "";
       const text=(group,key)=>group.reduce((text,row)=>text+fragmentSeparator(text,row[key])+row[key],"");
-      const next={...view,id:crypto.randomUUID(),contentHash:'f'.repeat(64),speakers:active.map(s=>({...s,id:speakerIds.get(s.id)})),utterances:groups.map(g=>({...g[0],id:crypto.randomUUID(),sourceUtteranceId:undefined,endUs:g.at(-1).endUs,recognizedText:text(g,'recognizedText'),effectiveText:text(g,'effectiveText'),speakerIds:g[0].speakerIds.map(id=>speakerIds.get(id))}))};
+      const next={...view,id:crypto.randomUUID(),contentHash:'f'.repeat(64),speakerColorKeys:Object.fromEntries(active.map(s=>[speakerIds.get(s.id),sourceColorKeys[s.id]])),speakers:active.map(s=>({...s,id:speakerIds.get(s.id)})),utterances:groups.map(g=>({...g[0],id:crypto.randomUUID(),sourceUtteranceId:undefined,endUs:g.at(-1).endUs,recognizedText:text(g,'recognizedText'),effectiveText:text(g,'effectiveText'),speakerIds:g[0].speakerIds.map(id=>speakerIds.get(id))}))};
       (fixture.consolidationHistory??=[]).push(before);
       if(draft)fixture.archivedDrafts[before.id]=structuredClone(draft);
       Object.assign(analysis,next);fixture.currentId=next.id;fixture.previousId=before.id;fixture.draft=null;meetings[0].lockVersion++;
-      (fixture.consolidationReceipts??={})[request.operationId]={request:structuredClone(request),analysis:structuredClone(next)};
+      const speakerIdMap=Object.fromEntries(speakerIds);
+      (fixture.consolidationReceipts??={})[request.operationId]={request:structuredClone(request),analysis:structuredClone(next),speakerIdMap};
       if(fixture.loseConsolidationReply){fixture.loseConsolidationReply=false;throw Error("合成の発言統合応答喪失");}
-      return {analysis:structuredClone(next),draft:null,changed:true};
+      return consolidationReply(next,null,true,speakerIdMap);
     }
     case "prepare_meeting_playback": {
       const entry=preparationEntry(args);

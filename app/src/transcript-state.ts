@@ -15,6 +15,7 @@ export interface Utterance {
 }
 export interface RecognitionReviewRange { trackId: string; startUs: number; endUs: number; reason: "repetition_after_recovery" }
 export interface Analysis {
+  speakerColorKeys?: Record<string, string>;
   reviewRanges?: RecognitionReviewRange[];
   id: string; meetingId: string; contentHash: string;
   speakers: Speaker[]; utterances: Utterance[];

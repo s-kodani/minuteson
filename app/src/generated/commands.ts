@@ -1743,8 +1743,8 @@ export const commandContracts = {
       }
     ],
     "response": {
-      "type": "Result<Option<AnalysisView>,mon_contracts::AppError>",
-      "ok": "Option<AnalysisView>",
+      "type": "Result<Option<AnalysisPresentation>,mon_contracts::AppError>",
+      "ok": "Option<AnalysisPresentation>",
       "error": "mon_contracts::AppError"
     }
   },
