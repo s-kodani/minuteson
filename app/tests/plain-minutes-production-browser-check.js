@@ -36,7 +36,7 @@ async (page,capturePath) => {
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 保存失敗時の入力\n");await page.evaluate(()=>window.__mon.plainMode="failure");
   await meetings().click();await dialog().getByRole("button",{name:"保存して続ける",exact:true}).click();await dialog().getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await dismiss();
   check(await input().inputValue()==="# 保存失敗時の入力\n","failed navigation save lost input");
-  await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
+  await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:/^保存済み$/}).waitFor();
   check(await page.evaluate(()=>{const c=window.__mon.plainCalls.filter(c=>c.cmd==="save_minutes_markdown");return JSON.stringify(c[1])===JSON.stringify(c[2]);}),"save retry changed operation/base/body");
   results.push("navigation save failure blocks departure; explicit retry preserves the identical operation and text");
   check(await panel().getByRole("button",{name:"保存",exact:true}).evaluate(button=>{
@@ -45,19 +45,19 @@ async (page,capturePath) => {
   }),"retained notifications cover the next explicit save");
   await input().fill("# 応答喪失の保存\n");await page.evaluate(()=>window.__mon.plainMode="lost");await panel().getByRole("button",{name:"保存",exact:true}).click();await page.getByRole("alert").filter({hasText:"保存できませんでした"}).first().waitFor();
   await input().fill("# 応答待ち中の追記\n");await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"未保存"}).waitFor();
-  check(await input().inputValue()==="# 応答待ち中の追記\n","lost success displaced later human input");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
+  check(await input().inputValue()==="# 応答待ち中の追記\n","lost success displaced later human input");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:/^保存済み$/}).waitFor();
   results.push("lost success recovery acknowledges original save while newer human input remains unsaved until explicit save");
   await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();
   check((await dialog().innerText()).includes("旧版は保存しません"),"replacement consequences missing");await dialog().getByRole("button",{name:"確認をキャンセル",exact:true}).click();check(await count("start_markdown_minutes_generation")===0,"cancelled regeneration ran");
   await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();
   await dialog().waitFor({state:"hidden"});
-  await page.evaluate(()=>window.__mon.completePlain());await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
+  await page.evaluate(()=>window.__mon.completePlain());await panel().getByRole("status").filter({hasText:/^保存済み$/}).waitFor();
   await panel().getByRole("button",{name:"議事録のプレビューを表示",exact:true}).click();await panel().getByRole("heading",{name:"生成された議事録",exact:true}).waitFor();
   check(await count("start_markdown_minutes_generation")===1,"regeneration duplicated admission");
   check(await page.evaluate(()=>{const call=window.__mon.plainCalls.find(c=>c.cmd==="start_markdown_minutes_generation");return call.args.expected.lockVersion===5&&call.args.request.input.expectedAnalysisId==="analysis";}),"generation did not freeze human target and current transcription");
   results.push("regeneration explicitly confirms replacement, enqueues Markdown worker once and previews result without candidate adoption");
   await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().waitFor({state:"hidden"});
-  await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 生成中の人間の保存\n");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
+  await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 生成中の人間の保存\n");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:/^保存済み$/}).waitFor();
   await page.evaluate(()=>window.__mon.completePlain());
   check(await input().inputValue()==="# 生成中の人間の保存\n"&&await page.evaluate(()=>window.__mon.jobs.at(-1).state==="failed"),"late generation displaced human save");
   results.push("late generation keeps human saved body instead of overwriting it");
