@@ -41,6 +41,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_capture_test_recovery") return {schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null};
         if (cmd === "get_recording_confirmation") return {revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null};
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];
+        if (cmd === "get_meeting_deletion_availability") return args.meetingIds.map(meetingId => ({meetingId,available:true,audioDeleted:false,blockers:[]}));
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];

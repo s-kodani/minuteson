@@ -99,6 +99,7 @@ export const browserSuites = [
   ["transcript-width-persistence", "browser-fixture.js", "transcript-width-persistence-browser-check.js"],
   ["fixed-player", "browser-fixture.js", "fixed-player-browser-check.js"],
   ["meeting-audio", "browser-fixture.js", "meeting-audio-browser-check.js"],
+  ["deleted-audio-view", "browser-fixture.js", "deleted-audio-view-browser-check.js"],
   ["meeting-missing", "browser-fixture.js", "meeting-missing-browser-check.js"],
   ["playback-speakers", "browser-fixture.js", "playback-speaker-browser-check.js"],
   // Estimated-segment review and manual merges were removed from the product.

@@ -20,8 +20,8 @@ type MeetingRead = <T>(step: "get_meeting" | "list_meetings", work: () => Promis
 /** Meeting actions contain no model settings, candidate review or adoption.
  * Native recording/import completion starts the global-settings flow.
  */
-export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, visible, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost }: {
-  meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; recordingActive: boolean; locked: boolean; visible: boolean;
+export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, audioDeleted, recordingActive, locked, visible, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost }: {
+  meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; audioDeleted: boolean | null; recordingActive: boolean; locked: boolean; visible: boolean;
   onHeadChanged: (read: MeetingRead) => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onReplaceGenerated: (flow: AnalysisFlow) => Promise<void>;
   onGenerationStarted?: () => void;
@@ -34,6 +34,8 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const [numSpeakers, setNumSpeakers] = useState<number|null>(null);
   const completed = useRef<string | null>(null), running = useRef(false);
   const regeneration = useRef<RegenerationRequest | null>(null);
+  const sourceAvailable = useRef(audioDeleted === false); sourceAvailable.current = audioDeleted === false;
+  const sourceReason = audioDeleted === true ? "音声は削除済みのため、文字起こしの生成・再生成はできません。" : audioDeleted === null ? "音声の状態を確認しています。" : undefined;
   const confirm = useActionConfirmation(false);
   const alive = useRef(true);
   const refreshRef = useRef(async () => {});
@@ -114,6 +116,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const pending = !!flow && !flow.replacementReady && ["pending", "transcription", "diarization"].includes(flow.stage);
   const resumeSpeakerHandoff = flow?.stage === "attention" && flow.transcriptionJob?.state === "succeeded" && !flow.diarizationJob;
   const submitRegeneration = async (request: RegenerationRequest) => {
+    if (!sourceAvailable.current) return;
     transcriptionAdmissions.begin(meetingId,meetingTitle,request.operationId);
     onGenerationStarted?.();
     try { await invoke("regenerate_transcription", { request }); regeneration.current = null; }
@@ -133,6 +136,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     finally {transcriptionAdmissions.end(meetingId,request.operationId);}
   };
   const regenerate = (initial = false) => run(async () => {
+    if (!sourceAvailable.current) return;
     // A lost acknowledgement retains the original intent and operation ID.
     // Read back the accepted flow before considering any new generation.
     if (regeneration.current) {
@@ -146,7 +150,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     const outcome = await confirm({ title: initial ? "文字起こしを生成" : "文字起こしを再生成", target: `会議「${meetingTitle}」`,
       message: initial ? "全体設定のモデルで文字起こしと話者分離を生成します。" : "全体設定のモデルで文字起こしと話者分離をやり直します。成功すると現在の本文・話者の修正を置き換えます。処理中に編集した場合は、置き換える前に確認します。失敗した場合は現在の内容を保持します。議事録は変更しません。",
       speakerCount: numSpeakers, onSpeakerCountChange: setNumSpeakers,
-      confirmLabel: initial ? "文字起こしを生成" : "文字起こしを再生成", validate: () => alive.current,
+      confirmLabel: initial ? "文字起こしを生成" : "文字起こしを再生成", validate: () => alive.current && sourceAvailable.current,
       action: async (chosenSpeakers = null) => {
         const request = { meetingId, operationId: crypto.randomUUID(), expected, numSpeakers: chosenSpeakers };
         regeneration.current = request;
@@ -157,7 +161,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     if (outcome === "completed" && regeneration.current) await submitRegeneration(regeneration.current);
   });
   const jobAction = (command: string) => {
-    if (!active) return;
+    if (!active || command === "resume_analysis_job" && !sourceAvailable.current) return;
     void run(async () => { await invoke(command, { jobId: active.id }); }, command !== "resume_analysis_job");
   };
   const cancelJob = () => {
@@ -178,13 +182,14 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     }, true);
   };
   const actions = <>
-      {!resumeSpeakerHandoff && !hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void regenerate(true)}>文字起こしを生成</button>}
-      {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" disabled={locked || busy || recordingActive || !recorded || pending} onClick={() => void regenerate()}>文字起こしを再生成</button>}
+      {audioDeleted === true && <span role="status">音声は削除済みです。</span>}
+      {!resumeSpeakerHandoff && !hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || !recorded || audioDeleted !== false} onClick={() => void regenerate(true)}>文字起こしを生成</button>}
+      {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || !recorded || pending || audioDeleted !== false} onClick={() => void regenerate()}>文字起こしを再生成</button>}
       {flow?.replacementReady && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void onReplaceGenerated(flow)}>生成結果に置き換える</button>}
-      {resumeSpeakerHandoff && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(() => invoke("continue_analysis_flow", { meetingId, expectedLockVersion: flow!.lockVersion }))}>話者分離を再開</button>}
+      {resumeSpeakerHandoff && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || audioDeleted !== false} onClick={() => void run(async () => { if (sourceAvailable.current) await invoke("continue_analysis_flow", { meetingId, expectedLockVersion: flow!.lockVersion }); })}>話者分離を再開</button>}
       {pending && active && ["queued", "running", "pausing", "paused", "interrupted"].includes(active.state) && <div className="analysis-actions">
         {["queued", "running"].includes(active.state) && <IconButton label="生成を一時停止" icon="pause" disabled={locked || busy} onClick={() => jobAction("pause_analysis_job")} />}
-        {["paused", "interrupted"].includes(active.state) && <button type="button" disabled={locked || busy || recordingActive} onClick={() => jobAction("resume_analysis_job")}>生成を再開</button>}
+        {["paused", "interrupted"].includes(active.state) && <button type="button" title={sourceReason} disabled={locked || busy || recordingActive || audioDeleted !== false} onClick={() => jobAction("resume_analysis_job")}>生成を再開</button>}
         <IconButton label="生成を取り消す" icon="close" disabled={locked || busy} onClick={cancelJob} />
       </div>}
   </>;
