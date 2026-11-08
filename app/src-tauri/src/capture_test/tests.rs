@@ -97,6 +97,31 @@ fn production_owned_directory_passes_only_its_explicit_lease_to_the_helper_comma
 #[test]
 #[cfg(target_os = "macos")]
 fn unrelated_fork_before_exec_keeps_cleanup_fenced_until_its_cloexec_copy_closes() {
+    const CHILD: &str = "MON_CAPTURE_TEST_UNRELATED_FORK_FIXTURE";
+    const TEST: &str = "capture_test::tests::unrelated_fork_before_exec_keeps_cleanup_fenced_until_its_cloexec_copy_closes";
+    if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // A paused pre-exec child retains every live writer description in
+        // this process, including unrelated parallel tests' CLOEXEC leases.
+        // Fork only after exec in a single-test process so the deliberate
+        // pause cannot make their nonblocking quiet/collection checks fail.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated unrelated-fork fixture failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed") && stdout.contains(TEST),
+            "the isolated unrelated-fork test did not run: {stdout}"
+        );
+        return;
+    }
+
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::{net::UnixStream, process::CommandExt};
