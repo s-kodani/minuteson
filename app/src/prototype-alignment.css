@@ -313,7 +313,9 @@ button:disabled { opacity:.5; }
 @media(max-width:1279px) {
   .sidebar { padding:20px 7px 18px; }
   .brand { padding:0 0 28px; }
-  .nav-item { justify-content:center; padding:10px 6px; }
+  .nav-item { position:relative; justify-content:center; padding:10px 6px; }
+  /* Counts overlay the icon rather than participating in the centered flex row. */
+  .sidebar .job-nav-count { position:absolute; top:calc(50% - 16px); left:calc(50% + 2px); display:flex; align-items:center; justify-content:center; margin:0; min-width:20px; height:20px; padding:0 3px; border:2px solid var(--surface); border-radius:999px; background:var(--primary); color:var(--on-primary); font-size:11px; line-height:16px; font-weight:650; text-align:center; white-space:nowrap; pointer-events:none; }
   .new-recording-nav { padding:8px; }
   .content { padding:26px; }
 }
@@ -405,12 +407,13 @@ button:disabled { opacity:.5; }
 .audio-controls label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
 .audio-controls select { box-sizing:border-box; height:var(--action-height,40px); min-height:var(--action-height,40px); padding:5px 8px; font:inherit; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 /* WebKit's native select ignores padding/min-height. Retain the native select
-   semantics while drawing the field and its theme-aware chevron ourselves. */
+   semantics while drawing the field and its theme-aware chevron ourselves.
+   One triangle avoids a seam between independently rasterized halves. */
 :root select:where(:not([multiple])) {
   -webkit-appearance:none; appearance:none; padding-right:32px;
-  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
-  background-position:right 16px center,right 11px center;
-  background-size:5px 5px; background-repeat:no-repeat;
+  background-image:conic-gradient(from 315deg at 50% 100%,var(--muted) 90deg,transparent 0);
+  background-position:right 11px center;
+  background-size:10px 5px; background-repeat:no-repeat;
 }
 @media(forced-colors:active) {
   :root select:where(:not([multiple])) { -webkit-appearance:auto; appearance:auto; background-image:none; }

@@ -240,9 +240,18 @@ impl Intent {
     }
     pub(super) fn validate(&self, db: &Connection) -> Result<(), String> {
         #[cfg(not(test))]
+        self.require_directory_scope()?;
+        self.validate_observation_format(db)
+    }
+    fn require_directory_scope(&self) -> Result<(), String> {
         if !self.file_header.directory_scope() {
             return Err("会議の削除記録は現行のフォルダー確認形式が必要です".into());
         }
+        Ok(())
+    }
+    // Audio-only snapshots share canonical observations, not whole-meeting
+    // deletion admission. Keep this check independent of that scope guard.
+    fn validate_observation_format(&self, db: &Connection) -> Result<(), String> {
         self.scope.validate_format(db)?;
         self.file_header.root.validate(true)?;
         self.file_header.database.validate(false)?;
@@ -341,7 +350,7 @@ fn validate_observations_inner(
         .map(PathRow::from_entry)
         .collect::<Result<Vec<_>, _>>()?;
     let intent = Intent::from_parts(scope, manifest, &rows)?;
-    intent.validate(db)?;
+    intent.validate_observation_format(db)?;
     if intent.manifest_with_long_audio(&rows, long_audio)? != *manifest {
         return Err("保存するファイル観測が正規形式と一致しません".into());
     }
@@ -874,4 +883,36 @@ pub(super) fn prepare_observed(
     event: &impl Fn(&str),
 ) -> Result<Prepared, String> {
     prepare_inner(storage, operation, confirmed, check, event)
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn audio_observations_validate_without_admitting_whole_meeting_deletion() {
+        let fixture = super::super::audio::tests::Fixture::new();
+        let census = Census::capture(&fixture.storage, &fixture.meeting, &|| false).unwrap();
+        let manifest = census.manifest();
+        let scope = census.scope();
+        let rows = manifest
+            .entries
+            .iter()
+            .map(PathRow::from_entry)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let intent = Intent::from_parts(scope, manifest, &rows).unwrap();
+        let db = fixture.storage.connection.lock().unwrap();
+        // Exercise the production guard explicitly: legacy meeting fixtures
+        // intentionally bypass it under cfg(test), which hid this regression.
+        assert_eq!(
+            intent.require_directory_scope().unwrap_err(),
+            "会議の削除記録は現行のフォルダー確認形式が必要です"
+        );
+        validate_observations(&db, scope, manifest).unwrap();
+        let mut changed = manifest.clone();
+        changed.database_scope_hash = "0".repeat(64);
+        assert!(validate_observations(&db, scope, &changed).is_err());
+        assert!(fixture.path.is_file());
+    }
 }

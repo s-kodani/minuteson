@@ -9,8 +9,8 @@
 /* Keep the chevron visible even when a field background is customized. */
 .recording-workspace .capture-input-selection select,.recording-workspace .active-microphone-selection select,.recording-workspace .speaker-count-fields select{
   -webkit-appearance:none;appearance:none;cursor:pointer;padding-right:48px;background-color:var(--raised);
-  background-image:linear-gradient(45deg,transparent 50%,var(--text) 50%),linear-gradient(135deg,var(--text) 50%,transparent 50%),linear-gradient(var(--input-border),var(--input-border));
-  background-position:right 18px center,right 12px center,right 38px center;background-size:6px 6px,6px 6px,1px 22px;background-repeat:no-repeat;
+  background-image:conic-gradient(from 315deg at 50% 100%,var(--text) 90deg,transparent 0),linear-gradient(var(--input-border),var(--input-border));
+  background-position:right 12px center,right 38px center;background-size:12px 6px,1px 22px;background-repeat:no-repeat;
 }
 .recording-workspace select:hover:not(:disabled){border-color:var(--muted);}
 .recording-workspace select:focus-visible{outline:2px solid var(--focus);outline-offset:2px;}

@@ -5,6 +5,7 @@ export const browserSuites = [
   ["prototype-markdown", null, "prototype-markdown-browser-check.js"],
   ["scrollbars", "scrollbars-browser-fixture.tsx", "scrollbars-browser-check.js"],
   ["compact-progress", "browser-fixture.js", "compact-progress-browser-check.js"],
+  ["compact-navigation", "browser-fixture.js", "compact-navigation-browser-check.js"],
   ["operation-progress", null, "operation-progress-browser-check.js"],
   ["canonical-playback", "canonical-playback-browser-fixture.tsx", "canonical-playback-browser-check.js"],
   ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
