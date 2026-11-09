@@ -13,7 +13,7 @@
 .transcript-primary-heading > h2 { flex:none; margin:0; }
 .transcript-primary-actions { min-width:0; margin-inline-start:auto; justify-content:flex-end; }
 .transcript-primary-actions > .options-modal { display:flex; align-items:center; }
-.transcript-copy-host,.transcript-generation-host { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.transcript-editor-actions,.transcript-generation-host { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .transcript-generation-host { justify-content:flex-end; }
 .transcript-generation-host > .analysis-actions { margin:0; }
 .transcript-copy-status { font-size:12px; overflow-wrap:anywhere; }

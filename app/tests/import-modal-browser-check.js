@@ -60,6 +60,24 @@ async (page) => {
   await boot(); await open();
   check(await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "ready import stayed on container or focused a hidden sibling's cancellation");
   results.push("busy initial import exposes only its visible cancellation after readiness, not retained hidden sibling controls");
+  for (const [width, height] of [[1200, 900], [960, 640]]) {
+    await page.setViewportSize({ width, height });
+    for (const theme of ["light", "dark"]) {
+      const layout = await modal().evaluate((element, theme) => {
+        document.documentElement.dataset.theme = theme;
+        const heading = element.querySelector("#import-title");
+        const title = heading.getBoundingClientRect();
+        const info = heading.parentElement.querySelector(".info-trigger").getBoundingClientRect();
+        const close = element.querySelector(".common-modal-dismiss-row > button").getBoundingClientRect();
+        const centerY = rect => rect.top + rect.height / 2;
+        return { gap: info.left - title.right, centerDifference: centerY(info) - centerY(title), closeGap: close.left - info.right };
+      }, theme);
+      check(Math.abs(layout.gap - 8) < 1 && Math.abs(layout.centerDifference) < 1 && layout.closeGap > 0, `import heading is misaligned at ${width}×${height} in ${theme}: ${JSON.stringify(layout)}`);
+    }
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  await page.setViewportSize({ width: 1200, height: 900 });
+  results.push("import title and info button share the standard gap and clear the close button in both themes and window sizes");
   for (const label of ["音声の取り込み", "会議全体の話者数", "取り込みの用語"]) {
     const before = await page.evaluate(() => JSON.stringify(window.monImportFixture.import));
     const icon = modal().getByRole("button", { name: `${label}の説明を開く`, exact: true });
