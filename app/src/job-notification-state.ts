@@ -113,7 +113,7 @@ export class JobNotificationTracker {
     const issueGroups = new Set(issues.map(jobGroup));
     return { jobs, events, issues, pending: [...this.pending.values()], healthyGroups: [...latest.keys()].filter(group => !issueGroups.has(group)) };
   }
-  confirmOutput(job: NotificationJob, publication: VerifiedJobPublication) {
+  confirmOutput(job: NotificationJob, publication: VerifiedJobPublication, warnings: string[] = []) {
     const pending = this.pending.get(job.id), current = this.seen.get(job.id);
     if (!pending || !current || transition(current) !== transition(job) || identity(current) !== identity(job)) return null;
     if(publication==="completion") {
@@ -129,6 +129,9 @@ export class JobNotificationTracker {
     this.pending.delete(job.id);
     if(publication==="superseded")return null; // Later human edits are current.
     if(publication==="markdown") {
+      if (warnings.length) {
+        return { ...notice(job, "が完了しました", "warning"), important: true, message: `「${job.meetingTitle}」の議事録を保存しました。${warnings.join("。")}` };
+      }
       return { ...notice(job, "が完了しました", "success"), message: `「${job.meetingTitle}」の議事録を保存しました` };
     }
     return notice(job, publication === "candidate" ? "の処理が完了しました" : "の結果を保存しました", "success");

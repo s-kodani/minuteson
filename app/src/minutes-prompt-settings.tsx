@@ -66,7 +66,7 @@ export function MinutesPromptSettings({ visible, locked }: { visible: boolean; l
   const disabled = locked || loading || confirm.pending || !state.payload;
   const invalid = state.payload ? promptValidation(state.payload) : "";
   return <section hidden={!visible} className="status-card minutes-prompt-settings" aria-label="議事録生成プロンプト">
-    <div className="heading-with-info"><h2>議事録生成プロンプト</h2><InfoPopover label="議事録生成プロンプト">すべての会議・モデルで共通の設定です。編集内容は自動保存され、次の新規生成から使われます。</InfoPopover></div>
+    <div className="heading-with-info"><h2>議事録生成プロンプト</h2><InfoPopover label="議事録生成プロンプト">すべての会議・モデルで共通の設定です。編集内容は自動保存され、次の新規生成から使われます。音声の根拠にはアプリ共通の引用IDを使い、保存時に音声リンクへ変換します。</InfoPopover></div>
     {([ ["extractPrompt", "作成用プロンプト", "文字起こしから議事録を作成するときに使います。"], ["mergePrompt", "統合用プロンプト", "長い会議を分割して作成した下書きを、一つの議事録にまとめるときに使います。"] ] as const).map(([field, label, help]) => <div key={field}>
       <div className="heading-with-info"><label htmlFor={`${id}-${field}`} className="prompt-label">{label}</label><InfoPopover label={label}>{help}</InfoPopover></div>
       <div className="prompt-label"><textarea id={`${id}-${field}`} aria-label={label} value={state.payload?.[field] ?? ""} disabled={disabled} rows={10}

@@ -107,6 +107,20 @@ test("saved minutes have a success notice without a format warning", () => {
   assert.throws(() => verifiedJobOutput(done, { ...proof, job: { ...done, meetingId: "foreign" } }));
 });
 
+test("saved minutes with citation issues show one warning after publication is verified", () => {
+  const tracker = new JobNotificationTracker(50);
+  tracker.ingest([job({ kind: "minutes_generation" })]);
+  const done = job({ kind: "minutes_generation", state: "succeeded", completedUnits: 2, updatedAt: 102 });
+  tracker.ingest([done]);
+  const proof = { job: done, contentHash: "c".repeat(64), publicationState: "markdown", warnings: ["一部の音声リンクは要確認です"] };
+  const publication = verifiedJobOutput(done, proof);
+  const event = tracker.confirmOutput(done, publication, proof.warnings)!;
+  assert.equal(event.level, "warning");
+  assert.equal(event.important, true);
+  assert.equal(event.message, "「会議A」の議事録を保存しました。一部の音声リンクは要確認です");
+  assert.equal(tracker.confirmOutput(done, publication, proof.warnings), null);
+});
+
 test("retained transcription quality failure explains why no result was adopted", () => {
   assert.match(jobFailureDetail("transcription_quality_failed"), /反復が残ったため停止/);
   assert.match(jobFailureDetail("transcription_quality_failed"), /採用していません/);

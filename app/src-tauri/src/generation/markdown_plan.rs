@@ -3,6 +3,7 @@ use super::markdown::{self, PromptVersion};
 use crate::storage::MinutesInput;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{collections::BTreeSet, ops::Range};
 
 pub(super) const MAX_UNITS: usize = 4096;
 pub(super) const MAX_BATCHES: usize = 4096;
@@ -49,6 +50,20 @@ fn interval(start: i64, end: i64, version: PromptVersion) -> Result<(String, Str
         unreachable!("current prompts always use compact intervals")
     }
 }
+
+pub(super) fn citation_link(input: &MinutesInput, id: usize) -> Result<String, String> {
+    let utterance = id
+        .checked_sub(1)
+        .and_then(|index| input.analysis.utterances.get(index))
+        .filter(|u| !u.effective_text.trim().is_empty())
+        .ok_or("引用IDに対応する発言がありません")?;
+    let (start, end) = interval(
+        utterance.start_us,
+        utterance.end_us,
+        PromptVersion::CitationIdsV6,
+    )?;
+    Ok(format!("[{start}–{end}](audio:{start}-{end})"))
+}
 // Validate against the fixed prompt revision, never against generated drafts.
 pub(super) fn audio_links_with_version(
     input: &MinutesInput,
@@ -81,7 +96,9 @@ pub(super) fn extract_prompt_with_version(
         let names:Vec<_>=utterance.speaker_ids.iter().map(|id|input.analysis.speakers.iter().find(|s|&s.id==id).map(|s|s.display_name.as_deref().unwrap_or(&s.label)).unwrap_or("話者不明")).collect();
         let (start,end)=interval(utterance.start_us,utterance.end_us,version)?;
         let mut value=json!({"start":start,"end":end,"speakers":names,"text":text,"partial":s.first_byte!=0||s.end_byte!=utterance.effective_text.len()});
-        {
+        if version.uses_citations() {
+            value["citationId"] = json!(format!("A{}", s.utterance_index + 1));
+        } else {
             if utterance.end_us <= utterance.start_us {
                 return Err("議事録入力の再生区間が不正です".into());
             }
@@ -163,10 +180,22 @@ pub(super) fn validate_coverage(input: &MinutesInput, plan: &Plan) -> Result<(),
 // the suffix too; this function never summarizes or discards source bytes.
 fn prefix(
     text: &str,
+    fits_prefix: impl FnMut(&str) -> Result<bool, String>,
+) -> Result<usize, String> {
+    prefix_with_boundaries(text, |_| true, fits_prefix)
+}
+
+fn prefix_with_boundaries(
+    text: &str,
+    allowed: impl Fn(usize) -> bool,
     mut fits_prefix: impl FnMut(&str) -> Result<bool, String>,
 ) -> Result<usize, String> {
-    let mut boundaries: Vec<_> = text.char_indices().map(|(i, _)| i).collect();
-    boundaries.push(text.len());
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .filter(|&i| i == 0 || allowed(i))
+        .chain(std::iter::once(text.len()))
+        .collect();
     let (mut low, mut high) = (0, boundaries.len() - 1);
     while low < high {
         let mid = (low + high + 1) / 2;
@@ -310,6 +339,32 @@ pub(super) fn merge_prompt(parts: &[String]) -> Result<String, String> {
 struct Batch {
     parts: Vec<String>,
     source_links: Vec<String>,
+    citation_ids: BTreeSet<usize>,
+    carried_ids: BTreeSet<usize>,
+}
+
+struct FragmentCitation {
+    marker: Range<usize>,
+    line: Range<usize>,
+    id: usize,
+}
+
+fn fragment_citations(text: &str) -> Vec<FragmentCitation> {
+    let mut line = 0..0;
+    let mut lines = text.split_inclusive('\n');
+    markdown::citations::inline_markers(text)
+        .into_iter()
+        .map(|(marker, id)| {
+            while marker.start >= line.end {
+                line = line.end..(line.end + lines.next().expect("marker has a source line").len());
+            }
+            FragmentCitation {
+                marker,
+                line: line.clone(),
+                id,
+            }
+        })
+        .collect()
 }
 impl Batch {
     fn with_fragment(
@@ -318,10 +373,22 @@ impl Batch {
         first: usize,
         end: usize,
         version: PromptVersion,
+        citations: &[FragmentCitation],
     ) -> Result<Self, String> {
         let mut next = self.clone();
         next.parts.push(text[first..end].to_owned());
-        {
+        if version.uses_citations() {
+            let first_citation = citations.partition_point(|citation| citation.line.end <= first);
+            for citation in citations[first_citation..]
+                .iter()
+                .take_while(|citation| citation.line.start < end)
+            {
+                next.citation_ids.insert(citation.id);
+                if citation.marker.start < first || citation.marker.end > end {
+                    next.carried_ids.insert(citation.id);
+                }
+            }
+        } else {
             for link in markdown::format::fragment_links(text, first, end)? {
                 if !next.source_links.contains(&link) {
                     next.source_links.push(link);
@@ -331,7 +398,11 @@ impl Batch {
         Ok(next)
     }
     fn prompt(&self) -> Result<String, String> {
-        if self.source_links.is_empty() {
+        if !self.carried_ids.is_empty() {
+            let ids: Vec<_> = self.carried_ids.iter().map(|id| format!("A{id}")).collect();
+            serde_json::to_string(&json!({"drafts":self.parts,"sourceCitationIds":ids}))
+                .map_err(|e| e.to_string())
+        } else if self.source_links.is_empty() {
             merge_prompt(&self.parts)
         } else {
             serde_json::to_string(&json!({"drafts":self.parts,"sourceLinks":self.source_links}))
@@ -392,9 +463,15 @@ impl Cursor {
         let mut current = Batch::default();
         for part in parts {
             markdown::text(json!({"markdown":part}))?;
+            let citations = if version.uses_citations() {
+                fragment_citations(&part)
+            } else {
+                vec![]
+            };
             let mut first = 0;
             while first < part.len() {
-                let candidate = current.with_fragment(&part, first, part.len(), version)?;
+                let candidate =
+                    current.with_fragment(&part, first, part.len(), version, &citations)?;
                 if task_fits(system, &candidate.prompt()?, limit, version) {
                     current = candidate;
                     first = part.len();
@@ -403,12 +480,31 @@ impl Cursor {
                 if !current.parts.is_empty() {
                     batches.push(std::mem::take(&mut current));
                 } else {
-                    let count = prefix(&part[first..], |text| {
-                        let candidate =
-                            current.with_fragment(&part, first, first + text.len(), version)?;
-                        Ok(task_fits(system, &candidate.prompt()?, limit, version))
-                    })?;
-                    batches.push(current.with_fragment(&part, first, first + count, version)?);
+                    let count = prefix_with_boundaries(
+                        &part[first..],
+                        |offset| {
+                            let offset = first + offset;
+                            let index = citations.partition_point(|c| c.marker.start < offset);
+                            index == 0 || citations[index - 1].marker.end <= offset
+                        },
+                        |text| {
+                            let candidate = current.with_fragment(
+                                &part,
+                                first,
+                                first + text.len(),
+                                version,
+                                &citations,
+                            )?;
+                            Ok(task_fits(system, &candidate.prompt()?, limit, version))
+                        },
+                    )?;
+                    batches.push(current.with_fragment(
+                        &part,
+                        first,
+                        first + count,
+                        version,
+                        &citations,
+                    )?);
                     first += count;
                 }
                 if batches.len() > MAX_BATCHES {
@@ -435,6 +531,12 @@ impl Cursor {
             .get(self.next)
             .ok_or("統合は完了しています")?
             .prompt()
+    }
+    pub(super) fn citation_ids(&self) -> Result<BTreeSet<usize>, String> {
+        self.batches
+            .get(self.next)
+            .map(|batch| batch.citation_ids.clone())
+            .ok_or_else(|| "統合は完了しています".into())
     }
     pub(super) fn accept(&mut self, text: String) -> Result<(), String> {
         markdown::text(json!({"markdown":text}))?;

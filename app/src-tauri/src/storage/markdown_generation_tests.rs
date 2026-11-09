@@ -20,6 +20,22 @@ schema=json.loads(pathlib.Path(arg('--json-schema-file')).read_text())
 assert list(schema['properties'])==['markdown']
 assert 'utteranceId' not in json.dumps(p) and 'speakerId' not in json.dumps(p)
 kind={kind:?}
+if kind in ('citations', 'citation_warnings'):
+    system=pathlib.Path(arg('--system-prompt-file')).read_text()
+    assert 'citationId' in system and 'sourceCitationIds' in system
+    if kind=='citation_warnings':
+        assert system.startswith('CUSTOM_CITATION_MERGE' if 'drafts' in p else 'CUSTOM_CITATION_EXTRACT')
+    marker=lambda id:chr(123)*2+id+chr(125)*2
+    if 'utterances' in p:
+        assert all('citationId' in u and 'audioLink' not in u for u in p['utterances'])
+        ids=list(dict.fromkeys(u['citationId'] for u in p['utterances']))
+    else:
+        import re
+        ids=list(dict.fromkeys(re.findall(r'A[1-9][0-9]*',' '.join(p['drafts']))+p.get('sourceCitationIds',[])))
+        assert 'sourceLinks' not in p and 'audio:' not in json.dumps(p)
+    text='# 点検会議\n\n確認しました。'+''.join(map(marker,ids))
+    if kind=='citation_warnings': text+=marker('A9999')+'\n\n- [00:01:14–00:01:25] を確認。'
+    print(json.dumps({{'markdown':text}},ensure_ascii=False));sys.exit(0)
 if kind=='custom':
     system=pathlib.Path(arg('--system-prompt-file')).read_text()
     assert system.startswith('CUSTOM_MERGE_' if 'drafts' in p else 'CUSTOM_EXTRACT_')
@@ -812,6 +828,88 @@ fn markdown_completed_unit_pauses_resumes_after_reopen_and_does_not_rerun_the_mo
     .is_some());
     assert_eq!(calls(root.path()), 1);
 }
+#[test]
+fn citation_generation_saves_links_and_warning_after_a_completed_checkpoint_resumes() {
+    for warnings in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let req = request(&storage, warnings);
+        if warnings {
+            let settings = storage.minutes_prompt_preferences().unwrap();
+            let mut prompts = settings.payload;
+            prompts.extract_prompt = "CUSTOM_CITATION_EXTRACT 表にしてください。".into();
+            prompts.merge_prompt = "CUSTOM_CITATION_MERGE 一つにまとめてください。".into();
+            storage
+                .save_minutes_prompt_preferences(settings.lock_version, prompts)
+                .unwrap();
+        }
+        let job = markdown_job::enqueue_synthetic_citations(
+            &storage,
+            req.clone(),
+            engine(
+                root.path(),
+                if warnings {
+                    "citation_warnings"
+                } else {
+                    "citations"
+                },
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(job.total_units.unwrap() > 1, warnings);
+        claim(&storage, &job);
+        let result = process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|j| {
+                if j.state == "running" && Some(j.completed_units) == j.total_units {
+                    storage.request_job_pause(&job.id, "user").unwrap();
+                }
+            },
+        )
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(storage.get_job(&job.id).unwrap().state, "paused");
+        assert!(storage
+            .get_minutes_markdown(&req.meeting_id)
+            .unwrap()
+            .is_none());
+        let model_calls = calls(root.path());
+        drop(storage);
+
+        let storage = Storage::open(root.path().into()).unwrap();
+        storage.resume_job(&job.id).unwrap();
+        claim(&storage, &job);
+        assert!(process(
+            &storage,
+            &job.id,
+            &crate::test_support::never_cancelled,
+            &|_| {}
+        )
+        .unwrap()
+        .is_some());
+        assert_eq!(calls(root.path()), model_calls);
+        let saved = storage
+            .get_minutes_markdown(&req.meeting_id)
+            .unwrap()
+            .unwrap();
+        assert!(saved
+            .markdown
+            .contains("[00:00:00–00:00:01](audio:00:00:00-00:00:01)"));
+        assert!(!saved.markdown.contains("{{A"));
+        assert_eq!(
+            saved.markdown.contains("[00:01:14–00:01:25] を確認。"),
+            warnings
+        );
+        let proof = storage.notification_output(&job.id).unwrap();
+        assert_eq!(proof.content_hash, saved.content_hash);
+        assert_eq!(proof.publication_state, "markdown");
+        assert_eq!(proof.warnings.is_empty(), !warnings);
+    }
+}
+
 #[test]
 fn markdown_partial_merge_resumes_exact_subunits_and_rejects_tampered_raw_bytes() {
     for tamper in [false, true] {

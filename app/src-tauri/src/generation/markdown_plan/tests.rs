@@ -2,6 +2,37 @@ use super::*;
 use crate::storage::current_minutes_fixture::input;
 
 #[test]
+fn citation_batches_keep_whole_markers_and_carry_the_id_with_split_text() {
+    let version = PromptVersion::CitationIdsV6;
+    let original = format!("{}{{{{A17}}}}", "あ".repeat(750));
+    let batches = Cursor::partition(vec![original.clone()], 600, version, "統合").unwrap();
+    assert!(batches.len() > 1);
+    assert_eq!(
+        batches
+            .iter()
+            .flat_map(|batch| &batch.parts)
+            .cloned()
+            .collect::<String>(),
+        original
+    );
+    assert_eq!(
+        batches
+            .iter()
+            .flat_map(|batch| &batch.parts)
+            .filter(|text| text.contains("{{A17}}"))
+            .count(),
+        1
+    );
+    for batch in &batches {
+        assert_eq!(batch.citation_ids, BTreeSet::from([17]));
+        if !batch.parts[0].contains("{{A17}}") {
+            let prompt: serde_json::Value = serde_json::from_str(&batch.prompt().unwrap()).unwrap();
+            assert_eq!(prompt["sourceCitationIds"], json!(["A17"]));
+        }
+    }
+}
+
+#[test]
 fn current_prompts_preserve_metadata_and_partition_every_utf8_byte_with_rounded_links() {
     let mut input = input();
     input.analysis.utterances[0].effective_text = "点検日。\"引用\"\\パス\n".repeat(500);

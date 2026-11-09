@@ -17,8 +17,8 @@ impl Default for MinutesPromptPreferences {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            extract_prompt: crate::generation::markdown::CONCISE_SYSTEM.into(),
-            merge_prompt: crate::generation::markdown::CONCISE_MERGE_SYSTEM.into(),
+            extract_prompt: crate::generation::markdown::CITATION_SYSTEM.into(),
+            merge_prompt: crate::generation::markdown::CITATION_MERGE_SYSTEM.into(),
         }
     }
 }
