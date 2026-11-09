@@ -110,7 +110,7 @@ fn windows_finalization_requires_current_seals_and_exact_clock_maps() {
         ("missing_raw", "録音の時計対応の出所が不正です"),
         (
             "mismatched_maps",
-            "原音声と録音全体の時計変換が一致しません",
+            "原音声と録音全体の共通時計対応が一致しません",
         ),
     ] {
         let f = DriftFixture::new();
@@ -183,6 +183,9 @@ fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
         serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["state"], "saved");
     assert_eq!(manifest["timingEstimated"], true);
+    // 500 packets of 479 frames at 48 kHz become mono 16 kHz PCM, with
+    // the fractional final frame retained across packet and raw-seal boundaries.
+    let saved_frames = (500_u64 * 479 * 16000).div_ceil(48000);
     for lane in [
         crate::recording_segments::Lane::Microphone,
         crate::recording_segments::Lane::System,
@@ -195,14 +198,18 @@ fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(prefix.frames(), 500 * 479);
+        assert_eq!(prefix.frames(), saved_frames);
+        assert!(prefix.entries().len() >= 2, "fixture must cross a raw seal");
+        for entry in prefix.entries() {
+            assert_eq!((entry.sample_rate, entry.channels), (16000, 1));
+        }
         prefix.verify_unchanged(&|| false).unwrap();
         let groups = prefix
             .flac_groups(prefix.first_capture_nanoseconds().unwrap())
             .unwrap();
         assert_eq!(
             groups.iter().map(|group| group.frames).sum::<u64>(),
-            500 * 479
+            saved_frames
         );
     }
     let diagnostics: serde_json::Value =
