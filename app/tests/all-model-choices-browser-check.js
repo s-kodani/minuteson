@@ -5,39 +5,75 @@
     ["話者分離", ["sherpa-1138-pyannote3-eres2net-base", "sherpa-1138-pyannote3-int8-eres2net-base"]],
     ["議事録生成", ["llama-b11533-qwen3-8b-q4km", "llama-b11533-qwen3-4b-q4km", "llama-b11533-qwen35-4b-q4km", "llama-b11533-qwen35-9b-q4km", "llama-b11960-gemma4-e4b-it-q4km"]],
   ];
-  for (const [label, ids] of choices) {
-    const field = page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
-    await field.locator(`option[value="official:${ids[0]}"]`).waitFor({ state: "attached" });
-    const offered = await field.locator('option[value^="official:"]').evaluateAll(options => options.map(option => option.value));
-    check(JSON.stringify(offered) === JSON.stringify(ids.map(id => `official:${id}`)), `unexpected official choices for ${label}`);
-    for (const id of ids) {
-      await field.selectOption(`official:${id}`);
-      check(await field.inputValue() === `official:${id}`, "model choice did not change");
-      check(await page.locator('.model-selection-row').filter({ has: field }).getByRole("button", { name: "ダウンロードして使用", exact: true }).isEnabled(), "choice has no download action");
+  const recommended = {
+    "reazonspeech-k2-v2-fp32": "ReazonSpeech-k2-v2（FP32）",
+    "sherpa-1138-pyannote3-eres2net-base": "Pyannote + ERes2Net base",
+    "llama-b11960-gemma4-e4b-it-q4km": "Gemma 4 E4B IT · Q4_K_M",
+  };
+  const prefix = "【おすすめ】";
+  const modelField = label => page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
+  const modelRow = field => page.locator('.model-selection-row').filter({ has: field });
+  const downloadCount = () => page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length);
+  const checkControlWidths = async width => {
+    const metrics = await page.locator('.model-selection-list .model-selection-row').evaluateAll(rows => rows.map(row => {
+      const s = row.querySelector('select').getBoundingClientRect(), b = row.querySelector('button').getBoundingClientRect();
+      return { s: s.height, b: b.height, right: Math.max(s.right, b.right) };
+    }));
+    check(metrics.length === 3 && metrics.every(m => m.s === 40 && m.b === 40 && m.right <= width), `controls differ or overflow at ${width}px`);
+  };
+  const fixtureUrl = new URL(page.url());
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 960, height: 900 });
+  for (const [platform, idPrefix] of [["windows", "windows-"], ["1", ""]]) {
+    fixtureUrl.searchParams.set("official", platform);
+    await page.goto(fixtureUrl.href);
+    for (const [label, ids] of choices) {
+      const field = modelField(label);
+      const values = ids.map(id => `official:${idPrefix}${id}`);
+      await field.locator(`option[value="${values[0]}"]`).waitFor({ state: "attached" });
+      check(await field.inputValue() === "", `initial selection changed for ${label}`);
+      const offered = await field.locator('option[value^="official:"]').evaluateAll(options => options.map(option => option.value));
+      check(JSON.stringify(offered) === JSON.stringify(values), `unexpected official choices for ${label} (${platform})`);
+      for (const [index, id] of ids.entries()) {
+        const value = values[index], name = recommended[id];
+        const optionLabel = await field.locator(`option[value="${value}"]`).textContent();
+        check(name ? optionLabel === prefix + name : !optionLabel.includes(prefix), `unexpected option label for ${value}`);
+        await field.selectOption(value);
+        check(await field.inputValue() === value, "model choice did not change");
+        check(await field.locator("option:checked").textContent() === optionLabel, `selected label differs for ${value}`);
+        check(await modelRow(field).getByRole("button", { name: "ダウンロードして使用", exact: true }).isEnabled(), "choice has no download action");
+      }
+      const recommendedId = ids.find(id => recommended[id]);
+      await field.selectOption(`official:${idPrefix}${recommendedId}`);
     }
+    const installedOption = modelField("文字起こし").locator('option[value="44444444-4444-4444-8444-444444444444"]');
+    check(await installedOption.textContent() === "既存の合成モデル", "unmatched installed model label changed");
+    check(await downloadCount() === 0, "selection started a download");
+    await checkControlWidths(960);
   }
-  check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 0, "selection started IO");
-  results.push("all twelve model choices are selectable without automatic download or execution");
+  await page.screenshot({ path: "output/playwright/recommended-models-960.png" });
+  await page.setViewportSize(originalViewport);
+  results.push("Windows and macOS IDs retain their order and values, with only the three recommendations marked at 960px and no automatic download");
   const use = async (label, engine, id) => {
-    const field = page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
-    const row = page.locator('.model-selection-row').filter({ has: field });
+    const field = modelField(label);
+    const row = modelRow(field);
     await field.selectOption(`official:${id}`);
     const beforeOptions = await field.locator('option').allTextContents();
-    const labelText = await field.locator(`option[value="official:${id}"]`).textContent();
+    const labelText = await field.locator("option:checked").textContent();
+    const modelName = recommended[id] ?? labelText;
     const previous = await page.evaluate(() => window.modelDownloadFixture.profiles[0].profileVersion);
     await row.getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
+    await page.getByRole("dialog", { name: "利用条件を確認", exact: true }).getByText(modelName, { exact: true }).waitFor();
     await approveModelLicense();
     await page.waitForFunction(({ previous, engine }) => {
       const p = window.modelDownloadFixture.profiles[0];
       return p.profileVersion === previous + 1 && p.components.some(c => c.engine === engine);
     }, { previous, engine });
-    await page.waitForFunction(label => {
-      const s = document.querySelector(`select[aria-label="${label}のモデル"]`);
-      return s?.closest('.model-selection-row')?.querySelector('button')?.disabled;
-    }, label);
+    await row.getByRole("button", { name: "使用中", exact: true }).waitFor();
     check(await field.inputValue() === `official:${id}`, "download changed the selected model identity");
+    check(await field.locator("option:checked").textContent() === labelText, "download changed the selected model label");
     check(JSON.stringify(await field.locator('option').allTextContents()) === JSON.stringify(beforeOptions), "download duplicated or renamed a choice");
-    check(await page.getByRole("region", {name:"導入済みモデル管理"}).getByText(labelText, {exact:true}).count() === 1, "installed model label differs from its option");
+    check(await page.getByRole("region", {name:"導入済みモデル管理"}).getByText(modelName, {exact:true}).count() === 1, "installed model name changed");
   };
   await use("文字起こし", "whisper.cpp", "whisper-synthetic-medium");
   await use("議事録生成", "llama.cpp", "llama-b11533-qwen3-4b-q4km");
@@ -70,14 +106,10 @@
   await page.getByRole("combobox").first().waitFor({ state: "hidden" });
   await page.evaluate(() => window.modelDownloadFixture.setVisible(true));
   await page.getByRole("region", { name: "導入済みモデル管理", exact: true }).waitFor();
-  check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 7, "remount downloaded again");
+  check(await downloadCount() === 7, "remount downloaded again");
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    const metrics = await page.locator('.model-selection-list .model-selection-row').evaluateAll(rows => rows.map(row => {
-      const s = row.querySelector('select').getBoundingClientRect(), b = row.querySelector('button').getBoundingClientRect();
-      return { s: s.height, b: b.height, right: Math.max(s.right, b.right) };
-    }));
-    check(metrics.length === 3 && metrics.every(m => m.s === 40 && m.b === 40 && m.right <= width), "controls differ or overflow");
+    await checkControlWidths(width);
   }
   results.push("reopening reads current models without repeating work; selectors and buttons retain matching heights at both widths");
   const llmField = page.getByRole("combobox", {name:"議事録生成のモデル"});
@@ -107,8 +139,10 @@
     const f = window.modelDownloadFixture, id = f.profiles[0].components.find(c => c.engine === "llama.cpp").packageId;
     return f.entries.find(e => e.packageId === id)?.modelName === "Qwen3-4B";
   });
-  check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 7, "older recipe downloaded identical model bytes again");
+  check(await downloadCount() === 7, "older recipe downloaded identical model bytes again");
   results.push("duplicate packages and older recipe IDs reuse exact model bytes with one label and retain the active selection");
   await page.screenshot({ path: "output/playwright/model-choices.png" });
+  await use("文字起こし", "asr", "reazonspeech-k2-v2-fp32");
+  results.push("all three recommendations retain their selected labels after installation, with the original names in license review and inventory");
   return { passed: results.length, results };
 })

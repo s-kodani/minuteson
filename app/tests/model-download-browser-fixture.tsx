@@ -15,6 +15,7 @@ import vadNetwork from "../model-catalog/whisper-vad-network.json";
 import { defaultVadOptions } from "../src/vad-state";
 import whisperVariants from "../model-catalog/whisper-variants.json";
 import { modelLicenseFixture } from "./model-license-fixture";
+import { isAsrEngine } from "../src/model-selection-state";
 // Build-specific bundle hashes cannot be a static catalog. Browser-only fake
 // runtime metadata exercises the same review shape; never actual IO/CPU proof.
 const fakeRuntimeFiles = [
@@ -56,7 +57,8 @@ f.settingsByEngine = {
   "llama.cpp": { executablePath: "", modelPath: "", threads: 2, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 },
 };
 f.preferenceVersions = { "whisper.cpp": 0, "sherpa-onnx": 0, "llama.cpp": 0 };
-const componentRoles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
+const componentRoles = { "asr": ["asr"], "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
+const settingsKey = (engine: string) => isAsrEngine(engine) ? "whisper.cpp" : engine;
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 4, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: "c".repeat(64), memberPath: "model" } }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
@@ -75,10 +77,13 @@ async function officialOptions() {
       const { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(option.label, { recipeHash: option.review.recipeHash }, false, f.policyRevision);
       return { ...option, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
     }));
-    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...transducerChoices, ...officialChoices].map(async choice => {
+    const catalog = new URLSearchParams(location.search).get("official");
+    if (catalog === "1" || catalog === "windows") return Promise.all([...hybridChoices, ...transducerChoices, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
       const review = await reviewed(definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture(choice.label, { recipeHash: review.recipeHash }, false, f.policyRevision);
-      return { id: choice.id, label: choice.label, description: choice.description, definition, review, tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
+      // Exercise Windows IDs in the selector with the same synthetic recipes.
+      const id = catalog === "windows" ? `windows-${choice.id}` : choice.id;
+      return { id, label: choice.label, description: choice.description, definition, review, tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } };
     }));
     const review = await reviewed(f.definition), { licenseNames, summary, restrictions, disclosureHash } = await modelLicenseFixture("文字起こし（合成）", { recipeHash: review.recipeHash }, f.licenseRestricted, f.policyRevision);
     return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review, licenseSummary: { licenseNames, summary, restrictions, disclosureHash } }];
@@ -124,30 +129,33 @@ export const modelDownloadIPC = async (command: string, args: any) => {
   if (command === "preview_model_profile_application") {
     if (f.mode === "previewFailure") throw Error("模擬使用設定の確認失敗");
     const entry = f.entries.find((item: any) => item.packageId === args.packageId), profile = f.profiles.find((item: any) => item.name === args.profile);
-    const before = structuredClone(f.settingsByEngine[entry.engine]), after = structuredClone(before);
+    const key = settingsKey(entry.engine);
+    const before = structuredClone(f.settingsByEngine[key]), after = structuredClone(before);
     after.executablePath = `/synthetic/${entry.packageId}/cli`;
     if (entry.engine === "sherpa-onnx") {
       after.segmentationModelPath = `/synthetic/${entry.packageId}/segmentation.onnx`;
       after.embeddingModelPath = `/synthetic/${entry.packageId}/embedding.onnx`;
       after.runtimeLibraryPaths = [`/synthetic/${entry.packageId}/runtime.dylib`];
     } else after.modelPath = `/synthetic/${entry.packageId}/model`;
-    if (entry.engine === "whisper.cpp" && entry.modelFiles?.some((f: any) => f.role === "vad")) {
+    if (entry.backendId) after.backend = { id: entry.backendId, files: {} };
+    if (isAsrEngine(entry.engine) && entry.modelFiles?.some((f: any) => f.role === "vad")) {
       after.vadModelPath = `/synthetic/${entry.packageId}/vad`;
       after.vadOptions = args.whisperVadOptions ?? before.vadOptions ?? structuredClone(defaultVadOptions);
     }
     if (args.diarizationThreads !== undefined) after.threads = args.diarizationThreads;
     if (args.diarizationClusterThresholdMilli !== undefined) after.clusterThresholdMilli = args.diarizationClusterThresholdMilli;
-    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: f.preferenceVersions[entry.engine], before: { engine: entry.engine, settings: before }, ...(args.whisperVadOptions === undefined ? {} : { whisperVadOptions: args.whisperVadOptions }), after: { engine: entry.engine, settings: after }, ...(args.diarizationThreads === undefined ? {} : { diarizationThreads: args.diarizationThreads }), ...(args.diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli: args.diarizationClusterThresholdMilli }), reviewDigest: "b".repeat(64) };
+    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: f.preferenceVersions[key], before: { engine: entry.engine, settings: before }, ...(args.whisperVadOptions === undefined ? {} : { whisperVadOptions: args.whisperVadOptions }), after: { engine: entry.engine, settings: after }, ...(args.diarizationThreads === undefined ? {} : { diarizationThreads: args.diarizationThreads }), ...(args.diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli: args.diarizationClusterThresholdMilli }), reviewDigest: "b".repeat(64) };
   }
   if (command === "apply_model_profile_application") {
     const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);
     if (profile.profileVersion !== preview.expectedProfileVersion || profile.id !== preview.expectedProfileId) throw Error("模擬設定競合");
     if (f.mode === "applyFailure") throw Error("模擬選択保存失敗");
     profile.id = args.token; profile.profileVersion++;
-    profile.components = [...profile.components.filter((item: any) => item.engine !== entry.engine), { roles: componentRoles[entry.engine as keyof typeof componentRoles], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
+    const key = settingsKey(entry.engine);
+    profile.components = [...profile.components.filter((item: any) => settingsKey(item.engine) !== key), { roles: componentRoles[entry.engine as keyof typeof componentRoles], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
     profile.configurationComplete = profile.components.length === 3;
-    if (JSON.stringify(f.settingsByEngine[entry.engine]) !== JSON.stringify(preview.after.settings)) f.preferenceVersions[entry.engine]++;
-    f.settingsByEngine[entry.engine] = structuredClone(preview.after.settings);
+    if (JSON.stringify(f.settingsByEngine[key]) !== JSON.stringify(preview.after.settings)) f.preferenceVersions[key]++;
+    f.settingsByEngine[key] = structuredClone(preview.after.settings);
     if (f.mode === "applyLost") throw Error("模擬選択保存応答喪失");
     return structuredClone(profile);
   }
@@ -190,7 +198,18 @@ export const modelDownloadIPC = async (command: string, args: any) => {
     if (f.mode === "movedFailure") throw Error("模擬：移動後の検証中断");
     f.active.add(args.token);
     const result = { packageId: args.packageId ?? args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
-    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(result.packageId, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(result.packageId, result); item.placement.state = "committed"; f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, quantization: item.review.manifest.quantization, modelFiles: item.review.manifest.files.filter((file: any) => !["executable", "runtime_library", "notice"].includes(file.role)).map((file: any) => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })), engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
+    const finish = () => {
+      f.active.delete(args.token);
+      if (f.cancelled.has(args.token)) { f.placements.set(result.packageId, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); }
+      f.placements.set(result.packageId, result);
+      item.placement.state = "committed";
+      const manifest = item.review.manifest;
+      f.entries.push({ ...result, modelName: manifest.modelName, modelVersion: manifest.modelVersion, quantization: manifest.quantization,
+        modelFiles: manifest.files.filter((file: any) => !["executable", "runtime_library", "notice"].includes(file.role)).map((file: any) => ({ role: file.role, size: file.expectedSize, sha256: file.expectedHash })),
+        engine: manifest.engine, engineVersion: manifest.engineVersion, backendId: manifest.backend?.id, sourceType: "download",
+        download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null });
+      return result;
+    };
     if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
     const complete = finish(); if (f.mode === "lost") throw Error("模擬コピー完了応答喪失"); return complete;
   }
