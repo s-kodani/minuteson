@@ -1,6 +1,7 @@
 .job-list-tabs{display:flex;gap:24px;border-bottom:1px solid var(--border);margin:0 0 22px}
-.job-list-tabs button{background:transparent;color:var(--muted);border:0;border-bottom:2px solid transparent;border-radius:0;padding:8px 2px 12px;margin-bottom:-1px}
+.job-list-tabs button{display:inline-flex;align-items:center;gap:7px;background:transparent;color:var(--muted);border:0;border-bottom:2px solid transparent;border-radius:0;padding:8px 2px 12px;margin-bottom:-1px}
 .job-list-tabs button[aria-selected=true]{color:var(--text);border-bottom-color:var(--primary);font-weight:600}
+.job-tab-count{display:inline-grid;place-items:center;min-width:20px;min-height:20px;padding:0 5px;border-radius:999px;background:var(--primary);color:var(--on-primary);font-size:11px;font-weight:650;line-height:1;font-variant-numeric:tabular-nums}
 .job-history-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:20px}
 .job-history-filters label{display:grid;gap:6px;font-size:12px;min-width:140px;max-width:100%}
 .job-history-actions{display:flex;align-items:center;gap:12px;margin-inline-start:auto}

@@ -1,3 +1,6 @@
+.import-dialog[data-modal-header] .import-dialog-heading { margin-inline-end:var(--common-modal-title-end-space); }
+.import-dialog[data-modal-header] .import-dialog-heading > [data-modal-title] { margin-inline-end:0; }
+
 /* The overlay is a sibling of the scrollport so long lists never move it. */
 .workspace-surface { position:relative; display:flex; flex:1; min-width:0; min-height:0; }
 .audio-drop-host { position:absolute; inset:8px; z-index:20; pointer-events:none; }

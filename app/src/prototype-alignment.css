@@ -162,7 +162,6 @@ button:disabled { opacity:.5; }
 .minutes-empty-state { padding:32px 16px; text-align:center; color:var(--muted); }
 .meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]) { padding:0; border:0; background:transparent; }
 .meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
-.transcript-main>.transcript-actions:first-child h2 { margin:0 auto 0 0; font-size:17px; }
 .speaker-panel-body .speaker-label { border:0; border-radius:6px; padding:4px 7px; }
 .utterance-meta .speaker-label { border:0; border-radius:6px; }
 @media(max-width:1119px) {
@@ -172,7 +171,6 @@ button:disabled { opacity:.5; }
 @media(max-height:760px) {
   .meeting-detail-status { padding-block:12px 8px; gap:0; }
   .meeting-detail-status .lead { margin-top:2px; }
-  .transcript-main>.transcript-actions:first-child button { min-height:32px; }
   .transcript-search { padding-bottom:4px; }
 }
 @media(max-width:760px) {
@@ -272,9 +270,6 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .workspace-panel-side-content>.speaker-panel-body { padding-inline:var(--tab-content-padding-inline); }
 .workspace-panel-drawer-host > .speaker-panel-body { background:var(--surface); }
 .transcript-main { position:relative; padding:24px var(--tab-content-padding-inline); gap:12px; }
-.transcript-main>.transcript-actions:first-child { justify-content:flex-end; gap:8px 12px; }
-.transcript-heading-actions { display:flex; align-items:center; min-width:0; max-width:100%; }
-.transcript-main>.transcript-actions:first-child>.hint { color:var(--muted); }
 .transcript-main .transcript-search { padding:0 0 12px; border:0; }
 .transcript-workspace-tools { position:static; }
 .meeting-workspace-tools { position:static; }
@@ -461,7 +456,8 @@ button:disabled { opacity:.5; }
 .common-modal label>input:is([type=checkbox],[type=radio]) { flex:none; margin:0; }
 .utterance-meta .assigned-speakers { margin:0; align-items:center; }
 .meeting-detail-content .utterance-list { padding-right:8px; scrollbar-gutter:stable; }
-.meeting-detail-content .transcript-search { align-items:center; gap:8px 12px; max-height:none; overflow:visible; }
+.meeting-detail-content .transcript-search { align-items:center; gap:8px 12px; max-height:none; overflow:visible; display:grid; grid-template-columns:minmax(0,1fr) max-content; }
+.meeting-detail-content .transcript-search > span { white-space:nowrap; }
 /* Import is a settings form too: one scroll boundary, clearly spaced groups. */
 .common-modal.import-dialog { width:min(720px,calc(100% - 48px)); max-width:720px; }
 .import-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
@@ -648,7 +644,6 @@ button:disabled { opacity:.5; }
 .model-license-approval input { flex:none; width:16px; height:16px; margin:3px 0 0; }
 .model-license-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
 @media(max-width:600px) { .model-license-actions>button { flex:1; } }
-.transcript-main>.transcript-actions:first-child>h2 { margin-right:auto; }
 .import-dialog fieldset { grid-template-columns:minmax(0,1fr); }
 @media(max-width:600px) { .model-selection-row { flex-wrap:wrap; } .model-selection-row>label { flex-basis:100%; } }
 /* Keep the primary title and its edit affordance together without extra UI. */
@@ -681,14 +676,6 @@ button:disabled { opacity:.5; }
 .speaker-structure-dialog .split-preview { margin:0; }
 .speaker-structure-dialog .split-preview :is(h3,p) { margin:0; white-space:pre-wrap; }
 .speaker-structure-dialog .transcript-actions { justify-content:flex-end; }
-
-/* Span both search columns to align the jump button with the toolbar's right edge. */
-.transcript-toolbar { display:grid; grid-template-columns:minmax(0,1fr) max-content; gap:12px; flex:none; min-width:0; }
-.meeting-detail-content .transcript-toolbar > .transcript-actions { display:grid; grid-template-columns:subgrid; grid-column:1 / -1; column-gap:12px; }
-.transcript-heading-actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px 12px; min-width:0; min-height:32px; }
-.transcript-heading-actions > h2 { margin:0 auto 0 0; font-size:17px; }
-.transcript-toolbar > .transcript-actions > span { white-space:nowrap; }
-.transcript-toolbar .transcript-search > label { min-width:0; }
 
 /* VAD follows the model-settings form metrics and the shared theme/actions. */
 .vad-settings { display:grid; gap:16px; margin-block:20px; min-width:0; }

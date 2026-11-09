@@ -222,12 +222,44 @@ async (page, capturePath, { approveModelLicense }) => {
   check(await common().getByRole("button", {name: /ジョブ一覧で確認/}).isVisible(), "expanded progress lost the job-list link");
   await page.getByRole("button", { name: "ジョブ一覧", exact: true }).click();
   const jobs = page.getByRole("region", { name: "バックグラウンドのジョブ一覧", exact: true });
+  const summary = jobs.getByRole("status").filter({ hasText: "合計" });
+  const activeTab = jobs.getByRole("tab", { name: "進行中 4", exact: true });
+  await activeTab.locator(".job-tab-count").getByText("4", { exact: true }).waitFor();
+  for (const label of ["合計 4件", "処理中 1件", "待機中 2件"]) await summary.getByText(label, { exact: true }).waitFor();
   await jobs.locator("li").last().waitFor();
   check(await jobs.locator("li").count() === 4, "job inventory hides waiting or paused work");
   check(await jobs.getByText("待機中", { exact: true }).count() === 2, "waiting states are missing");
   await jobs.getByText("議事録生成", { exact: true }).waitFor();
   check(await jobs.locator(".operation-progress-queued progress").first().evaluate(element => getComputedStyle(element).animationName) === "none", "queued work looks like running work");
   await jobs.getByText("一時停止", { exact: true }).waitFor();
+  const chipColors = await jobs.evaluate(element => {
+    const root = document.documentElement;
+    const previousTheme = root.dataset.theme;
+    const color = selector => getComputedStyle(element.querySelector(selector)).backgroundColor;
+    try {
+      return ["light", "dark"].map(theme => {
+        root.dataset.theme = theme;
+        return {
+          summary: [...element.querySelectorAll(".job-list-count .job-chip")].map(chip => getComputedStyle(chip).backgroundColor),
+          running: color(".job-status.job-chip-running"),
+          queued: color(".job-status.job-chip-queued"),
+          paused: color(".job-status.job-chip-paused"),
+        };
+      });
+    } finally {
+      if (previousTheme === undefined) delete root.dataset.theme;
+      else root.dataset.theme = previousTheme;
+    }
+  });
+  for (const { summary: colors, running, queued, paused } of chipColors) {
+    check(new Set([...colors, paused]).size === 4 && colors[1] === running && colors[2] === queued, "job colors do not distinguish counts and states consistently");
+  }
+  check(chipColors[0].summary.every((color, index) => color !== chipColors[1].summary[index]), "job summary colors do not follow the theme");
+  await activeTab.press("ArrowRight");
+  const historyTab = jobs.getByRole("tab", { name: "履歴", exact: true, selected: true });
+  check(await historyTab.evaluate(element => element === document.activeElement), "history tab did not receive keyboard focus");
+  await historyTab.press("Home");
+  check(await activeTab.getAttribute("aria-selected") === "true" && await activeTab.evaluate(element => element === document.activeElement), "active tab did not restore keyboard focus");
   await jobs.locator("li").first().getByRole("button", { name: "会議を開く", exact: true }).click();
   await page.getByRole("heading", { name: "会議A", exact: true }).waitFor();
   check(await page.locator(".meeting-detail-content .operation-progress").count() === 0, "opening a job restores inline progress");
@@ -238,10 +270,18 @@ async (page, capturePath, { approveModelLicense }) => {
   await page.evaluate(async () => {
     const f = window.monBrowserFixture;
     f.notificationReadFail = false;
+    f.notificationJobs = f.notificationJobs.map(job => ({ ...job, state: job.state === "running" ? "pausing" : "cancelled", updatedAt: job.updatedAt + 1 }));
+    await f.emitNotification();
+  });
+  for (const label of ["合計 1件", "処理中 1件", "待機中 0件"]) await summary.getByText(label, { exact: true }).waitFor();
+  await jobs.locator(".job-status").getByText("停止処理中", { exact: true }).waitFor();
+  await page.evaluate(async () => {
+    const f = window.monBrowserFixture;
     f.notificationJobs = f.notificationJobs.map(job => ({ ...job, state: "cancelled", updatedAt: job.updatedAt + 1 }));
     await f.emitNotification();
   });
   await jobs.getByRole("heading", { name: "進行中のジョブはありません", exact: true }).waitFor();
+  check(await jobs.locator(".job-tab-count").count() === 0 && await summary.count() === 0, "empty job inventory kept the count badges");
   await common().waitFor({ state: "hidden" });
   results.push("job inventory across meetings, waiting minutes generation, paused work, safe navigation, read errors and empty state");
   return { passed: results.length, results };

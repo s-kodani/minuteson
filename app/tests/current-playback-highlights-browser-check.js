@@ -36,16 +36,15 @@ async page => {
   }))));
   await page.getByRole("button", {name:"会議A",exact:true}).click();
   check(await editor.locator('[data-utterance-id]').count()===103&&await editor.locator('.transcript-pages').count()===0,"utterances remain paginated");
-  const jump=editor.getByRole('button',{name:'再生位置へ移動',exact:true});
+  const header=page.locator('.transcript-primary-heading');
+  const jump=header.getByRole('button',{name:'再生位置へ移動',exact:true});
   check(await jump.isDisabled(),'jump enabled without a timeline');
-  const heading=await editor.getByRole('heading',{name:'発言一覧',exact:true}).boundingBox(),button=await jump.boundingBox();
-  check(button.x>=heading.x+heading.width,'jump is not to the right of the heading');
   await editor.getByRole('button',{name:'00:00:00の発言を編集',exact:true}).click();
   const pending=editor.getByRole('textbox',{name:'00:00:00の発言',exact:true});await pending.fill('ジャンプ中も保持する本文');
   await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('発言0');
   const saved=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
   await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:null,utteranceId:null,scope:'meeting',timeUs:102_500_000,playing:true,trackKind:'mixed'});});
-  await page.waitForFunction(()=>!document.querySelector('.transcript-list-heading button')?.disabled);
+  await jump.and(header.locator('button:enabled')).waitFor();
   check(await editor.locator('[data-utterance-id="synthetic-102"]').count()===0,'timeline automatically cleared the filter');
   await jump.click();await editor.locator('[data-utterance-id="synthetic-102"]').waitFor();
   check(await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).inputValue()===''&&await editor.locator('[data-utterance-id]').count()===103,'explicit jump did not reveal all matching rows');
@@ -53,7 +52,7 @@ async page => {
   await target.and(editor.locator('.utterance-playing')).waitFor();
   check(await target.evaluate(el=>{const r=el.getBoundingClientRect();return !el.classList.contains('utterance-group-fragment')&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;}),'jump did not scroll to the target');
   check(await pending.inputValue()==='ジャンプ中も保持する本文'&&await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length)===saved,'jump saved or lost pending input');
-  results.push('heading-right jump reveals a filtered playback target without saving or losing pending text');
+  results.push('header jump reveals a filtered playback target without saving or losing pending text');
   await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'jump',meetingId:'meeting-0',analysisId:null,utteranceId:null,scope:'meeting',timeUs:50_500_000,playing:false,trackKind:'mixed'});});
   await jump.click();check(await editor.locator('[data-utterance-id="synthetic-50"]').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),'paused timeline cannot be jumped to');
   await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'synthetic-check',session:'foreign',meetingId:'another-meeting',analysisId:'analysis',utteranceId:'synthetic-50',scope:'utterance',timeUs:50_500_000,playing:true,trackKind:'mic'});});

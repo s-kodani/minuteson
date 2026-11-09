@@ -354,11 +354,12 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .common-modal .model-application-changes th, .common-modal .model-application-changes td { padding: 6px; }
 .common-modal-dismiss-row { display:flex; justify-content:flex-end; position:sticky; top:0; padding:6px; margin:-6px -6px 12px; background:var(--surface); z-index:2; }
 /* Overlay only the close control, keeping each view's existing form/grid intact. */
+.common-modal[data-modal-header] { --common-modal-title-end-space:56px; }
 .common-modal[data-modal-header][open] { display:grid; grid-template-columns:minmax(0,1fr); }
 .common-modal[data-modal-header] > :is(.common-modal-dismiss-row,.common-modal-body,.common-modal-replacement,.action-confirmation) { grid-area:1 / 1; min-width:0; }
 .common-modal[data-modal-header] > .common-modal-dismiss-row { align-self:start; justify-self:end; align-items:center; top:-6px; min-height:calc(var(--common-modal-title-height,40px) + 12px); margin:-6px -6px 0 0; pointer-events:none; }
 .common-modal[data-modal-header] > .common-modal-dismiss-row > button { pointer-events:auto; }
-.common-modal[data-modal-header] [data-modal-title] { display:flex; align-items:center; min-height:40px; margin-block-start:0; margin-inline-end:56px; }
+.common-modal[data-modal-header] [data-modal-title] { display:flex; align-items:center; min-height:40px; margin-block-start:0; margin-inline-end:var(--common-modal-title-end-space); }
 .recording-confirmation-shell { height:100dvh; min-height:0; padding:0; overflow:hidden; }
 .recording-confirmation-loading { padding:20px; }
 .recording-confirmation-popover { box-sizing:border-box; display:flex; flex-direction:column; gap:12px; width:100%; height:100%; padding:20px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:16px; box-shadow:0 18px 48px rgb(0 0 0 / 20%); }
@@ -405,14 +406,18 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .job-nav-count { margin-left:auto; min-width:20px; font-size:11px; font-variant-numeric:tabular-nums; color:var(--secondary-text); }
 .job-list { min-width:0; }
 .job-list h1 { margin-top:0; }
-.job-list-count { margin:24px 0 12px; color:var(--secondary-text); font-size:13px; }
+.job-list-count { display:flex; flex-wrap:wrap; gap:8px; margin:24px 0 12px; }
+.job-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; line-height:18px; white-space:nowrap; }
+.job-chip strong { font-weight:750; font-variant-numeric:tabular-nums; }
+.job-chip-total { background:light-dark(#f3e8ff,#3b2356); color:light-dark(#6b21a8,#e9d5ff); }
+.job-chip-running { background:var(--info-surface); color:var(--info-text); }
+.job-chip-queued { background:light-dark(#e2e8f0,#293649); color:light-dark(#334155,#cbd5e1); }
+.job-chip-pausing,.job-chip-paused,.job-chip-interrupted { background:var(--warning-surface); color:var(--warning-text); }
 .job-list-rows { list-style:none; padding:0; margin:0; }
 .job-list-rows > li { padding:24px 0; border-top:1px solid var(--border); }
 .job-list-row-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; }
 .job-kind { color:var(--secondary-text); }
-.job-status { font-weight:600; }
-.job-status-running { color:var(--primary-strong); }
-.job-status-paused,.job-status-interrupted { color:var(--warning-text); }
+.job-status::before { content:""; flex:none; width:6px; height:6px; border-radius:50%; background:currentColor; }
 .job-list-rows .operation-progress-heading { font-size:14px; }
 .job-list-rows .operation-progress-heading > span:first-child { display:grid; gap:4px; }
 .job-list-rows .operation-progress-heading span span { font-size:12px; }

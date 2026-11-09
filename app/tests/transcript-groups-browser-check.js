@@ -80,7 +80,7 @@ async (page,capturePath) => {
   check(await body.getByRole('article').count()===1,'search cannot match across former source boundaries');
   await search.fill('はい。');
   await page.evaluate(async id=>{(await import('/src/playback-follow.ts')).playbackTimeline.publish({owner:'consolidation-check',session:'check',meetingId:'meeting-0',analysisId:window.monBrowserFixture.currentId,utteranceId:id,scope:'utterance',timeUs:3_500_000,playing:true,trackKind:'mic'});},firstId);
-  await editor.getByRole('button',{name:'再生位置へ移動',exact:true}).click();
+  await page.locator('.transcript-primary-heading').getByRole('button',{name:'再生位置へ移動',exact:true}).click();
   await row().waitFor();check(await search.inputValue()===''&&await body.getByRole('article').count()===3,'jump did not reveal the merged playback row');
   await page.evaluate(async()=>{(await import('/src/playback-follow.ts')).playbackTimeline.release('consolidation-check');});
   for(const width of [1280,390]){

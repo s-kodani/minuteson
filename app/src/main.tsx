@@ -104,7 +104,7 @@ function MainWindow() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   useLayoutEffect(() => { closeInfoPopovers(); }, [detailTab]);
   const [transcriptActionsHost, setTranscriptActionsHost] = useState<HTMLDivElement | null>(null);
-  const [transcriptCopyHost, setTranscriptCopyHost] = useState<HTMLDivElement | null>(null);
+  const [transcriptEditorActionsHost, setTranscriptEditorActionsHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => { setDetailTab("transcript"); }, [selectedMeeting?.id]);
   const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
   const [audioDropHost, setAudioDropHost] = useState<HTMLDivElement | null>(null);
@@ -479,8 +479,15 @@ function MainWindow() {
             </tr>)}</tbody></table></div>}
           </section>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
-            <div className="card-head transcript-primary-heading"><h2>文字起こし</h2><div className="plain-minutes-primary-actions transcript-primary-actions"><div ref={setTranscriptCopyHost} className="transcript-copy-host" /><VocabularyEditor compact key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} /><div ref={setTranscriptActionsHost} className="transcript-generation-host" /></div></div>
-            <TranscriptEditor actionsHost={transcriptCopyHost} key={selectedMeeting.id} sourceEpoch={analysisEpoch} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={present => setTranscriptMeeting(present ? selectedMeeting.id : null)} onConsolidated={async()=>{
+            <div className="card-head transcript-primary-heading">
+              <h2>{transcriptMeeting === selectedMeeting.id ? "発言一覧" : "文字起こし"}</h2>
+              <div className="plain-minutes-primary-actions transcript-primary-actions">
+                <div ref={setTranscriptEditorActionsHost} className="transcript-editor-actions" />
+                <VocabularyEditor compact key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} />
+                <div ref={setTranscriptActionsHost} className="transcript-generation-host" />
+              </div>
+            </div>
+            <TranscriptEditor actionsHost={transcriptEditorActionsHost} key={selectedMeeting.id} sourceEpoch={analysisEpoch} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={present => setTranscriptMeeting(present ? selectedMeeting.id : null)} onConsolidated={async()=>{
               const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id:selectedMeeting.id}),invoke<Meeting[]>("list_meetings")]);
               setSelectedMeeting(meeting);setMeetings(items);setAnalysisEpoch(value=>value+1);
             }} />

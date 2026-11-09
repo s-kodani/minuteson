@@ -229,7 +229,10 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     } catch (cause) { if (mounted.current) setCopyStatus({ message: `コピーできませんでした: ${String(cause)}`, level: "error", eventId: crypto.randomUUID() }); }
     finally { copying.current = false; if (mounted.current) setCopyBusy(false); }
   };
-  const copyAction = <IconButton label="文字起こしをコピー" icon="copy" disabled={disabled || copyBusy || !view?.utterances.length} onClick={() => void copyTranscript()} />;
+  const editorActions = <>
+    <IconButton label="文字起こしをコピー" icon="copy" disabled={disabled || copyBusy || !view?.utterances.length} onClick={() => void copyTranscript()} />
+    {analysis && <button type="button" className="small-secondary" disabled={!jumpRow || disabled || !visible} onClick={jumpToPlayback}>再生位置へ移動</button>}
+  </>;
   const openText = (utterance: Utterance) => { if (editable) setTexts(current => Object.hasOwn(current, utterance.id) ? current : { ...current, [utterance.id]: utterance.effectiveText }); };
   const cancelText = (id: string) => { if (!disabled && !snapshot.error && !snapshot.dirty) {
     const row = document.activeElement?.closest<HTMLElement>("[data-utterance-id]");
@@ -334,7 +337,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     },
   };
   return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
-    {actionsHost ? createPortal(copyAction, actionsHost) : <div className="transcript-actions">{copyAction}</div>}
+    {actionsHost ? createPortal(editorActions, actionsHost) : <div className="transcript-actions">{editorActions}</div>}
     <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
     {!loading && !analysis && !error && <p className="transcript-state">文字起こしはまだありません。</p>}
@@ -369,10 +372,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
           </li>)}</ul>
         </section>}
 
-        <div className="transcript-toolbar">
-          <div className="transcript-actions transcript-list-heading"><div className="transcript-heading-actions"><h2>発言一覧</h2><button type="button" className="small-secondary" disabled={!jumpRow||disabled||!visible} onClick={jumpToPlayback}>再生位置へ移動</button></div></div>
-          <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
-        </div>
+        <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
         {view && <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={disabled}>
           <TranscriptRows rows={shown} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
             colorKeys={view?.speakerColorKeys}
