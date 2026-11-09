@@ -81,8 +81,9 @@ async (page, _capturePath, { applyPlaybackTheme }) => {
   await page.getByRole("heading",{name:"発言一覧",exact:true}).waitFor();
   const panel=current.locator(".loading-overlay-panel");
   const heading=page.locator(".transcript-primary-heading");
-  const title=heading.getByRole("heading",{name:"文字起こし",exact:true});
+  const title=heading.getByRole("heading",{name:"発言一覧",exact:true});
   const copy=heading.getByRole("button",{name:"文字起こしをコピー",exact:true});
+  const jump=heading.getByRole("button",{name:"再生位置へ移動",exact:true});
   const vocabulary=heading.getByRole("button",{name:"会議の用語",exact:true});
   const originalViewport=page.viewportSize();
   for(const [theme,width,height] of [["dark",1280,820],["light",960,640]]){
@@ -91,9 +92,12 @@ async (page, _capturePath, { applyPlaybackTheme }) => {
     const box=await panel.boundingBox();
     check(box&&Math.abs(box.x+box.width/2-width/2)<=1&&Math.abs(box.y+box.height/2-height/2)<=1,`loading panel is off center at ${width}px`);
     const titleBox=await title.boundingBox();
-    for(const button of [copy,vocabulary,regen]){
+    let previousBox=titleBox;
+    for(const button of [copy,jump,vocabulary,regen]){
       const actionBox=await button.boundingBox();
       check(actionBox&&actionBox.height===32&&Math.abs(actionBox.y+actionBox.height/2-titleBox.y-titleBox.height/2)<=1,`header action is misaligned at ${width}px`);
+      check(actionBox.x>=previousBox.x+previousBox.width,`header actions are out of order at ${width}px`);
+      previousBox=actionBox;
     }
     const backgrounds=await page.evaluate(()=>{
       const surface=element=>{

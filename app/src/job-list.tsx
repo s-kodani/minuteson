@@ -14,13 +14,23 @@ export function JobCount() {
 
 export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: DataOperation; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void> }) {
   const items = orderedProgress(useProgressItems()), read = useJobReadStatus();
+  const runningCount = items.filter(item => item.state === "running" || item.state === "pausing").length;
+  const queuedCount = items.filter(item => item.state === "queued").length;
   const [error, setError] = useState("");
   const [view, setView] = useState<"active"|"history">("active");
   const run = async (action: () => Promise<unknown>) => { setError(""); try { await action(); } catch (cause) { setError(String(cause)); } };
   const ended = data?.jobs.filter(job => job.snapshot.phase === "attention") ?? [];
   return <section className="job-list" aria-label="バックグラウンドのジョブ一覧">
     <div className="page-heading heading-with-info"><h1>ジョブ一覧</h1><InfoPopover label="ジョブ一覧">処理中・待機中の作業と、過去90日間の処理結果を確認できます。履歴はアプリを終了しても保持します。</InfoPopover></div>
-    <div className="job-list-tabs" role="tablist" aria-label="ジョブの表示">{(["active","history"] as const).map(tab=><button type="button" key={tab} role="tab" id={`job-${tab}-tab`} aria-controls={`job-${tab}-panel`} aria-selected={view===tab} tabIndex={view===tab?0:-1} onClick={()=>setView(tab)} onKeyDown={event=>{if(["ArrowLeft","ArrowRight","Home","End"].includes(event.key)){event.preventDefault();const next=event.key==="Home"?"active":event.key==="End"?"history":view==="active"?"history":"active";setView(next);document.getElementById(`job-${next}-tab`)?.focus();}}}>{tab==="active"?`進行中${items.length?` ${items.length}`:""}`:"履歴"}</button>)}</div>
+    <div className="job-list-tabs" role="tablist" aria-label="ジョブの表示">{(["active", "history"] as const).map(tab => <button type="button" key={tab} role="tab" id={`job-${tab}-tab`} aria-controls={`job-${tab}-panel`} aria-selected={view === tab} tabIndex={view === tab ? 0 : -1} onClick={() => setView(tab)} onKeyDown={event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "active" : event.key === "End" ? "history" : view === "active" ? "history" : "active";
+      setView(next);
+      document.getElementById(`job-${next}-tab`)?.focus();
+    }}>
+      {tab === "active" ? <>進行中{items.length > 0 && <> <span className="job-tab-count">{items.length}</span></>}</> : "履歴"}
+    </button>)}</div>
     <div id="job-history-panel" role="tabpanel" aria-labelledby="job-history-tab" hidden={view!=="history"}>{view==="history"&&<JobHistory locked={locked} onOpenMeeting={onOpenMeeting} onOpenModels={onOpenModels} onOpenData={onOpenData} onShowRestored={onShowRestored}/>}</div>
     <div id="job-active-panel" role="tabpanel" aria-labelledby="job-active-tab" hidden={view!=="active"}>
     {read.state === "loading" && <p role="status">ジョブの状態を確認しています。</p>}
@@ -28,9 +38,13 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
     {data?.jobsError && <p role="status">バックアップ・復元の状態を再確認しています。表示は前回取得した状態です。</p>}
     {error && <p role="alert">{error}</p>}
     {!items.length && read.state === "ready" && <div className="job-list-empty"><h2>進行中のジョブはありません</h2><p>録音の保存・回復、モデルの準備、音声取り込み、文字起こし、話者分離、議事録生成、バックアップ、復元がここに表示されます。</p></div>}
-    {items.length > 0 && <><p className="job-list-count" role="status">{items.length} 件 · 処理中 {items.filter(item => ["running", "pausing"].includes(item.state)).length} · 待機中 {items.filter(item => item.state === "queued").length}</p>
+    {items.length > 0 && <><p className="job-list-count" role="status">
+      <span className="job-chip job-chip-total">合計 <strong>{items.length}件</strong></span>{" "}
+      <span className="job-chip job-chip-running">処理中 <strong>{runningCount}件</strong></span>{" "}
+      <span className="job-chip job-chip-queued">待機中 <strong>{queuedCount}件</strong></span>
+    </p>
       <ul className="job-list-rows">{items.map(item => <li key={item.id}>
-        <div className="job-list-row-heading"><span className="job-kind">{operationName(item.kind)}</span><span className={`job-status job-status-${item.state}`}>{operationStatus(item.state)}</span></div>
+        <div className="job-list-row-heading"><span className="job-kind">{operationName(item.kind)}</span><span className={`job-chip job-status job-chip-${item.state}`}>{operationStatus(item.state)}</span></div>
         <OperationProgressBar progress={item} />
         {["backup", "restore"].includes(item.kind) && (() => {
           const job = data?.jobs.find(job => `data:${job.snapshot.token}` === item.id);
