@@ -38,6 +38,16 @@ let unresolved: Pending | null = null;
 const downloads = new Map<string, DownloadReceipt>();
 const automaticMergeChoices = [{value:500,label:"従来（分けやすい）"},{value:900,label:"ややまとめる"},{value:1100,label:"まとめる"},{value:1300,label:"強くまとめる"},{value:1500,label:"さらに強くまとめる"}];
 const engines = [{ engine: "asr", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
+const recommendedModelIds = new Set([
+  "reazonspeech-k2-v2-fp32",
+  "sherpa-1138-pyannote3-eres2net-base",
+  "llama-b11960-gemma4-e4b-it-q4km",
+]);
+function modelOptionLabel(choice: ModelChoice): string {
+  return choice.option && recommendedModelIds.has(choice.option.id.replace(/^windows-/u, ""))
+    ? `【おすすめ】${choice.label}`
+    : choice.label;
+}
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
@@ -386,7 +396,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const actionLabel = { in_use: "使用中", add_vad: "VADを追加して使用", use: "使用", update_runtime: "実行環境を更新して使用", download: "ダウンロードして使用" }[action];
       return <div className="model-selection-item" key={engine}><div className="model-selection-row"><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
-        {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
+        {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{modelOptionLabel(item)}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={event => void useModel(engine, value, true, actionLabel, event.currentTarget)}>{actionLabel}</button></div>
         {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデル本体は変更しません。再利用できるモデルデータはコピーします。旧コピーを保持するため追加の空き容量が必要です。</p>}
         {choice && <div className="model-license-summary"><div><span>{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
