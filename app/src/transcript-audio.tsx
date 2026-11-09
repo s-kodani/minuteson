@@ -21,13 +21,12 @@ export class BrowserAudioClock implements PlaybackClock {
     this.context ??= new AudioContext();
     await this.context.resume();
   }
-  schedule(packet: AudioPacket, at: number, rate: number, ended: () => void) {
+  schedule(packet: AudioPacket, at: number, ended: () => void) {
     const context = this.context!;
     const buffer = context.createBuffer(packet.channels.length, packet.frames, packet.sampleRate);
     packet.channels.forEach((samples, channel) => buffer.getChannelData(channel).set(samples));
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.playbackRate.value = rate;
     source.connect(context.destination);
     source.onended = () => { source.disconnect(); ended(); };
     source.start(at);

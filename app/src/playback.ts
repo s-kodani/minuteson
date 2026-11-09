@@ -1,3 +1,5 @@
+import { PlaybackStretch } from "./playback-stretch.ts";
+
 export interface PlaybackInfo {
   token: string;
   sampleRate: number;
@@ -64,19 +66,20 @@ export function decodeAudioPacket(bytes: ArrayBuffer | number[]): AudioPacket {
 export interface PlaybackClock {
   now(): number;
   resume(): Promise<void>;
-  schedule(packet: AudioPacket, at: number, rate: number, ended: () => void): () => void;
+  schedule(packet: AudioPacket, at: number, ended: () => void): () => void;
 }
 
 interface ScheduledAudio {
   from: number;
   frames: number;
+  outputFrames: number;
   at: number;
   until: number;
   stop: () => void;
 }
 
-// Buffer at most three small packets. Scheduling uses the audio clock, rather
-// than JS timers, so adjoining packets can play without timer-induced gaps.
+// Schedule at most three packets, with one additional look-ahead packet for
+// time stretching. Audio-clock scheduling keeps adjoining packets contiguous.
 export class ChunkPlayer {
   private info: PlaybackInfo | null = null;
   private position = 0;
@@ -87,6 +90,8 @@ export class ChunkPlayer {
   private readingGeneration: number | null = null;
   private generation = 0;
   private scheduled: ScheduledAudio[] = [];
+  private stretch: PlaybackStretch | null = null;
+  private lookAhead: AudioPacket | null = null;
   private error: string | null = null;
   private clock: PlaybackClock;
   private read: (token: string, offset: number) => Promise<ArrayBuffer | number[]>;
@@ -102,7 +107,11 @@ export class ChunkPlayer {
     const now = this.clock.now();
     const active = this.scheduled.find((part) => now >= part.at && now < part.until);
     const elapsed = this.scheduled.filter((part) => now >= part.until).at(-1);
-    const frame = active && this.info ? Math.min(active.from + active.frames, active.from + Math.floor((now - active.at) * this.info.sampleRate * this.rate)) : elapsed ? elapsed.from + elapsed.frames : this.position;
+    let frame = elapsed ? elapsed.from + elapsed.frames : this.position;
+    if (active && this.info) {
+      const output = (now - active.at) * this.info.sampleRate;
+      frame = active.from + Math.min(active.frames, Math.floor(output * (active.frames / active.outputFrames)));
+    }
     return { info: this.info, frame, playing: this.playing, buffering: this.playing && this.scheduled.length === 0, rate: this.rate, error: this.error };
   }
 
@@ -128,6 +137,8 @@ export class ChunkPlayer {
     this.position = this.snapshot().frame;
     this.playing = false;
     this.generation++;
+    this.stretch = null;
+    this.lookAhead = null;
     const scheduled = this.scheduled;
     this.scheduled = [];
     for (const part of scheduled) part.stop();
@@ -162,6 +173,7 @@ export class ChunkPlayer {
     const generation = ++this.generation;
     this.changed();
     try {
+      this.stretch = this.rate === 1 ? null : new PlaybackStretch(this.rate, this.info.sampleRate, this.info.channels);
       await this.clock.resume();
       if (generation === this.generation) await this.fill(generation);
     } catch (cause) {
@@ -176,6 +188,16 @@ export class ChunkPlayer {
     this.changed();
   }
 
+  private async readPacket(info: PlaybackInfo, from: number, generation: number) {
+    const bytes = await this.read(info.token, from);
+    if (generation !== this.generation) return null;
+    const packet = decodeAudioPacket(bytes);
+    if (packet.sampleRate !== info.sampleRate || packet.channels.length !== info.channels || packet.frames !== playbackPacketFrames(info, from)) {
+      throw new Error("再生情報と音声パケットが一致しません");
+    }
+    return packet;
+  }
+
   private async fill(generation: number) {
     if (this.readingGeneration === generation) return;
     this.readingGeneration = generation;
@@ -183,26 +205,30 @@ export class ChunkPlayer {
       while (generation === this.generation && this.playing && this.info && this.scheduled.length < 3 && this.nextFrame < this.info.totalFrames) {
         const info = this.info;
         const from = this.nextFrame;
-        const frames = playbackPacketFrames(info, from);
-        const bytes = await this.read(info.token, from);
-        if (generation !== this.generation) return;
-        const packet = decodeAudioPacket(bytes);
-        if (packet.sampleRate !== info.sampleRate || packet.channels.length !== info.channels || packet.frames !== frames) {
-          throw new Error("再生情報と音声パケットが一致しません");
+        const packet = this.lookAhead ?? await this.readPacket(info, from, generation);
+        if (!packet || generation !== this.generation) return;
+        const nextFrame = from + packet.frames;
+        let output = packet;
+        if (this.stretch) {
+          const next = nextFrame < info.totalFrames ? await this.readPacket(info, nextFrame, generation) : null;
+          if (generation !== this.generation) return;
+          this.lookAhead = next;
+          output = this.stretch.process(packet, next);
         }
-        const at = Math.max(this.nextTime, this.clock.now() + 0.04);
-        const until = at + packet.frames / packet.sampleRate / this.rate;
-        const part: ScheduledAudio = { from, frames: packet.frames, at, until, stop: () => {} };
-        part.stop = this.clock.schedule(packet, at, this.rate, () => {
+        const now = this.clock.now();
+        const at = this.nextTime > now ? this.nextTime : now + 0.04;
+        const until = at + output.frames / output.sampleRate;
+        const part: ScheduledAudio = { from, frames: packet.frames, outputFrames: output.frames, at, until, stop: () => {} };
+        part.stop = this.clock.schedule(output, at, () => {
           if (generation !== this.generation) return;
           this.scheduled = this.scheduled.filter((item) => item !== part);
-          this.position = part.from + part.frames;
+          this.position = Math.max(this.position, part.from + part.frames);
           if (this.nextFrame >= info.totalFrames && this.scheduled.length === 0) this.playing = false;
           this.changed();
           void this.fill(generation);
         });
         this.scheduled.push(part);
-        this.nextFrame += packet.frames;
+        this.nextFrame = nextFrame;
         this.nextTime = until;
         this.changed();
       }
