@@ -120,7 +120,12 @@ fn swift_generated_pc_only_capture_publishes_wave_without_inventing_microphone_a
     let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&source).unwrap();
     assert_eq!(source.tracks.len(), 1);
     assert_eq!(source.tracks[0].kind, "system");
-    assert_eq!(source.tracks[0].chunks[0].frames, 480);
+    assert_eq!(
+        (source.tracks[0].sample_rate, source.tracks[0].channels),
+        (16000, 1)
+    );
+    // The fixture's 480 input frames at 48 kHz retain 10 ms of audio at 16 kHz.
+    assert_eq!(source.tracks[0].chunks[0].frames, 160);
     drop(db);
     let plan = storage
         .verify_canonical_audio(&meeting.id, &|| false)
