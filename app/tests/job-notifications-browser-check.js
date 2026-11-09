@@ -86,7 +86,17 @@ async page => {
   await page.evaluate(()=>window.monBrowserFixture.emitNotification());
   check(await success.getAttribute("data-toast-id")===noticeId,"success duplicated on refresh");
   await noWork();
-  results.push("free format minutes save successfully without format checks or warnings");
+  results.push("minutes with a clean receipt display the ordinary save notice");
+
+  await boot();await start({kind:"minutes_generation"});await dismiss();
+  await page.evaluate(()=>{const f=window.monBrowserFixture;f.notificationPublication="markdown";f.notificationWarnings=["一部の音声リンクは要確認です"];});
+  await update({state:"succeeded",completedUnits:2,totalUnits:2,outputAnalysisId:null});
+  const warning=host().locator(".toast-warning").filter({hasText:"議事録を保存しました。一部の音声リンクは要確認です"});
+  await warning.waitFor();
+  check(await host().locator(".toast-success").filter({hasText:"議事録を保存しました"}).count()===0,"duplicate success notice");
+  await page.evaluate(()=>window.monBrowserFixture.emitNotification());
+  check(await warning.count()===1&&await calls("get_analysis_notification_output")===1,"citation warning duplicated on refresh");
+  results.push("verified minutes with citation issues display one warning and no duplicate success notice");
 
   await boot();await page.getByRole("button",{name:"会議A",exact:true}).click();
   await page.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();

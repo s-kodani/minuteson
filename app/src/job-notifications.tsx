@@ -125,10 +125,11 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
               try {
                 const proof = await invoke<unknown>("get_analysis_notification_output", { jobId: job.id });
                 if (disposed) return;
-                const event = tracker.confirmOutput(job, verifiedJobOutput(job, proof));
+                const publication = verifiedJobOutput(job, proof);
+                const warnings = (proof as { warnings?: string[] }).warnings ?? [];
+                const event = tracker.confirmOutput(job, publication, warnings);
                 if(event && job.kind==="speaker_completion") event.message += `。${(proof as {warnings:string[]}).warnings.join("。")}`;
                 if(event && ["transcription","diarization"].includes(job.kind)) {
-                  const warnings=(proof as {warnings?:string[]}).warnings??[];
                   if(warnings.length){event.message=`「${job.meetingTitle}」の${jobName(job.kind)}：完了・要確認あり。${warnings.join("。")} `;event.level="warning";event.important=true;}
                 }
                 if (event) publish([event]);

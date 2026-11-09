@@ -162,11 +162,15 @@ impl Storage {
                 "superseded"
             }
             .to_string();
+            let warnings = crate::generation::markdown_job::notification_warnings(
+                &spec,
+                checkpoint.as_ref().ok_or("議事録の生成結果がありません")?,
+            )?;
             return Ok(NotificationOutput {
                 job,
                 content_hash: hash,
                 publication_state,
-                warnings: vec![],
+                warnings,
             });
         }
         let (id, table, computed) = match job.kind.as_str() {

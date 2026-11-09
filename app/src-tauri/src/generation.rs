@@ -120,7 +120,7 @@ struct Task {
     system: String,
     prompt: String,
     schema: Value,
-    local: Option<Value>,
+    citation_ids: Option<std::collections::BTreeSet<usize>>,
 }
 fn artifact_type(name: &str) -> Result<&'static str, String> {
     match name {
@@ -177,9 +177,6 @@ fn verify_task_bytes(
     }
     let raw = llama::parse_output(&read(&artifacts[3])?)?;
     llama::validate_markdown_bound(&raw, &task.schema)?;
-    if task.local.as_ref().is_some_and(|local| local != &raw) {
-        return Err("議事録のローカル確定処理が変更されています".into());
-    }
     Ok(raw)
 }
 pub(crate) fn process_observed(
