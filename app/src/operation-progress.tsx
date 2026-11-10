@@ -38,7 +38,7 @@ export function OperationProgressBar({ progress, disclosure, children }: { progr
   return <>
     {disclosure && <button ref={disclosure.trigger} type="button" className="progress-disclosure" aria-label={`「${progress.target}」の進捗詳細${expanded ? "を閉じる" : "を開く"}`} aria-description={expanded ? undefined : valueText} aria-expanded={expanded} aria-controls={`${id}-panel`} onClick={event => { event.currentTarget.focus({ preventScroll: true }); disclosure.toggle(); }}>
       <span className="progress-ring" aria-hidden="true" data-value={percent !== null ? `${percent}%` : spinning ? undefined : "–"} data-spinning={spinning || undefined}>
-        <svg width="34" height="34" viewBox="0 0 36 36" fill="none" strokeWidth="2.5">
+        <svg width="28" height="28" viewBox="0 0 36 36" fill="none" strokeWidth="2.5">
           <circle className="progress-ring-track" cx="18" cy="18" r="16" />
           {arcLength > 0 && <circle className="progress-ring-arc" cx="18" cy="18" r="16" pathLength="100" strokeDasharray={`${arcLength} 100`} strokeLinecap="round" transform="rotate(-90 18 18)" />}
         </svg>

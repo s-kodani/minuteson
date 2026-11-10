@@ -438,7 +438,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .common-operation-progress .progress-disclosure:focus-visible { outline-offset:-3px; }
 .common-operation-progress[data-expanded="true"] .progress-disclosure { width:100%; height:34px; }
-.progress-ring { position:absolute; top:0; right:0; width:var(--floating-progress-inner-size); aspect-ratio:1; display:grid; place-items:center; font-size:11px; font-weight:650; font-variant-numeric:tabular-nums; transition:opacity 90ms ease 80ms; }
+.progress-ring { position:absolute; top:0; right:0; width:var(--floating-progress-inner-size); aspect-ratio:1; display:grid; place-items:center; font-size:9px; font-weight:650; font-variant-numeric:tabular-nums; transition:opacity 90ms ease 80ms; }
 .progress-ring::after { content:attr(data-value); }
 .progress-ring svg,.progress-ring::after { grid-area:1 / 1; }
 .progress-ring-track { stroke:var(--input-border); }
