@@ -562,6 +562,18 @@ class ReleaseTests(unittest.TestCase):
                 api.call("/compare/not-a-commit...main")
             urlopen.assert_called_once()
 
+    def test_draft_state_patch_keeps_the_release_tag(self):
+        api = release.GitHub(repository="owner/repo", token="test-token")
+        draft = Provider().value
+        with patch.object(api, "call") as call:
+            api.save_state(draft, {"status": "claimed"}, target_commitish=SHA)
+            endpoint, payload, method = call.call_args.args
+            self.assertEqual((endpoint, method), ("/releases/123", "PATCH"))
+            self.assertEqual(payload["tag_name"], "v1.2.3")
+            self.assertEqual(payload["target_commitish"], SHA)
+            api.save_state(draft, {"status": "claimed"})
+            self.assertEqual(call.call_args.args[1]["tag_name"], "v1.2.3")
+
     def test_draft_claim_is_idempotent_and_pins_source_before_dispatch(self):
         api = Provider()
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
