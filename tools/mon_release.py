@@ -83,6 +83,9 @@ class GitHub:
     def save_state(self, release, record, **changes):
         body = clean_body(release.get("body"))
         encoded = base64.b64encode(json.dumps(record, sort_keys=True).encode()).decode()
+        if release.get("draft"):
+            # GitHub can replace an unpublished tag with an untagged placeholder on PATCH.
+            changes["tag_name"] = release["tag_name"]
         return self.call(f"/releases/{release['id']}", {**changes, "body": body + f"\n\n<!-- mon-release:{encoded} -->"}, "PATCH")
 
     def file(self, name, commit):
