@@ -32,16 +32,29 @@ export function OperationProgressBar({ progress, disclosure, children }: { progr
   }, [progress.startedAtMs, progress.finishedAtMs]);
   const detail = displayNativePathsInText([progress.detail, operationElapsed(progress, now)].filter(Boolean).join(" · "));
   const expanded = disclosure?.expanded ?? true;
-  const controlled = [`${id}-heading`, ...(detail ? [`${id}-detail`] : []), ...(children ? [`${id}-footer`] : [])].join(" ");
-  return <div className={`operation-progress${progress.paused ? " operation-progress-paused" : ""}${progress.state === "queued" ? " operation-progress-queued" : ""}`}>
-    {disclosure && <button ref={disclosure.trigger} type="button" className="progress-disclosure" aria-label={`「${progress.target}」の進捗詳細${expanded ? "を閉じる" : "を開く"}`} aria-expanded={expanded} aria-controls={controlled} onClick={event => { event.currentTarget.focus({ preventScroll: true }); disclosure.toggle(); }}>
-      <strong id={`${id}-target`} title={progress.target}>{progress.target}</strong><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={expanded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} /></svg>
+  const valueText = percent === null ? progress.label : `${percent}% · ${progress.label}`;
+  const spinning = percent === null && !progress.paused && (progress.state === "running" || progress.state === "pausing");
+  const arcLength = percent ?? (spinning ? 25 : 0);
+  return <>
+    {disclosure && <button ref={disclosure.trigger} type="button" className="progress-disclosure" aria-label={`「${progress.target}」の進捗詳細${expanded ? "を閉じる" : "を開く"}`} aria-description={expanded ? undefined : valueText} aria-expanded={expanded} aria-controls={`${id}-panel`} onClick={event => { event.currentTarget.focus({ preventScroll: true }); disclosure.toggle(); }}>
+      <span className="progress-ring" aria-hidden="true" data-value={percent !== null ? `${percent}%` : spinning ? undefined : "–"} data-spinning={spinning || undefined}>
+        <svg width="34" height="34" viewBox="0 0 36 36" fill="none" strokeWidth="2.5">
+          <circle className="progress-ring-track" cx="18" cy="18" r="16" />
+          {arcLength > 0 && <circle className="progress-ring-arc" cx="18" cy="18" r="16" pathLength="100" strokeDasharray={`${arcLength} 100`} strokeLinecap="round" transform="rotate(-90 18 18)" />}
+        </svg>
+      </span>
+      <span className="progress-disclosure-title">
+        <strong id={`${id}-target`} title={progress.target}>{progress.target}</strong>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+      </span>
     </button>}
-    <div id={`${id}-heading`} className="operation-progress-heading" hidden={!expanded}><span id={`${id}-label`}>{!disclosure && <><strong>{progress.target}</strong>{" "}</>}<span>{progress.label}</span></span>{percent !== null && <span className="operation-progress-percent" aria-hidden="true">{percent}%</span>}</div>
-    <progress max={100} value={percent ?? undefined} aria-labelledby={disclosure ? `${id}-target` : `${id}-label`} aria-describedby={expanded && detail ? `${id}-detail` : undefined} aria-valuetext={percent === null ? progress.label : `${percent}% · ${progress.label}`} />
-    {detail && <small id={`${id}-detail`} hidden={!expanded}>{detail}</small>}
-    {children && <div id={`${id}-footer`} className="progress-footer" hidden={!expanded}>{children}</div>}
-  </div>;
+    <div id={disclosure ? `${id}-panel` : undefined} inert={!expanded || undefined} className={`operation-progress${progress.paused ? " operation-progress-paused" : ""}${progress.state === "queued" ? " operation-progress-queued" : ""}`}>
+      <div className="operation-progress-heading"><span id={`${id}-label`}>{!disclosure && <><strong>{progress.target}</strong>{" "}</>}<span>{progress.label}</span></span>{percent !== null && <span className="operation-progress-percent" aria-hidden="true">{percent}%</span>}</div>
+      <progress max={100} value={percent ?? undefined} aria-labelledby={disclosure ? `${id}-target` : `${id}-label`} aria-describedby={detail ? `${id}-detail` : undefined} aria-valuetext={valueText} />
+      {detail && <small id={`${id}-detail`}>{detail}</small>}
+      {children && <div className="progress-footer">{children}</div>}
+    </div>
+  </>;
 }
 
 export function CommonOperationProgress({ onOpenJobs }: { onOpenJobs?: () => void }) {
@@ -72,12 +85,21 @@ function FloatingOperationProgress({ progress, count, onOpenJobs }: { progress: 
   useLayoutEffect(() => {
     const card = element.current, column = card?.closest<HTMLElement>(".main-column"), header = column?.querySelector<HTMLElement>(".topbar");
     if (!card || !column || !header) return;
+    const bell = header.querySelector<HTMLElement>(".header-notification-button");
     const measure = () => {
       const gap = parseFloat(getComputedStyle(card).getPropertyValue("--floating-progress-gap")) || 12;
-      card.style.top = `${header.getBoundingClientRect().bottom - column.getBoundingClientRect().top + gap}px`;
+      const columnBounds = column.getBoundingClientRect();
+      card.style.top = `${header.getBoundingClientRect().bottom - columnBounds.top + gap}px`;
+      card.style.setProperty("--floating-progress-column-width", `${columnBounds.width}px`);
+      if (bell) {
+        const bounds = bell.getBoundingClientRect();
+        card.style.setProperty("--floating-progress-anchor-right", `${columnBounds.right - bounds.left - bounds.width / 2}px`);
+      }
     };
     const observer = new ResizeObserver(measure);
-    observer.observe(header); observer.observe(column); measure();
+    observer.observe(header); observer.observe(column);
+    if (bell) observer.observe(bell);
+    measure();
     return () => observer.disconnect();
   }, []);
   return <section ref={element} className="common-operation-progress" aria-label="進行中の処理" data-expanded={expanded}

@@ -15,10 +15,10 @@ async page => {
     await common.locator('.progress-disclosure[aria-expanded="true"]').waitFor();
   };
   const showProgress = async (label, percent = null) => {
-    // A new owner replaces the card and starts collapsed. Wait for its always
-    // visible bar before expanding, rather than opening the previous owner's card.
+    // A new owner starts collapsed. Match its progress data before expanding
+    // so this doesn't open the previous owner's card.
     const value = percent === null ? label : `${percent}% · ${label}`;
-    await common.locator(`progress[aria-valuetext=${JSON.stringify(value)}]`).waitFor();
+    await common.locator(`progress[aria-valuetext=${JSON.stringify(value)}]`).waitFor({ state: 'attached' });
     await expand();
     await common.getByText(label,{exact:true}).waitFor();
     if (percent !== null) await common.getByText(`${percent}%`,{exact:true}).waitFor();

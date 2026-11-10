@@ -22,11 +22,10 @@ async (page, capturePath, { approveModelLicense }) => {
   await expand(); await common().getByText(/全体の経過時間 5分20秒/).waitFor();
   await expand(); await common().getByText("50%", { exact: true }).waitFor();
   check(await models.getByRole("progressbar").count() === 0, "model settings duplicates header progress");
-  const appearance = await common().locator(".operation-progress").evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopWidth, radius: style.borderRadius, shadow: style.boxShadow, top: element.getBoundingClientRect().top, headerBottom: document.querySelector(".topbar").getBoundingClientRect().bottom, insideHeader: !!element.closest(".topbar") }; });
+  const appearance = await common().evaluate(element => { const style = getComputedStyle(element); return { position: style.position, background: style.backgroundColor, border: style.borderTopWidth, radius: style.borderRadius, shadow: style.boxShadow, top: element.getBoundingClientRect().top, headerBottom: document.querySelector(".topbar").getBoundingClientRect().bottom, insideHeader: !!element.closest(".topbar") }; });
   check(appearance.background !== "rgba(0, 0, 0, 0)" && appearance.border === "1px" && appearance.radius === "12px" && appearance.shadow !== "none", "floating card lacks rounded background or shadow");
   check(!appearance.insideHeader && appearance.top >= appearance.headerBottom + 10, "progress card is not separated below header");
-  const layer = await common().evaluate(element => { const style = getComputedStyle(element); return { position: style.position, background: style.backgroundColor, pointerEvents: style.pointerEvents }; });
-  check(layer.position === "absolute" && layer.background === "rgba(0, 0, 0, 0)" && layer.pointerEvents === "none", "progress still paints or occupies an opaque page row");
+  check(appearance.position === "absolute", "progress occupies a workspace row");
   check(await common().locator("small").isVisible(), "progress detail is hidden");
   await page.evaluate(async () => {
     await window.operationProgressFixture.emitTransfer(100, { operationId: crypto.randomUUID() });
