@@ -48,7 +48,9 @@ class GitHub:
             raise ValueError("invalid repository")
 
     def call(self, endpoint, data=None, method=None, binary=None):
-        if not endpoint.startswith("/") or ".." in endpoint:
+        # GitHub's compare API requires a literal three-dot separator.
+        main_comparison = re.fullmatch(r"/compare/[0-9a-f]{40}\.\.\.main", endpoint)
+        if not endpoint.startswith("/") or (".." in endpoint and not main_comparison):
             raise ValueError("invalid GitHub endpoint")
         host = "https://uploads.github.com" if binary is not None else "https://api.github.com"
         payload = binary if binary is not None else (json.dumps(data).encode() if data is not None else None)
