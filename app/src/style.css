@@ -473,9 +473,9 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .job-list-count { display:flex; flex-wrap:wrap; gap:8px; margin:24px 0 12px; }
 .job-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; line-height:18px; white-space:nowrap; }
 .job-chip strong { font-weight:750; font-variant-numeric:tabular-nums; }
-.job-chip-total { background:light-dark(#f3e8ff,#3b2356); color:light-dark(#6b21a8,#e9d5ff); }
-.job-chip-running { background:var(--info-surface); color:var(--info-text); }
-.job-chip-queued { background:light-dark(#e2e8f0,#293649); color:light-dark(#334155,#cbd5e1); }
+.job-chip-total { background:#27272a; color:#fff; }
+.job-chip-running { background:light-dark(#e4e4e7,#3f3f46); color:var(--text); }
+.job-chip-queued { background:var(--background); color:var(--secondary-text); outline:1px solid var(--border); outline-offset:-1px; }
 .job-chip-pausing,.job-chip-paused,.job-chip-interrupted { background:var(--warning-surface); color:var(--warning-text); }
 .job-list-rows { list-style:none; padding:0; margin:0; }
 .job-list-rows > li { padding:24px 0; border-top:1px solid var(--border); }
