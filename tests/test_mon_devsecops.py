@@ -551,6 +551,17 @@ class DocumentationTests(unittest.TestCase):
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_github_client_compares_a_resolved_commit_to_main(self):
+        api = release.GitHub(repository="owner/repo", token="test-token")
+        with patch.object(release.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"status":"identical"}'
+            self.assertEqual(api.call(f"/compare/{SHA}...main"), {"status": "identical"})
+            request = urlopen.call_args.args[0]
+            self.assertEqual(request.full_url, f"https://api.github.com/repos/owner/repo/compare/{SHA}...main")
+            with self.assertRaisesRegex(ValueError, "invalid GitHub endpoint"):
+                api.call("/compare/not-a-commit...main")
+            urlopen.assert_called_once()
+
     def test_draft_claim_is_idempotent_and_pins_source_before_dispatch(self):
         api = Provider()
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
