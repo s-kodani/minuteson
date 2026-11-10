@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {InputJournalSession,InputJournalNotices,checkedJournalReport,journalMessage,type JournalPersistence,type JournalView} from "../src/input-journal-state.ts";
+import {InputJournalSession,InputJournalFailures,checkedJournalReport,type JournalPersistence,type JournalView} from "../src/input-journal-state.ts";
 import {ArchivedInputController} from "../src/archived-input-controller.ts";
 import {checkedArchivedInputPage} from "../src/archived-input-state.ts";
 const owner="73500000-0000-4000-8000-000000000001",meeting="63500000-0000-4000-8000-000000000001";
@@ -21,13 +21,12 @@ test("failure survives absent/failed/stale reads and only fresh confirmation res
   const s=new InputJournalSession(owner);s.accept(report(1,"failed"),0);assert.equal(s.read(0).problem,true);
   s.fail();assert.deepEqual(s.read(1),{state:"unknown",problem:true});
   s.accept(report(2),2);assert.equal(s.read(2).problem,true);
-  assert.match(journalMessage(s.read(2)),/以前の接続記録の保存エラー/u);
   assert.equal(s.read(1003).problem,true);
   s.accept(report(3,"confirmed",999,999),1004);assert.deepEqual(s.read(1004),{state:"confirmed",problem:false});
 });
 const view=(state:JournalView["state"],problem=false):JournalView=>({state,problem});
-test("automatic journal delays stay silent at any age and during short recoveries",()=>{
-  const n=new InputJournalNotices();
+test("automatic journal delays do not become writer failures",()=>{
+  const n=new InputJournalFailures();
   for(const phase of ["preparing","recording","saved"]){
     for(const state of ["unknown","pending","stale","confirmed"] as const){
       for(const at of [0,1000,5000,60000,3600000])assert.equal(n.read(view(state),phase,at),null);
@@ -35,27 +34,25 @@ test("automatic journal delays stay silent at any age and during short recoverie
   }
 });
 
-test("confirmed writer failures need two seconds of fresh confirmation before silent removal",()=>{
-  const n=new InputJournalNotices(),s=new InputJournalSession(owner);
-  const failure=n.read(view("failed",true),"recording",0)!;
+test("writer failure diagnostics need two seconds of fresh confirmation to resolve",()=>{
+  const n=new InputJournalFailures(),s=new InputJournalSession(owner);
+  assert.equal(n.read(view("failed",true),"recording",0),"failed");
   s.accept(report(1,"confirmed",999,999),500);
-  for(const at of [500,1000,1500,2000,2500])assert.equal(n.read(s.read(at),"recording",at),failure);
-  for(const at of [3000,3500,4000,4500])assert.equal(n.read(view("confirmed"),"recording",at),failure);
+  for(const at of [500,1000,1500,2000,2500])assert.equal(n.read(s.read(at),"recording",at),"failed");
+  for(const at of [3000,3500,4000,4500])assert.equal(n.read(view("confirmed"),"recording",at),"failed");
   assert.equal(n.read(view("confirmed"),"recording",5000),null);
-  const recurring=n.read(view("failed",true),"recording",5500)!;
-  assert.notEqual(recurring.eventId,failure.eventId);
+  assert.equal(n.read(view("failed",true),"recording",5500),"failed");
 });
 
-test("real failures notify immediately, survive missing reads, escalate invalidity and end with the owner",()=>{
-  const n=new InputJournalNotices();
-  const failed=n.read(view("failed",true),"recording",0)!;assert.equal(failed.level,"error");
-  assert.equal(n.read(view("unknown",true),"recording",500),failed);
-  assert.equal(n.read(view("pending",true),"recording",1000),failed);
-  const invalid=n.read(view("invalid",true),"recording",1500)!;
-  assert.notEqual(invalid.eventId,failed.eventId);assert.match(invalid.message,/整合/u);
-  assert.equal(n.read(view("stale",true),"recording",2000),invalid);
+test("writer failures remain diagnosable through missing reads and record invalidity",()=>{
+  const n=new InputJournalFailures();
+  assert.equal(n.read(view("failed",true),"recording",0),"failed");
+  assert.equal(n.read(view("unknown",true),"recording",500),"failed");
+  assert.equal(n.read(view("pending",true),"recording",1000),"failed");
+  assert.equal(n.read(view("invalid",true),"recording",1500),"invalid");
+  assert.equal(n.read(view("stale",true),"recording",2000),"invalid");
   assert.equal(n.read(view("unknown",true),"saved",2500),null);
-  assert.equal(new InputJournalNotices().read(view("unknown"),"recording",2500),null);
+  assert.equal(new InputJournalFailures().read(view("unknown"),"recording",2500),null);
 });
 test("immutable heartbeat, committed floors, closed and invalid state cannot regress",()=>{
   const s=new InputJournalSession(owner);s.accept(report(),0);

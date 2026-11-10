@@ -30,7 +30,12 @@ async (page, capturePath, detailUI) => {
     await app().selectOption(key);
     return key;
   };
-  const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{
+    await page.getByRole("alert").filter({hasText:"録音の操作:"}).waitFor();
+    check(await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).count()===0,"recording start failure was duplicated");
+    await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
+    await modal().waitFor({state:"hidden"});
+  };
   let stage="setup";
   try{
     stage="global";await boot();await begin();await accept().click();await modal().waitFor({state:"hidden"});

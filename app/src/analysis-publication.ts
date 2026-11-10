@@ -7,18 +7,20 @@ import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { publishWithReplacementConfirmation, type Publication } from "./transcription-regeneration";
 import { toasts } from "./toast";
 import { toastKey } from "./toast-state";
+import { backgroundReadFailure } from "./background-read-failure";
 
 /** Publication is coordinated even when another meeting is open. A changed
  * draft asks for consent and keeps the completed result available on cancel.
  */
 export function useAnalysisPublication(locked: boolean, saveThenAct: (action: () => Promise<void>) => Promise<void | "cancelled">) {
-  const [error, setError] = useState("");
+  const [readStatus, setReadStatus] = useState("");
   const confirm = useActionConfirmation(false);
   const live = useRef({ locked, saveThenAct, confirm }); live.current = { locked, saveThenAct, confirm };
   const request = useRef<(flow: AnalysisFlow) => Promise<void>>(async () => {});
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false, running = false;
+    const readFailure = backgroundReadFailure("transcription_publication");
     const handled = new Set<string>();
     const failures = new Map<string, { flowId: string; message: string }>();
     const stops: (() => void)[] = [];
@@ -60,6 +62,13 @@ export function useAnalysisPublication(locked: boolean, saveThenAct: (action: ()
       running = true;
       try {
         const flows = await invoke<AnalysisFlow[]>("get_ready_analysis_flows");
+        if (disposed) return;
+        if (!Array.isArray(flows) || flows.some(flow => !flow || typeof flow.id !== "string"
+          || typeof flow.meetingId !== "string" || !Number.isSafeInteger(flow.lockVersion))) {
+          throw Error("反映待ちの文字起こしの一覧を確認できません。");
+        }
+        readFailure.recovered();
+        setReadStatus("");
         for (const [meetingId, failure] of failures) {
           try {
             const current = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
@@ -70,17 +79,22 @@ export function useAnalysisPublication(locked: boolean, saveThenAct: (action: ()
             }
           } catch { /* A failed read is not proof that the old issue recovered. */ }
         }
-        if (!disposed) setError("");
         for (const flow of flows) {
           if (disposed || live.current.locked || confirmations.getSnapshot()) break;
           if (!handled.has(`${flow.id}:${flow.lockVersion}`)) await publish(flow);
         }
-      } catch (cause) { if (!disposed) setError(String(cause)); }
+      } catch (cause) {
+        if (!disposed && readFailure.failed(cause)) {
+          setReadStatus("反映待ちの文字起こしを確認できません。自動で再確認しています。");
+        }
+      }
       finally { running = false; }
     };
-    for (const event of ["analysis-flow-changed", "analysis-job-changed"]) void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else stops.push(stop); });
+    for (const event of ["analysis-flow-changed", "analysis-job-changed"]) {
+      void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => { /* Periodic reads still run. */ });
+    }
     void refresh(); const timer = window.setInterval(() => void refresh(), 3000);
     return () => { disposed = true; request.current = async () => {}; stops.forEach(stop => stop()); window.clearInterval(timer); };
   }, []);
-  return { error, replace: (flow: AnalysisFlow) => request.current(flow) };
+  return { readStatus, replace: (flow: AnalysisFlow) => request.current(flow) };
 }

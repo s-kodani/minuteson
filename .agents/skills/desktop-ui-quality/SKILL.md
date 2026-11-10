@@ -1,6 +1,6 @@
 ---
 name: desktop-ui-quality
-description: "Implement or review desktop UI changes involving layout, interaction states, notifications, text input, and native windows. Use for desktop usability and visual regressions; follow the application's existing design system."
+description: "Implement or review desktop UI changes involving layout, interaction states, text input, native windows, and user-facing notifications. Use when adding or changing notification triggers, wording, or history, including native and background failures that reach the UI."
 ---
 
 # デスクトップUIの品質確認
@@ -24,14 +24,9 @@ description: "Implement or review desktop UI changes involving layout, interacti
 
 ## 文言と通知
 
-「何が起きたか」「作業やデータにどう影響するか」「次に何ができるか」を簡潔に伝える。
-実装用のパス表記、例外、プロトコル名だけをユーザー向け説明にしない。
-詳細は診断ログ等に残し、利用者向け文言から調査に必要な情報まで削除しない。
-
-一時的な内部再確認、実際の保存失敗、要対応の状態を区別する。
-表示・抑制・集約・履歴保持は、その通知で利用者が判断または行動する必要があるかで決める。
-対応不要の内部変化を毎回警告にせず、重要な失敗を見た目の改善のために隠さない。
-通知を閉じたことと、原因が解消したことを同一視しない。
+通知の追加、発生条件・文言・履歴の変更、バックグラウンド処理やネイティブ処理のエラーを画面へ出す変更では、実装前に[通知の判断メモ](references/interaction-review.md#通知の判断メモ)を使う。
+利用者が作業や結果への影響を把握する必要があるか、次に何ができるかを発生条件ごとに確認し、表示先と件数を決める。
+利用者向けには起きたこと、作業やデータへの影響、次の操作を簡潔に伝え、調査に必要な技術詳細は内部ログに残す。
 
 ## 入力とネイティブ境界
 

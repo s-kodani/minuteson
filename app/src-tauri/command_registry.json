@@ -71,6 +71,35 @@
       }
     },
     {
+      "name": "record_background_read_failure",
+      "handler": "internal_logs::record_background_read_failure",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "source",
+            "wireName": "source",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "message",
+            "wireName": "message",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_internal_logs",
       "handler": "internal_logs::get_internal_logs",
       "roles": [

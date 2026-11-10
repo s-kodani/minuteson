@@ -28,11 +28,13 @@ async page => {
     await page.goto("http://127.0.0.1:1420/"); await page.waitForFunction(() => !!window.closeFixture);
     await page.getByRole("button", { name: "新しい録音", exact: true }).click(); await page.getByRole("button", { name: "録音を開始", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "選択した会議の録音を開始しますか？", exact: true }); await dialog.getByRole("button", { name: "録音を開始する", exact: true }).click(); await dialog.waitFor({ state: "hidden" });
-    await page.evaluate(() => { window.closeFixture.queueHold.receive = true; return window.closeFixture.recordChanged({ phase: "recording" }); }); await set(1);
+    await page.evaluate(() => { window.closeFixture.queueHold.receive = true; return window.closeFixture.recordChanged({ phase: "recording" }); }); await set(1,false,1);
     await page.waitForFunction(() => window.closeFixture.queueReplies.length === 1);
     await page.waitForFunction(() => document.querySelector('[data-input-kind="microphone"]')?.dataset.noticeReception === "unconfirmed");
     check(await mic().count() === 0 && await calls("render_recording_input_notice") === 0, "receive fabricated rendering");
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-input-state") === "connected", "historical interruption became current disconnected status");
+    check(await page.evaluate(()=>window.closeFixture.notificationHistory().every(n=>!n.message.includes("通知履歴の一部"))),"notification loss entered the main notification history");
+    check(!(await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"),"main input tooltip showed notification loss");
     results.push("held reception neither displays nor acknowledges a historical event; actual current input remains connected");
 
     await page.evaluate(() => { const d = document.createElement("dialog"); d.id = "render-cover"; d.textContent = "合成表示遮蔽";d.style.opacity="0"; document.body.append(d); d.showModal(); });
@@ -81,17 +83,15 @@ async page => {
     await page.screenshot({ path: "input-queue-mini-360x116.png" });
     const bounds=await page.locator(".mini-shell").evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,width:e.clientWidth,scrollWidth:e.scrollWidth,rows:[...e.children].map(child=>({class:child.className,height:child.getBoundingClientRect().height,top:child.getBoundingClientRect().top,width:child.getBoundingClientRect().width}))}));
     check(bounds.scrollHeight <= bounds.height + 1 && bounds.scrollWidth <= bounds.width + 1, `queued mini notice overflowed 360x116: ${JSON.stringify(bounds)}`);
-    check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "loss metadata disappeared");
-    check(await page.locator('[data-input-kind="microphone"]').isVisible() && (await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "loss status icon lost its explanation");
-    results.push("independent input telemetry and retained loss indication fit the native mini geometry");
+    check(await page.locator('[data-input-kind="microphone"]').isVisible() && !(await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "mini input tooltip showed notification loss");
+    results.push("input telemetry fits the native mini geometry and keeps notification loss internal");
     check(await page.evaluate(()=>["microphone","system"].every(input=>window.closeFixture.queueState.lanes[input].length===2&&window.closeFixture.queueState.lanes[input].every(n=>!n.delivery.rendered&&!n.delivery.receiveId))),"mini changed pending interruption or recovery evidence");
     results.push("mini leaves both pending lanes and their render evidence untouched for main presentation");
     const reads = await calls("get_recording_input_status"); await page.evaluate(() => { window.closeFixture.failInputStatus = true; }); await page.waitForFunction(() => document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState === "unknown");
-    check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "read failure cleared retained history loss");
     check(await calls("get_recording_input_status") > reads, "read failure stopped polling");
     await page.evaluate(() => window.closeFixture.recordChanged({ phase: "stopping" })); await page.locator(".mini-input-notice").waitFor({ state: "hidden" });
     check(await page.evaluate(() => window.closeFixture.calls.every(c => !["start_capture_test", "start_recording", "stop_recording"].includes(c.command))), "mini check requested capture");
-    results.push("failed reads retain loss state without current connection proof; stop removes delivery and no capture is requested");
+    results.push("failed reads hide current connection proof; stop removes delivery and no capture is requested");
     return { passed: results.length, results };
   } catch (cause) { throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator("body").innerText()}`); }
   finally { await page.context().unrouteAll(); await page.evaluate(() => sessionStorage.removeItem("MON_INPUT_QUEUE_FIXTURE")).catch(() => {}); }

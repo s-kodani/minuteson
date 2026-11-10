@@ -4,6 +4,7 @@ pub const COMMANDS: &[&str] = &[
     "get_window_environment",
     "get_credits",
     "record_meeting_open_failure",
+    "record_background_read_failure",
     "get_internal_logs",
     "get_recording_recovery",
     "get_startup_report",

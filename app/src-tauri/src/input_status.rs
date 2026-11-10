@@ -335,6 +335,8 @@ impl StatusReader {
         if age_ms > FRESH_MS {
             notices.clear();
         }
+        let notice_loss = self.queue.loss();
+        notice_loss.log_if_incomplete("live-notice-loss", owner);
         Ok(Snapshot {
             schema_version: 4,
             owner_id: p.owner_id,
@@ -343,7 +345,7 @@ impl StatusReader {
             microphone: p.microphone,
             system: p.system,
             notices,
-            notice_loss: Some(self.queue.loss()),
+            notice_loss: Some(notice_loss),
             observed_at: Instant::now(),
             observed_wall: SystemTime::now(),
         })

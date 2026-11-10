@@ -19,7 +19,12 @@ async (page,capturePath,detailUI)=>{
     await page.waitForFunction(()=>{const e=document.querySelector('.recording-workspace button');return e&&!e.disabled;});
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するマイク"]');return e&&!e.disabled;});
   };
-  const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした。"}).waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{
+    await page.getByRole("alert").filter({hasText:"録音の操作:"}).waitFor();
+    check(await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).count()===0,"recording start failure was duplicated");
+    await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
+    await modal().waitFor({state:"hidden"});
+  };
   try {
   await boot();
   for(const [label,text] of [["新しい録音","モデル未準備でも録音できます"],["録音の会議名","日時から仮の会議名"],["録音するマイク","自動では会議アプリ"],["録音前の入力確認","毎回のテストは必須ではありません"]]){

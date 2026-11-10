@@ -372,9 +372,28 @@ pub(crate) fn decode(
     Ok(info)
 }
 
+const IMPORT_CANCELLED: &str = "音声取り込みを中断しました";
+
+/// These errors originate at explicit cancellation checkpoints. The cancel
+/// flag alone cannot distinguish them from a concurrent I/O or cleanup error.
+pub(crate) fn is_cancellation_error(error: &str) -> bool {
+    matches!(
+        error,
+        IMPORT_CANCELLED
+            | "解析停止の待機を取り消しました"
+            | "ファイル照合を中断しました"
+            | "音声ファイルの照合を中断しました"
+            | "録音音声の照合を中断しました"
+            | "FLAC音声処理を中断しました"
+            | "取り込み保存の検証を停止しました"
+            | "取り込み形式の移行を停止しました"
+            | "取り込み回復の検証を停止しました"
+    )
+}
+
 fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
-        Err("音声取り込みを中断しました".into())
+        Err(IMPORT_CANCELLED.into())
     } else {
         Ok(())
     }
@@ -598,8 +617,9 @@ pub(crate) fn import_configured(
     match result {
         Ok(saved) => Ok(saved),
         Err(error) => {
+            let cancellation = cancelled() && is_cancellation_error(&error);
             // A complete manifest is a recovery boundary, not disposable temp.
-            if base.join("manifest.json").exists() && !cancelled() {
+            if base.join("manifest.json").exists() && !cancellation {
                 storage.audio_import_pending_finalization(&snapshot.id, &error)?;
                 Err(format!(
                     "取り込み音声を保持しました。次回起動時に保存を再検証します: {error}"
@@ -607,10 +627,12 @@ pub(crate) fn import_configured(
             } else {
                 storage.fail_audio_import(
                     &snapshot.id,
-                    if cancelled() { "cancelled" } else { "failed" },
+                    if cancellation { "cancelled" } else { "failed" },
                     &error,
                 )?;
-                storage.cleanup_audio_import(&snapshot.id)?;
+                storage.cleanup_audio_import(&snapshot.id).map_err(|cause| {
+                    format!("取り込みの一時ファイルを整理できませんでした。元ファイルは保持しています。{cause}")
+                })?;
                 Err(error)
             }
         }

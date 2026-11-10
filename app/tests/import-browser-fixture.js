@@ -7,7 +7,7 @@ const diar = { executablePath:"",segmentationModelPath:"",embeddingModelPath:"",
 const llama = {executablePath:"",modelPath:"",threads:4,contextTokens:8192,predictionTokens:2048,gpuLayers:0,seed:1,promptBudget:5400};
 const importDurationUs = 4_000_000;
 const f = window.monImportFixture = {
-  calls:[],failCancel:false,failSelect:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
+  calls:[],failCancel:false,failStatus:false,deferCancel:false,failSelect:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
   import:{revision:0,phase:"idle",busy:false,recordingBlocked:false,token:null,fileName:null,info:null,sourceBytes:null,requiredBytes:null,availableBytes:null,completed:0,saved:null,errorMessage:null},
   global:{id:"global",payload:[{id:crypto.randomUUID(),term:"MON",reading:null,note:null,enabled:true}],lockVersion:1},
   meetings:[{id:"existing",title:"既存会議",lifecycle:"draft",sourceType:"recording",createdAt:1791115200000,updatedAt:1791115200000,lockVersion:0}],books:{},
@@ -27,7 +27,10 @@ mockIPC(async(command,args)=>{
     case "capture_available":return false;
     case "get_voice_matching_preferences":return {id:"voice_matching",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
     case "get_speaker_completion_preferences":return {id:"speaker_completion",lockVersion:0,payload:{similarityThresholdMilli:800,marginThresholdMilli:100}};
-    case "get_audio_import":return structuredClone(f.import);
+    case "get_audio_import":
+      if(f.failStatus)throw Error("模擬取り込み状況の取得失敗");
+      return structuredClone(f.import);
+    case "record_background_read_failure":return null;
     case "select_audio_import":{
       if(f.failSelect)throw Error("模擬音声選択失敗");
       if(f.cancelPanel){await f.changed({phase:"idle",busy:false});return structuredClone(f.import);}
@@ -38,7 +41,8 @@ mockIPC(async(command,args)=>{
     case "cancel_audio_import":
       if(f.failCancel)throw Error("模擬取消失敗");
       if(args.token!==f.import.token)throw Error("取消対象が変更されました");
-      await f.changed({phase:"cancelled",busy:false});return structuredClone(f.import);
+      await f.changed(f.deferCancel ? {phase:"cancelling"} : {phase:"cancelled",busy:false,errorMessage:null});
+      return structuredClone(f.import);
     case "start_audio_import":{
       if(args.request.token!==f.import.token||f.import.phase!=="ready")throw Error("確認した音声が変更されました");
       if(args.request.options.expectedGlobalVersion!==f.global.lockVersion)throw Error("共通用語が確認後に変更されました");

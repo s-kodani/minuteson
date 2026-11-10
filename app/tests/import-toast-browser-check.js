@@ -49,7 +49,53 @@ async page => {
   await boot(); await open(); await modal.getByRole("button", { name: "閉じる", exact: true }).click();
   await page.getByRole("dialog", { name: "取り込み確認内容の破棄を確認", exact: true }).getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click(); await modal.waitFor({ state: "hidden" });
   await cancelledNotice.waitFor();
-  check(await host.locator(".toast-success").count() === 0 && await calls("cancel_audio_import") === 1 && await calls("start_audio_import") === 0, "cancel was labeled saved or executed another action");
+  check(await host.locator(".toast-success").count() === 0 && await host.getByRole("alert").count() === 0 && await calls("cancel_audio_import") === 1 && await calls("start_audio_import") === 0, "cancel was labeled saved, failed or executed another action");
   results.push("confirmed cancellation is information, not saved success, and contains no destructive notification action");
+
+  const startWaiting = async () => {
+    await boot({ saveDelayMs: 60000, deferCancel: true });
+    await open();
+    await modal.getByRole("button", { name: "取り込む", exact: true }).click();
+    await page.waitForFunction(() => window.monImportFixture.import.phase === "waiting");
+  };
+  const requestCancel = async () => {
+    const button = "取り込みを取り消す";
+    await modal.getByRole("button", { name: button, exact: true }).click();
+    await page.getByRole("dialog", { name: "進行中の取り込み取消を確認", exact: true }).getByRole("button", { name: button, exact: true }).click();
+    await page.waitForFunction(() => window.monImportFixture.import.phase === "cancelling");
+  };
+  await startWaiting();
+  const readStatus = modal.getByText("音声の取り込み状況を確認できません。自動で再確認しています。", { exact: true });
+  await page.evaluate(() => { window.monImportFixture.failStatus = true; });
+  await page.waitForFunction(() => window.monImportFixture.calls.some(call => call.args?.source === "audio_import_status"));
+  check(await readStatus.count() === 0, "a single failed poll interrupted import");
+  await readStatus.waitFor({ timeout: 12000 });
+  check(await page.evaluate(async () => {
+    const { toasts } = await import("/src/toast.tsx");
+    return window.monImportFixture.calls.filter(call => call.args?.source === "audio_import_status").length === 1
+      && !toasts.getHistorySnapshot().some(notice => notice.message.includes("模擬取り込み状況の取得失敗"));
+  }), "failed import polling repeated diagnostics or became a notification");
+  await page.evaluate(() => { window.monImportFixture.failStatus = false; });
+  await readStatus.waitFor({ state: "hidden" });
+  check(await calls("start_audio_import") === 1, "a failed read retried import");
+  results.push("a sustained import status failure is shown in progress and clears on a successful read");
+
+  await requestCancel();
+  await page.evaluate(() => window.monImportFixture.changed({ phase: "failed", busy: false, errorMessage: "模擬取り込み後片付け失敗" }));
+  await modal.getByRole("alert").filter({ hasText: "模擬取り込み後片付け失敗" }).waitFor();
+  check(await cancelledNotice.count() === 0, "failed cleanup announced successful cancellation");
+  results.push("failed cleanup stays visible without claiming cancellation succeeded");
+
+  await startWaiting();
+  await requestCancel();
+  await page.evaluate(() => {
+    const f = window.monImportFixture, meetingId = "saved-during-cancel";
+    f.meetings.push({ ...f.meetings[0], id: meetingId, title: "保存済みの会議", lifecycle: "imported", sourceType: "audio_import" });
+    return f.changed({ phase: "saved", busy: false, saved: { id: f.import.token, meetingId, state: "ready" } });
+  });
+  await modal.waitFor({ state: "hidden" });
+  await savedNotice.waitFor();
+  check(await cancelledNotice.count() === 0 && await calls("start_audio_import") === 1, "a confirmed save was replaced by a cancellation result");
+  results.push("a confirmed save takes precedence over a concurrent cancellation");
   return { passed: results.length, results };
 }

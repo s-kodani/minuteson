@@ -3,6 +3,7 @@ tauri::generate_handler![
     window_environment::get_window_environment,
     credits::get_credits,
     internal_logs::record_meeting_open_failure,
+    internal_logs::record_background_read_failure,
     internal_logs::get_internal_logs,
     recording_recovery::get_recording_recovery,
     startup_attention::get_startup_report,

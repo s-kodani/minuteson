@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {ArchivedInputController} from "../src/archived-input-controller.ts";
 import {ArchivedInputScheduler} from "../src/archived-input-scheduler.ts";
 import {checkedArchivedInputRows,type ArchivedInputRow} from "../src/archived-input-state.ts";
+import {InputLevelClock} from "../src/input-level-state.ts";
 
 const id=(i:number)=>`${i.toString(16).padStart(8,"0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
 const row=(i:number,active=true):ArchivedInputRow=>({meetingId:id(1000+i),sessionId:id(i),title:`会議${i}`,issue:null,historySaveIssue:null,
@@ -14,11 +15,14 @@ const page=(rows:ArchivedInputRow[],next:string|null=null)=>({schemaVersion:3,re
 const ready=(value:unknown)=>({paused:false,value});
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function harness(initial:ArchivedInputRow[]=[]){
-  let at=0,serial=0;const timers=new Map<number,{at:number;run:()=>void}>();
+  let at=0,serial=0,wallShift=0,clockAvailable=true;const timers=new Map<number,{at:number;run:()=>void}>();
+  const wall=()=>clockAvailable?100_000+at+wallShift:NaN;
+  let clock=new InputLevelClock(at,wall());
   const calls:{at:number;request:any}[]=[],errors:string[]=[];
   const c=new ArchivedInputController(id(999));
   let rows=initial,hold:((v:unknown)=>void)|null=null,held=false,fail=false;
-  const s=new ArchivedInputScheduler(c,{now:()=>at,start:(run,delay)=>{const id=++serial;timers.set(id,{at:at+delay,run});return id;},stop:id=>{timers.delete(id as number);}},async request=>{
+  const s=new ArchivedInputScheduler(c,{now:()=>clock.read(at,wall()),reset:()=>{clock=new InputLevelClock(at,wall());return clock.read(at,wall())===0;},
+    start:(run,delay)=>{const id=++serial;timers.set(id,{at:at+delay,run});return id;},stop:id=>{timers.delete(id as number);}},async request=>{
     calls.push({at,request});if(held)return new Promise(resolve=>{hold=resolve;});if(fail)throw Error("read failed");
     if(request.kind==="page"){
       const found=rows.filter(r=>request.after===null||r.sessionId>request.after).slice().sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
@@ -31,7 +35,8 @@ function harness(initial:ArchivedInputRow[]=[]){
     const next=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;
     assert.ok(++runs<2000,"timer storm");at=next[1].at;timers.delete(next[0]);next[1].run();await flush();
   }at=end;await flush();}
-  return {s,c,calls,errors,advance,setRows:(value:ArchivedInputRow[])=>{rows=value;},setFail:(value:boolean)=>{fail=value;},hold:()=>{held=true;},release:(value:unknown)=>{held=false;hold!(value);},timers};
+  return {s,c,calls,errors,advance,setRows:(value:ArchivedInputRow[])=>{rows=value;},setFail:(value:boolean)=>{fail=value;},hold:()=>{held=true;},release:(value:unknown)=>{held=false;hold!(value);},timers,
+    shiftWall:(delta:number)=>{wallShift+=delta;},setClockAvailable:(available:boolean)=>{clockAvailable=available;}};
 }
 
 test("idle discovery sleeps for 60 seconds; diagnostics never start targeted reads",async()=>{
@@ -123,9 +128,32 @@ test("a UI meeting list that lags discovery is not proof of removal",()=>{
   assert.deepEqual(c.targets().map(t=>t.sessionId),[id(2)]);
 });
 
-test("an invalid clock fails closed without creating a zero-delay timer loop",()=>{
-  const c=new ArchivedInputController(id(999));let timers=0,reads=0,error="";
-  const s=new ArchivedInputScheduler(c,{now:()=>NaN,start:()=>{timers++;return 1;},stop:()=>{}},async()=>{reads++;return page([]);},(_reading,value)=>{error=value;});
-  s.start(false);s.sync();s.invalidate(true);
-  assert.equal(timers,0);assert.equal(reads,0);assert.match(error,/時計が変更されたため/);
+test("wall clock rollback fences a pending read and preserves pending delivery across fresh discovery",async()=>{
+  const h=harness([row(1)]);h.s.start(false);await h.advance(0);
+  assert.equal(h.c.paint(h.s.now()).attempts[0].attempt.action,"receive");
+  h.hold();await h.advance(500);
+  assert.equal(h.calls.at(-1)?.request.kind,"rows");
+  h.shiftWall(-60_000);
+  h.setRows([row(1),row(2)]);
+  h.release(ready({schemaVersion:1,recordings:[],missingSessionIds:[id(1)]}));
+  await h.advance(0);
+  assert.deepEqual(h.calls[2]?.request,{kind:"page",after:null});
+  const {views,attempts}=h.c.paint(h.s.now());
+  assert.equal(views.length,2);
+  assert.ok(views.every(view=>view.checked));
+  assert.deepEqual(attempts.map(a=>a.attempt.sessionId),[id(2)]);
+  assert.ok(h.errors.every(error=>error===""));
+});
+
+test("an unavailable clock retries with one timer and resumes when sampling works",async()=>{
+  const h=harness();h.setClockAvailable(false);h.s.start(false);
+  await h.advance(500);h.s.sync();h.s.invalidate(true);
+  assert.deepEqual([...h.timers.values()].map(t=>t.at),[1000]);
+  await h.advance(500);
+  assert.deepEqual([...h.timers.values()].map(t=>t.at),[2000]);
+  assert.equal(h.calls.length,0);
+  h.setClockAvailable(true);await h.advance(1000);
+  assert.deepEqual(h.calls,[{at:2000,request:{kind:"page",after:null}}]);
+  assert.ok(h.errors.every(error=>error===""));
+  h.s.dispose();assert.equal(h.timers.size,0);
 });

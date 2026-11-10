@@ -39,6 +39,7 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
   const {inputs,uid,mode,loading,error}=control;
   const present=inputs?.devices.find(d=>d.uid===uid);
   const permission=inputs?.microphonePermission;
+  const permissionRequired=permission==="denied"||permission==="restricted";
   return <section className="capture-input-selection" aria-label="録音の入力準備">
     <div className="capture-microphone-selection">
     <div className="card-head"><div className="heading-with-info"><label htmlFor={microphoneId}>マイク</label><InfoPopover label="録音するマイク">{mode==="automatic"?"自動では会議アプリの使用マイクを優先し、特定できなければOSの既定入力を使います。5秒テストではOSの既定入力を確認します。":"固定では指定したマイクだけを使います。"}入力確認には「5秒録音して確認」を使えます。機器一覧や権限の許可だけでは実際の音声入力は確認できません。権限が未確認の場合は録音開始時にOSの許可を確認します。</InfoPopover></div><IconButton type="button" className="small-secondary" icon="refresh" label="マイク一覧を再確認" disabled={locked||loading} onClick={control.reload}/></div>
@@ -48,9 +49,9 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
       {inputs?.devices.map(d=><option key={d.uid} value={d.uid}>{d.name}{d.isDefault?"（OSの既定）":""}</option>)}
     </select>
     {loading&&<p role="status">機器一覧を確認中</p>}
-    <ErrorNotice scope="capture-inputs" type="missing-input" active={!!(inputs&&!present)}>{mode==="automatic"?"OSの既定入力を確認できません。マイクを接続して再確認してください。":"選択したマイクが見つかりません。接続して再確認するか、別のマイクを選択してください。"}</ErrorNotice>
-    <ErrorNotice scope="capture-inputs" type="permission" active={permission==="denied"||permission==="restricted"}>{windows?"Windowsの設定 → プライバシーとセキュリティ → マイクで、マイクへのアクセスとデスクトップアプリのアクセスを許可し、一覧を再確認してください。":"マイクの利用を許可してください。macOSのシステム設定で録音ヘルパーのマイク権限を確認し、一覧を再確認してください。"}</ErrorNotice>
-    {inputs&&permission!=="denied"&&permission!=="restricted"&&<p className="capture-input-hint">{permission==="authorized"?"入力未確認":"権限未確認 / 入力未確認"}</p>}
+    <ErrorNotice scope="capture-inputs" type="missing-input" active={!!(inputs&&!present&&!permissionRequired)}>{mode==="automatic"?"OSの既定入力を確認できません。マイクを接続して再確認してください。":"選択したマイクが見つかりません。接続して再確認するか、別のマイクを選択してください。"}</ErrorNotice>
+    <ErrorNotice scope="capture-inputs" type="permission" active={permissionRequired}>{windows?"Windowsの設定 → プライバシーとセキュリティ → マイクで、マイクへのアクセスとデスクトップアプリのアクセスを許可し、一覧を再確認してください。":"マイクの利用を許可してください。macOSのシステム設定で録音ヘルパーのマイク権限を確認し、一覧を再確認してください。"}</ErrorNotice>
+    {inputs&&!permissionRequired&&<p className="capture-input-hint">{permission==="authorized"?"入力未確認":"権限未確認 / 入力未確認"}</p>}
     <ErrorNotice scope="capture-inputs" type="CaptureInputSelection-operation" active={!!(error)}>{error}</ErrorNotice>
     </div>
     <CaptureApplicationSelection control={scopeControl} locked={locked}/>

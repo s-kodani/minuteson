@@ -38,5 +38,54 @@ async (page, capturePath) => {
       results.push(`${platform} ${size.width}×${size.height}: navigation, settings focus, recording entry and list scrolling remain accessible`);
     }
   }
+  await page.evaluate(() => {
+    const fixture = window.monBrowserFixture, invoke = window.__TAURI_INTERNALS__.invoke;
+    fixture.restoredLabelIds = ["meeting-0"];
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === "record_background_read_failure") { fixture.calls.push({ command, args }); return null; }
+      if (command === "list_restored_meeting_ids") {
+        if (fixture.failRestoreLabels) throw Error("模擬復元ラベル取得失敗");
+        return fixture.restoredLabelIds;
+      }
+      if (command === "plugin:window|is_maximized") {
+        if (fixture.failWindowRead) throw Error("模擬ウィンドウ状態取得失敗");
+        return !!fixture.maximized;
+      }
+      if (command === "plugin:window|toggle_maximize") throw Error("模擬最大化操作失敗");
+      return invoke(command, args);
+    };
+  });
+  const reload = page.getByRole("button", { name: "再読込", exact: true });
+  const restoredLabel = page.getByText("バックアップから復元", { exact: true });
+  await reload.click();
+  await restoredLabel.waitFor();
+  await page.evaluate(() => { window.monBrowserFixture.failRestoreLabels = true; });
+  await reload.click();
+  await page.waitForFunction(() => window.monBrowserFixture.calls.some(call => call.args?.source === "restore_labels"));
+  check(await restoredLabel.isVisible(), "a failed refresh removed the last confirmed restore label");
+  await page.evaluate(() => Object.assign(window.monBrowserFixture, { failRestoreLabels: false, restoredLabelIds: [] }));
+  await reload.click();
+  await restoredLabel.waitFor({ state: "hidden" });
+
+  const windowControls = page.getByRole("group", { name: "ウィンドウ操作", exact: true });
+  await page.evaluate(() => {
+    Object.assign(window.monBrowserFixture, { failWindowRead: true, maximized: true });
+    return window.monBrowserFixture.emitWindowFocus();
+  });
+  await page.waitForFunction(() => window.monBrowserFixture.calls.some(call => call.args?.source === "window_maximized"));
+  check(await windowControls.getByRole("button", { name: "最大化", exact: true }).isVisible(), "a failed read replaced the last window state");
+  await page.evaluate(() => {
+    window.monBrowserFixture.failWindowRead = false;
+    return window.monBrowserFixture.emitWindowFocus();
+  });
+  const restoreWindow = windowControls.getByRole("button", { name: "元のサイズに戻す", exact: true });
+  await restoreWindow.waitFor();
+  await restoreWindow.click();
+  await page.getByRole("alert").filter({ hasText: /最大化・復元できません.*模擬最大化操作失敗/ }).waitFor();
+  check(await page.evaluate(async () => {
+    const { toasts } = await import("/src/toast.tsx");
+    return !toasts.getHistorySnapshot().some(notice => /模擬復元ラベル取得失敗|模擬ウィンドウ状態取得失敗/.test(notice.message));
+  }), "passive read failures were recorded in notification history");
+  results.push("restore labels and Windows state recover after log-only failures, while an explicit window action failure remains visible");
   return results;
 }

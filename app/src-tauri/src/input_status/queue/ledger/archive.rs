@@ -306,12 +306,14 @@ impl ArchiveQueue {
                 delivery.account_persistence_time(started.elapsed());
             }
         }
+        let notice_loss = self.record.queue.loss();
+        notice_loss.log_if_incomplete("archived-notice-loss", &self.record.owner_id);
         Ok(Batch {
             schema_version: 1,
             owner_id: self.record.owner_id.clone(),
             revision: self.record.revision,
             notices,
-            notice_loss: self.record.queue.loss(),
+            notice_loss,
             history_issue: self.record.history_issue.clone(),
         })
     }

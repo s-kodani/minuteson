@@ -149,6 +149,14 @@ impl Startup {
                 .map(|_| ())
                 .map_err(|_| "不明な画面です".into());
         }
+        // The Windows title bar also runs while storage admission is pending.
+        if command == "record_background_read_failure" {
+            return if label == "main" {
+                Ok(())
+            } else {
+                Err("自動確認の診断ログはメイン画面だけで記録できます".into())
+            };
+        }
         let report = self.snapshot()?;
         if matches!(command, "get_residency_state" | "hide_main_to_background") {
             return if label == "main" {
@@ -441,6 +449,16 @@ mod tests {
             serde_json::json!({"schemaVersion":1,"platform":if cfg!(windows){"windows"}else if cfg!(target_os="macos"){"macos"}else{"other"},"phase":"ready","failure":null})
         );
         assert!(s.admit_command("recorder", "get_startup_report").is_err());
+    }
+    #[test]
+    fn background_read_diagnostics_are_main_only_before_storage_admission() {
+        let startup = Startup::default();
+        let command = "record_background_read_failure";
+        assert!(startup.admit_command("main", command).is_ok());
+        assert!(startup.admit_command("recorder", command).is_err());
+        assert!(startup
+            .admit_command("recording-confirmation", command)
+            .is_err());
     }
     #[test]
     fn poisoned_diagnostic_lock_denies_commands_but_keeps_os_exit_path() {

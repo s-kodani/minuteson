@@ -35,7 +35,8 @@ export interface InternalLogPage {
 }
 export const logCategories: Record<string, string> = {
   meeting_open_diagnostics: "会議を開くときの診断",
-  recording_diagnostics: "録音の確認・接続記録",
+  background_read: "自動確認の診断",
+  recording_diagnostics: "マイク・PC音声の中断・再開履歴",
   application: "アプリ", recording: "録音", import: "音声取り込み", model: "モデル準備",
   speaker_completion: "話者補完", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成",
   playback: "再生準備", backup: "バックアップ", restore: "復元", relocation: "保存先変更",

@@ -20,10 +20,11 @@ type MeetingRead = <T>(step: "get_meeting" | "list_meetings", work: () => Promis
 /** Meeting actions contain no model settings, candidate review or adoption.
  * Native recording/import completion starts the global-settings flow.
  */
-export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, audioDeleted, recordingActive, locked, visible, onHeadChanged, withSavedEdits, onReplaceGenerated, onGenerationStarted, actionsHost }: {
+export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, audioDeleted, recordingActive, locked, visible, onHeadChanged, withSavedEdits, onReplaceGenerated, publicationReadStatus, onGenerationStarted, actionsHost }: {
   meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; audioDeleted: boolean | null; recordingActive: boolean; locked: boolean; visible: boolean;
   onHeadChanged: (read: MeetingRead) => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onReplaceGenerated: (flow: AnalysisFlow) => Promise<void>;
+  publicationReadStatus?: string;
   onGenerationStarted?: () => void;
   actionsHost?: HTMLElement | null;
 }) {
@@ -195,6 +196,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   return <>
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || flow?.errorMessage} historyOnly={!error && flowHistoryOnly} />
     <LoadingOverlay active={visible && !!refreshError} label="文字起こしの状態を確認中です。" />
+    {visible && (flow?.readyToPublish || flow?.replacementReady) && publicationReadStatus && <p role="status">{publicationReadStatus}</p>}
     {actionsHost ? createPortal(actions, actionsHost) : <div className="analysis-actions">{actions}</div>}
   </>;
 }

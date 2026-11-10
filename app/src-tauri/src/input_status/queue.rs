@@ -37,6 +37,18 @@ pub(crate) struct Loss {
     system: u64,
 }
 
+impl Loss {
+    pub(super) fn log_if_incomplete(&self, stage: &str, owner: &str) {
+        if self.microphone > 0 || self.system > 0 {
+            let message = format!(
+                "通知履歴の保持不足 microphoneThrough={} systemThrough={}",
+                self.microphone, self.system
+            );
+            super::diagnostics::read_result(stage, Some(owner), None, Some(&message));
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Action {
     Receive,

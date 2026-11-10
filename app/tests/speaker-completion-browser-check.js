@@ -17,8 +17,20 @@ async page => {
   check(await apply.isDisabled(),'saved apply button');
   const payload=await page.evaluate(()=>window.monBrowserFixture.speakerCompletionPreferences.payload);
   check(JSON.stringify(payload)===JSON.stringify({similarityThresholdMilli:730,marginThresholdMilli:60}),'saved values');
-  check(await page.getByRole('region',{name:'登録した声の自動適用',exact:true}).getByRole('spinbutton',{name:'類似度の下限',exact:true}).inputValue()==='0.70','independent voice settings');
+  const voice=page.getByRole('region',{name:'登録した声の自動適用',exact:true});
+  const voiceSimilarity=voice.getByRole('spinbutton',{name:'類似度の下限',exact:true});
+  check(await voiceSimilarity.inputValue()==='0.70','independent voice settings');
+  await voiceSimilarity.fill('');
+  await voice.getByText('閾値は0.00～1.00、0.01刻みで設定してください。',{exact:true}).waitFor();
+  check(await voice.getByRole('button',{name:'適用',exact:true}).isDisabled(),'empty voice threshold can be applied');
+  await voiceSimilarity.fill('0.75');await voice.getByRole('button',{name:'適用',exact:true}).click();
+  await page.waitForFunction(()=>window.monBrowserFixture.voiceMatchingPreferences?.lockVersion===1);
   await similarity.fill('0.731');check(await apply.isDisabled(),'fractional similarity rejected');
+  await region.getByText('閾値は0.00～1.00、0.01刻みで設定してください。',{exact:true}).waitFor();
+  check(await page.evaluate(async()=>{
+    const {toasts}=await import('/src/toast.tsx');
+    return !toasts.getHistorySnapshot().some(notice=>/^(話者補完設定|声の自動適用設定):/.test(notice.message));
+  }),'editing added a threshold error to notification history');
   await similarity.fill('0.74');
   await page.evaluate(()=>{window.monBrowserFixture.loseCompletionPreferencesReply=true;});await apply.click();
   await region.getByRole('button',{name:'現在の状態を確認',exact:true}).waitFor();

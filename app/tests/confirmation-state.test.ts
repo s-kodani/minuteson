@@ -82,6 +82,27 @@ test("lost or failed response is retained, never automatically retried or called
   assert.equal(calls, 1); assert.equal(errors, 1); assert.equal(c.getSnapshot()!.phase, "failed");
   c.cancel(id); assert.equal(await result, "unconfirmed");
 });
+test("only a reported operation failure replaces the confirmation error", async () => {
+  const cases = [
+    [() => true, true],
+    [() => undefined, false],
+    [() => { throw Error("report failed"); }, false],
+  ] as const;
+  for (const [report, reported] of cases) {
+    const c = controller();
+    const result = c.request({}, null, null, {
+      ...options(async () => { throw Error("operation failed"); }),
+      onError: report,
+    });
+    const id = c.getSnapshot()!.id;
+    await c.execute(id);
+    assert.equal(c.getSnapshot()!.phase, "failed");
+    assert.equal(c.getSnapshot()!.error, "Error: operation failed");
+    assert.equal(c.getSnapshot()!.errorReported, reported);
+    c.cancel(id);
+    assert.equal(await result, "unconfirmed");
+  }
+});
 test("disposed owner cancels pending decisions but does not cancel accepted native work", async () => {
   const c = controller(), owner = {}; let calls = 0, done!: () => void;
   const first = c.request(owner, {}, {}, options(async () => { calls++; })); c.disposeOwner(owner); assert.equal(await first, "cancelled"); assert.equal(calls, 0);

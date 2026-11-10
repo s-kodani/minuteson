@@ -1,4 +1,4 @@
-export { matchingThreshold } from "./voice-matching-state.ts";
+export { matchingThreshold, matchingThresholdInput } from "./voice-matching-state.ts";
 export type CompletionPreferences = {similarityThresholdMilli:number; marginThresholdMilli:number};
 
 export function identificationText(value: import("./transcript-state.ts").SpeakerIdentification | null | undefined) {

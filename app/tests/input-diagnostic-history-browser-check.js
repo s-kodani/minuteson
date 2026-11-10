@@ -9,7 +9,10 @@ async (page,capturePath=path=>path)=>{
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});
   const rows=()=>history().locator("[data-history-id]");
   const open=async()=>{await page.getByRole("button",{name:"通知一覧",exact:true}).click();await history().waitFor();};
-  const quiet=async()=>check(await page.evaluate(()=>window.closeFixture.notificationHistory().length===0),"automatic diagnostics entered notification history");
+  const quiet=async()=>check(await page.evaluate(()=>window.closeFixture.notificationHistory().length===0),"input diagnostics entered notification history");
+  const waitWriter=(owner,state)=>page.waitForFunction(({owner,state})=>window.closeFixture.calls.some(c=>
+    c.command==="record_input_diagnostic_log"&&c.args.stage==="live-journal-notice"&&c.args.sessionId===owner
+    &&(state===null?c.args.message===null:c.args.message&&JSON.parse(c.args.message).state===state)),{owner,state});
   for(const platform of ["windows","macos"]){
     await page.setViewportSize({width:1200,height:900});
     await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);
@@ -33,28 +36,29 @@ async (page,capturePath=path=>path)=>{
     results.push(`${platform}: long live/archive failures, recovery and replacement WebView remain silent while retries continue`);
 
     const owner=await page.evaluate(()=>{const f=window.closeFixture;f.journalStatus={state:"failed",requestedRevision:2,committedRevision:1,closed:false};const owner=crypto.randomUUID();f.recordChanged({phase:"recording",sessionId:owner});return owner;});
-    await page.locator('.toast-host .toast-error').filter({hasText:"接続記録を保存できませんでした"}).waitFor();
-    await open();check(await rows().count()===1,"confirmed writer failure lost its notification");
-    await page.evaluate(()=>{const f=window.closeFixture;f.journalStatus={state:"failed",requestedRevision:2,committedRevision:1,closed:false};return f.recordChanged({sessionId:crypto.randomUUID()});});
-    await page.waitForFunction(()=>window.closeFixture.notificationHistory().length===2);
+    await waitWriter(owner,"failed");
+    await open();await quiet();
     await page.evaluate(()=>window.closeFixture.journalStatus={state:"confirmed",requestedRevision:2,committedRevision:2,closed:false});
-    await page.waitForFunction(()=>window.closeFixture.notificationHistory().length===1);
-    check(await page.evaluate(owner=>JSON.parse(window.closeFixture.notificationHistory()[0].key)[0]===owner,owner),"recovery erased another recording's failure");
-    await page.evaluate(owner=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({sessionId:owner,count:0,title:"保存確認"})];return f.recordChanged({phase:"idle"});},owner);
-    await page.waitForFunction(()=>window.closeFixture.notificationHistory().length===0);
+    await waitWriter(owner,null);await quiet();
+    await page.evaluate(()=>window.closeFixture.journalStatus={state:"invalid",requestedRevision:3,committedRevision:2,closed:false});
+    await waitWriter(owner,"invalid");await quiet();
+    await page.evaluate(owner=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({sessionId:owner,count:0,title:"保存診断",historySaveIssue:"invalid",issue:"missing",loss:2})];return f.recordChanged({phase:"idle"});},owner);
+    await page.waitForTimeout(650);await quiet();
     check(await page.evaluate(()=>!window.closeFixture.calls.some(c=>c.command==="acknowledge_archived_recording_input_notice")),"silent recovery emitted a native receipt");
-    results.push(`${platform}: real writer failures survive stop and unrelated recovery; final evidence removes history without receipts`);
+    results.push(`${platform}: writer failures, invalidity and recovery are logged while saved input diagnostics stay out of notifications`);
 
-    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({count:0,title:"要音声確認",historySaveIssue:"failed",issue:"missing",loss:2})];return f.recordChanged({phase:"idle"});});
-    await rows().filter({hasText:"要音声確認"}).waitFor();
-    check((await rows().filter({hasText:"要音声確認"}).innerText()).includes("音声を再生して内容を確認"),"actionable historical failure lost its next step");
+    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"要音声確認",historySaveIssue:"failed",issue:"missing",loss:2})];return f.recordChanged({phase:"idle"});});
+    const interruption=rows().filter({hasText:"マイクの取得が中断していました"});
+    await interruption.waitFor();
+    check((await interruption.innerText()).includes("保存された音声と欠損範囲を確認"),"archived interruption lost its next step");
+    check(await rows().filter({hasText:/中断・再開履歴|接続通知を/u}).count()===0,"notification showed history diagnostics alongside the actual interruption");
     for(const [width,theme]of [[960,"light"],[360,"dark"]]){
       await page.setViewportSize({width,height:900});await page.emulateMedia({colorScheme:theme});
       check(await history().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"notification history overflowed");
       await page.screenshot({path:capturePath(`notification-policy-${platform}-${width}-${theme}.png`)});
     }
     check(await page.evaluate(()=>!window.closeFixture.calls.some(c=>["start_recording","stop_recording","prepare_meeting_playback"].includes(c.command))),"notification observation started audio work");
-    results.push(`${platform}: actionable archive diagnosis and wide/narrow layouts remain; local failure/recovery logging continues`);
+    results.push(`${platform}: actual archived interruptions keep their next step in wide and narrow layouts`);
     await history().getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();
     await page.setViewportSize({width:1200,height:900});
     await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);

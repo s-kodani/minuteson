@@ -16,7 +16,8 @@ test("capture polling and stopping dispatch lock waits and file reads off the na
 test("input preparation has no permanent permission-help button or modal",()=>{
   const source=readFileSync(new URL("../src/capture-inputs.tsx",import.meta.url),"utf8");
   assert.doesNotMatch(source,/録音の権限を確認|OptionsModal|拒否されたとは判断できません/);
-  assert.match(source,/<ErrorNotice[^>]*type="permission"[^>]*active=\{permission==="denied"\|\|permission==="restricted"\}/);
+  assert.match(source,/const permissionRequired=permission==="denied"\|\|permission==="restricted"/);
+  assert.match(source,/<ErrorNotice[^>]*type="permission"[^>]*active=\{permissionRequired\}/);
   assert.doesNotMatch(source,/<p role="alert">/);
   assert.match(source,/マイクの利用を許可してください/);
   assert.match(source,/macOSのシステム設定/);

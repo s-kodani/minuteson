@@ -20,8 +20,15 @@
   check(await apply.isDisabled(),'unchanged settings can be applied');
   await field('発話判定の閾値').fill('');
   check(await apply.isDisabled(),'blank allowed');
-  await page.getByRole('alert').waitFor();
+  const fieldError=panel.getByText('0.01～0.99の範囲で、0.01刻みで入力してください。',{exact:true});
+  await fieldError.waitFor();
+  check(await field('発話判定の閾値').getAttribute('aria-invalid')==='true','invalid value not associated with the input');
+  check(await page.evaluate(async()=>{
+    const {toasts}=await import('/src/toast.tsx');
+    return !toasts.getHistorySnapshot().some(notice=>notice.message.startsWith('VAD設定:'));
+  }),'editing added a VAD error to notification history');
   await reset.click();
+  await fieldError.waitFor({state:'hidden'});
   await field('最大発話区間（秒）').fill('1');
   await field('最小発話時間（ms）').fill('2000');
   check(await apply.isDisabled(),'contradictory durations accepted');

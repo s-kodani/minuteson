@@ -61,6 +61,7 @@ const switchDraft = (nextId) => {
 };
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.emitWindowFocus = () => emit("tauri://focus", null);
 fixture.emitTranscriptChange = (event = "analysis-version-changed", meetingId = meetings[0].id) => emit(event, meetingId);
 fixture.emitDiarizationRuntime = payload => emit("diarization-runtime-progress", payload);
 fixture.emitMinutesRuntime = payload => emit("minutes-runtime-progress", payload);

@@ -12,7 +12,11 @@ const sample=(id,modelName,hash)=>({id,modelName,modelHash:hash.repeat(64),extra
 window.monVoiceFixture.people=[{id:"9b3b937d-test-person",name:"田中 太郎",version:1,samples:[sample("known","3D-Speaker ERes2Net base","a"),sample("unknown",null,"b")]}];
 window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
   f.calls.push({command,args:structuredClone(args)});
-  if(command==="get_model_download_guidance")return {pending:f.pending};
+  if(command==="get_model_download_guidance"){
+    if(new URLSearchParams(location.search).has("guidance-read-failure"))throw Error("合成の初回案内取得失敗");
+    return {pending:f.pending};
+  }
+  if(command==="record_background_read_failure")return null;
   if(command==="dismiss_model_download_guidance"){
     if(f.failDismiss)throw Error("合成の案内終了保存失敗");
     f.pending=false;localStorage.setItem(key,"done");return {pending:false};

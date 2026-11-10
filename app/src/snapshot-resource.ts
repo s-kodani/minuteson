@@ -91,7 +91,7 @@ export function observeSnapshots<T>(options: {
   read: () => Promise<unknown>;
   subscribe: (accept: (value: T) => void) => Promise<() => void>;
   accept: (value: T) => void;
-  error: (cause: unknown) => void;
+  error: (cause: unknown, source: "read" | "event" | "subscription") => void;
   intervalMs: number;
   invalidations?: boolean;
   schedule: SnapshotTransport<T>["schedule"];
@@ -107,7 +107,7 @@ export function observeSnapshots<T>(options: {
         again = false;
         const readEvidence = evidence;
         try { await options.read(); }
-        catch (cause) { if (!disposed && evidence === readEvidence) options.error(cause); }
+        catch (cause) { if (!disposed && evidence === readEvidence) options.error(cause, "read"); }
       } while (again && !disposed);
     })().finally(() => {
       pending = null;
@@ -124,9 +124,9 @@ export function observeSnapshots<T>(options: {
     if (disposed) return;
     if (options.invalidations) { void refresh(); return; }
     try { options.accept(value); evidence++; }
-    catch (cause) { options.error(cause); }
+    catch (cause) { options.error(cause, "event"); }
   }).then(stop => { if (disposed) stop(); else { stops.push(stop); poll(); } }).catch(cause => {
-    if (!disposed) { options.error(cause); poll(); }
+    if (!disposed) { options.error(cause, "subscription"); poll(); }
   });
   return { refresh, ready: stopPromise, stop: () => { disposed = true; stops.splice(0).forEach(stop => stop()); } };
 }
