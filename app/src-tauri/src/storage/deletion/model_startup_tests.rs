@@ -20,13 +20,17 @@ fn lease(f: &Fixture, op: &str) -> DataMaintenanceLease {
 }
 fn finish(f: &Fixture) -> String {
     let op = uuid::Uuid::new_v4().to_string();
+    finish_with_id(f, &op);
+    op
+}
+fn finish_with_id(f: &Fixture, op: &str) {
     let owner = AnalysisController::default()
         .begin_model_deletion(false, false, &crate::test_support::never_cancelled)
         .unwrap();
     let view = models::preview(
         &f.storage,
         &f.root,
-        &op,
+        op,
         &f.package,
         &f.review,
         &crate::test_support::never_cancelled,
@@ -35,7 +39,7 @@ fn finish(f: &Fixture) -> String {
     intent::prepare(
         &f.storage,
         &f.root,
-        &op,
+        op,
         &f.package,
         &f.review,
         &view.census_hash,
@@ -46,20 +50,19 @@ fn finish(f: &Fixture) -> String {
     .unwrap();
     removal::start(
         &f.storage,
-        &op,
+        op,
         &owner,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
     assert!(removal::run(
         &f.storage,
-        &op,
+        op,
         &owner,
         &crate::test_support::never_cancelled
     )
     .unwrap()
     .completed());
-    op
 }
 fn reason(f: &Fixture, op: &str) -> Option<String> {
     super::super::super::startup::reason(&f.storage.connection.lock().unwrap(), op).unwrap()
@@ -301,7 +304,9 @@ fn model_startup_defers_stale_jobs_but_never_bypasses_actual_worker_admission() 
 #[test]
 fn model_startup_exact_reserved_root_is_reviewed_without_adopting_neighbors() {
     let f = Fixture::new();
-    let op = finish(&f);
+    // The operation ID also contains the neighboring root's suffix.
+    let op = "00000000-2500-4000-8000-000000000000";
+    finish_with_id(&f, op);
     let reserved = f.root.join(format!(".mon-delete-model-{op}-4"));
     let neighbor = f.root.join(format!(".mon-delete-model-{op}-250"));
     for path in [&reserved, &neighbor] {
@@ -309,29 +314,31 @@ fn model_startup_exact_reserved_root_is_reviewed_without_adopting_neighbors() {
         std::fs::write(path.join("NEW"), b"KEEP UNLESS EXACT").unwrap();
     }
     let f = f.cold();
-    assert_eq!(reason(&f, &op).as_deref(), Some(REAPPEARED));
-    let owner = lease(&f, &op);
+    assert_eq!(reason(&f, op).as_deref(), Some(REAPPEARED));
+    let owner = lease(&f, op);
     let view = renewal::review(
         &f.storage,
-        &op,
+        op,
         &owner,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    assert!(view.entries().iter().any(|e| e
-        .relative_path
-        .starts_with(reserved.file_name().unwrap().to_str().unwrap())));
-    assert!(!view
-        .entries()
-        .iter()
-        .any(|e| e.relative_path.contains("-250")));
+    let entries = view.entries();
+    let includes_root = |root: &Path| {
+        let name = root.file_name().unwrap();
+        entries
+            .iter()
+            .any(|entry| Path::new(&entry.relative_path).starts_with(name))
+    };
+    assert!(includes_root(&reserved));
+    assert!(!includes_root(&neighbor));
     renewal::accept(&f.storage, &view, view.census_hash(), true, &owner, &|| {
         false
     })
     .unwrap();
     removal::run(
         &f.storage,
-        &op,
+        op,
         &owner,
         &crate::test_support::never_cancelled,
     )
