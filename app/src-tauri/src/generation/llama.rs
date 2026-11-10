@@ -265,6 +265,29 @@ pub(crate) fn run_unit(
         &|_| {},
     )
 }
+pub(crate) fn run_compatibility_check(
+    config: &LlamaConfig,
+    directory: &Path,
+    system_prompt: &str,
+    prompt: &str,
+    schema: &Value,
+    idle_timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Value>, String> {
+    run_unit_with_purpose(
+        config,
+        directory,
+        system_prompt,
+        prompt,
+        schema,
+        idle_timeout,
+        cancelled,
+        &|_| {},
+        None,
+        super::memory::MemoryCheckPurpose::ModelPreparation,
+    )
+}
+
 pub(crate) fn run_unit_observed(
     config: &LlamaConfig,
     directory: &Path,
@@ -297,6 +320,32 @@ pub(crate) fn run_unit_observed_on_device(
     cancelled: &impl Fn() -> bool,
     observe: &impl Fn(super::llama_metrics::Phase),
     device: Option<&str>,
+) -> Result<Option<Value>, String> {
+    run_unit_with_purpose(
+        config,
+        directory,
+        system_prompt,
+        prompt,
+        schema,
+        idle_timeout,
+        cancelled,
+        observe,
+        device,
+        super::memory::MemoryCheckPurpose::MinutesGeneration,
+    )
+}
+
+fn run_unit_with_purpose(
+    config: &LlamaConfig,
+    directory: &Path,
+    system_prompt: &str,
+    prompt: &str,
+    schema: &Value,
+    idle_timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+    observe: &impl Fn(super::llama_metrics::Phase),
+    device: Option<&str>,
+    purpose: super::memory::MemoryCheckPurpose,
 ) -> Result<Option<Value>, String> {
     use super::llama_metrics::{Metrics, Phase};
     // Explicit layer settings historically allowed the backend's default
@@ -438,7 +487,7 @@ pub(crate) fn run_unit_observed_on_device(
         // official shared builds. CPU trials and CPU jobs must stay on CPU.
         command.args(["--device", "none", "--no-kv-offload", "--no-op-offload"]);
     }
-    if let Err(error) = super::memory::guard(config, device, cancelled) {
+    if let Err(error) = super::memory::guard(config, device, purpose, cancelled) {
         return if cancelled() { Ok(None) } else { Err(error) };
     }
     if cancelled() {
