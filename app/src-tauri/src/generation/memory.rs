@@ -10,6 +10,12 @@ use std::time::Duration;
 const GIB: u64 = 1024 * 1024 * 1024;
 const ALIGNMENT: u32 = 256;
 
+#[derive(Clone, Copy)]
+pub(super) enum MemoryCheckPurpose {
+    MinutesGeneration,
+    ModelPreparation,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Device {
@@ -192,7 +198,7 @@ impl Estimate {
         }
         Ok(e)
     }
-    fn check(&self, budget: Budget) -> Result<(), String> {
+    fn check(&self, budget: Budget, purpose: MemoryCheckPurpose) -> Result<(), String> {
         let mut host_required = self
             .devices
             .last()
@@ -203,7 +209,7 @@ impl Estimate {
             // Device memory is an additional constraint, never extra host RAM.
             let usable = Budget::new(d.free)?.usable;
             if required > usable {
-                return Err(insufficient(&d.name, required, d.free, usable));
+                return Err(insufficient(purpose, &d.name, required, d.free, usable));
             }
             if d.shared_memory {
                 host_required = host_required
@@ -213,6 +219,7 @@ impl Estimate {
         }
         if host_required > budget.usable {
             return Err(insufficient(
+                purpose,
                 "CPU/共有メモリ",
                 host_required,
                 budget.available,
@@ -222,8 +229,24 @@ impl Estimate {
         Ok(())
     }
 }
-fn insufficient(device: &str, required: u64, available: u64, usable: u64) -> String {
-    format!("議事録生成のメモリが不足しています（{device}：必要 {:.2} GiB、利用可能 {:.2} GiB、安全余裕を除く上限 {:.2} GiB）。他の処理を終了して再試行するか、新しく生成して分割サイズを調整してください。保存済みの結果は保持しています。（minutes_memory_insufficient）",
+fn insufficient(
+    purpose: MemoryCheckPurpose,
+    device: &str,
+    required: u64,
+    available: u64,
+    usable: u64,
+) -> String {
+    let (operation, guidance) = match purpose {
+        MemoryCheckPurpose::MinutesGeneration => (
+            "議事録生成",
+            "他の処理を終了して再試行するか、新しく生成して分割サイズを調整してください。保存済みの結果は保持しています。",
+        ),
+        MemoryCheckPurpose::ModelPreparation => (
+            "モデルの動作確認",
+            "他のアプリを閉じてから再試行してください。",
+        ),
+    };
+    format!("{operation}に必要なメモリが不足しています（{device}：必要 {:.2} GiB、利用可能 {:.2} GiB、モデルに使えるメモリの上限 {:.2} GiB）。{guidance}（minutes_memory_insufficient）",
         required as f64 / GIB as f64, available as f64 / GIB as f64, usable as f64 / GIB as f64)
 }
 fn arguments(config: &LlamaConfig, device: Option<&str>) -> Result<Vec<String>, String> {
@@ -309,7 +332,7 @@ pub(super) fn select_context(
         let e = estimate(&mut session, &config, None, &|| {
             started.elapsed() > Duration::from_secs(60)
         })?;
-        let result = e.check(budget);
+        let result = e.check(budget, MemoryCheckPurpose::MinutesGeneration);
         diagnostic(
             &config,
             None,
@@ -335,7 +358,7 @@ pub(super) fn select_context(
             let e = estimate(&mut session, &config, None, &|| {
                 started.elapsed() > Duration::from_secs(60)
             })?;
-            e.check(budget)?;
+            e.check(budget, MemoryCheckPurpose::MinutesGeneration)?;
             Err(invalid_estimate())
         }
     }
@@ -370,6 +393,7 @@ fn largest_fitting(
 pub(super) fn guard(
     config: &LlamaConfig,
     device: Option<&str>,
+    purpose: MemoryCheckPurpose,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     #[cfg(test)]
@@ -384,7 +408,7 @@ pub(super) fn guard(
     let e = estimate(&mut session, config, device, cancelled)?;
     // Refresh after GPU teardown/probing; never reuse the enqueue-time value.
     let budget = Budget::new(available()?)?;
-    let result = e.check(budget);
+    let result = e.check(budget, purpose);
     diagnostic(
         config,
         device,
@@ -402,6 +426,7 @@ pub(super) fn guard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use MemoryCheckPurpose::{MinutesGeneration, ModelPreparation};
     fn host(bytes: u64) -> Device {
         Device {
             kind: "host".into(),
@@ -431,7 +456,10 @@ mod tests {
         let physical = 20 * GIB;
         let commit = 4 * GIB;
         assert!(e(vec![host(4 * GIB)])
-            .check(Budget::new(physical.min(commit)).unwrap())
+            .check(
+                Budget::new(physical.min(commit)).unwrap(),
+                MinutesGeneration
+            )
             .is_err());
     }
     #[test]
@@ -441,20 +469,33 @@ mod tests {
         gpu.name = "Vulkan0".into();
         gpu.shared_memory = true;
         assert!(e(vec![gpu.clone(), host(3 * GIB)])
-            .check(Budget::new(6 * GIB).unwrap())
+            .check(Budget::new(6 * GIB).unwrap(), MinutesGeneration)
             .is_err());
         gpu.shared_memory = false;
         gpu.kind = "gpu".into();
         assert!(e(vec![gpu, host(3 * GIB)])
-            .check(Budget::new(6 * GIB).unwrap())
+            .check(Budget::new(6 * GIB).unwrap(), MinutesGeneration)
             .is_ok());
     }
     #[test]
     fn memory_drop_between_planning_and_fallback_is_rejected_before_allocation() {
         let estimate = e(vec![host(6 * GIB)]);
-        assert!(estimate.check(Budget::new(10 * GIB).unwrap()).is_ok());
-        let error = estimate.check(Budget::new(5 * GIB).unwrap()).unwrap_err();
-        assert!(error.contains("minutes_memory_insufficient") && error.contains("6.00"));
+        assert!(estimate
+            .check(Budget::new(10 * GIB).unwrap(), MinutesGeneration)
+            .is_ok());
+        let budget = Budget::new(5 * GIB).unwrap();
+        let error = estimate.check(budget, MinutesGeneration).unwrap_err();
+        assert!(
+            error.contains("必要 6.00 GiB、利用可能 5.00 GiB、モデルに使えるメモリの上限 4.00 GiB")
+        );
+        assert!(error.contains("新しく生成して分割サイズを調整してください"));
+        assert!(error.ends_with("（minutes_memory_insufficient）"));
+
+        let error = estimate.check(budget, ModelPreparation).unwrap_err();
+        assert_eq!(
+            error,
+            "モデルの動作確認に必要なメモリが不足しています（CPU/共有メモリ：必要 6.00 GiB、利用可能 5.00 GiB、モデルに使えるメモリの上限 4.00 GiB）。他のアプリを閉じてから再試行してください。（minutes_memory_insufficient）"
+        );
     }
     #[test]
     fn pages_do_not_include_speculative_twice_and_overflow_is_rejected() {
@@ -636,7 +677,7 @@ mod tests {
             selected,
             0
         ));
-        guard(&config, None, &|| false).unwrap();
+        guard(&config, None, MinutesGeneration, &|| false).unwrap();
         eprintln!("Phi guarded CPU fallback: inputTokens={input} contextTokens={selected} maximumKvBytes={} selectedEstimateBudget={:?}",16*GIB,Budget::new(available().unwrap()).unwrap());
     }
 }

@@ -269,7 +269,16 @@ fn run(
                 seed: 42,
             };
             let schema = serde_json::json!({"type":"object","properties":{"ok":{"type":"boolean","const":true}},"required":["ok"],"additionalProperties":false});
-            let result=crate::generation::llama::run_unit(&config,directory.path(),"Return the exact JSON object required by the schema. This is a local compatibility test.","Return {\"ok\":true}.",&schema,timeout,cancelled)?.ok_or("モデル互換性確認を取り消しました")?;
+            let result = crate::generation::llama::run_compatibility_check(
+                &config,
+                directory.path(),
+                "Return the exact JSON object required by the schema. This is a local compatibility test.",
+                "Return {\"ok\":true}.",
+                &schema,
+                timeout,
+                cancelled,
+            )?
+            .ok_or("モデル互換性確認を取り消しました")?;
             if result != serde_json::json!({"ok":true}) {
                 return Err("議事録エンジンが固定schemaの確認結果を返しませんでした".into());
             }
