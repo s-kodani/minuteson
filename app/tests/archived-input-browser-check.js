@@ -10,8 +10,8 @@ async page=>{
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});
   const openHistory=async()=>{await page.getByRole("button",{name:"通知一覧",exact:true}).click();await history().waitFor();};
   const closeHistory=async()=>{await history().getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();await history().waitFor({state:"hidden"});};
-  const diagnosis=()=>history().locator(".toast-card").filter({hasText:"接続通知を"});
-  const readWarning=()=>page.locator(".toast-host .toast-card").filter({hasText:"過去の録音の接続記録を確認できません"});
+  const diagnosis=()=>history().locator(".toast-card").filter({hasText:/接続通知を|中断・再開履歴|通知履歴の一部/u});
+  const readWarning=()=>page.locator(".toast-host .toast-card").filter({hasText:"中断・再開履歴を確認できません"});
   const calls=()=>page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="acknowledge_archived_recording_input_notice").map(c=>c.args.request));
   const release=action=>page.evaluate(action=>{const state=window.closeFixture.archived;state.hold[action]=false;const replies=state.replies.filter(r=>r.action===action);state.replies=state.replies.filter(r=>r.action!==action);replies.forEach(r=>r.resolve());},action);
   const reload=async()=>{await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);};
@@ -51,17 +51,17 @@ async page=>{
     results.push("confirmed interruption closes before recovery and each historical input advances independently");
     await card().getByRole("button",{name:"会議を開く",exact:true}).click();await page.getByRole("tabpanel",{name:"文字起こし",exact:true}).waitFor();
     check(await page.locator(".topbar").innerText().then(text=>text.includes("会議詳細")),"archive action did not open meeting detail");
-    await openHistory();const details=diagnosis();
-    check((await details.innerText()).includes("接続通知を2件残せませんでした")&&(await details.innerText()).includes("接続記録が見つからず"),"retained diagnostics lost after navigation/dismissal");
-    check(await page.locator(".archived-input-notices,.issue-status").count()===0,"historical diagnostics escaped the notification list");
+    await openHistory();
+    check(await diagnosis().count()===0,"history read errors or notification loss entered the notification list");
+    check(await page.locator(".archived-input-notices,.issue-status").count()===0,"historical diagnostics appeared in the workspace");
     await closeHistory();
-    results.push("meeting action navigates through production UI without playback; missing history and loss remain after dismissal");
+    results.push("meeting action opens the meeting while missing history and notification loss stay out of the UI");
     await readStack();
     for(const input of ["マイク","PC音声"]){const n=card(input);if(await n.count())await n.getByRole("button",{name:input==="マイク"?"情報通知を閉じる":"注意通知を閉じる",exact:true}).click();}
     await card("PC音声").filter({hasText:"復帰していました"}).waitFor();await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.rendered);
     await reload();await page.waitForTimeout(700);check(await card().count()===0&&await card("PC音声").count()===0,"rendered past event replayed after reload");
-    await openHistory();await diagnosis().waitFor();await closeHistory();
-    results.push("render-confirmed events do not replay in replacement WebView while diagnostics persist");
+    await openHistory();check(await diagnosis().count()===0,"replacement WebView exposed archive diagnostics");await closeHistory();
+    results.push("render-confirmed events do not replay in replacement WebView");
 
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.lost.render=true;f.archived.lost.receive=true;});await seed({title:"応答喪失の会議"});
     await card().waitFor();await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
@@ -102,25 +102,12 @@ async page=>{
     // live toasts before interacting with the notification history.
     await page.waitForFunction(()=>[...document.querySelectorAll(".toast-host .toast-card")].every(e=>! /終了した録音.*(?:マイク|PC音声)/u.test(e.textContent??"")));
     await openHistory();
-    const saved=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
-    await saved.waitFor();
-    let savedText=await saved.innerText();
-    check(savedText.includes("接続記録の保存処理でエラーが発生しました")&&savedText.includes("マイクの接続通知を2件残せませんでした")&&savedText.includes("PC音声の接続通知を2件残せませんでした"),"saved diagnosis/loss did not reach production review UI");
-    check(!savedText.includes("過去の接続状況を確認できません"),"readable saved diagnosis was labelled unreadable");
+    check(await diagnosis().count()===0,"saved writer failure or notification loss entered the notification list");
     const savedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
     check((await calls()).every(c=>c.sessionId!==savedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"a recording without pending notices started reception or rendering");
-    results.push("saved diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
-    await reload();await openHistory();await history().getByText(/接続記録の保存処理でエラーが発生しました/).waitFor();
-    const reopened=history().locator(".toast-card").filter({hasText:"接続記録の保存処理でエラーが発生しました"});
-    savedText=await reopened.innerText();
-    check(savedText.includes("接続記録の保存処理でエラー")&&savedText.includes("接続通知を2件残せませんでした")&&(await calls()).every(c=>c.sessionId!==savedOwner),"reload removed immutable import issues or started acknowledging absent notices");
-    results.push("saved failed persistence and retained loss survive WebView replacement without acknowledgement requests");
-    for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
-      await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
-      check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`saved diagnosis UI overflows ${width} ${theme}`);
-      await page.screenshot({path:`output/playwright/archive-expanded-saved-${theme}-${width}-20261012.png`});
-    }}
-    results.push("readable saved diagnostics retain bounded 960/360px light/dark layouts");
+    await reload();await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="get_archived_recording_input_notices"));await openHistory();
+    check(await diagnosis().count()===0&&(await calls()).every(c=>c.sessionId!==savedOwner),"reload surfaced a saved diagnostic or acknowledged an absent notice");
+    results.push("saved writer failures and notification loss stay quiet across WebView replacement");
     await closeHistory();
     await page.setViewportSize({width:1200,height:900});
     const visualTitle="終了済み録音の通知を確認するための点検会議";
@@ -134,7 +121,8 @@ async page=>{
       await page.screenshot({path:`output/playwright/archive-expanded-${theme}-${width}-20261012.png`});
     }}
     await openHistory();
-    check((await history().innerText()).includes("終了した録音")&&(await history().innerText()).includes("音声を再生して内容を確認してください"),"diagnostics imply present capture");
+    check((await history().innerText()).includes("終了した録音")&&(await history().innerText()).includes("取得が中断していました"),"archived interruption disappeared from history");
+    check(await diagnosis().count()===0,"historical interruption displayed internal diagnostics");
     await closeHistory();
     results.push("960/360px light/dark layouts retain historical warnings and distinguish them from present acquisition");
     const forbidden=["start_capture_test","start_recording","stop_recording","prepare_meeting_playback","prepare_playback","prepare_capture_test_playback"];

@@ -131,7 +131,10 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         if(!accepted||accepted.id!==expected.id)throw Error("録音の会議保存結果を確認できません。開始は再送していません。");
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");
         setMeetings(await invoke<CaptureMeeting[]>("list_meetings"));
-      }), onError: cause => setCaptureError(`録音の受付状態を確認してください。開始は自動再送していません: ${String(cause)}`) });
+      }), onError: cause => {
+        setCaptureError(`録音の受付状態を確認してください。開始は自動再送していません: ${String(cause)}`);
+        return true;
+      } });
     } catch (error) {
       setCaptureError(String(error));
     } finally {

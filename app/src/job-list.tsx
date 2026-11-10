@@ -12,7 +12,7 @@ export function JobCount() {
   return count ? <span className="job-nav-count" aria-hidden="true">{count}</span> : null;
 }
 
-export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: DataOperation; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void> }) {
+export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored, publicationReadStatus }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: DataOperation; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void>; publicationReadStatus?: string }) {
   const items = orderedProgress(useProgressItems()), read = useJobReadStatus();
   const runningCount = items.filter(item => item.state === "running" || item.state === "pausing").length;
   const queuedCount = items.filter(item => item.state === "queued").length;
@@ -35,6 +35,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
     <div id="job-active-panel" role="tabpanel" aria-labelledby="job-active-tab" hidden={view!=="active"}>
     {read.state === "loading" && <p role="status">ジョブの状態を確認しています。</p>}
     {read.state === "error" && <p role="status">ジョブの状態を確認中です。表示は前回取得した状態です。</p>}
+    {publicationReadStatus && <p role="status">{publicationReadStatus}</p>}
     {data?.jobsError && <p role="status">バックアップ・復元の状態を再確認しています。表示は前回取得した状態です。</p>}
     {error && <p role="alert">{error}</p>}
     {!items.length && read.state === "ready" && <div className="job-list-empty"><h2>進行中のジョブはありません</h2><p>録音の保存・回復、モデルの準備、音声取り込み、文字起こし、話者分離、議事録生成、バックアップ、復元がここに表示されます。</p></div>}

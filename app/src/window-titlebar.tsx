@@ -1,7 +1,9 @@
 import { useWindowEnvironment } from "./window-environment";
 import type { WindowEnvironment } from "./window-environment-state";
+import { backgroundReadFailure } from "./background-read-failure";
 import { ErrorNotice } from "./toast";
 import { isTauri } from "./ipc.ts";
+import { TauriEvent } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import appIconUrl from "../src-tauri/icons/icon.svg";
@@ -29,30 +31,74 @@ function WindowTitlebar() {
   const [title, setTitle] = useState(document.title);
   const [maximized, setMaximized] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const active = useRef(true), running = useRef(false), revision = useRef(0);
-  const refreshMaximized = async () => {
-    const request = ++revision.current;
-    try {
-      const value = await nativeWindow.isMaximized();
-      if (active.current && request === revision.current) setMaximized(value);
-    } catch (cause) {
-      if (active.current && request === revision.current) setError(`ウィンドウの状態を確認できません: ${String(cause)}`);
-    }
-  };
+  const active = useRef(true), running = useRef(false);
+  const refreshMaximized = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     active.current = true;
-    const stops: (() => void)[] = [];
-    const subscribe = async (subscription: Promise<() => void>) => {
-      try { const stop = await subscription; if (active.current) stops.push(stop); else stop(); }
-      catch (cause) { if (active.current) setError(`ウィンドウの状態を受信できません: ${String(cause)}`); }
+    let disposed = false, revision = 0, titleReady = false, readingTitle = false;
+    const titleFailure = backgroundReadFailure("window_title");
+    const maximizedFailure = backgroundReadFailure("window_maximized");
+    const readTitle = async () => {
+      if (disposed || titleReady || readingTitle) return;
+      readingTitle = true;
+      try {
+        const value = await nativeWindow.title();
+        if (!disposed) { setTitle(value); titleReady = true; }
+      } catch (cause) { if (!disposed) titleFailure.failed(cause); }
+      finally { readingTitle = false; }
     };
-    void nativeWindow.title().then(value => { if (active.current) setTitle(value); }).catch(cause => {
-      if (active.current) setError(`ウィンドウのタイトルを確認できません: ${String(cause)}`);
-    });
-    void refreshMaximized();
-    void subscribe(nativeWindow.onResized(() => { void refreshMaximized(); }));
-    void subscribe(nativeWindow.onFocusChanged(() => { void refreshMaximized(); }));
-    return () => { active.current = false; ++revision.current; stops.forEach(stop => stop()); };
+    const readMaximized = async () => {
+      if (disposed) return;
+      const request = ++revision;
+      try {
+        const value = await nativeWindow.isMaximized();
+        if (!disposed && request === revision) { setMaximized(value); maximizedFailure.recovered(); }
+      } catch (cause) {
+        if (!disposed && request === revision) maximizedFailure.failed(cause);
+      }
+    };
+    refreshMaximized.current = readMaximized;
+
+    const subscriptions = [
+      {
+        start: () => nativeWindow.onResized(() => { void readMaximized(); }),
+        failure: backgroundReadFailure("window_resize_subscription"),
+        stop: undefined as (() => void) | undefined, pending: false,
+      },
+      {
+        start: () => nativeWindow.listen(TauriEvent.WINDOW_FOCUS, onFocus),
+        failure: backgroundReadFailure("window_focus_subscription"),
+        stop: undefined as (() => void) | undefined, pending: false,
+      },
+    ];
+    const [resize, focus] = subscriptions;
+    const subscribe = async (subscription: typeof resize) => {
+      if (disposed || subscription.stop || subscription.pending) return;
+      subscription.pending = true;
+      try {
+        const stop = await subscription.start();
+        if (disposed) stop(); else subscription.stop = stop;
+      } catch (cause) { if (!disposed) subscription.failure.failed(cause); }
+      finally { subscription.pending = false; }
+    };
+    function onFocus() {
+      void readTitle();
+      void readMaximized();
+      for (const subscription of subscriptions) void subscribe(subscription);
+    }
+    const fallbackFocus = () => { if (!focus.stop) onFocus(); };
+    const fallbackResize = () => { if (!resize.stop) void readMaximized(); };
+    window.addEventListener("focus", fallbackFocus);
+    window.addEventListener("resize", fallbackResize);
+    onFocus();
+    return () => {
+      disposed = true;
+      active.current = false;
+      refreshMaximized.current = async () => {};
+      window.removeEventListener("focus", fallbackFocus);
+      window.removeEventListener("resize", fallbackResize);
+      for (const subscription of subscriptions) subscription.stop?.();
+    };
   }, [nativeWindow]);
 
   const run = async (label: string, action: () => Promise<void>) => {
@@ -62,7 +108,7 @@ function WindowTitlebar() {
     catch (cause) { if (active.current) setError(`${label}できません: ${String(cause)}`); }
     finally { running.current = false; if (active.current) setBusy(false); }
   };
-  const toggleMaximized = () => run("最大化・復元", async () => { await nativeWindow.toggleMaximize(); await refreshMaximized(); });
+  const toggleMaximized = () => run("最大化・復元", async () => { await nativeWindow.toggleMaximize(); await refreshMaximized.current(); });
   return <div className="windows-titlebar" role="group" aria-label="ウィンドウ操作" onKeyDown={event => event.stopPropagation()}>
     <div className="windows-titlebar-drag" onMouseDown={event => {
       if (event.button !== 0) return;

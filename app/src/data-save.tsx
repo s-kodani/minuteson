@@ -60,11 +60,12 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     return () => { disposed = true; };
   }, [visible, s?.revision]);
   useEffect(() => { onProtectionChange(unknown || confirm.pending ? "operation" : rpcProtection); }, [rpcProtection, unknown, confirm.pending, onProtectionChange]);
+  const reportFailure = (cause: unknown) => { setError(String(cause)); return true; };
   const run = async (action: () => Promise<void>, propagate = false, protection: DataProtection = "operation") => {
     if (rpcRunning.current) { if (propagate) throw Error("別のデータ操作が実行中です。処理は開始していません。"); return; }
     rpcRunning.current = true; setRpcProtection(protection); setError("");
     try { await action(); }
-    catch (cause) { setError(String(cause)); if (propagate) throw cause; }
+    catch (cause) { if (propagate) throw cause; reportFailure(cause); }
     finally { rpcRunning.current = false; setRpcProtection(null); }
   };
   const read = async () => { await latest.current.refresh(); };
@@ -112,7 +113,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       }, propagate);
       if (propagate) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
     };
-    if (expected?.attentionRequired || expected?.retryAllowed) await confirm({ opener: selectionOpener, title: "データ操作の確認内容変更を確認", target: pendingMove ? storage?.pendingTarget ?? "未完了の保存先変更" : expected.backupPreview?.destination ?? expected.relocationPreview?.destination ?? "現在のデータ操作", confirmLabel: pendingMove ? "未完了移動を再確認する" : "確認内容を変更して選び直す", message: [expected.attentionRequired ? pendingMove ? "未完了移動の現在の内容を再確認します。確認だけでは切替・削除しません。" : "前の保存結果は未確定です。保存先の実ファイルを確認してから別の操作を開始します。前の結果と途中コピーは変更しません。" : "", expected.retryAllowed ? "現在の確認内容を破棄して選び直します。既存会議と元バックアップは変更しません。" : ""].filter(Boolean).join("\n"), validate: () => !conditions.current.locked && !conditions.current.unknown && !rpcRunning.current && sameTarget(), action: () => select(true) });
+    if (expected?.attentionRequired || expected?.retryAllowed) await confirm({ opener: selectionOpener, title: "データ操作の確認内容変更を確認", target: pendingMove ? storage?.pendingTarget ?? "未完了の保存先変更" : expected.backupPreview?.destination ?? expected.relocationPreview?.destination ?? "現在のデータ操作", confirmLabel: pendingMove ? "未完了移動を再確認する" : "確認内容を変更して選び直す", message: [expected.attentionRequired ? pendingMove ? "未完了移動の現在の内容を再確認します。確認だけでは切替・削除しません。" : "前の保存結果は未確定です。保存先の実ファイルを確認してから別の操作を開始します。前の結果と途中コピーは変更しません。" : "", expected.retryAllowed ? "現在の確認内容を破棄して選び直します。既存会議と元バックアップは変更しません。" : ""].filter(Boolean).join("\n"), validate: () => !conditions.current.locked && !conditions.current.unknown && !rpcRunning.current && sameTarget(), action: () => select(true), onError: reportFailure });
     else await select();
   };
   const retryUnknown = async () => {
@@ -135,11 +136,11 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       if (propagate) await waitForDataStop(current.token!, current.kind!, async () => { await latest.current.refresh(); return latest.current.getSnapshot(); });
       setOpen(false); pending.current = null; pendingChoice.current = null; setUnknown(false);
     }, propagate);
-    if (current.busy) await confirm({ title: "データ操作の安全な取消を確認", target: current.kind === "relocation" ? current.relocationPreview?.destination ?? "保存先変更" : current.kind === "backup" ? current.backupPreview?.destination ?? "バックアップ" : current.kind === "restore" ? "追加復元" : "データ操作", confirmLabel: "取消を要求して停止を待つ", message: current.kind === "relocation" ? "保存先変更を取り消します。旧保存先と途中コピーを保持します。切替済みの場合は終了して再起動が必要です。停止完了まで書込保護を維持します。" : "進行中の処理を取り消します。公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。停止完了まで書込保護を維持します。", validate: () => !rpcRunning.current && latest.current.getSnapshot()?.token === current.token && latest.current.getSnapshot()?.kind === current.kind && !!latest.current.getSnapshot()?.busy, action: () => stop(true) });
+    if (current.busy) await confirm({ title: "データ操作の安全な取消を確認", target: current.kind === "relocation" ? current.relocationPreview?.destination ?? "保存先変更" : current.kind === "backup" ? current.backupPreview?.destination ?? "バックアップ" : current.kind === "restore" ? "追加復元" : "データ操作", confirmLabel: "取消を要求して停止を待つ", message: current.kind === "relocation" ? "保存先変更を取り消します。旧保存先と途中コピーを保持します。切替済みの場合は終了して再起動が必要です。停止完了まで書込保護を維持します。" : "進行中の処理を取り消します。公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。停止完了まで書込保護を維持します。", validate: () => !rpcRunning.current && latest.current.getSnapshot()?.token === current.token && latest.current.getSnapshot()?.kind === current.kind && !!latest.current.getSnapshot()?.busy, action: () => stop(true), onError: reportFailure });
     else await stop();
   };
   const restart = async () => {
-    await confirm({ title: "保存先切替後の終了を確認", target: storage?.meetingRoot ?? s?.relocationReceipt?.destination ?? "切替後の保存先", confirmLabel: "安全に終了する", message: "アプリを安全に終了します。終了後、手動で再起動してください。旧保存先は削除しません。", validate: () => !rpcRunning.current && !latest.current.getSnapshot()?.busy && (!!latest.current.getSnapshot()?.restartRequired || !!conditions.current.storage?.restartRequired), action: () => run(async () => { await invoke("finish_main_close", { quit: true }); }, true) });
+    await confirm({ title: "保存先切替後の終了を確認", target: storage?.meetingRoot ?? s?.relocationReceipt?.destination ?? "切替後の保存先", confirmLabel: "安全に終了する", message: "アプリを安全に終了します。終了後、手動で再起動してください。旧保存先は削除しません。", validate: () => !rpcRunning.current && !latest.current.getSnapshot()?.busy && (!!latest.current.getSnapshot()?.restartRequired || !!conditions.current.storage?.restartRequired), action: () => run(async () => { await invoke("finish_main_close", { quit: true }); }, true), onError: reportFailure });
   };
   const dismiss = async () => {
     if (rpcRunning.current || unknown || latest.current.snapshot?.busy) { setError("処理と結果確認が終わってから閉じてください。"); return; }

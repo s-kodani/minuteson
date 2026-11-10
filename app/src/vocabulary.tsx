@@ -66,20 +66,20 @@ export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef, re
     const timer = window.setTimeout(() => { void queue.flush().catch(() => {}); }, 700);
     return () => window.clearTimeout(timer);
   }, [queue, state, loading, confirm.pending]);
+  const reportFailure = (cause: unknown) => { setError(String(cause)); return true; };
   const reload = async () => {
     const expected = JSON.stringify(queue.snapshot().payload);
     const read = async () => {
-    setLoading(true); setError("");
-    try { const value = await load(); queue.load(value.book); setCommon(value.common); }
-    catch (cause) { setError(String(cause)); throw cause; }
-    finally { setLoading(false); }
+      setLoading(true); setError("");
+      try { const value = await load(); queue.load(value.book); setCommon(value.common); }
+      finally { setLoading(false); }
     };
-    if (queue.snapshot().dirty) await confirm({ title: "用語入力の破棄を確認", target: meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語", confirmLabel: "入力を破棄して再読込する", message: "未保存の用語入力を破棄して再読込します。この入力は復元できません。過去の解析条件は変更しません。", validate: () => JSON.stringify(queue.snapshot().payload) === expected, action: read });
-    else try { await read(); } catch { /* error is displayed above */ }
+    if (queue.snapshot().dirty) await confirm({ title: "用語入力の破棄を確認", target: meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語", confirmLabel: "入力を破棄して再読込する", message: "未保存の用語入力を破棄して再読込します。この入力は復元できません。過去の解析条件は変更しません。", validate: () => JSON.stringify(queue.snapshot().payload) === expected, action: read, onError: reportFailure });
+    else try { await read(); } catch (cause) { reportFailure(cause); }
   };
   const remove = (entry: VocabularyEntry) => {
     const expected = JSON.stringify(queue.snapshot().payload);
-    void confirm({ title: "用語の削除を確認", target: `${meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語"} · ${entry.term || "空欄の用語"}`, confirmLabel: "用語を削除する", message: `用語「${entry.term || "空欄"}」を削除します。登録は復元できません。過去の解析の固定コピーと結果は保持します。`, validate: () => JSON.stringify(queue.snapshot().payload) === expected, onError: cause => setError(String(cause)), action: async () => { queue.edit(value => value.filter(item => item.id !== entry.id)); if (validVocabulary(queue.snapshot().payload ?? [])) await queue.flush(); } });
+    void confirm({ title: "用語の削除を確認", target: `${meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語"} · ${entry.term || "空欄の用語"}`, confirmLabel: "用語を削除する", message: `用語「${entry.term || "空欄"}」を削除します。登録は復元できません。過去の解析の固定コピーと結果は保持します。`, validate: () => JSON.stringify(queue.snapshot().payload) === expected, onError: reportFailure, action: async () => { queue.edit(value => value.filter(item => item.id !== entry.id)); if (validVocabulary(queue.snapshot().payload ?? [])) await queue.flush(); } });
   };
   const update = (id: string, patch: Partial<VocabularyEntry>) => queue.edit((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
   const disabled = locked || loading || confirm.pending || !state.payload;

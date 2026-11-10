@@ -24,6 +24,19 @@ async page => {
   check(await extract.inputValue()==="既定の作成用プロンプト" && await merge.inputValue()==="表を統合する", "reset changed another field");
   results.push("independent prompt editing, autosave and reset");
 
+  await extract.fill(" ");
+  const fieldError = panel.getByText("作成用プロンプトを入力してください。", { exact: true });
+  await fieldError.waitFor();
+  check(await extract.getAttribute("aria-invalid")==="true" && await merge.getAttribute("aria-invalid")==="false", "prompt error marked the wrong field");
+  check(await page.evaluate(async()=>{
+    const {toasts}=await import('/src/toast.tsx');
+    return !toasts.getHistorySnapshot().some(notice=>notice.message.startsWith("議事録プロンプト設定:"));
+  }), "editing added a prompt error to notification history");
+  await extract.fill("修正した作成用プロンプト"); await saved();
+  check((await payload()).extractPrompt==="修正した作成用プロンプト", "valid correction was not saved");
+  await fieldError.waitFor({state:"hidden"});
+  results.push("prompt input errors are scoped to the field and a valid correction is saved");
+
   await page.evaluate(() => window.monBrowserFixture.failPromptSave=true);
   await extract.fill("失敗しても保持する入力");
   await page.getByRole("complementary",{name:"通知",exact:true}).getByRole("alert").filter({hasText:"模擬プロンプト保存失敗"}).waitFor();

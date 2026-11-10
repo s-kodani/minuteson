@@ -5,6 +5,7 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_window_environment" => matches!(role, "main" | "recorder" | "recording-confirmation"),
         "get_credits" => matches!(role, "main"),
         "record_meeting_open_failure" => matches!(role, "main"),
+        "record_background_read_failure" => matches!(role, "main"),
         "get_internal_logs" => matches!(role, "main"),
         "get_recording_recovery" => matches!(role, "main"),
         "get_startup_report" => matches!(role, "main"),

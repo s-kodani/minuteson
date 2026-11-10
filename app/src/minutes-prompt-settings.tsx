@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useActionConfirmation } from "./confirmation-service";
 import { IssueNotice } from "./toast";
-import { promptValidation, resetPrompt, type MinutesPromptPreferences, type MinutesPromptSnapshot } from "./minutes-prompt-state";
+import { promptFieldErrors, promptValidation, resetPrompt, type MinutesPromptPreferences, type MinutesPromptSnapshot } from "./minutes-prompt-state";
 
 const read = () => invoke<MinutesPromptSnapshot>("get_minutes_prompt_preferences");
 export function MinutesPromptSettings({ visible, locked }: { visible: boolean; locked: boolean }) {
@@ -64,25 +64,31 @@ export function MinutesPromptSettings({ visible, locked }: { visible: boolean; l
     try { await flush(); } catch { /* queue retains the input and save error */ }
   };
   const disabled = locked || loading || confirm.pending || !state.payload;
-  const invalid = state.payload ? promptValidation(state.payload) : "";
+  const errors = state.payload ? promptFieldErrors(state.payload) : null;
+  const invalid = !!(errors?.extractPrompt || errors?.mergePrompt);
   return <section hidden={!visible} className="status-card minutes-prompt-settings" aria-label="議事録生成プロンプト">
     <div className="heading-with-info"><h2>議事録生成プロンプト</h2><InfoPopover label="議事録生成プロンプト">すべての会議・モデルで共通の設定です。編集内容は自動保存され、次の新規生成から使われます。音声の根拠にはアプリ共通の引用IDを使い、保存時に音声リンクへ変換します。</InfoPopover></div>
-    {([ ["extractPrompt", "作成用プロンプト", "文字起こしから議事録を作成するときに使います。"], ["mergePrompt", "統合用プロンプト", "長い会議を分割して作成した下書きを、一つの議事録にまとめるときに使います。"] ] as const).map(([field, label, help]) => <div key={field}>
-      <div className="heading-with-info"><label htmlFor={`${id}-${field}`} className="prompt-label">{label}</label><InfoPopover label={label}>{help}</InfoPopover></div>
-      <div className="prompt-label"><textarea id={`${id}-${field}`} aria-label={label} value={state.payload?.[field] ?? ""} disabled={disabled} rows={10}
-        onCompositionStart={() => {
-          if (!composition.current) { let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; }); composition.current = { done, finish }; }
-          setComposing(true);
-        }} onCompositionEnd={() => { composition.current?.finish(); composition.current = null; setComposing(false); }}
-        onChange={event => { const text = event.target.value; queue.edit(value => ({ ...value, [field]: text })); }} />
-      </div>
-      <button type="button" className="small-secondary" aria-label={`${label}をデフォルトに戻す`} disabled={disabled || state.saving || composing || state.payload?.[field] === state.draft?.defaults[field]} onClick={() => void reset(field)}>デフォルトに戻す</button>
-    </div>)}
+    {([ ["extractPrompt", "作成用プロンプト", "文字起こしから議事録を作成するときに使います。"], ["mergePrompt", "統合用プロンプト", "長い会議を分割して作成した下書きを、一つの議事録にまとめるときに使います。"] ] as const).map(([field, label, help]) => {
+      const fieldId = `${id}-${field}`;
+      const error = !composing && errors?.[field];
+      return <div key={field}>
+        <div className="heading-with-info"><label htmlFor={fieldId} className="prompt-label">{label}</label><InfoPopover label={label}>{help}</InfoPopover></div>
+        <div className="prompt-label"><textarea id={fieldId} aria-invalid={!!error} aria-describedby={error ? `${fieldId}-error` : undefined} value={state.payload?.[field] ?? ""} disabled={disabled} rows={10}
+          onCompositionStart={() => {
+            if (!composition.current) { let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; }); composition.current = { done, finish }; }
+            setComposing(true);
+          }} onCompositionEnd={() => { composition.current?.finish(); composition.current = null; setComposing(false); }}
+          onChange={event => { const text = event.target.value; queue.edit(value => ({ ...value, [field]: text })); }} />
+          {error && <small className="settings-field-error" id={`${fieldId}-error`}>{error}</small>}
+        </div>
+        <button type="button" className="small-secondary" aria-label={`${label}をデフォルトに戻す`} disabled={disabled || state.saving || composing || state.payload?.[field] === state.draft?.defaults[field]} onClick={() => void reset(field)}>デフォルトに戻す</button>
+      </div>;
+    })}
     <div className="analysis-actions">
       <span role="status">{loading ? "読込中…" : state.saving ? "保存中…" : state.dirty ? "未保存" : state.draft ? "保存済み" : ""}</span>
-      {state.error && <button type="button" disabled={disabled || state.saving || composing || !!invalid} onClick={() => void queue.retry().catch(() => {})}>保存を再試行</button>}
+      {state.error && <button type="button" disabled={disabled || state.saving || composing || invalid} onClick={() => void queue.retry().catch(() => {})}>保存を再試行</button>}
       <IconButton label="議事録プロンプト設定を再読込" icon="refresh" type="button" className="small-secondary" disabled={locked || loading || state.saving || composing || confirm.pending} onClick={() => void reload()} />
     </div>
-    <IssueNotice scope="minutes-prompts" type="preferences" label="議事録プロンプト設定" message={readError || invalid || state.error || ""} action={state.error && !invalid ? { kind: "retry", label: "プロンプトの保存を再試行", disabled: disabled || state.saving || composing, run: async () => { await queue.retry(); } } : readError ? { kind: "retry", label: "プロンプト設定を再読込", disabled: locked || loading, run: load } : undefined} />
+    <IssueNotice scope="minutes-prompts" type="preferences" label="議事録プロンプト設定" message={readError || state.error || ""} action={state.error && !invalid ? { kind: "retry", label: "プロンプトの保存を再試行", disabled: disabled || state.saving || composing, run: async () => { await queue.retry(); } } : readError ? { kind: "retry", label: "プロンプト設定を再読込", disabled: locked || loading, run: load } : undefined} />
   </section>;
 }

@@ -20,6 +20,8 @@ import { formatElapsed } from "./session";
 import { OperationProgressBar, usePublishProgress } from "./operation-progress";
 import { importProgress } from "./operation-progress-state";
 import { SpeakerCountSelect } from "./speaker-count-select";
+import { backgroundReadFailure } from "./background-read-failure";
+import { assertCloseImport } from "./application-close";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
 export function AudioImportPanel({locked,recordingActive,visible,overlayHost,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
@@ -30,6 +32,8 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
   const confirm = useActionConfirmation(locked || recordingActive);
   const [snapshot,setSnapshot]=useState<ImportSnapshot|null>(null);
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [readStatus,setReadStatus]=useState("");
+  const [readFailure]=useState(()=>backgroundReadFailure("audio_import_status"));
   const [title,setTitle]=useState("");
   const [numSpeakers,setNumSpeakers]=useState<number|null>(null);
   const [terms,setTerms]=useState<VocabularyEntry[]>([]),[common,setCommon]=useState<Book|null>(null);
@@ -41,9 +45,18 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
   const snapshotRef=useRef(snapshot),selectRef=useRef<(path:string|null)=>Promise<void>>(async()=>{});
   const delivered=useRef<string|null>(null),mounted=useRef(true), selecting=useRef(false);
   const [openFailed,setOpenFailed]=useState(false);
-  const progress = importProgress(snapshot);
+  const lastProgress = importProgress(snapshot);
+  const progress = lastProgress && readStatus
+    ? { ...lastProgress, detail: [lastProgress.detail, readStatus].filter(Boolean).join(" · ") }
+    : lastProgress;
   usePublishProgress("audio-import", [progress]);
-  const accept=(next:ImportSnapshot)=>{ const value=acceptImport(snapshotRef.current,next); snapshotRef.current=value; setSnapshot(value); };
+  const accept=(next:ImportSnapshot)=>{
+    const value=acceptImport(snapshotRef.current,next);
+    if (value !== next) return;
+    snapshotRef.current=value; setSnapshot(value);
+    readFailure.recovered(); setReadStatus("");
+  };
+  const reportFailure=(cause:unknown)=>{ setError(String(cause)); return true; };
   snapshotRef.current=snapshot;
   const inputRef = useRef({ title, terms, numSpeakers });
   inputRef.current = { title, terms, numSpeakers };
@@ -53,10 +66,27 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
     const clearHover=()=>setHover(false);
     window.addEventListener("blur",clearHover);
     let disposed=false;const stops:(()=>void)[]=[];
+    const eventFailure=backgroundReadFailure("audio_import_subscription");
+    const acceptObserved = (value: ImportSnapshot) => {
+      assertCloseImport(value);
+      accept(value);
+    };
     const observation = observeSnapshots<ImportSnapshot>({
-      read: async () => { const value = await invoke<ImportSnapshot>("get_audio_import"); if(!disposed) accept(value); },
+      read: async () => {
+        const prior = snapshotRef.current;
+        try {
+          const value = await invoke<ImportSnapshot>("get_audio_import");
+          if (!disposed) acceptObserved(value);
+        } catch (cause) {
+          if (prior === snapshotRef.current) throw cause;
+        }
+      },
       subscribe: read => listen<ImportSnapshot>("audio-import-changed", event => read(event.payload)),
-      accept, error: cause => setError(String(cause)),
+      accept: value => { acceptObserved(value); eventFailure.recovered(); },
+      error: (cause, source) => {
+        if (source !== "read") { eventFailure.failed(cause); return; }
+        if (readFailure.failed(cause)) setReadStatus("音声の取り込み状況を確認できません。自動で再確認しています。");
+      },
       intervalMs: 1000, schedule: browserSchedule, focus: browserFocus,
     });
     void getCurrentWebview().onDragDropEvent(event=>{
@@ -94,12 +124,12 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
         if (!open) opener.current=sourceOpener;
         setError("");setOpenFailed(false);setVocabularyOpen(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");setNumSpeakers(null);
         try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
-        catch(cause){setError(String(cause)); if (propagateFailure) throw cause;}finally{setBusy(false);}
+        catch(cause){if (propagateFailure) throw cause; reportFailure(cause);}finally{setBusy(false);}
       };
       if (propagateFailure) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
     };
     try {
-      if (open && (terms.length || title || numSpeakers!==null)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・話者数・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
+      if (open && (terms.length || title || numSpeakers!==null)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・話者数・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true), onError: reportFailure });
       else await change();
     } catch (cause) { if (mounted.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); } finally { selecting.current=false; }
   };
@@ -110,19 +140,19 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
   },[snapshot]);
   const cancelNative=async(s:ImportSnapshot)=>{
     setBusy(true);setError("");
-    try{accept(await invoke<ImportSnapshot>("cancel_audio_import",{token:s.token}));}catch(cause){setError(String(cause));throw cause;}finally{setBusy(false);}
+    try{accept(await invoke<ImportSnapshot>("cancel_audio_import",{token:s.token}));}finally{setBusy(false);}
   };
   const cancel=async()=>{
     const s=snapshotRef.current;if(!s?.token)return true;
-    if (s.busy) return await confirm({ title: "進行中の取り込み取消を確認", target: s.fileName ?? `取り込み ${s.token}`, confirmLabel: "取り込みを取り消す", message: "進行中の取り込みを取り消します。未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。", validate: () => snapshotRef.current?.token === s.token && !snapshotRef.current?.saved, action: () => cancelNative(s) }) === "completed";
-    try { await cancelNative(s); return true; } catch { return false; }
+    if (s.busy) return await confirm({ title: "進行中の取り込み取消を確認", target: s.fileName ?? `取り込み ${s.token}`, confirmLabel: "取り込みを取り消す", message: "進行中の取り込みを取り消します。未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。", validate: () => snapshotRef.current?.token === s.token && !snapshotRef.current?.saved, action: () => cancelNative(s), onError: reportFailure }) === "completed";
+    try { await cancelNative(s); return true; } catch (cause) { reportFailure(cause); return false; }
   };
   const close=async()=>{
     if(snapshotRef.current?.busy||busy){setError("取り込みの取消・保存が完了してから閉じてください。");return;}
     const s = snapshotRef.current, expected = JSON.stringify(inputRef.current);
     const dismiss = async () => { if (s?.token && s.phase === "ready") await cancelNative(s); setOpen(false); };
-    if ((terms.length || title || numSpeakers!==null) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss });
-    else try { await dismiss(); } catch { /* error stays visible */ }
+    if ((terms.length || title || numSpeakers!==null) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss, onError: reportFailure });
+    else try { await dismiss(); } catch (cause) { reportFailure(cause); }
   };
   const start=async()=>{
     if(!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)||!snapshot?.token)return;
@@ -145,7 +175,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
     {terms.length>50&&<nav aria-label="取り込み用語のページ" className="transcript-pages"><IconButton label="前へ" icon="previous" type="button" disabled={index===0} onClick={()=>setPage(index-1)} /><span>{index+1} / {Math.ceil(terms.length/50)}</span><IconButton label="次へ" icon="next" type="button" disabled={(index+1)*50>=terms.length} onClick={()=>setPage(index+1)} /></nav>}
   </fieldset></>;
   return <>
-    <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
+    <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" && !snapshot.busy && !snapshot.errorMessage ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
     <ToastNotice scope="audio-import" type="saved" eventId={snapshot?.saved?.id} message={snapshot?.phase === "saved" && snapshot.saved ? "音声を保存しました。文字起こしを進めます。" : ""} action={snapshot?.saved ? { kind: "open", label: "保存した会議を開く", disabled, run: async () => { const saved = snapshotRef.current?.saved; if (!disabled && saved) await openSaved(saved.meetingId); } } : undefined} />
     {visible&&<div className="import-entry">{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
     {hover&&!disabled&&!open&&overlayHost&&createPortal(<div className="audio-drop-overlay" role="status">
@@ -170,7 +200,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
     <ScopedModal title="音声を取り込む" id="audio-import-dialog" ref={dialog} open={open} blocked={busy || !!snapshot?.busy} onDismiss={close} restoreReady={!busy && !snapshot?.busy} restoreTarget={() => opener.current} className="import-dialog" aria-labelledby="import-title"
       persistentReplacement={vocabularyContent} replacement={vocabularyOpen ? {key:"import-vocabulary",labelledBy:"import-vocabulary-title",content:null,className:"import-vocabulary-view",blocked:busy || !!snapshot?.busy,dismissLabel:"閉じる",onDismiss:()=>setVocabularyOpen(false),restoreTarget:()=>vocabularyTrigger.current} : null}>
       <div className="heading-with-info import-dialog-heading"><h2 id="import-title">音声を取り込む</h2><InfoPopover label="音声の取り込み"><p>動画の音声抽出は対応しません。</p><p>音声の保存後、全体設定で選んだモデルで文字起こしと話者分離を進めます。モデルが未導入でも音声は保持します。</p></InfoPopover></div><p>原本を変更せず管理領域へコピーし、解析用音声を作成します。参加者の同意を得た音声を使ってください。</p>
-      {progress ? <OperationProgressBar progress={progress} /> : <p role="status">{snapshot?importLabel(snapshot.phase):"音声を選択しています"}</p>}
+      {progress ? <OperationProgressBar progress={progress} /> : <p role="status">{(busy && readStatus) || (snapshot ? importLabel(snapshot.phase) : "音声を選択しています")}</p>}
       {snapshot?.info&&<dl className="import-info"><dt>ファイル名</dt><dd>{snapshot.fileName}</dd><dt>長さ</dt><dd>{formatElapsed(snapshot.info.durationUs/1000)}</dd><dt>形式</dt><dd>{snapshot.info.detectedFormat.toUpperCase()} · {snapshot.info.codec.toUpperCase()} · {snapshot.info.sampleRate.toLocaleString()} Hz · {snapshot.info.channels} ch</dd><dt>原本</dt><dd>{bytesLabel(snapshot.sourceBytes)}</dd><dt>保存に必要な容量</dt><dd>{bytesLabel(snapshot.requiredBytes)}（中間音声と余裕を含む）</dd><dt>保存先の空き容量</dt><dd>{bytesLabel(snapshot.availableBytes)}</dd></dl>}
 
       {openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}

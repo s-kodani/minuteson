@@ -195,11 +195,17 @@ impl Reader {
 /// immediately afterwards. Current diagnostics explicitly distinguish unknown and confirmed states. Do not display arbitrary error strings or paths.
 pub(super) fn archived_issue(directory: &File, owner: &str) -> Option<&'static str> {
     let result = final_issue(directory, owner);
+    let error = match &result {
+        Ok(Some("failed")) => Some("録音終了時に入力履歴の保存に失敗しました"),
+        Ok(Some("invalid")) => Some("録音終了時の入力履歴の保存結果に不整合があります"),
+        Err(error) => Some(error.as_str()),
+        _ => None,
+    };
     super::diagnostics::read_result(
         "archived-final/manifest.json+input-events.json",
         Some(owner),
         None,
-        result.as_ref().err().map(String::as_str),
+        error,
     );
     result.unwrap_or(Some("unavailable"))
 }

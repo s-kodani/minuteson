@@ -20,7 +20,12 @@ async (page, capturePath, detailUI) => {
     await input().waitFor();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
   };
-  const dismissFailure=async()=>{await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).first().waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});};
+  const dismissFailure=async()=>{
+    await page.getByRole("alert").filter({hasText:"録音の操作:"}).waitFor();
+    check(await page.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).count()===0,"recording start failure was duplicated");
+    await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
+    await modal().waitFor({state:"hidden"});
+  };
   let stage="setup";
   try{
     stage="metadata-only";await boot();
@@ -69,8 +74,17 @@ async (page, capturePath, detailUI) => {
       stage=permission;await boot({microphonePermission:permission});
       const permissionSettings = await page.evaluate(() => navigator.platform.includes("Win") ? "Windowsの設定" : "macOSのシステム設定");
       check(await start().isDisabled()&&(await page.getByRole("alert").filter({hasText:permissionSettings}).count())===1&&await count("start_recording")===0,"denied permission allowed capture or requested TCC");
+      check(await page.evaluate(async()=>{
+        const {toasts}=await import('/src/toast.tsx');
+        return !toasts.getHistorySnapshot().some(notice=>/OSの既定入力を確認できません|選択したマイクが見つかりません/.test(notice.message));
+      }),"denied permission produced a misleading missing-device notification");
       results.push(`${permission} microphone permission blocks start and provides manual permission guidance`);
     }
+    await page.evaluate(()=>Object.assign(window.closeFixture.captureInputs,{microphonePermission:"authorized",devices:[]}));
+    await refresh().click();
+    await page.getByRole("alert").filter({hasText:"OSの既定入力を確認できません"}).waitFor();
+    check(await start().isDisabled(),"an absent device enabled capture after permission was granted");
+    results.push("the device is checked again after permission is granted");
     stage="unknown";await boot({microphonePermission:"unknown"});
     check(await start().isEnabled()&&(await section().innerText()).includes("権限未確認 / 入力未確認")&&!(await section().innerText()).includes("権限は許可済み"),"unknown permission fabricated authorization");
     results.push("unknown permission stays explicitly unknown and does not claim verified input");

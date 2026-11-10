@@ -156,7 +156,11 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       message: "生成に成功すると保存済みの議事録を置き換えます。手動編集も置き換わり、旧版は保存しません。失敗した場合は現在の本文を保持します。",
       confirmLabel: "議事録を再生成", validate: () => alive.current && !controller.snapshot().dirty
         && controller.snapshot().document?.operationId === saved.operationId, action: prepare,
-      onError: cause => { if (alive.current) setError(String(cause)); } });
+      onError: cause => {
+        if (!alive.current) return false;
+        setError(String(cause));
+        return true;
+      } });
     else await prepare();
     });
     if (submit) {

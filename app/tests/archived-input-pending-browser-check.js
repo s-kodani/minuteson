@@ -30,9 +30,22 @@ async page => {
   const hidden=await reads();await page.waitForTimeout(1000);check(await reads()===hidden,'minimized window continued polling');
   await page.evaluate(()=>{window.monWindowState={visible:true,minimized:false};window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>['get_archived_recording_input_notices','get_archived_recording_input_notice_rows'].includes(c.command)).length>n,hidden);
+  await page.evaluate(()=>{
+    const now=Date.now;
+    Date.now=()=>now()-60_000;
+    const f=window.closeFixture;
+    f.archived.rows=[f.newArchivedRow({title:'時計変更後の録音'})];
+    f.recordChanged({phase:'idle'});
+  });
+  await page.locator('.toast-host .toast-card').filter({hasText:'終了した録音「時計変更後の録音」'}).first().waitFor();
+  await page.getByRole('button',{name:'通知一覧',exact:true}).click();
+  const history=page.getByRole('dialog',{name:'通知一覧',exact:true});
+  await history.waitFor();
+  check(await page.locator('.toast-card').filter({hasText:'時計が変更されたため'}).count()===0,'wall clock rollback appeared as a notification');
+  await history.getByRole('button',{name:'通知一覧を閉じる',exact:true}).click();
   const forbidden=['start_recording','stop_recording','start_capture_test','prepare_meeting_playback'];
   check(await page.evaluate(names=>window.closeFixture.calls.every(c=>!names.includes(c.command)),forbidden),'notification check invoked audio operations');
   await page.goto('http://127.0.0.1:1420/?window=recorder');await page.waitForFunction(()=>!!window.closeFixture);await page.waitForTimeout(700);
   check(await reads()===0,'mini panel polled archived notices');
-  return {passed:6,results:['idle histories have no short polling','hung reads stay single flight without wait toasts','events during reads trigger a follow-up','active delivery only reads targeted recordings','minimization pauses and restoration refreshes reads','mini panel has no history reads or audio operations']};
+  return {passed:7,results:['idle histories have no short polling','hung reads stay single flight without wait toasts','events during reads trigger a follow-up','active delivery only reads targeted recordings','minimization pauses and restoration refreshes reads','wall clock rollback refreshes without a restart notification','mini panel has no history reads or audio operations']};
 }

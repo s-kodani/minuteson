@@ -162,5 +162,33 @@ async (page, _capturePath, { applyPlaybackTheme }) => {
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='regenerate_transcription').length)===1,'handoff recovery reran transcription');
   check(await page.evaluate(()=>window.monBrowserFixture.analysisFlow.transcriptionJob.id)==='saved-transcription','handoff recovery discarded saved transcription');
   results.push('speaker handoff failures resume from the successful transcription without regenerating it');
+  await page.evaluate(async()=>{
+    const f=window.monBrowserFixture, invoke=window.__TAURI_INTERNALS__.invoke;
+    f.failPublicationRead=true;
+    f.analysisFlow={...f.analysisFlow,readyToPublish:true,replacementReady:true};
+    window.__TAURI_INTERNALS__.invoke=async(command,args)=>{
+      if(command==="get_ready_analysis_flows"){
+        if(f.failPublicationRead)throw Error("模擬反映待ち取得失敗");
+        return [];
+      }
+      if(command==="record_background_read_failure"){f.calls.push({command,args});return null;}
+      return invoke(command,args);
+    };
+    await f.emitNotification();
+  });
+  const publicationReadStatus=page.getByRole("status").filter({hasText:"反映待ちの文字起こしを確認できません。"});
+  await page.waitForFunction(()=>window.monBrowserFixture.calls.some(call=>call.args?.source==="transcription_publication"));
+  check(await publicationReadStatus.count()===0,"the first failed poll showed a user-facing error");
+  await publicationReadStatus.waitFor({timeout:12000});
+  await page.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
+  await publicationReadStatus.waitFor();
+  check(await page.evaluate(async()=>{
+    const {toasts}=await import('/src/toast.tsx');
+    return window.monBrowserFixture.calls.filter(call=>call.args?.source==="transcription_publication").length===1
+      && !toasts.getHistorySnapshot().some(notice=>notice.message.includes("模擬反映待ち取得失敗"));
+  }),"failed polling repeated diagnostics or entered notification history");
+  await page.evaluate(async()=>{window.monBrowserFixture.failPublicationRead=false;await window.monBrowserFixture.emitNotification();});
+  await publicationReadStatus.waitFor({state:"hidden"});
+  results.push("sustained publication read failures stay in context, and a successful retry clears the status");
   return {passed:results.length,results};
 }

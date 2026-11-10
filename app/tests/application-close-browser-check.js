@@ -22,7 +22,9 @@ async (page) => {
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
   const request = () => page.evaluate(() => window.closeFixture.request(true));
-  const failure = name => modal(name).locator(".toast-card").filter({ hasText: "処理を完了できませんでした。" }).first();
+  const failure = name => modal(name).locator(".toast-card").filter({
+    hasText: name === startTitle ? "録音の操作:" : "処理を完了できませんでした。",
+  }).first();
   const dismissFailed = async name => { await failure(name).waitFor(); await modal(name).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal(name).waitFor({ state: "hidden" }); };
   let stage = "setup";
   try {

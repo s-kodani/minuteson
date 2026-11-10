@@ -350,6 +350,48 @@ pub(crate) fn record_meeting_open_failure(
 }
 
 #[tauri::command]
+pub(crate) fn record_background_read_failure(
+    window: WebviewWindow,
+    source: String,
+    message: String,
+) -> Result<(), mon_contracts::AppError> {
+    let result = (|| {
+        require_main(window.label())?;
+        if !matches!(
+            source.as_str(),
+            "restore_labels"
+                | "model_download_guidance"
+                | "window_title"
+                | "window_maximized"
+                | "window_resize_subscription"
+                | "window_focus_subscription"
+                | "transcription_publication"
+                | "audio_import_status"
+                | "audio_import_subscription"
+        ) || message.trim().is_empty()
+            || message.len() > 4096
+        {
+            return Err("自動確認の診断ログの対象または内容が不正です".into());
+        }
+        detail(
+            Context {
+                category: "background_read".into(),
+                operation_id: Some(source.clone()),
+                ..Context::default()
+            },
+            "failed",
+            "warn",
+            Duration::ZERO,
+            &format!("{source}: {message}"),
+        );
+        Ok(())
+    })();
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("record_background_read_failure", message)
+    })
+}
+
+#[tauri::command]
 pub(crate) async fn get_internal_logs(
     window: WebviewWindow,
     query: Query,

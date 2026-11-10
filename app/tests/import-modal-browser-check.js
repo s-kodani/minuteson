@@ -33,7 +33,7 @@ async (page) => {
   const card = page.locator(".audio-drop-card"), cardBounds = await card.boundingBox(), smallOverlay = await overlay.boundingBox();
   check(cardBounds.x >= smallOverlay.x && cardBounds.y >= smallOverlay.y && cardBounds.x + cardBounds.width <= smallOverlay.x + smallOverlay.width && cardBounds.y + cardBounds.height <= smallOverlay.y + smallOverlay.height && await card.evaluate(e => e.scrollWidth <= e.clientWidth && e.scrollHeight <= e.clientHeight), "drop card clipped or required scrolling at the minimum desktop size");
   await page.screenshot({ path: "audio-drop-dark-960.png" });
-  await page.evaluate(() => window.monImportFixture.changed({ phase: "copying", busy: true })); await overlay.waitFor({ state: "hidden" });
+  await page.evaluate(() => window.monImportFixture.changed({ phase: "copying", busy: true, token: crypto.randomUUID() })); await overlay.waitFor({ state: "hidden" });
   await page.evaluate(() => window.monImportFixture.leave());
   await page.evaluate(() => window.monImportFixture.changed({ phase: "idle", busy: false }));
   await overlay.waitFor({ state: "hidden" });
@@ -167,6 +167,7 @@ async (page) => {
   const selectFailure = page.getByRole("dialog", { name: "取り込み入力の破棄と選び直しを確認", exact: true });
   await selectFailure.waitFor(); await page.evaluate(() => window.monImportFixture.failSelect = true);
   await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await selectFailure.getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
+  check(await selectFailure.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).count()===0, "reselection failure was duplicated");
   check(await count("select_audio_import") === 2 && await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).isDisabled(), "swallowed selection failure completed or repeated");
   await selectFailure.getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal().getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
   check(await count("start_audio_import") === 0 && await count("cancel_audio_import") === 0, "failed selection started or cancelled import");

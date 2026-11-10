@@ -16,6 +16,6 @@ export function useActionConfirmation(blocked: boolean) {
     if (modal && !modal.hasAttribute("data-common-modal")) return Promise.resolve("cancelled" as const);
     const parent = modal ?? null;
     const opener = options.opener !== undefined ? options.opener : document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return confirmations.request(owner.current, parent, opener, { ...options, validate: () => live.current && !blockedRef.current && (options.validate?.() ?? true), onError: cause => { if (live.current) options.onError?.(cause); } }, parent?.scrollTop ?? 0);
+    return confirmations.request(owner.current, parent, opener, { ...options, validate: () => live.current && !blockedRef.current && (options.validate?.() ?? true), onError: cause => live.current ? options.onError?.(cause) : undefined }, parent?.scrollTop ?? 0);
   }, { pending: active?.owner === owner.current });
 }

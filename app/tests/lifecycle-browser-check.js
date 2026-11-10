@@ -96,6 +96,14 @@ async(page,capturePath)=>{
   for(const width of [900,760]){await page.setViewportSize({width,height:1000});check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"voice model names overflow");}
   results.push("voice library distinguishes person IDs and per-sample registered model names including unknown models");
   await page.evaluate(()=>localStorage.setItem("MON_LIFECYCLE_GUIDANCE","pending"));
+  await page.goto(new URL("/?initial=1&guidance-read-failure=1",page.url()).href);
+  await page.waitForFunction(()=>window.lifecycleFixture?.calls.some(call=>call.command==="record_background_read_failure"&&call.args.source==="model_download_guidance"));
+  check(await page.evaluate(async()=>{
+    const {toasts}=await import('/src/toast.tsx');
+    return localStorage.getItem("MON_LIFECYCLE_GUIDANCE")==="pending"
+      && !toasts.getHistorySnapshot().some(notice=>notice.message.includes("合成の初回案内取得失敗"));
+  }),"a passive guidance read failure changed the saved preference or entered notification history");
+  results.push("failed startup guidance reads are logged silently and can recover next launch");
   await page.goto(new URL("/?initial=1",page.url()).href);
   const guidance=page.getByRole("dialog",{name:"ローカルAIモデルをダウンロード",exact:true});await guidance.waitFor();
   await page.evaluate(()=>window.lifecycleFixture.failDismiss=true);

@@ -355,8 +355,11 @@ impl AnalysisController {
                     }
                     if let Err(error) = result {
                         let storage = app.state::<Storage>();
-                        if let Ok(current) = storage.get_job(&job.id) {
-                            if let Ok(failed) = storage.finish_job(
+                        let failed = storage.get_job(&job.id).and_then(|current| {
+                            if current.state == "failed" {
+                                return Ok(current);
+                            }
+                            storage.finish_job(
                                 &job.id,
                                 current.completed_units,
                                 "failed",
@@ -369,13 +372,20 @@ impl AnalysisController {
                                         job.kind.failure_code()
                                     },
                                 ),
-                            ) {
-                                emit(app, failed);
-                            }
-                        }
+                            )
+                        });
                         // Retain detailed diagnostics locally, without transcript text.
                         crate::internal_logs::report_error("analysis", &error.to_string());
-                        let _ = app.emit("analysis-worker-error", error.to_string());
+                        if let Some(failed) = failed.ok().or_else(|| {
+                            storage
+                                .get_job(&job.id)
+                                .ok()
+                                .filter(|current| current.state == "failed")
+                        }) {
+                            emit(app, failed);
+                        } else {
+                            let _ = app.emit("analysis-worker-error", error.to_string());
+                        }
                     }
                     let resume = controller.state.lock().is_ok_and(|state| {
                         !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)

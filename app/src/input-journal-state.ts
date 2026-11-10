@@ -39,39 +39,28 @@ export class InputJournalSession {
     return {state:this.report.persistence.state,problem:this.problem};
   }
 }
-export function journalMessage(view:JournalView):string {
-  const detail={unknown:"マイク・PC音声の接続記録について、保存結果を読み取れません",stale:"マイク・PC音声の接続記録について、新しい保存結果が届いていません",pending:"マイク・PC音声の接続記録を保存しています",failed:"マイク・PC音声の接続記録を保存できませんでした。保存処理でエラーが発生したため表示しています",invalid:"マイク・PC音声の接続記録に不整合が見つかり、記録の保存を停止しました",confirmed:""}[view.state];
-  return detail?`${detail}。${view.problem&&!["failed","invalid"].includes(view.state)?"以前の接続記録の保存エラーは、まだ解消を確認できていません。":""}録音ファイルの保存結果とは別の確認です。録音終了後に再確認します。警告が続く場合は会議を開き、音声を再生して確認してください。`:"";
-}
-export type JournalNotice={message:string;level:"warning"|"error";eventId:string};
-// Presentation hysteresis is independent of the one-second evidence expiry.
-// Hold one occurrence through short recoveries and changing diagnostic states.
-export class InputJournalNotices {
+// Keep one diagnostic occurrence across short recoveries and unavailable reads.
+export class InputJournalFailures {
   private confirmedSince:number|null=null;
-  private active:JournalNotice|null=null;
   private failure:"failed"|"invalid"|null=null;
-  private sequence=0;
   private lastAt:number|null=null;
-  read(view:JournalView,phase:string,at:number):JournalNotice|null {
+  read(view:JournalView,phase:string,at:number):"failed"|"invalid"|null {
     if(!time(at)||this.lastAt!==null&&(at<this.lastAt||at-this.lastAt>1000))this.confirmedSince=null;
     this.lastAt=at;
     if(phase!=="recording"){
-      this.confirmedSince=null;this.active=null;this.failure=null;
+      this.confirmedSince=null;this.failure=null;
       return null;
     }
     if(view.state==="failed"||view.state==="invalid"||view.problem){
       this.confirmedSince=null;
-      const failure=view.state==="invalid"?"invalid":"failed";
-      if(this.failure===null||failure==="invalid"&&this.failure!=="invalid"){
-        this.failure=failure;
-        this.active={message:journalMessage({state:failure,problem:true}),level:"error",eventId:String(++this.sequence)};
-      }
+      if(view.state==="invalid")this.failure="invalid";
+      else this.failure??="failed";
     }else if(view.state==="confirmed"&&time(at)){
       this.confirmedSince??=at;
-      if(at-this.confirmedSince>=2000){this.active=null;this.failure=null;}
+      if(at-this.confirmedSince>=2000)this.failure=null;
     }else{
       this.confirmedSince=null;
     }
-    return this.active;
+    return this.failure;
   }
 }

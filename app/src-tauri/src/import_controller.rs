@@ -52,6 +52,21 @@ impl Default for Snapshot {
         }
     }
 }
+impl Snapshot {
+    fn mark_cancelled(&mut self) {
+        self.phase = "cancelled".into();
+        self.error_message = None;
+    }
+
+    fn finish_error(&mut self, error: String, cancel_requested: bool) {
+        if cancel_requested && audio_import::is_cancellation_error(&error) {
+            self.mark_cancelled();
+        } else {
+            self.phase = "failed".into();
+            self.error_message = Some(error);
+        }
+    }
+}
 struct Selection {
     audio: SelectedAudio,
     helper: Fingerprint,
@@ -212,9 +227,6 @@ impl ImportController {
                     audio_import::inspect(&path, &helper, storage.import_scratch()?, &cancelled)?;
                 let available = audio_import::available_bytes(storage.import_scratch()?)?;
                 let required = audio.info.required_bytes(audio.proof.size)?;
-                if cancelled() {
-                    return Err("音声の確認を取り消しました".into());
-                }
                 Ok((Selection { audio, helper }, required, available))
             }))
             .unwrap_or_else(|_| Err("音声の確認処理が予期せず停止しました".into()));
@@ -241,16 +253,8 @@ impl ImportController {
                     };
                     s.selected = Some(selection);
                 }
-                _ if cancelled() => {
-                    s.snapshot.phase = "cancelled".into();
-                    s.snapshot.error_message =
-                        Some("確認を取り消しました。元ファイルは変更していません".into());
-                }
-                Err(error) => {
-                    s.snapshot.phase = "failed".into();
-                    s.snapshot.error_message = Some(error);
-                }
-                _ => {}
+                Ok(_) => s.snapshot.mark_cancelled(),
+                Err(error) => s.snapshot.finish_error(error, cancelled()),
             }
         });
         let _ = AnalysisController::kick(app);
@@ -348,10 +352,7 @@ impl ImportController {
                         s.snapshot.saved = Some(saved);
                         s.snapshot.error_message = None;
                     }
-                    Err(error) => {
-                        s.snapshot.phase = if cancelled() { "cancelled" } else { "failed" }.into();
-                        s.snapshot.error_message = Some(error);
-                    }
+                    Err(error) => s.snapshot.finish_error(error, cancelled()),
                 }
             });
             let _ = AnalysisController::kick(&app);
@@ -411,13 +412,16 @@ impl ImportController {
         if s.snapshot.token.as_deref() != Some(token) {
             return Err("取消対象が変更されました".into());
         }
+        if !s.snapshot.busy && s.snapshot.phase != "ready" {
+            return Ok(s.snapshot.clone());
+        }
         s.cancel.store(true, Ordering::Release);
         s.snapshot.progress = None;
         s.selected = None;
         if s.snapshot.busy {
             s.snapshot.phase = "cancelling".into();
-        } else if s.snapshot.saved.is_none() {
-            s.snapshot.phase = "cancelled".into();
+        } else {
+            s.snapshot.mark_cancelled();
         }
         s.snapshot.revision += 1;
         if !s.snapshot.busy {
@@ -541,8 +545,8 @@ impl ImportController {
     pub(crate) fn abort_shutdown(app: &AppHandle) {
         Self::update(app, |s| {
             s.closing = false;
-            if !s.snapshot.busy && s.snapshot.saved.is_none() {
-                s.snapshot.phase = "cancelled".into();
+            if !s.snapshot.busy && s.snapshot.phase == "ready" {
+                s.snapshot.mark_cancelled();
             }
         });
     }
@@ -583,15 +587,13 @@ impl ImportController {
             }
             Self::update(&app, |s| {
                 s.snapshot.busy = false;
-                s.snapshot.phase = if cancelled() {
-                    "cancelled"
-                } else if result.is_ok() {
-                    "idle"
-                } else {
-                    "failed"
+                match result {
+                    Ok(_) => {
+                        s.snapshot.phase = "idle".into();
+                        s.snapshot.error_message = None;
+                    }
+                    Err(error) => s.snapshot.finish_error(error, cancelled()),
                 }
-                .into();
-                s.snapshot.error_message = result.err();
             });
             let _ = AnalysisController::kick(&app);
         });
@@ -686,6 +688,53 @@ mod tests {
             total: Some(10),
             unit: "frames",
         }
+    }
+
+    #[test]
+    fn expected_cancellation_does_not_hide_a_failed_cleanup_or_unrequested_stop() {
+        let mut snapshot = Snapshot::default();
+        snapshot.finish_error("ファイル照合を中断しました".into(), true);
+        assert_eq!(snapshot.phase, "cancelled");
+        assert!(snapshot.error_message.is_none());
+
+        for (message, cancel_requested) in [
+            ("取り込みの一時ファイルを整理できませんでした", true),
+            ("音声取り込みを中断しました", false),
+        ] {
+            snapshot.finish_error(message.into(), cancel_requested);
+            assert_eq!(snapshot.phase, "failed");
+            assert_eq!(snapshot.error_message.as_deref(), Some(message));
+        }
+    }
+
+    #[test]
+    fn cancelling_an_unstarted_selection_clears_its_error_but_keeps_terminal_failures() {
+        let controller = ImportController::default();
+        let selection = controller.begin("inspecting").unwrap();
+        let token = selection.token.as_deref().unwrap();
+        controller
+            .change(|s| {
+                s.snapshot.busy = false;
+                s.snapshot.phase = "ready".into();
+                s.snapshot.error_message = Some("保存先の空き容量が不足しています".into());
+            })
+            .unwrap();
+        let cancelled = controller.cancel(token).unwrap();
+        assert_eq!(cancelled.phase, "cancelled");
+        assert!(cancelled.error_message.is_none());
+
+        let next = controller.begin("inspecting").unwrap();
+        let failed = controller
+            .change(|s| {
+                s.snapshot.busy = false;
+                s.snapshot
+                    .finish_error("取り込みの確認に失敗しました".into(), false);
+            })
+            .unwrap();
+        let receipt = controller.cancel(next.token.as_deref().unwrap()).unwrap();
+        assert_eq!(receipt.phase, "failed");
+        assert_eq!(receipt.revision, failed.revision);
+        assert_eq!(receipt.error_message, failed.error_message);
     }
 
     #[test]

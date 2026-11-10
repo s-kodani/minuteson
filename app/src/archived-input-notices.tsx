@@ -9,16 +9,14 @@ import {InputLevelClock} from "./input-level-state";
 import type {InputKind} from "./recording-input-state";
 import {ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
-import {archivedDiagnosticMessage} from "./input-diagnostic-copy";
 import {InputDiagnosticLog} from "./input-diagnostic-log";
 
 const lanes:InputKind[]=["microphone","system"];
 const scope=(owner:string)=>`archived-input:${owner}`;
 function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInputView;locked:boolean;onOpen:(id:string)=>Promise<void>;onRendered:(owner:string,id:string,generation:number)=>void;onClose:(owner:string,input:InputKind)=>void}){
-  useEffect(()=>{if(view.historySaveConfirmed)toasts.forget(toastKey(view.sessionId,"journal-save"));},[view.sessionId,view.historySaveConfirmed]);
   // ToastNotice normally outlives a view. This bounded historical owner must
   // explicitly resolve its presentation on eviction/deletion/unmount instead.
-  useEffect(()=>()=>{for(const input of [...lanes,"diagnostic"])toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
+  useEffect(()=>()=>{for(const input of lanes)toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
   return <>{lanes.map(input=>{
     const n=view.notices.find(n=>n.input===input),label=input==="microphone"?"マイク":"PC音声";
     return <ToastNotice key={input} scope={scope(view.sessionId)} type={input}
@@ -33,16 +31,23 @@ function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInpu
 
 /** Closed recordings only: neither a current connection badge nor replay. */
 export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingIds?:string[];paused:boolean;locked:boolean;onOpen:(id:string)=>Promise<void>}){
-  const [views,setViews]=useState<ArchivedInputView[]>([]),[restartRequired,setRestartRequired]=useState(false);
+  const [views,setViews]=useState<ArchivedInputView[]>([]);
   const guard=useRef({paused,locked,onOpen,meetingIds}),syncProps=useRef<()=>void>(()=>{}),actions=useRef({rendered:(_owner:string,_id:string,_generation:number)=>{},close:(_owner:string,_input:InputKind)=>{}});
   guard.current={paused,locked,onOpen,meetingIds};
   useEffect(()=>{
     if(!isTauri())return;
     let disposed=false,nativeVisible=false,visibilityEpoch=0,painting=0,visibilityRetry=0,visibilityFailures=0;
-    const diagnosticLog=new InputDiagnosticLog(),controller=new ArchivedInputController(crypto.randomUUID(),(owner,error)=>diagnosticLog.report("archived-validation",owner,error)),clock=new InputLevelClock(performance.now(),Date.now()),stops:(()=>void)[]=[];
+    const diagnosticLog=new InputDiagnosticLog(),controller=new ArchivedInputController(crypto.randomUUID(),(owner,error)=>diagnosticLog.report("archived-validation",owner,error)),stops:(()=>void)[]=[];
     controller.pause(true);
     let knownMeetings=new Set(guard.current.meetingIds??[]),operationEpoch=0,wasPaused=guard.current.paused;
-    const now=()=>clock.read(performance.now(),Date.now());
+    let clock=new InputLevelClock(performance.now(),Date.now());
+    const resetClock=()=>{
+      operationEpoch++;
+      const mono=performance.now(),wall=Date.now();
+      clock=new InputLevelClock(mono,wall);
+      diagnosticLog.report("archived-validation",null,"保存後通知の時計の変化を検知しました。時刻の基準を取り直して再確認します。");
+      return clock.read(mono,wall)===0;
+    };
     const blocked=()=>guard.current.paused||document.hidden||!nativeVisible;
     const paint=()=>{
       if(disposed)return;
@@ -53,15 +58,18 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
         const next=new Set(guard.current.meetingIds);
         controller.removeMeetings(new Set([...knownMeetings].filter(id=>!next.has(id))));knownMeetings=next;
       }
-      const state=controller.paint(now());setViews(state.views);
+      const state=controller.paint(scheduler.now());setViews(state.views);
       for(const request of state.attempts)void deliver(request);
       scheduler.sync();
       if(!blocked()&&controller.needsPaint())painting=window.setTimeout(paint,100);
     };
-    const scheduler=new ArchivedInputScheduler(controller,{now,start:(run,delay)=>window.setTimeout(run,delay),stop:timer=>clearTimeout(timer as number)},
+    const scheduler=new ArchivedInputScheduler(controller,{now:()=>clock.read(performance.now(),Date.now()),reset:resetClock,start:(run,delay)=>window.setTimeout(run,delay),stop:timer=>clearTimeout(timer as number)},
       request=>request.kind==="page"?invoke("get_archived_recording_input_notices",{afterSessionId:request.after}):invoke("get_archived_recording_input_notice_rows",{targets:request.targets}),
-      ()=>{if(!disposed){setRestartRequired(scheduler.restartRequired);paint();}},
-      (request,error)=>diagnosticLog.report(request.kind==="page"?"archived-page":"archived-rows",null,error,request));
+      paint,
+      (request,error)=>{
+        diagnosticLog.report(request.kind==="page"?"archived-page":"archived-rows",null,error,request);
+        if(request.kind==="page"&&error===null)diagnosticLog.report("archived-validation",null,null);
+      });
     const deliver=async(request:ArchivedAttempt)=>{
       if(disposed||blocked())return;
       const a=request.attempt,epoch=operationEpoch;
@@ -70,13 +78,14 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
         if(disposed)return;
         const reply=unpackNoticeReply(value);
         if(reply.paused){controller.defer(request);paint();return;}
+        const at=scheduler.now();
         // Reconcile the original RPC slot, but never resurrect paused display.
         if(blocked()||epoch!==operationEpoch)controller.deferTargets([{meetingId:request.meetingId,sessionId:a.sessionId}]);
-        controller.complete(request,reply.value,now());paint();
+        controller.complete(request,reply.value,at);paint();
       }catch{if(!disposed){controller.fail(request);paint();}}
     };
     syncProps.current=()=>{if(wasPaused!==guard.current.paused){operationEpoch++;wasPaused=guard.current.paused;}scheduler.setBlocked(blocked());paint();};
-    actions.current={rendered:(owner,id,generation)=>{if(disposed||blocked())return;controller.rendered(owner,id,generation,now());paint();},close:(owner,input)=>{if(disposed)return;controller.dismiss(owner,input);paint();}};
+    actions.current={rendered:(owner,id,generation)=>{if(disposed||blocked())return;controller.rendered(owner,id,generation,scheduler.now());paint();},close:(owner,input)=>{if(disposed)return;controller.dismiss(owner,input);paint();}};
     const nativeWindow=getCurrentWindow();
     const checkVisibility=async(wake=false)=>{
       const epoch=++visibilityEpoch;clearTimeout(visibilityRetry);
@@ -110,18 +119,9 @@ export function ArchivedInputNotices({paused,locked,onOpen,meetingIds}:{meetingI
       disposed=true;visibilityEpoch++;scheduler.dispose();clearTimeout(painting);clearTimeout(visibilityRetry);stops.forEach(stop=>stop());
       window.removeEventListener("focus",focus);document.removeEventListener("visibilitychange",visibility);
       syncProps.current=()=>{};actions.current={rendered:()=>{},close:()=>{}};
-      toasts.resolve(toastKey("archived-input","restart"));
     };
   },[]);
   useEffect(()=>{syncProps.current();},[paused,meetingIds]);
   const open=async(id:string)=>{if(!guard.current.locked)await guard.current.onOpen(id);};
-  return <>
-    {views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>)}
-    <ToastNotice scope="archived-input" type="restart" level="error" message={restartRequired?"時計が変更されたため、過去の録音の接続記録を確認できません。アプリを再起動して再確認してください。":""}/>
-    {views.map(view=>{
-      return <ToastNotice key={view.sessionId} scope={scope(view.sessionId)} type="diagnostic" level="warning" important historyOnly meetingId={view.meetingId}
-        message={archivedDiagnosticMessage(view)} clearHistoryOnResolve={view.checked&&view.historySaveConfirmed}
-        action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>open(view.meetingId)}}/>;
-    })}
-  </>;
+  return views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>);
 }

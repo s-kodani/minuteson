@@ -8,7 +8,8 @@ export type ConfirmationOptions = {
   speakerCount?: number | null;
   onSpeakerCountChange?: (value: number | null) => void;
   validate?: () => boolean;
-  onError?: (cause: unknown) => void;
+  /** Return true when the operation has its own visible error. */
+  onError?: (cause: unknown) => boolean | void;
   inlineErrors?: boolean;
   progressAction?: { label: string; action: () => Promise<void> };
   alternativeAction?: { label: string; action: () => Promise<void> };
@@ -16,7 +17,7 @@ export type ConfirmationOptions = {
 export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel" | "inlineErrors" | "speakerCount"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
-  phase: ConfirmationPhase; error: string;
+  phase: ConfirmationPhase; error: string; errorReported?: boolean;
   progressLabel?: string; progressPending?: boolean; progressDone?: boolean; progressError?: string;
   alternativeLabel?: string;
 };
@@ -82,8 +83,9 @@ export class ConfirmationController<Parent, Opener> {
     } catch (cause) {
       if (this.pending !== pending || !this.snapshot) return;
       if (cause instanceof SavedEditsCancelled) { this.finish("cancelled"); return; }
-      this.publish({ ...this.snapshot, phase: "failed", error: String(cause) });
-      try { pending.options.onError?.(cause); } catch { /* preserve the original failure */ }
+      let errorReported = false;
+      try { errorReported = pending.options.onError?.(cause) === true; } catch { /* preserve the original failure */ }
+      this.publish({ ...this.snapshot, phase: "failed", error: String(cause), errorReported });
     }
   }
 }
