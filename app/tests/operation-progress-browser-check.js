@@ -240,6 +240,8 @@ async (page, capturePath, { approveModelLicense }) => {
         root.dataset.theme = theme;
         return {
           summary: [...element.querySelectorAll(".job-list-count .job-chip")].map(chip => getComputedStyle(chip).backgroundColor),
+          totalText: getComputedStyle(element.querySelector(".job-chip-total")).color,
+          queuedOutline: getComputedStyle(element.querySelector(".job-chip-queued")).outlineWidth,
           running: color(".job-status.job-chip-running"),
           queued: color(".job-status.job-chip-queued"),
           paused: color(".job-status.job-chip-paused"),
@@ -250,10 +252,13 @@ async (page, capturePath, { approveModelLicense }) => {
       else root.dataset.theme = previousTheme;
     }
   });
-  for (const { summary: colors, running, queued, paused } of chipColors) {
+  for (const { summary: colors, totalText, queuedOutline, running, queued, paused } of chipColors) {
     check(new Set([...colors, paused]).size === 4 && colors[1] === running && colors[2] === queued, "job colors do not distinguish counts and states consistently");
+    check(colors[0] === "rgb(39, 39, 42)" && totalText === "rgb(255, 255, 255)", "job total is not white text on charcoal");
+    check(queuedOutline === "1px", "queued job chip lacks its outline");
   }
-  check(chipColors[0].summary.every((color, index) => color !== chipColors[1].summary[index]), "job summary colors do not follow the theme");
+  check(chipColors[0].running === "rgb(228, 228, 231)" && chipColors[1].running === "rgb(63, 63, 70)", "running job colors do not follow the neutral palette");
+  check(chipColors[0].queued !== chipColors[1].queued, "queued job color does not follow the theme");
   await activeTab.press("ArrowRight");
   const historyTab = jobs.getByRole("tab", { name: "履歴", exact: true, selected: true });
   check(await historyTab.evaluate(element => element === document.activeElement), "history tab did not receive keyboard focus");

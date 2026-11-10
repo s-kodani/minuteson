@@ -18,6 +18,13 @@ async (page, capturePath, detailUI) => {
     const tile = await bounds(), anchor = await bell();
     check(tile.width === 44 && tile.height === 44, 'collapsed progress is not a 44px square');
     check(Math.abs(tile.x + tile.width / 2 - anchor.x - anchor.width / 2) < 1 && tile.y > anchor.y + anchor.height, 'progress ring is not centered below the bell');
+    const graphic = await ring.locator('svg').evaluate(element => {
+      const { width, height } = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { width, height, centerX: rect.x + rect.width / 2, centerY: rect.y + rect.height / 2 };
+    });
+    check(graphic.width === '28px' && graphic.height === '28px' && Math.abs(graphic.centerX - tile.x - 22) < 1 && Math.abs(graphic.centerY - tile.y - 22) < 1, 'ring is not 28px and centered in the tile');
+    check(await ring.evaluate(element => getComputedStyle(element, '::after').fontSize) === '9px', 'compact percentage is not 9px');
     return tile;
   };
   const geometry = () => page.locator('.meeting-detail-status, .meeting-detail-navigation, .content').evaluateAll(nodes => nodes.map(node => {
