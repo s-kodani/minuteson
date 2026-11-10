@@ -4,8 +4,21 @@ async (page, capturePath, detailUI) => {
   const results = [];
   const banner = page.getByRole('region', { name: '進行中の処理', exact: true });
   const trigger = () => banner.locator('.progress-disclosure');
+  const ring = banner.locator('.progress-ring');
   const state = async expanded => {
     await page.waitForFunction(expanded => document.querySelector('.progress-disclosure')?.getAttribute('aria-expanded') === String(expanded), expanded);
+    await banner.evaluate(async element => {
+      getComputedStyle(element).width;
+      await Promise.allSettled(element.getAnimations().map(animation => animation.finished));
+    });
+  };
+  const bounds = () => banner.boundingBox();
+  const bell = () => page.getByRole('button', { name: '通知一覧', exact: true }).boundingBox();
+  const checkRing = async () => {
+    const tile = await bounds(), anchor = await bell();
+    check(tile.width === 44 && tile.height === 44, 'collapsed progress is not a 44px square');
+    check(Math.abs(tile.x + tile.width / 2 - anchor.x - anchor.width / 2) < 1 && tile.y > anchor.y + anchor.height, 'progress ring is not centered below the bell');
+    return tile;
   };
   const geometry = () => page.locator('.meeting-detail-status, .meeting-detail-navigation, .content').evaluateAll(nodes => nodes.map(node => {
     const r = node.getBoundingClientRect(); return [r.x, r.y, r.width, r.height];
@@ -28,43 +41,37 @@ async (page, capturePath, detailUI) => {
     await f.emitNotification();
   });
   await state(false);
-  check(await banner.getByRole('progressbar').getAttribute('value') === '50', 'collapsed bar lost measured progress');
-  check(!(await banner.innerText()).includes('50%') && !(await banner.innerText()).includes('経過時間'), 'collapsed card exposes detail');
+  check(await ring.getAttribute('data-value') === '50%' && (await trigger().getAttribute('aria-description')).includes('50%'), 'ring lost measured progress');
+  check(await banner.getByRole('progressbar').count() === 0, 'collapsed ring exposes the detail bar');
   check(!await banner.locator('.operation-progress-heading').isVisible(), 'collapsed processing status remains visible');
-  const compactHeight = await banner.evaluate(e => e.getBoundingClientRect().height);
-  check(compactHeight >= 28 && compactHeight <= 36, `unexpected single-row height: ${compactHeight}`);
-  const layout = () => banner.evaluate(element => {
-    const titleElement = element.querySelector('.progress-disclosure strong');
-    const title = titleElement.getBoundingClientRect();
-    const text = document.createRange(); text.selectNodeContents(titleElement);
-    const bar = element.querySelector('progress').getBoundingClientRect();
-    const icon = element.querySelector('.progress-disclosure svg').getBoundingClientRect();
-    return { title: { right:title.right, textRight:text.getBoundingClientRect().right, center:title.y + title.height / 2, bottom:title.bottom }, bar: { left:bar.left, right:bar.right, center:bar.y + bar.height / 2, top:bar.top }, icon: { left:icon.left, center:icon.y + icon.height / 2 } };
-  });
-  const wideLayout = await layout();
-  check(wideLayout.title.right < wideLayout.bar.left && wideLayout.bar.right < wideLayout.icon.left, 'wide banner is not ordered title, progress, disclosure');
-  check(Math.abs(wideLayout.title.center - wideLayout.bar.center) < 1 && Math.abs(wideLayout.icon.center - wideLayout.bar.center) < 1, 'wide banner does not align on one row');
-  check(Math.abs(wideLayout.bar.left - wideLayout.title.textRight - 12) < 1, 'progress does not follow title text with a 12px gap');
-  await patch({ meetingTitle: '短い会議' });
-  await trigger().locator('strong').getByText('短い会議', { exact: true }).waitFor();
-  const shortLayout = await layout();
-  check(Math.abs(shortLayout.bar.left - shortLayout.title.textRight - 12) < 1 && shortLayout.bar.left < wideLayout.bar.left, 'shorter title leaves a fixed-width blank column before progress');
-  await patch({ meetingTitle: '週次ミーティング' });
-  await trigger().locator('strong').getByText('週次ミーティング', { exact: true }).waitFor();
+  const compact = await checkRing();
   await unchanged(baseline);
   await detailUI.applyPlaybackTheme('dark');
   await page.screenshot({ path: capturePath('job-banner-compact.png') });
+  await banner.evaluate(element => {
+    const recordWidth = event => {
+      if (event.target !== element || event.propertyName !== 'width') return;
+      element.dataset.expandingWidth = String(element.getBoundingClientRect().width);
+      element.removeEventListener('transitionrun', recordWidth);
+    };
+    element.addEventListener('transitionrun', recordWidth);
+  });
   await trigger().hover(); await state(true);
-  check(await banner.getByText('50%', { exact: true }).isVisible(), 'hover did not reveal percent');
+  const expanded = await bounds();
+  const expandingWidth = Number(await banner.getAttribute('data-expanding-width'));
+  check(expanded.x < compact.x && expanded.y === compact.y && Math.abs(expanded.x + expanded.width - compact.x - compact.width) < 1, 'card did not expand left from the ring');
+  check(expandingWidth >= compact.width && expandingWidth < expanded.width, 'card snapped to full width without a transition');
+  check(await banner.getByRole('progressbar').getAttribute('value') === '50', 'hover did not reveal measured progress');
   check(await banner.locator('small').isVisible(), 'hover did not reveal elapsed detail');
-  check(await banner.evaluate(e => e.getBoundingClientRect().height) > compactHeight, 'expanded card has no additional detail');
+  check(expanded.height > compact.height, 'expanded card has no additional detail');
   await unchanged(baseline);
   await away(); await state(false);
-  results.push('slim title and measured bar; hover expands and leaves; no content size or position changes');
+  await checkRing();
+  results.push('ring aligned under notification bell; hover animates left and back without moving workspace content');
 
   await trigger().hover(); await state(true);
   await trigger().click(); await away(); await state(true);
-  await trigger().click(); await state(false);
+  await trigger().click({ position: { x: (await bounds()).width - 16, y: 6 } }); await state(false);
   await page.mouse.move(...await trigger().evaluate(e => { const r = e.getBoundingClientRect(); return [r.x + 4, r.y + 4]; }));
   await state(false);
   await away(); await trigger().hover(); await state(true);
@@ -82,30 +89,33 @@ async (page, capturePath, detailUI) => {
   await page.setViewportSize({ width: 560, height: 800 });
   await away();
   const narrow = await geometry();
-  check(await trigger().locator('strong').evaluate(e => e.scrollWidth > e.clientWidth && getComputedStyle(e).textOverflow === 'ellipsis'), 'long title is not ellipsized');
-  const narrowHeight = await banner.evaluate(e => e.getBoundingClientRect().height);
-  check(narrowHeight >= 40 && narrowHeight <= 48 && narrowHeight > compactHeight, 'narrow banner did not retain the two-row layout');
-  const narrowLayout = await layout();
-  check(narrowLayout.bar.top > narrowLayout.title.bottom && Math.abs(narrowLayout.title.center - narrowLayout.icon.center) < 1, 'narrow banner did not keep title/icon above progress');
+  await checkRing();
   await page.screenshot({ path: capturePath('job-banner-compact-narrow.png') });
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'banner causes horizontal overflow');
   await trigger().dispatchEvent('pointerover', { pointerType: 'touch' }); await state(false);
   await trigger().dispatchEvent('click'); await state(true);
+  check(await trigger().locator('strong').evaluate(e => e.scrollWidth > e.clientWidth && getComputedStyle(e).textOverflow === 'ellipsis'), 'long title is not ellipsized');
   await unchanged(narrow);
   await trigger().dispatchEvent('click'); await state(false);
   await patch({ state: 'paused' });
-  check(await banner.getByRole('progressbar').evaluate(e => getComputedStyle(e).animationName) === 'none', 'paused card animates');
+  check(await ring.getAttribute('data-value') === '50%' && await ring.locator('svg').evaluate(e => getComputedStyle(e).animationName) === 'none', 'paused ring changed progress or animates');
   await patch({ state: 'running', completedUnits: 4 });
-  await page.waitForFunction(() => document.querySelector('.common-operation-progress progress')?.getAttribute('value') === null);
+  await banner.locator('.progress-ring[data-spinning="true"]').waitFor();
+  check(await ring.getAttribute('data-value') === null, 'indeterminate ring invents a percentage');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  check(await ring.locator('svg').evaluate(e => getComputedStyle(e).animationName) === 'none', 'reduced motion does not stop the ring');
   await trigger().dispatchEvent('click'); await state(true);
+  check(await banner.evaluate(e => e.getAnimations().length) === 0, 'reduced motion does not disable card transitions');
+  check(await banner.getByRole('progressbar').getAttribute('value') === null, 'indeterminate detail bar invents a percentage');
   check(await banner.locator('.operation-progress-percent').count() === 0, 'indeterminate finalization invents a percentage');
   await unchanged(narrow);
-  results.push('long titles, narrow screens, touch pointer/click, paused and indeterminate progress');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  results.push('long titles, narrow screens, touch pointer/click, paused and indeterminate progress, reduced motion');
 
   await page.setViewportSize({ width: 1200, height: 900 });
   await away();
   await trigger().click(); await state(false);
-  check(await banner.evaluate(e => e.getBoundingClientRect().height) === compactHeight, 'widening the window did not restore the single-row layout');
+  await checkRing();
   // Test the identity reset from a pinned card without a stationary pointer
   // opening the replacement card as it mounts under that pointer in WebKit.
   await trigger().click(); await state(true); await away(); await state(true);

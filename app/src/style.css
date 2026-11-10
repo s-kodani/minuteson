@@ -388,21 +388,84 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .operation-progress-paused progress { opacity:.55; animation:none; }
 .operation-progress-queued progress:indeterminate { animation:none; background:var(--input-border); }
 .main-column:has(> .common-operation-progress) { position:relative; }
-.common-operation-progress { --floating-progress-gap:12px; container-type:inline-size; position:absolute; top:76px; left:24px; right:24px; z-index:20; min-width:0; margin:0; padding:0; background:transparent; border:0; pointer-events:none; }
-.common-operation-progress .operation-progress { margin:0; padding:8px 14px; background:var(--raised); border:1px solid var(--border); border-radius:12px; box-shadow:0 4px 14px rgb(0 0 0 / 7%); pointer-events:auto; }
-.common-operation-progress [hidden] { display:none; }
-.common-operation-progress .progress-disclosure { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:0; padding:0; border:0; border-radius:2px; background:transparent; color:var(--text); font-size:13px; line-height:18px; text-align:left; }
-.progress-disclosure strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.progress-disclosure svg { flex:none; }
+.common-operation-progress {
+  --floating-progress-gap:12px;
+  --floating-progress-inset:24px;
+  --floating-progress-size:44px;
+  --floating-progress-inner-size:calc(var(--floating-progress-size) - 2px);
+  --floating-progress-anchor-right:calc(var(--floating-progress-inset) + var(--floating-progress-size) / 2);
+  --floating-progress-ring-right:calc(var(--floating-progress-anchor-right) - var(--floating-progress-size) / 2);
+  --floating-progress-content-width:calc(var(--floating-progress-column-width,100vw) - var(--floating-progress-inset) - var(--floating-progress-ring-right) - 2px);
+  --floating-progress-ease:cubic-bezier(.2,.75,.25,1);
+  position:absolute;
+  top:76px;
+  right:var(--floating-progress-ring-right);
+  width:var(--floating-progress-size);
+  z-index:20;
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:minmax(var(--floating-progress-inner-size),0fr);
+  overflow:hidden;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--raised);
+  box-shadow:0 4px 14px rgb(0 0 0 / 7%);
+  pointer-events:none;
+  transition:width 240ms var(--floating-progress-ease), grid-template-rows 240ms var(--floating-progress-ease);
+}
+.common-operation-progress[data-expanded="true"] {
+  width:calc(100% - var(--floating-progress-inset) - var(--floating-progress-ring-right));
+  grid-template-rows:minmax(var(--floating-progress-inner-size),1fr);
+  pointer-events:auto;
+}
+.common-operation-progress .progress-disclosure {
+  position:absolute;
+  z-index:1;
+  top:0;
+  right:0;
+  width:var(--floating-progress-inner-size);
+  height:var(--floating-progress-inner-size);
+  min-height:0;
+  padding:0;
+  border:0;
+  border-radius:inherit;
+  background:transparent;
+  color:var(--text);
+  font-size:13px;
+  line-height:18px;
+  text-align:left;
+  pointer-events:auto;
+}
+.common-operation-progress .progress-disclosure:focus-visible { outline-offset:-3px; }
+.common-operation-progress[data-expanded="true"] .progress-disclosure { width:100%; height:34px; }
+.progress-ring { position:absolute; top:0; right:0; width:var(--floating-progress-inner-size); aspect-ratio:1; display:grid; place-items:center; font-size:11px; font-weight:650; font-variant-numeric:tabular-nums; transition:opacity 90ms ease 80ms; }
+.progress-ring::after { content:attr(data-value); }
+.progress-ring svg,.progress-ring::after { grid-area:1 / 1; }
+.progress-ring-track { stroke:var(--input-border); }
+.progress-ring-arc { stroke:var(--primary); }
+.common-operation-progress[data-expanded="false"] .progress-ring[data-spinning] svg { animation:progress-ring-spin 1.8s linear infinite; }
+.common-operation-progress[data-expanded="true"] .progress-ring { opacity:0; transition-delay:0ms; }
+@keyframes progress-ring-spin { to { transform:rotate(360deg); } }
+/* Lay out detail at its final width so text doesn't rewrap as the shell opens. */
+.common-operation-progress .operation-progress { justify-self:end; min-height:0; width:var(--floating-progress-content-width); margin:0; padding:26px 14px 8px; }
+.progress-disclosure-title { position:absolute; top:8px; right:14px; width:calc(var(--floating-progress-content-width) - 28px); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.progress-disclosure-title strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.progress-disclosure-title svg { flex:none; }
+.common-operation-progress :is(.operation-progress,.progress-disclosure-title) { opacity:0; visibility:hidden; transition:opacity 80ms ease, visibility 80ms step-end; }
+.common-operation-progress[data-expanded="true"] :is(.operation-progress,.progress-disclosure-title) { opacity:1; visibility:visible; transition:opacity 80ms ease 160ms; }
+.common-operation-progress .operation-progress[inert] progress:indeterminate { animation-play-state:paused; }
 .common-operation-progress progress { height:3px; margin-top:6px; }
 .common-operation-progress .operation-progress-heading { margin-top:8px; }
 .common-operation-progress .progress-footer { margin-top:12px; padding-top:8px; border-top:1px solid var(--border); }
-/* Keep the disclosure button across the whole row, behind the progress meter. */
-@container (min-width:600px) {
-  .common-operation-progress[data-expanded="false"] .operation-progress { display:grid; grid-template-columns:fit-content(min(40%, 260px)) minmax(80px, 1fr) 16px; column-gap:12px; align-items:center; padding-top:6px; padding-bottom:6px; }
-  .common-operation-progress[data-expanded="false"] .progress-disclosure { grid-column:1 / -1; grid-row:1; display:grid; grid-template-columns:subgrid; }
-  .common-operation-progress[data-expanded="false"] .progress-disclosure svg { grid-column:3; }
-  .common-operation-progress[data-expanded="false"] progress { grid-column:2; grid-row:1; margin:0; pointer-events:none; }
+@media(prefers-reduced-motion:reduce) {
+  .common-operation-progress,
+  .common-operation-progress .progress-ring,
+  .common-operation-progress[data-expanded] :is(.operation-progress,.progress-disclosure-title) { transition:none; }
+  .common-operation-progress[data-expanded="false"] .progress-ring[data-spinning] svg { animation:none; }
+}
+@media(forced-colors:active) {
+  .progress-ring-track { stroke:GrayText; }
+  .progress-ring-arc { stroke:ButtonText; }
 }
 .job-nav-count { margin-left:auto; min-width:20px; font-size:11px; font-variant-numeric:tabular-nums; color:var(--secondary-text); }
 .job-list { min-width:0; }
@@ -429,7 +492,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .job-list-empty p,.job-read-error { font-size:13px; color:var(--secondary-text); line-height:1.7; }
 @keyframes operation-progress-pulse { 0%,100% { background-position:0% 50%; } 50% { background-position:100% 50%; } }
 @media(prefers-reduced-motion:reduce) { .operation-progress progress:indeterminate { animation:none; } }
-@media(max-width:760px) { .common-operation-progress { --floating-progress-gap:10px; left:12px; right:12px; } }
+@media(max-width:760px) { .common-operation-progress { --floating-progress-gap:10px; --floating-progress-inset:12px; } }
 
 .minutes-prompt-settings { margin-top: 20px; }
 .minutes-prompt-settings .prompt-label textarea { min-height: 220px; line-height: 1.6; }
