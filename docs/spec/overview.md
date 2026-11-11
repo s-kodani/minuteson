@@ -40,22 +40,22 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 ## 配布と評価の確認状況
 
-2026-11-11に、コミット`d34c198e92c95e9ce9ea8d20c6db2d6225e9d0fd`を対象とする1.0.0のdry runが成功しました。インストーラーはGitHub Actionsの成果物として保存され、`v1.0.0`のGitHub Releaseは下書きのままです。配布経路と品質評価の確認状況は次のとおりです。
+2026-11-12（日本時間）に、コミット`682f4440b58a3fdad47969adae3a7919410e93bd`を対象とする1.0.0のdry runが成功しました。インストーラーはGitHub Actionsの成果物として保存され、`v1.0.0`のGitHub Releaseは下書きのままです。配布経路と品質評価の確認状況は次のとおりです。
 
 | 項目 | 確認状況 |
 | --- | --- |
 | 自動検査 | 対象コミットのmain CI・セキュリティ検査、dry run内の全件CI・セキュリティ検査が成功。Windows・macOSのブラウザー／ネイティブ回帰テストと、代表モデルを使ったランタイム検証を確認 |
-| macOS | 通常版アプリとDMGのDeveloper ID署名、Apple公証、チケット添付・検証が成功（`notarization: tickets_validated`）。ダウンロードしたDMGからのGatekeeper確認、実機での権限・録音・モデル導入、通常版の更新とデータ保持は未確認 |
+| macOS | 通常版アプリとDMGのDeveloper ID署名、Apple公証、チケット添付・検証が成功（`notarization: tickets_validated`）。最終署名済みDMGのFinder表示・再マウント、ダウンロードしたDMGからのGatekeeper確認、実機での権限・録音・モデル導入、通常版の更新とデータ保持は未確認 |
 | Windows | 未署名EXEとStore用未署名MSIXの生成・成果物収集、MSIXの内容照合、リンク済みEXEのDPI宣言検査が成功。対象クライアントOSでの今回の配布物の導入・実機操作・更新、Store提出・認定・一般公開は未確認。過去の検証用コピーによるWACKの総合結果はWARNINGで、DPIのInfrastructureエラーと任意検査の指摘は今回のCIでは解消確認していない |
 | 配布証跡 | 全プラットフォームの成果物統合・ハッシュ照合、SBOM・チェックサム・GitHubのビルド来歴証明の生成が成功。GitHub Releaseの公開とStore提出は未実施 |
 | 品質・性能 | 短い実モデル統合や合成入力の検査記録あり。16GB端末・10話者、60分処理、4時間録音、各機器・会議アプリでの網羅的な評価は未確認。CI上のランタイム検証は通常版の実機操作確認とは別に扱う |
 | ライセンス | 自作コード・文書・自作画像はMIT。依存通知本文・SDK由来条件等の配布審査は未完了。依存ライブラリ・モデルの条件は個別に適用される |
 
-確認根拠は[main CI](https://github.com/s-kodani/minuteson/actions/runs/42958731033)、[mainのセキュリティ検査](https://github.com/s-kodani/minuteson/actions/runs/42958731072)、[1.0.0のdry run](https://github.com/s-kodani/minuteson/actions/runs/42958883715)です。dry runでは[macOS署名・公証ジョブ](https://github.com/s-kodani/minuteson/actions/runs/42958883715/job/130358948004)と[成果物統合・証明生成ジョブ](https://github.com/s-kodani/minuteson/actions/runs/42958883715/job/130359659284)が成功し、後者の公開ステップは`dry_run=true`の条件でスキップされました。
+確認根拠は[main CI](https://github.com/s-kodani/minuteson/actions/runs/43033231999)、[mainのセキュリティ検査](https://github.com/s-kodani/minuteson/actions/runs/43033232338)、[1.0.0のdry run](https://github.com/s-kodani/minuteson/actions/runs/43033864257)です。dry runでは[macOS署名・公証ジョブ](https://github.com/s-kodani/minuteson/actions/runs/43033864257/job/130655364007)と[成果物統合・証明生成ジョブ](https://github.com/s-kodani/minuteson/actions/runs/43033864257/job/130668669631)が成功し、後者の公開ステップは`dry_run=true`の条件でスキップされました。
 
-添付予定の配布物は[verified-release-preview](https://github.com/s-kodani/minuteson/actions/runs/42958883715/artifacts/13833696360)、Store提出用のMSIXは[release-store](https://github.com/s-kodani/minuteson/actions/runs/42958883715/artifacts/13832676423)に保存されています。これらは30日保持のActions成果物で、保持期限は2026-12-11（UTC）です。確認時点で`RELEASE_PUBLISH_ENABLED=false`、`STORE_PUBLISH_ENABLED=false`を維持しています。
+添付予定の配布物は[verified-release-preview](https://github.com/s-kodani/minuteson/actions/runs/43033864257/artifacts/13873499074)、macOS単独のDMGは[release-macos](https://github.com/s-kodani/minuteson/actions/runs/43033864257/artifacts/13872672781)、Store提出用のMSIXは[release-store](https://github.com/s-kodani/minuteson/actions/runs/43033864257/artifacts/13874475070)に保存されています。これらは30日保持のActions成果物で、保持期限は2026-12-11（UTC）です。確認時点で`RELEASE_PUBLISH_ENABLED=false`、`STORE_PUBLISH_ENABLED=false`を維持しています。
 
-このdry runの証跡は、`rustix`を1.1.6へ更新する[依存更新PR #67](https://github.com/s-kodani/minuteson/pull/67)より前の固定SHAでの記録です。依存更新後のSHAに対して、全件CI・パッケージ生成・署名・公証・証明生成までを含むdry runは未実施です。
+今回の対象SHAには、`rustix`を1.1.6へ更新する[依存更新PR #67](https://github.com/s-kodani/minuteson/pull/67)と、DMGのインストール案内・アイコン配置を改善する[macOS修正PR #68](https://github.com/s-kodani/minuteson/pull/68)が含まれます。DMG作成用の固定依存を認証情報の読み込み前に導入し、新しいDMG生成処理を含む署名・公証まで同じdry runで確認しました。取得したmacOS成果物の対象SHA、DMG・SBOMのハッシュも受領記録と照合済みです。
 
 署名・公証と自動検査の成功だけでは、実機確認・ライセンス審査を確認済みにしません。macOSの構築記録では`runtimeQA`・`gatekeeper`・`licenseReview`・`manualUpdate`が`not_verified`、MSIXの構築記録では`installedVerification`・`certification`が`pending`であり、いずれも`distributionReady`は`false`のままです。
 
