@@ -19,6 +19,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONUTF8: '1'
+
 concurrency:
   group: release-${{ inputs.release_id }}
   cancel-in-progress: false
