@@ -55,6 +55,8 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 添付予定の配布物は[verified-release-preview](https://github.com/s-kodani/minuteson/actions/runs/42958883715/artifacts/13833696360)、Store提出用のMSIXは[release-store](https://github.com/s-kodani/minuteson/actions/runs/42958883715/artifacts/13832676423)に保存されています。これらは30日保持のActions成果物で、保持期限は2026-12-11（UTC）です。確認時点で`RELEASE_PUBLISH_ENABLED=false`、`STORE_PUBLISH_ENABLED=false`を維持しています。
 
+このdry runの証跡は、`rustix`を1.1.6へ更新する[依存更新PR #67](https://github.com/s-kodani/minuteson/pull/67)より前の固定SHAでの記録です。依存更新後のSHAに対して、全件CI・パッケージ生成・署名・公証・証明生成までを含むdry runは未実施です。
+
 署名・公証と自動検査の成功だけでは、実機確認・ライセンス審査を確認済みにしません。macOSの構築記録では`runtimeQA`・`gatekeeper`・`licenseReview`・`manualUpdate`が`not_verified`、MSIXの構築記録では`installedVerification`・`certification`が`pending`であり、いずれも`distributionReady`は`false`のままです。
 
 ソースからのビルドは[macOS](../guides/build-macos.md)／[Windows](../guides/build-windows.md)、配布物の構築・検証は[macOS配布](../guides/distribution-macos.md)、[Windows EXE](../guides/distribution-windows.md)、[Microsoft Store](../guides/distribution-store.md)の手順を参照してください。性能や文字起こしの精度は端末・モデル・音声に依存し、上表の未測定条件について保証値を設けません。
