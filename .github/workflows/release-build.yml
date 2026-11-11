@@ -160,6 +160,9 @@ jobs:
         with:
           name: prepared-macos
           path: output/prepared-macos
+      - name: Install locked DMG layout dependencies before loading credentials
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r tools/requirements-macos-release.txt
       - name: Sign and notarize the same-run prepared app
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}

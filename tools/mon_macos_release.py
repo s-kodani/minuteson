@@ -491,6 +491,8 @@ def build(output, identity, team, profile, environment, prepared=None):
     for name, expected in POLICIES.items():
         if read_plist(policy / name) != expected:
             raise ValueError("component entitlement policy changed; refusing before build")
+    dmg_builder = str(REPOSITORY / "tools/mon_macos_dmg.py")
+    command([sys.executable, dmg_builder, "--check"], timeout=30)
     output.mkdir(mode=0o700)
     cache = Path(tempfile.mkdtemp(prefix="mon-distribution-build-", dir=output))
     cache_identity = cache.stat()
@@ -540,8 +542,8 @@ def build(output, identity, team, profile, environment, prepared=None):
         command(["/usr/bin/ditto", str(app), str(image_source / bundle_name)], timeout=120)
         (image_source / "Applications").symlink_to("/Applications")
         dmg = output / f"{product_name}_{version}_aarch64.dmg"
-        command(["/usr/bin/hdiutil", "create", "-volname", product_name, "-srcfolder", str(image_source),
-                 "-format", "UDZO", "-nospotlight", str(dmg)], timeout=300)
+        command([sys.executable, dmg_builder, "--source", str(image_source),
+                 "--destination", str(dmg), "--product-name", product_name], timeout=900)
         command(["/usr/bin/hdiutil", "verify", str(dmg)], timeout=120)
         sign(dmg, identity, team)
         if profile is not None:

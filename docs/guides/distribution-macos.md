@@ -18,6 +18,8 @@ sources:
 
 [macOSビルド環境](build-macos.md)と、有効なDeveloper ID Application証明書・対応する秘密鍵、公証用のキーチェーンプロファイルを用意します。コマンド例の氏名・Team ID・メールアドレスは自分の値へ置き換えます。
 
+DMG作成にはビルド用Python環境へ `python -m pip install --require-hashes --only-binary=:all: -r tools/requirements-macos-release.txt` で固定依存を導入します。Release buildの署名ジョブでは、認証情報を読み込む前に導入します。ローカルではビルドを実行する `python3` と同じ環境を使います。
+
 1. XcodeのSettings → Accounts／Apple AccountsでTeamを選び、Manage CertificatesからDeveloper ID Applicationを作成します。既存の有効な証明書と秘密鍵があれば再利用できます。
 2. 証明書と鍵を`security find-identity -v -p codesigning`で確認します。
 3. Apple Accountで公証用のアプリ用パスワードを作成し、次のコマンドの対話入力で保存します。通常のApple Accountパスワードは使いません。
@@ -60,6 +62,10 @@ npm --prefix app run tauri:release:build -- \
 署名のみでもsecure timestamp取得などの通信は発生し得ます。`notarization: not_requested`の成果物を公証済みとして扱いません。
 
 ## 成果物と確認
+
+DMGは660×440ポイントのアイコン表示で開き、左にMinutesOn、右にApplicationsを配置します。背景にドラッグによるインストール、コピー後の起動、ディスクの取り出しを案内します。Finderの自動整列を無効にし、背景と位置を `.DS_Store` に保存してから読み取り専用DMGへ変換・署名・公証します。背景は `tools/dmg/render-background.swift` から再生成でき、通常・Retina用の画像を同梱しています。
+
+表示確認では、新しいDMGを開いて説明と矢印、左右のアイコン、文字の欠けがないことを確認し、一度取り出して再度開いても同じ配置になることを確認します。インストールする場合はMinutesOnをApplicationsへドラッグし、コピー完了後にApplicationsから起動してDMGを取り出します。
 
 | 成果物 | 内容 |
 | --- | --- |
