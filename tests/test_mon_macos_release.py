@@ -91,8 +91,8 @@ class ReleaseConfigurationTests(unittest.TestCase):
                 (built / "source").write_bytes(b"synthetic application")
             elif Path(argv[0]).name == "ditto":
                 shutil.copytree(argv[-2], argv[-1])
-            elif Path(argv[0]).name == "hdiutil" and "create" in argv:
-                Path(argv[-1]).write_bytes(b"synthetic disk image")
+            elif "--destination" in argv:
+                Path(argv[argv.index("--destination") + 1]).write_bytes(b"synthetic disk image")
             return b"", b""
 
         with ExitStack() as stack:
@@ -116,8 +116,8 @@ class ReleaseConfigurationTests(unittest.TestCase):
         self.assertTrue((output / "image-source/MinutesOn Preview.app/source").is_file())
         self.assertEqual(signed, ["MONCaptureProbe.app", "mon-speaker-embedding", "MinutesOn Preview.app",
                                   "MinutesOn Preview_1.0.0_aarch64.dmg"])
-        creation = next(argv for argv in commands if "create" in argv)
-        self.assertEqual(creation[creation.index("-volname") + 1], "MinutesOn Preview")
+        creation = next(argv for argv in commands if "--destination" in argv)
+        self.assertEqual(creation[creation.index("--product-name") + 1], "MinutesOn Preview")
         self.assertEqual(result["productName"], "MinutesOn Preview")
         self.assertEqual(result["dmg"], "MinutesOn Preview_1.0.0_aarch64.dmg")
         self.assertFalse(result["distributionReady"])
@@ -366,8 +366,8 @@ class ReleaseTests(unittest.TestCase):
                     Path(argv[-1]).write_bytes(b"synthetic notary archive")
                 else:
                     shutil.copytree(argv[-2], argv[-1])
-            elif "hdiutil" in argv[0] and "create" in argv:
-                Path(argv[-1]).write_bytes(b"synthetic disk image")
+            elif "--destination" in argv:
+                Path(argv[argv.index("--destination") + 1]).write_bytes(b"synthetic disk image")
             elif "notarytool" in argv:
                 return json.dumps({"status": "Accepted", "id": REQUEST}).encode(), b""
             return self.signed(argv, **kwargs)
@@ -385,8 +385,8 @@ class ReleaseTests(unittest.TestCase):
         output, result = self.pipeline()
         signs = [argv for argv in self.calls if "--sign" in argv]
         self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", *release.WORKER_NAMES, "MONCaptureProbe.app", "mon-speaker-embedding", "MinutesOn.app", "MinutesOn_1.0.0_aarch64.dmg"])
-        creation = next(argv for argv in self.calls if "hdiutil" in argv[0] and "create" in argv)
-        self.assertEqual(creation[creation.index("-volname") + 1], "MinutesOn")
+        creation = next(argv for argv in self.calls if "--destination" in argv)
+        self.assertEqual(creation[creation.index("--product-name") + 1], "MinutesOn")
         self.assertEqual(result["productName"], "MinutesOn")
         self.assertFalse(any("notarytool" in argv or "stapler" in argv or Path(argv[0]).name == "open" for argv in self.calls))
         self.assertEqual(result["notarization"], "not_requested")
@@ -418,7 +418,7 @@ class ReleaseTests(unittest.TestCase):
     def test_explicit_notary_pipeline_staples_app_before_dmg_and_never_rebuilds_accepted_dmg(self):
         _, result = self.pipeline("existing-explicit-profile")
         uploads = [i for i, argv in enumerate(self.calls) if "notarytool" in argv]
-        creation = next(i for i, argv in enumerate(self.calls) if "hdiutil" in argv[0] and "create" in argv)
+        creation = next(i for i, argv in enumerate(self.calls) if "--destination" in argv)
         app_staple = next(i for i, argv in enumerate(self.calls) if "stapler" in argv and "staple" in argv and argv[-1].endswith("MinutesOn.app"))
         dmg_staple = next(i for i, argv in enumerate(self.calls) if "stapler" in argv and "staple" in argv and argv[-1].endswith(".dmg"))
         self.assertEqual(len(uploads), 2)
@@ -426,18 +426,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertLess(app_staple, creation)
         self.assertLess(creation, uploads[1])
         self.assertLess(uploads[1], dmg_staple)
-        self.assertEqual(sum("create" in argv and "hdiutil" in argv[0] for argv in self.calls), 1)
+        self.assertEqual(sum("--destination" in argv for argv in self.calls), 1)
         self.assertEqual(result["notaryRequestIds"], [REQUEST, REQUEST])
         self.assertEqual(result["notarization"], "tickets_validated")
         self.assertFalse(result["distributionReady"])
 
     def test_pipeline_failure_preserves_partial_artifacts_without_publishing_success_record(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
-            self.pipeline(fail_at="create")
+            self.pipeline(fail_at="--destination")
         output = self.root / "distribution"
         self.assertTrue((output / "MinutesOn.app").is_dir())
         self.assertTrue((output / "preparation-build.log").is_file())
         self.assertFalse((output / "build-result.json").exists())
+
+    def test_missing_dmg_dependencies_fail_before_building_or_signing(self):
+        with self.assertRaises(ValueError):
+            self.pipeline(fail_at="--check")
+        self.assertFalse((self.root / "distribution").exists())
+        self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
 
     def test_changed_policy_refused_before_build_and_target_creation(self):
         original = release.read_plist
