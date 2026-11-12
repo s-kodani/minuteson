@@ -120,8 +120,10 @@ jobs:
           cache: pip
           cache-dependency-path: tools/requirements-security.txt
       - run: python -m pip install -r tools/requirements-security.txt
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # v1.99.1
         if: matrix.language == 'rust' || matrix.language == 'swift'
+        with:
+          toolchain: '1.99.1'
       - name: Restore Rust FFI build for Swift analysis
         if: matrix.language == 'swift'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
