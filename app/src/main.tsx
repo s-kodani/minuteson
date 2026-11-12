@@ -196,9 +196,9 @@ function MainWindow() {
   const navigationArrow = quietNavigation && !operationNavigationBlocked && dataProtection !== "operation"
     && !captureTest.blocked && !captureBusy && !closingBusy && !startConfirm.pending;
   const writeNavigationArrow = navigationArrow && !deletionBlocked && !dataOperation.snapshot?.restartRequired;
-  // Navigation saves temporarily lock writes, but must not cancel background
-  // model preparation. Recording, maintenance and shutdown still stop it.
-  const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || closingBusy || startConfirm.pending;
+  // Navigation saves and close confirmation temporarily lock writes without
+  // cancelling background preparation. Explicit quit stops it in native shutdown.
+  const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || startConfirm.pending;
   const publication = useAnalysisPublication(writeLocked, action => withSavedEdits(action, "transcription"));
   const { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, finishCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult } = useCaptureActions({
     context: { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state },
