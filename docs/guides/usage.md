@@ -13,6 +13,9 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/README.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-inspection.tsx"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-license.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/175c6ce0a3063d0050b1cf772ef190b3f143fadf/app/src/main.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/175c6ce0a3063d0050b1cf772ef190b3f143fadf/app/src/operation-progress.tsx"
+  - resource: "https://github.com/s-kodani/minuteson/blob/175c6ce0a3063d0050b1cf772ef190b3f143fadf/app/src/job-notifications.tsx"
 ---
 
 # MinutesOnの使い方
@@ -27,6 +30,10 @@ sources:
 2. 未導入なら「ダウンロードして使用」を押します。条件の概要と全文を読み、「モデルと実行エンジンの利用条件を確認しました」をチェックして続行します。空き容量を確保し、照合・動作確認・設定適用の終了を待ちます。
 3. 導入済みなら「使用」を押し、同様に条件を確認して切り替えます。モデルの変更は次に開始する処理へ反映されます。確認を閉じたり取り消したりした場合は準備を開始しません。
 4. 固有名詞がある場合は共通用語へ表記・読みを登録します。モデルごとの「用語辞書の対応」を確認できます。
+
+処理を開始すると共通の進捗を詳細表示し、5秒後に右上の角丸の小型表示へ縮小します。マウスを重ねるかクリックすると詳細を開けます。詳細をクリックで固定した場合や、詳細内のボタンにフォーカスがある場合は表示を維持します。
+
+モデルのダウンロード中にメインウィンドウを閉じると、バックグラウンドでの継続を確認します。「継続して画面を閉じる」を選ぶと、ダウンロード・配置・使用設定を続けたまま画面を閉じます。常駐アイコンから開き直せます。確認をキャンセルした場合も処理は継続します。アプリ自体を終了する場合は「終了」を選びます。
 
 ## 録音する
 
@@ -57,6 +64,8 @@ sources:
 ## 議事録を作る
 
 議事録タブで生成し、Markdownをプレビュー・編集・保存します。必要に応じてMarkdownへ出力します。再生成では旧版の自動バックアップを作らないため、残したい内容は先に出力してください。
+
+開始準備中も、小型の進捗表示では処理中のリングが回転します。OSで視差効果を減らす設定が有効な場合は、回転を抑制します。
 
 ## データを管理する
 
