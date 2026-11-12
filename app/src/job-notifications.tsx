@@ -60,7 +60,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   }, [admissions]);
   usePublishProgress("minutes-admission", admissions.filter(item => item.pending).map(item => ({
     id: `minutes-admission:${item.operationId}`, target: item.meetingTitle, meetingId: item.meetingId,
-    kind: "minutes_generation", state: "queued", label: "議事録生成 · 開始準備中",
+    kind: "minutes_generation", state: "running", label: "議事録生成 · 開始準備中",
     completed: null, total: null, detail: "受付結果を確認しています。ほかの画面も操作できます。",
   })));
   const [tracker] = useState(() => new JobNotificationTracker(Date.now()));

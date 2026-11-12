@@ -41,6 +41,7 @@ export const browserSuites = [
   ["speaker-completion-settings", "browser-fixture.js", "speaker-completion-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
   ["model-preparation-recovery", null, "model-preparation-recovery-browser-check.js"],
+  ["model-background", null, "model-background-browser-check.js"],
   ["diarization-cpu", null, "diarization-cpu-browser-check.js"],
   ["diarization-auto-merge", null, "diarization-auto-merge-browser-check.js"],
   ["all-model-choices", "model-download-browser-fixture.tsx", "all-model-choices-browser-check.js"],

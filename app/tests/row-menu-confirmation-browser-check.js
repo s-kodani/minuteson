@@ -17,6 +17,7 @@ async (page, capturePath, detailUI) => {
   check(await page.evaluate(() => !window.dataFixture.calls.some(call => call.command === "start_data_operation")), "cancelling confirmation changed data");
   results.push("cancelling returns focus to the stable ellipsis without changing any audio or meeting");
   await page.getByRole("button",{name:"既存会議",exact:true}).click();
+  check(await page.getByRole("alert").count() === 0, "opening meeting detail emitted unrelated fixture errors");
   const detailTrigger=page.getByRole("button",{name:"会議の操作",exact:true});await detailTrigger.click();
   const detailMenu=page.getByRole("menu",{name:"会議の操作",exact:true});
   await detailMenu.getByRole("menuitem",{name:"既存会議の音声だけを削除",exact:true}).click();await modal.waitFor();

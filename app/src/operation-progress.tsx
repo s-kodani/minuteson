@@ -64,9 +64,15 @@ export function CommonOperationProgress({ onOpenJobs }: { onOpenJobs?: () => voi
 
 function FloatingOperationProgress({ progress, count, onOpenJobs }: { progress: OperationProgress; count: number; onOpenJobs?: () => void }) {
   const element = useRef<HTMLElement>(null), trigger = useRef<HTMLButtonElement>(null);
-  const [mode, setMode] = useState<"hover" | "pinned" | null>(null);
+  const [mode, setMode] = useState<"intro" | "hover" | "pinned" | null>("intro");
   const hovering = useRef(false), suppressHover = useRef(false);
   const expanded = mode !== null;
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setMode(prior => prior === "intro" ? hovering.current ? "hover" : null : prior);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, []);
   const close = (restoreFocus = false) => {
     suppressHover.current = hovering.current;
     if (restoreFocus && element.current?.contains(document.activeElement)) trigger.current?.focus({ preventScroll: true });
@@ -105,8 +111,8 @@ function FloatingOperationProgress({ progress, count, onOpenJobs }: { progress: 
   return <section ref={element} className="common-operation-progress" aria-label="進行中の処理" data-expanded={expanded}
     onPointerEnter={event => { if (event.pointerType === "mouse") { hovering.current = true; if (!suppressHover.current) setMode(prior => prior ?? "hover"); } }}
     onPointerLeave={() => { hovering.current = false; suppressHover.current = false; setMode(prior => prior === "hover" && (document.activeElement === trigger.current || !element.current?.contains(document.activeElement)) ? null : prior); }}
-    onFocusCapture={event => { if (event.target !== trigger.current) setMode(prior => prior === "hover" ? "pinned" : prior); }}>
-    <OperationProgressBar progress={progress} disclosure={{ expanded, trigger, toggle: () => mode === "pinned" ? close() : setMode("pinned") }}>
+    onFocusCapture={event => { if (event.target !== trigger.current) setMode(prior => prior === "hover" || prior === "intro" ? "pinned" : prior); }}>
+    <OperationProgressBar progress={progress} disclosure={{ expanded, trigger, toggle: () => mode === "pinned" || mode === "intro" ? close() : setMode("pinned") }}>
       {count > 1 && onOpenJobs && <button type="button" className="small-secondary progress-jobs-link" onClick={onOpenJobs}>進行中の処理 {count} 件 · ジョブ一覧で確認 →</button>}
     </OperationProgressBar>
   </section>;

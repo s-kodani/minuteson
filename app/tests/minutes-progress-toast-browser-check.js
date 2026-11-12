@@ -15,8 +15,15 @@ async (page,capturePath)=>{
   check(Math.abs(await title.evaluate(e=>e.getBoundingClientRect().height)-height)<1,"generation changed title row height");
   check(await header.locator(".operation-progress").count()===0,"operation progress is inside the title area");
   check(await button.isDisabled(),"generation admission allowed duplicate submission");
+  const common=page.getByRole("region",{name:"進行中の処理",exact:true});
+  await common.getByText("議事録生成 · 開始準備中",{exact:true}).waitFor();
+  await common.locator('.progress-disclosure[aria-expanded="false"]').waitFor();
+  const ring=common.locator('.progress-ring');
+  check(await ring.getAttribute("data-spinning")==="true" && await ring.getAttribute("data-value")===null,"pending minutes preparation shows a dash instead of a spinner");
+  check(await ring.locator(".progress-ring-arc").count()===1,"pending minutes preparation has no progress ring arc");
+  check(await ring.locator("svg").evaluate(e=>getComputedStyle(e).animationName)==="progress-ring-spin","pending minutes preparation ring does not rotate");
   await page.screenshot({path:capturePath("minutes-progress-toast.png")});
   await page.evaluate(()=>window.__mon.startRelease());
   await page.waitForFunction(()=>!document.querySelector(".meeting-detail-status")?.innerText.includes("操作を実行中"));
-  return {passed:1,results:["generation admission stays quiet without changing title typography or enabling duplicate submission"]};
+  return {passed:2,results:["generation admission stays quiet without changing title typography or enabling duplicate submission","pending minutes preparation collapses after five seconds with a rotating ring and no dash"]};
 }

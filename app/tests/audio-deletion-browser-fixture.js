@@ -31,6 +31,13 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
 d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version:4, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
 export const audioDeletionIPC = async (command, args) => {
+  // Meeting detail mounts these readers even when the test only deletes audio.
+  if (command === "get_minutes_markdown") return null;
+  if (command === "get_meeting_vocabulary") return { global: structuredClone(f.book), meeting: { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 } };
+  if (command === "get_meeting_audio_summary") {
+    if (d.deleted) throw Error("音声は削除済みです");
+    return { schemaVersion: 1, durationUs: analysis.utterances[0].endUs, modes: ["mixed"] };
+  }
   if (command === "get_meeting_deletion_availability") {
     const rows = await dataSaveIPC(command, args);
     for (const row of rows) if (row.meetingId === f.meetings[0].id) row.audioDeleted = d.audioStateUnknown ? null : d.deleted > 0;
