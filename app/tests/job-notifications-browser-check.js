@@ -8,7 +8,21 @@ async page => {
   const boot=async()=>{await page.reload();await page.getByRole("button",{name:"通知一覧",exact:true}).waitFor();await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==="get_analysis_notification_jobs"));};
   const start=async(patch={})=>{await page.evaluate(async patch=>{const f=window.monBrowserFixture;f.notificationJobs=[f.makeNotificationJob(patch)];await f.emitNotification();},patch);await status("受け付けました").waitFor();};
   const update=async patch=>{const before=await calls("get_analysis_notification_jobs");await page.evaluate(async patch=>{const f=window.monBrowserFixture;Object.assign(f.notificationJobs[0],{updatedAt:Date.now()},patch);await f.emitNotification();},patch);await page.waitForFunction(n=>window.monBrowserFixture.calls.filter(c=>c.command==="get_analysis_notification_jobs").length>n,before);};
-  const dismiss=async()=>{for(const button of await host().getByRole("button",{name:/通知を閉じる$/}).all())if(await button.isVisible())await button.click();await host().locator('[data-sonner-toast]:not([data-removed=true]) .toast-card').waitFor({state:"hidden"});};
+  const dismiss=async()=>{
+    const cards=host().locator('[data-sonner-toast]:not([data-removed=true]) .toast-card');
+    await cards.first().getByRole("button",{name:/通知を閉じる$/}).waitFor({state:"visible"});
+    // Dismiss by stable identity: removing a card shifts nth-based locators,
+    // while Sonner may retain the removed card during its exit animation.
+    const ids=await cards.evaluateAll(items=>items.map(item=>item.getAttribute("data-toast-id")));
+    for(const id of ids){
+      const selector=`.toast-card[data-toast-id=${JSON.stringify(id)}]`;
+      const active=host().locator(`[data-sonner-toast]:not([data-removed=true]) ${selector}`);
+      if(await active.count()===0)continue;
+      await active.getByRole("button",{name:/通知を閉じる$/}).click();
+      await host().locator(selector).waitFor({state:"hidden"});
+    }
+    await cards.waitFor({state:"hidden"});
+  };
   const noWork=async()=>check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(c=>/^(start_|retry_|resume_analysis|cancel_analysis|regenerate_|publish_|adopt_|restore_)/.test(c.command))),"notification executed work");
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});
   const openHistory=async()=>{await page.getByRole("button",{name:"通知一覧",exact:true}).click();await history().waitFor();};

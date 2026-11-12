@@ -190,6 +190,29 @@ fn quiet_drop_preexec_child() {
 }
 #[test]
 fn durable_test_ownership_is_single_allocated_private_and_never_replays_removed_ids() {
+    const CHILD: &str = "MON_DURABLE_JOURNAL_FIXTURE";
+    const TEST: &str = "capture_test::journal::tests::durable_test_ownership_is_single_allocated_private_and_never_replays_removed_ids";
+    if std::env::var(CHILD).as_deref() != Ok(TEST) {
+        // Other parallel tests can fork while this writer lease is held. Create
+        // it after exec in a single-test child so unrelated CLOEXEC copies
+        // cannot delay quiet ownership. Keep every ownership assertion below.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1"])
+            .env(CHILD, TEST)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated durable ownership fixture failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed") && stdout.contains(TEST),
+            "the isolated durable ownership test did not run: {stdout}"
+        );
+        return;
+    }
     let fixture = tempfile::tempdir().unwrap();
     let registry = Registry::open(fixture.path()).unwrap();
     assert!(Registry::open(fixture.path()).is_err());
