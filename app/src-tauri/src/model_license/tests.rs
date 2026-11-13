@@ -67,7 +67,7 @@ fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_change
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
     assert_eq!(registry.models.len(), 12);
-    assert_eq!(registry.notices.len(), 19);
+    assert_eq!(registry.notices.len(), 21);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();
         let text = verify_notice(record, bytes).unwrap();
@@ -178,6 +178,77 @@ fn matching_weights_with_a_non_catalog_runtime_remain_unconfirmed() {
         .expected_hash = Some("f".repeat(64));
     assert!(official(&manifest).unwrap().is_some());
     assert!(!installed(&manifest, &fixed()).unwrap().official);
+}
+
+#[test]
+fn windows_llama_requires_both_dll_notices_and_keeps_provenance_recipe_bound() {
+    let macos = qwen();
+    let macos_hash = official(&macos).unwrap().unwrap().disclosure_hash;
+    let mut manifest = macos.clone();
+    manifest.target = Target::WindowsX86_64;
+    assert!(official(&manifest).unwrap().is_none());
+    for name in WINDOWS_LLAMA_NOTICES {
+        let record = registry()
+            .unwrap()
+            .notices
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap();
+        manifest.files.push(PackageFile {
+            relative_path: format!("notices/{name}"),
+            role: Role::Notice,
+            expected_size: Some(record.bytes as u64),
+            expected_hash: Some(record.sha256.clone()),
+        });
+    }
+    let disclosure = official(&manifest).unwrap().unwrap();
+    for name in WINDOWS_LLAMA_NOTICES {
+        assert!(disclosure.notices.iter().any(|n| n.name == name));
+        let path = format!("notices/{name}");
+        let mut missing = manifest.clone();
+        missing.files.retain(|f| f.relative_path != path);
+        assert!(official(&missing).unwrap().is_none());
+        for change_size in [false, true] {
+            let mut corrupt = manifest.clone();
+            let notice = corrupt
+                .files
+                .iter_mut()
+                .find(|f| f.relative_path == path)
+                .unwrap();
+            if change_size {
+                notice.expected_size = Some(1);
+            } else {
+                notice.expected_hash = Some("a".repeat(64));
+            }
+            assert!(official(&corrupt).unwrap().is_none());
+        }
+    }
+    let provenance = PackageFile {
+        relative_path: "notices/native-dll-provenance.json".into(),
+        role: Role::Notice,
+        expected_size: Some(10),
+        expected_hash: Some("b".repeat(64)),
+    };
+    manifest.files.push(provenance);
+    assert_eq!(
+        official(&manifest).unwrap().unwrap().disclosure_hash,
+        disclosure.disclosure_hash
+    );
+    assert!(official(&manifest)
+        .unwrap()
+        .unwrap()
+        .notices
+        .iter()
+        .all(|n| !n.name.ends_with(".json")));
+    let mut changed = manifest.clone();
+    changed.files.last_mut().unwrap().expected_hash = Some("c".repeat(64));
+    assert!(!installed(&changed, &[manifest.clone()]).unwrap().official);
+    manifest.files.last_mut().unwrap().relative_path = "notices/unknown-terms.json".into();
+    assert!(official(&manifest).unwrap().is_none());
+    assert_eq!(
+        official(&macos).unwrap().unwrap().disclosure_hash,
+        macos_hash
+    );
 }
 
 #[test]

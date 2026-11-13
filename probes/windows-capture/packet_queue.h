@@ -43,4 +43,10 @@ class PacketQueue {
   std::uint64_t frames_=0,peak_=0,bytes_=0,nanoseconds_=0;
   std::exception_ptr failure_;
 };
+class CaptureReader {
+ public:
+  PacketQueue queue;
+  virtual void stop()=0;
+  virtual ~CaptureReader()=default;
+};
 } // namespace product

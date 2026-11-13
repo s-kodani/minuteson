@@ -1,7 +1,7 @@
 //! Native-owned, offline disclosures. These records do not alter hashed recipes,
 //! package identities, readiness, jobs, or stored preferences.
 use crate::model_download_recipe::RecipeExt;
-use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role};
+use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role, Target};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -10,6 +10,9 @@ use tauri::{Manager, WebviewWindow};
 
 #[path = "model_license_assets.rs"]
 mod assets;
+
+const WINDOWS_LLAMA_NOTICES: [&str; 2] =
+    ["llvm-openmp-20.1.8-LICENSE.txt", "microsoft-vc-runtime.txt"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -341,10 +344,14 @@ fn official(manifest: &PackageManifest) -> Result<Option<Disclosure>, String> {
     else {
         return Ok(None);
     };
+    let windows_llama =
+        manifest.engine == Engine::Llama && manifest.target == Target::WindowsX86_64;
     let mut present = BTreeSet::new();
     for file in manifest.files.iter().filter(|f| f.role == Role::Notice) {
         // Build provenance is not license text; its bytes remain recipe-bound.
-        if manifest.engine == Engine::Whisper && file.relative_path == "build-info.json" {
+        if (manifest.engine == Engine::Whisper && file.relative_path == "build-info.json")
+            || (windows_llama && file.relative_path == "notices/native-dll-provenance.json")
+        {
             continue;
         }
         let Some(hash) = file.expected_hash.as_ref() else {
@@ -373,6 +380,13 @@ fn official(manifest: &PackageManifest) -> Result<Option<Disclosure>, String> {
         .required_notices
         .iter()
         .any(|n| !present.contains(&n.key()))
+    {
+        return Ok(None);
+    }
+    if windows_llama
+        && WINDOWS_LLAMA_NOTICES
+            .iter()
+            .any(|name| !present.iter().any(|key| key.0 == *name))
     {
         return Ok(None);
     }

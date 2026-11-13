@@ -4,7 +4,7 @@
 #include "voice_pcm.h"
 #include "packet_queue.h"
 #include "input_preparation.h"
-#include "loopback_scope.h"
+#include "endpoint_mixer.h"
 #include "synthetic_driver.h"
 #include <avrt.h>
 #include <functiondiscoverykeys_devpkey.h>
@@ -97,9 +97,10 @@ struct CaptureApartment {
   CaptureApartment(){acquisition(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"initialize WASAPI preparation thread");}
   ~CaptureApartment(){CoUninitialize();}
 };
+#include "system_capture.h"
 struct PreparedInput {
   ComPtr<IAudioClient> client;
-  std::unique_ptr<AsyncCapture> reader;
+  std::unique_ptr<CaptureReader> reader;
   MicrophoneChoice choice;
   bool matching_position_rate=false;
   PreparedInput()=default;
@@ -128,6 +129,10 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
     if(!microphone&&selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
   };
   current();
+  if(!microphone&&!selected_pid){
+    result.reader=std::make_unique<SystemCapture>();result.matching_position_rate=true;
+    current();return result;
+  }
   if(microphone){
     result.choice=current_microphone_choice(uid,selected_pid,identity);
     current();auto e=enumerator();ComPtr<IMMDevice> device;
@@ -135,11 +140,9 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
     acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(result.client.GetAddressOf())),"activate WASAPI microphone");
   }else{
     if(selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
-    const auto target=loopback_target(selected_pid,GetCurrentProcessId());
-    // Process loopback includes every render endpoint. The global mode excludes
-    // this helper's tree only; selected-app capture never falls back to global.
+    // Selected-app capture never falls back to global endpoint loopback.
     // The worker retains an unfinished native activation even after UI timeout.
-    result.client=activate_process_loopback(target.pid,target.exclude_tree,INFINITE);
+    result.client=activate_process_loopback(selected_pid,false,INFINITE);
   }
   current();
   WAVEFORMATEX* mix=nullptr;
@@ -161,7 +164,7 @@ class Lane {
   bool started=false,holding_for_window=false;std::uint64_t window_start=0,window_end=0;
   Binding binding;
   std::unique_ptr<RawSegments> raw;
-  std::unique_ptr<AsyncCapture> reader;
+  std::unique_ptr<CaptureReader> reader;
   std::unique_ptr<NativePreparation> preparation;
   PreparationSchedule preparation_schedule;
   std::uint64_t peak_queued_frames=0,discontinuities=0;

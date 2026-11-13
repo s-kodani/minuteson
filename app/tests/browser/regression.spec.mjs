@@ -12,7 +12,7 @@ const failed = process.env.MON_BROWSER_FAILED_TESTS ? new Set(JSON.parse(process
 
 for (const [name, fixture, source] of suites) {
   if (failed && !failed.has(name)) continue;
-  test(name, async ({ page, baseURL }, info) => {
+  test(name, async ({ page, baseURL, request }, info) => {
     page.setDefaultTimeout(name.startsWith("internal-logs-") ? 30_000 : 10_000);
     // Cold Vite module loads have a separate budget from control interactions.
     page.setDefaultNavigationTimeout(30_000);
@@ -20,12 +20,15 @@ for (const [name, fixture, source] of suites) {
     const localPort = value => value.replaceAll("1420", port);
     if (fixture) {
       const index = new RegExp(`^${baseURL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:\\?.*)?$`);
-      await page.context().route(index, async route => {
-        const response = await route.fetch();
-        const body = (await response.text()).replace(/<script type="module" src="\/src\/(?:main|bootstrap)\.tsx[^"]*"><\/script>/u,
-          `<script type="module">await import("/tests/${fixture}");</script>`);
-        await route.fulfill({ response, body });
-      });
+      // Fetch Vite's transformed document once, outside navigation handlers.
+      // Repeated fixture reloads must not fetch through a WebKit request whose
+      // connection can be reset as that navigation is replaced or cancelled.
+      const response = await request.get(`${baseURL}/`);
+      expect(response.ok()).toBe(true);
+      const body = (await response.text()).replace(/<script type="module" src="\/src\/(?:main|bootstrap)\.tsx[^"]*"><\/script>/u,
+        `<script type="module">await import("/tests/${fixture}");</script>`);
+      await response.dispose();
+      await page.context().route(index, route => route.fulfill({ status: 200, contentType: "text/html", body }));
       await page.goto(`${baseURL}/${["vad-settings", "all-model-choices", "whisper-variants", "qwen35-models"].includes(name) ? "?official=1" : ""}`);
       if (fixtureReadiness[fixture]) await page.waitForFunction(key => !!window[key], fixtureReadiness[fixture]);
     }
