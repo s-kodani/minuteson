@@ -40,7 +40,7 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 ## 配布と評価の確認状況
 
-2026-11-13（日本時間）に、コミット`abaad2b56be302b22d31b2735d2499b3f27a9d29`を対象とする1.0.0のdry runが成功しました。インストーラーはGitHub Actionsの成果物として保存され、`v1.0.0`のGitHub Releaseは下書きのままです。配布経路と品質評価の確認状況は次のとおりです。
+2026-11-13（日本時間）に、コミット`abaad2b56be302b22d31b2735d2499b3f27a9d29`を対象とする1.0.0のdry runが成功しました。この検証時点ではインストーラーをGitHub Actionsの成果物として保存し、`v1.0.0`のGitHub Releaseは下書きでした。以下はこの検証の確認記録です。最新の公開状況とダウンロードは[GitHub Releases](https://github.com/s-kodani/minuteson/releases)で確認してください。
 
 | 項目 | 確認状況 |
 | --- | --- |

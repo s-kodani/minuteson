@@ -34,7 +34,7 @@ MinutesOn **1.0.1** は次回公開に向けた開発版です。署名済み配
 
 ## 配布状況
 
-このリポジトリでは現在、インストーラーを配布していません。ソースからビルドする場合は、[macOS](docs/guides/build-macos.md)／[Windows](docs/guides/build-windows.md)の手順を参照してください。対応環境と動作確認状況は[製品概要](docs/spec/overview.md#配布と評価の確認状況)に記載しています。
+インストーラーの公開状況とダウンロードは[GitHub Releases](https://github.com/s-kodani/minuteson/releases)を確認してください。ソースからビルドする場合は、[macOS](docs/guides/build-macos.md)／[Windows](docs/guides/build-windows.md)の手順を参照してください。対応環境と動作確認状況は[製品概要](docs/spec/overview.md#配布と評価の確認状況)に記載しています。
 
 ## 使い始める
 
