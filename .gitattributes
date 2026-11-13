@@ -1,5 +1,6 @@
 # Notice files are verified by exact byte length and SHA-256 in index.json.
 third-party/notices/** -text
+third-party/runtime-notices/** -text
 # Preserve upstream notice bytes, including original line endings and whitespace.
 third-party/model-licenses/*.txt -text -whitespace
 # The capture ABI build compares this header with cbindgen's LF output byte for byte.

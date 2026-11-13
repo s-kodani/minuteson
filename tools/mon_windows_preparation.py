@@ -29,6 +29,8 @@ REQUIRED = (
         "mon-speaker-embedding.exe", "workers/runtime-index.json", "workers/mon-whisper-worker.exe",
         "workers/mon-llama-worker.exe", "workers/mon-sherpa-worker.exe", "workers/mon-transducer-worker.exe",
         "workers/mon-whisper-vulkan-worker.exe", "workers/mon-llama-vulkan-worker.exe", "asr/bin/mon-transducer-worker.exe",
+        "notices/llvm-openmp-20.1.8-LICENSE.txt", "notices/microsoft-vc-runtime.txt",
+        "notices/native-dll-provenance.json",
     )),
 )
 

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "licenseReview": "not_verified",
+  "distributionReady": false,
+  "llamaArchiveSha256": "73f962f82850d244db47eaacb9d913637027b82399124324298576d58c5f4287",
+  "libomp": {
+    "sha256": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c",
+    "version": "20.1.8",
+    "versionEvidence": "Original DLL strings contain llvm_package_20.1.8 and Clang 20.1; LLVM OpenMP Runtime product metadata; hash binds the exact llama b11960 DLL.",
+    "license": "Apache-2.0 WITH LLVM-exception (and retained legacy notices in upstream LICENSE.TXT)",
+    "sourceUrl": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.8/openmp/LICENSE.TXT"
+  },
+  "files": [
+    {
+      "path": "llvm-openmp-20.1.8-LICENSE.txt",
+      "bytes": 19741,
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+      "sourceUrl": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.8/openmp/LICENSE.TXT"
+    },
+    {
+      "path": "microsoft-vc-runtime.txt",
+      "bytes": 1578,
+      "sha256": "a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b",
+      "sourceUrl": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
+    }
+  ]
+}

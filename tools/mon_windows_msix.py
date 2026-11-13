@@ -33,6 +33,9 @@ RUNTIME_FILES = (
     "mon-speaker-embedding.exe",
     "asr/notices/nlohmann-MIT.txt",
     "whisper/notices/whisper-MIT.txt",
+    "notices/llvm-openmp-20.1.8-LICENSE.txt",
+    "notices/microsoft-vc-runtime.txt",
+    "notices/native-dll-provenance.json",
 )
 RUNTIME_DIRS = ("workers",)
 BASE_LOGOS = ("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")

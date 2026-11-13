@@ -1,0 +1,31 @@
+Microsoft Visual C++ Runtime (app-local DLLs)
+
+Copyright Microsoft Corporation. All rights reserved.
+
+This is redistribution information, not a replacement license or a grant
+of rights under the MinutesOn MIT license.
+
+Files: msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll.
+The builder obtains these files from the installed Visual Studio 2022
+VC/Redist/MSVC/<version>/x64/Microsoft.VC143.CRT directory and preserves
+their bytes. Actual hashes and source directory are recorded in
+native-dll-provenance.json.
+
+Redistribution requires the applicable Microsoft Software License Terms
+and a validly licensed copy of the relevant Visual Studio software.
+The REDIST list permits unmodified files from the listed CRT directory
+to accompany your application, subject to those terms. Availability on
+a build machine is not by itself proof of the distributor's entitlement.
+
+Official redistribution guidance:
+https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
+Official Visual Studio 2022 REDIST list:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+Official Visual Studio license directory (choose the actual edition):
+https://visualstudio.microsoft.com/license-terms/
+Visual C++ runtime end-user terms (do not substitute for redistribution rights):
+https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/
+
+Receipt of these files does not grant permission to redistribute them
+independently of the applicable Microsoft terms. The distributor must
+confirm the applicable entitlement and conditions before distribution.
