@@ -133,6 +133,20 @@
       "bytes": 11358,
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
       "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+    },
+    {
+      "name": "llvm-openmp-20.1.8-LICENSE.txt",
+      "file": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4.txt",
+      "bytes": 19741,
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+      "sourceUrl": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.8/openmp/LICENSE.TXT"
+    },
+    {
+      "name": "microsoft-vc-runtime.txt",
+      "file": "a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b.txt",
+      "bytes": 1578,
+      "sha256": "a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b",
+      "sourceUrl": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
     }
   ],
   "models": [

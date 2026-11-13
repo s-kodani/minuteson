@@ -15,6 +15,8 @@ pub(super) fn embedded(sha256: &str) -> Option<&'static [u8]> {
         "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a" => Some(include_bytes!("../../../third-party/model-licenses/bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a.txt")),
         "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4" => Some(include_bytes!("../../../third-party/model-licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt")),
         "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30" => Some(include_bytes!("../../../third-party/model-licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt")),
+        "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4" => Some(include_bytes!("../../../third-party/model-licenses/fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4.txt")),
+        "a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b" => Some(include_bytes!("../../../third-party/model-licenses/a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b.txt")),
         _ => None,
     }
 }
