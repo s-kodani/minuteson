@@ -167,7 +167,8 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
                  "lockHashes": {name: sha((repository / relative).read_bytes()) for name, relative in
                                 (("cargo", "Cargo.lock"), ("npm", "app/package-lock.json"))},
                  "supplementManifestSha256": sha(index_bytes),
-                 "packages": [], "missingNoticeTexts": [], "referenceOnlyPackages": []}
+                 "packages": [], "missingNoticeTexts": [], "referenceOnlyPackages": [],
+                 "unresolvedNoticeReviews": []}
     chunks = [b"MinutesOn third-party dependency notices\n\n"
               b"Collected package-provided texts, NOT a license clearance.\n"
               b"See third-party-inventory.json for scope, missing texts and exact versions.\n"
@@ -178,11 +179,31 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
         entry = {"ecosystem": ecosystem, "name": name, "version": version,
                  "declaredLicense": license_id, "repository": repository_url, "noticeFiles": [],
                  "supplementalFiles": [record for record, _ in supplements], "sourceArchive": source}
+        supplement = next((p for p in index["packages"]
+                           if ecosystem == "cargo" and (p["name"], p["version"]) == (name, version)), {})
+        selected = supplement.get("selectedLicense")
+        if selected:
+            if selected not in (license_id or "").split(" OR "):
+                raise ValueError("selected supplemental license is not declared by the package")
+            entry["selectedLicense"] = selected
+        review = supplement.get("noticeReview")
+        if review:
+            if (review.get("state") != "not_verified" or not review.get("reasons")
+                    or not all(isinstance(reason, str) and reason.strip() for reason in review["reasons"])
+                    or not review.get("sourceUrl", "").startswith("https://")):
+                raise ValueError("supplemental notice review must retain its unresolved reasons")
+            entry["noticeReview"] = review
+            inventory["unresolvedNoticeReviews"].append({"package": key, **review})
         if not texts and not any(record["kind"] == "license_text" for record, _ in supplements):
             inventory["missingNoticeTexts"].append(key)
             if supplements:
                 inventory["referenceOnlyPackages"].append(key)
         chunks.append(f"{'=' * 72}\n{key}\nDeclared license: {license_id or 'not supplied'}\n\n".encode())
+        if selected:
+            chunks.append(f"Selected license: {selected}\n".encode())
+        if review:
+            chunks.append(("Notice review remains open:\n" + "\n".join(review["reasons"])
+                           + f"\nReview source: {review['sourceUrl']}\n\n").encode())
         for relative, data in texts:
             total += len(data)
             if total > MAX_TOTAL_BYTES:

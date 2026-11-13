@@ -245,6 +245,22 @@ class NoticeTests(unittest.TestCase):
         self.assertEqual(entry["sourceArchive"]["state"], "source_reference_not_download_verified")
         self.assertFalse(inventory["distributionReady"])
 
+    def test_full_text_does_not_silently_close_attribution_or_sdk_review(self):
+        index, _ = self.supplement()
+        review = {"state": "not_verified", "reasons": ["Earlier notices and SDK terms still need review"],
+                  "sourceUrl": "https://example.invalid/upstream/issue"}
+        index["packages"][0].update(selectedLicense="MIT", noticeReview=review)
+        self.file("third-party/notices/index.json", json.dumps(index))
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertNotIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
+        self.assertEqual(inventory["unresolvedNoticeReviews"], [{"package": "cargo:crate@1.0", **review}])
+        self.assertIn(b"Earlier notices and SDK terms still need review", text)
+        self.assertFalse(inventory["distributionReady"])
+        index["packages"][0]["selectedLicense"] = "Zlib"
+        self.file("third-party/notices/index.json", json.dumps(index))
+        with self.assertRaisesRegex(ValueError, "not declared"):
+            notices.collect(self.root, self.metadata, self.lock)
+
     def test_supplement_license_vcs_archive_hash_or_content_changes_are_refused(self):
         original, package = self.supplement()
         for key, value in [("declaredLicense", "Apache-2.0"), ("vcsCommit", "b" * 40),

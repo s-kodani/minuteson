@@ -35,6 +35,7 @@ class ModelCatalogTests(unittest.TestCase):
             for name in ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'):
                 (redist / name).write_bytes(name.encode())
             with patch.object(windows_runtime, 'PACKAGE', package), patch.object(windows_runtime, 'sign'), \
+                    patch.object(windows_runtime, 'write_native_notices'), \
                     patch.object(windows_runtime, 'visual_cpp_redistributable', return_value=redist):
                 windows_runtime.catalog()
             choices = json.loads((package / 'catalog.json').read_text(encoding='utf8'))

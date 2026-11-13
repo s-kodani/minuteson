@@ -33,6 +33,45 @@ LLAMA_NATIVE_FILES = {'llama-completion.exe','llama-completion-impl.dll','llama-
 VC_RUNTIME_FILES = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
 
 
+def write_native_notices(redist_files, redist_source=None):
+    """Bind the OpenMP notice to known upstream bytes; retain CRT conditions."""
+    directory = ROOT / 'third-party/runtime-notices'
+    manifest = json.loads((directory / 'index.json').read_text(encoding='utf8'))
+    if manifest['schemaVersion'] != 1 or manifest['llamaArchiveSha256'] != LLAMA_11960[2]:
+        raise ValueError('native license provenance does not match the pinned llama archive')
+    libomp = PACKAGE / 'llama/libomp.dll'
+    if not libomp.is_file() or digest(libomp) != manifest['libomp']['sha256']:
+        raise ValueError('libomp bytes changed; review its version and license before packaging')
+    texts = {}
+    for record in manifest['files']:
+        name = record['path']
+        path = directory / name
+        if Path(name).name != name or path.is_symlink() or not path.is_file():
+            raise ValueError('native notice must be a regular file in its source directory')
+        data = path.read_bytes()
+        if len(data) != record['bytes'] or hashlib.sha256(data).hexdigest() != record['sha256']:
+            raise ValueError('native notice differs from its recorded bytes')
+        data.decode('utf8')
+        texts[name] = data
+    provenance = {
+        'schemaVersion': 1, 'licenseReview': 'not_verified', 'distributionReady': False,
+        'libomp': manifest['libomp'],
+        'llamaArchiveSha256': LLAMA_11960[2],
+        'visualCpp': {
+            'source': redist_source or 'Visual Studio 2022 VC/Redist/MSVC/<version>/x64/Microsoft.VC143.CRT',
+            'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in redist_files.items()},
+            'licenseBasis': 'https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution',
+            'distributorEntitlement': 'not_verified',
+        },
+    }
+    texts['native-dll-provenance.json'] = (json.dumps(provenance, indent=2) + '\n').encode()
+    # Root copies are visible in credits; engine copies accompany installed
+    # model packages and travel inside the deterministic runtime archive.
+    for name, data in texts.items():
+        dump(data, PACKAGE / 'notices' / name)
+        dump(data, PACKAGE / 'llama/notices' / name)
+
+
 def visual_studio_installations():
     roots = list(dict.fromkeys(Path(os.environ.get(name) or default) for name, default in (
         ('ProgramFiles', 'C:/Program Files'), ('ProgramW6432', 'C:/Program Files'),
@@ -151,11 +190,12 @@ def upstream_engines():
     # full DLL dispatch set rather than depending on the build host's PATH.
     print('Windows runtime files:',[str(p.relative_to(PACKAGE)) for p in PACKAGE.rglob('*') if p.is_file()],flush=True)
 
-def catalog(redist_files=None):
+def catalog(redist_files=None, *, redist_source=None):
     # Read every required DLL before changing any existing runtime bytes.
     redist_files = visual_cpp_runtime_files() if redist_files is None else redist_files
     if set(redist_files) != set(VC_RUNTIME_FILES) or any(not isinstance(data, bytes) or not data for data in redist_files.values()):
         raise ValueError('All required Visual C++ redistributable DLL bytes must be supplied')
+    write_native_notices(redist_files, redist_source)
     upstream=mon_model_catalog.compile_target('windows_x86_64')
     whisper_network=json.loads((ROOT/'app/model-catalog/whisper-network.json').read_text(encoding="utf8"))
     variants=json.loads((ROOT/'app/model-catalog/whisper-variants.json').read_text(encoding="utf8"))
@@ -181,7 +221,8 @@ def catalog(redist_files=None):
     # Sign before generating hashes: installed bytes must match the recipes.
     for engine in executables:
         for path in sorted((PACKAGE/engine).rglob('*')):
-            if path.is_file() and path.suffix.lower() in ('.exe','.dll'):sign(path)
+            if path.is_file() and path.suffix.lower() in ('.exe','.dll') and path.name not in (*VC_RUNTIME_FILES, 'libomp.dll'):
+                sign(path)
     def native_files(engine):
         paths=sorted(p for p in (PACKAGE/engine).rglob('*') if p.is_file())
         if engine == 'llama':
@@ -234,7 +275,10 @@ def main():
     previous=pending.with_name(pending.name+'-previous')
     PACKAGE=pending
     try:
-        build_whisper();upstream_engines();catalog(redist_files);build_embedding()
+        build_whisper();upstream_engines()
+        redist_root = visual_cpp_redistributable()
+        redist_source = '/'.join(redist_root.parts[-6:])
+        catalog(redist_files, redist_source=redist_source);build_embedding()
         import mon_windows_workers
         mon_windows_workers.prepare(package_root=PACKAGE)
         mon_windows_workers.prepare(vulkan=True,package_root=PACKAGE)

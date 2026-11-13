@@ -31,6 +31,7 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
             def append(package_root):
                 self.assertEqual((package_root/'workers/mon-transducer-worker.exe').read_bytes(),b'fixed worker')
             modules={'mon_windows_workers':SimpleNamespace(prepare=workers),'mon_asr_bundle':SimpleNamespace(append_windows_choices=append)}
+            self.enterContext(patch.object(runtime, 'visual_cpp_redistributable', return_value=root/'VC/Redist/MSVC/test/x64/Microsoft.VC143.CRT'))
             with patch.dict(sys.modules,modules),patch.object(runtime,'os',SimpleNamespace(name='nt')),patch.object(runtime,'CACHE',root),patch.object(runtime,'PACKAGE',package),patch.object(runtime,'visual_cpp_runtime_files',return_value={}),patch.object(runtime,'build_whisper'),patch.object(runtime,'upstream_engines'),patch.object(runtime,'catalog'),patch.object(runtime,'build_embedding'):
                 runtime.main()
             self.assertEqual(len(destinations),2)
@@ -197,9 +198,15 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
         for engine, name in executables.items():
             (package / engine).mkdir(parents=True)
             (package / engine / name).write_bytes(engine.encode())
-        with patch.object(runtime, 'PACKAGE', package), patch.object(runtime, 'sign'):
+        notice_root = self.native_notice_fixture(package)
+        with patch.object(runtime, 'PACKAGE', package), patch.object(runtime, 'ROOT', notice_root), patch.object(runtime, 'sign') as sign:
             runtime.catalog(payload)
+        self.assertNotIn(package/'llama/libomp.dll', [call.args[0] for call in sign.call_args_list])
+        self.assertFalse(set(package/'llama'/name for name in runtime.VC_RUNTIME_FILES) &
+                         set(call.args[0] for call in sign.call_args_list))
         with tarfile.open(package / 'runtime.tar') as archive:
+            self.assertIn('llama/notices/llvm-openmp-20.1.8-LICENSE.txt', archive.getnames())
+            self.assertIn('llama/notices/microsoft-vc-runtime.txt', archive.getnames())
             for name, data in payload.items():
                 self.assertEqual((package / 'llama' / name).read_bytes(), data)
                 self.assertEqual(archive.extractfile('llama/' + name).read(), data)
@@ -214,6 +221,43 @@ class WindowsRuntimeRedistributableTests(unittest.TestCase):
             for name in runtime.VC_RUNTIME_FILES:
                 self.assertEqual(files[name]['role'], 'runtime_library')
                 self.assertEqual(files[name]['expectedHash'], runtime.digest(crt / name))
+            self.assertEqual(files['notices/llvm-openmp-20.1.8-LICENSE.txt']['role'], 'notice')
+        provenance = json.loads((package/'notices/native-dll-provenance.json').read_text())
+        self.assertEqual(provenance['visualCpp']['sha256'],
+                         {name: runtime.hashlib.sha256(data).hexdigest() for name,data in payload.items()})
+        self.assertEqual(provenance['visualCpp']['distributorEntitlement'], 'not_verified')
+
+    def native_notice_fixture(self, package):
+        source = self.root/'notice-source'
+        directory = source/'third-party/runtime-notices'
+        directory.mkdir(parents=True)
+        catalog = source/'app/model-catalog'
+        catalog.mkdir(parents=True)
+        for name in ('whisper-network.json', 'whisper-variants.json', 'whisper-vad-network.json'):
+            (catalog/name).write_bytes((ROOT/'app/model-catalog'/name).read_bytes())
+        manifest = json.loads((ROOT/'third-party/runtime-notices/index.json').read_text())
+        for record in manifest['files']:
+            (directory/record['path']).write_bytes((ROOT/'third-party/runtime-notices'/record['path']).read_bytes())
+        data = b'synthetic known OpenMP DLL'
+        (package/'llama').mkdir(parents=True, exist_ok=True)
+        (package/'llama/libomp.dll').write_bytes(data)
+        manifest['libomp']['sha256'] = runtime.hashlib.sha256(data).hexdigest()
+        (directory/'index.json').write_text(json.dumps(manifest))
+        return source
+
+    def test_unknown_openmp_or_changed_notice_refuses_before_publishing_texts(self):
+        package = self.root/'package'
+        source = self.native_notice_fixture(package)
+        with patch.object(runtime, 'PACKAGE', package), patch.object(runtime, 'ROOT', source):
+            (package/'llama/libomp.dll').write_bytes(b'changed upstream')
+            with self.assertRaisesRegex(ValueError, 'libomp bytes changed'):
+                runtime.write_native_notices({})
+            self.assertFalse((package/'notices').exists())
+            (package/'llama/libomp.dll').write_bytes(b'synthetic known OpenMP DLL')
+            (source/'third-party/runtime-notices/microsoft-vc-runtime.txt').write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'recorded bytes'):
+                runtime.write_native_notices({})
+            self.assertFalse((package/'notices').exists())
 
     def test_supplied_runtime_payload_cannot_omit_a_required_dll(self):
         with patch.object(runtime, 'dump') as dump:

@@ -15,7 +15,10 @@
       "../../.cache/windows-runtime/package/workers/": "windows-runtime/workers/",
       "../../.cache/windows-capture-headers/LICENSE.MIT": "notices/nlohmann-json-MIT.txt",
       "../../.cache/windows-third-party-notices/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt",
-      "../../.cache/windows-third-party-notices/third-party-inventory.json": "third-party-inventory.json"
+      "../../.cache/windows-third-party-notices/third-party-inventory.json": "third-party-inventory.json",
+      "../../.cache/windows-runtime/package/notices/llvm-openmp-20.1.8-LICENSE.txt": "windows-runtime/notices/llvm-openmp-20.1.8-LICENSE.txt",
+      "../../.cache/windows-runtime/package/notices/microsoft-vc-runtime.txt": "windows-runtime/notices/microsoft-vc-runtime.txt",
+      "../../.cache/windows-runtime/package/notices/native-dll-provenance.json": "windows-runtime/notices/native-dll-provenance.json"
     }
   }
 }
