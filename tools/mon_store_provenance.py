@@ -157,7 +157,6 @@ def verify_manifest(github, release, manifest_file):
             "attestation", "verify", str(manifest_file), "--repo", github.repository,
             "--hostname", "github.com", "--cert-identity", identity_url,
             "--cert-oidc-issuer", OIDC_ISSUER, "--source-ref", "refs/heads/main",
-            "--signer-workflow", github.repository + "/" + WORKFLOW,
             "--deny-self-hosted-runners", "--format", "json",
         ])
         require(manifest_file.read_bytes() == raw)

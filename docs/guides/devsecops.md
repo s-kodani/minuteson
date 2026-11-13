@@ -128,6 +128,8 @@ Dependabotは[定義](../../.github/dependabot.yml)に従い、npm・Cargo・Git
 
 Store提出前に、Release assetのmanifestの実バイトへ付いたGitHub attestationを検証します。現在の数値リポジトリID、main上の正式なRelease build、GitHubの署名発行元、証明書が示すrun・attemptを照合し、実際の公開ステップが成功していることを要求します。dry runの証明だけでは提出しません。ワークフロー版のSHAとビルド対象のSHAは区別し、タグの解決先・main包含・署名済みStore receipt・取得MSIXの容量とSHAを確認します。Release本文の状態・sourceSha・buildRunIdは出自の証明ではありません。
 
+GitHub CLIの署名者指定には、mainの正式ワークフローを完全一致で指定する`--cert-identity`を使います。これと排他的な`--signer-workflow`等を併用せず、発行元・source ref・GitHubホスト環境の制限と、検証済み証明書内のワークフロー照合を維持します。申請前検証だけの修正では、公開済みアプリやMSIXを再ビルドせず、同じ成果物の出自を再検証して提出を再開します。
+
 証明不足・不一致・期限切れではStoreを変更せず停止します。公開処理が実行中なら次の定期確認を待ち、別runへの切替や再ビルドで補いません。提出済みでPendingCommitを超えた処理は成果物を再取得せず状態確認を継続します。PendingCommitからの再開では再度出自を確認します。
 
 MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソースで勝手に再構築せず、原本の保管状況と提出を確認します。失敗状態は自動で繰り返し提出せず、修正後に明示再開します。
