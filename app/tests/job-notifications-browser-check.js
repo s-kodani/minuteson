@@ -4,6 +4,10 @@ async page => {
   const host=()=>page.getByRole("complementary",{name:"通知",exact:true});
   const status=text=>host().getByRole("status").filter({hasText:text});
   const alert=text=>host().getByRole("alert").filter({hasText:text});
+  // These checks exercise notification state and guarded navigation. WebKit
+  // can move the Sonner stack during pointer entry; activate its visible
+  // controls by keyboard. Dedicated toast UI tests retain pointer coverage.
+  const activateNotice=async control=>{await control.waitFor({state:"visible"});await control.focus();await control.press("Enter");};
   const calls=command=>page.evaluate(command=>window.monBrowserFixture.calls.filter(c=>c.command===command).length,command);
   const boot=async()=>{await page.reload();await page.getByRole("button",{name:"通知一覧",exact:true}).waitFor();await page.waitForFunction(()=>window.monBrowserFixture.calls.some(c=>c.command==="get_analysis_notification_jobs"));};
   const start=async(patch={})=>{await page.evaluate(async patch=>{const f=window.monBrowserFixture;f.notificationJobs=[f.makeNotificationJob(patch)];await f.emitNotification();},patch);await status("受け付けました").waitFor();};
@@ -18,12 +22,7 @@ async page => {
       const selector=`.toast-card[data-toast-id=${JSON.stringify(id)}]`;
       const active=host().locator(`[data-sonner-toast]:not([data-removed=true]) ${selector}`);
       if(await active.count()===0)continue;
-      // Pointer entry expands/repositions Sonner cards on WebKit. This suite
-      // tests notification state; activate the visible close control by
-      // keyboard so a moving stack cannot turn its click into a list focus.
-      const close=active.getByRole("button",{name:/通知を閉じる$/});
-      await close.focus();
-      await close.press("Enter");
+      await activateNotice(active.getByRole("button",{name:/通知を閉じる$/}));
       await host().locator(selector).waitFor({state:"hidden"});
     }
     await cards.waitFor({state:"hidden"});
@@ -45,7 +44,7 @@ async page => {
   const savedId=await completedCard.getAttribute("data-toast-id");
   await page.evaluate(()=>window.monBrowserFixture.emitNotification({id:"foreign",state:"succeeded"}));
   check(await completedCard.getAttribute("data-toast-id")===savedId&&await calls("get_analysis_notification_output")===1,"completion was not verified exactly once");
-  await completedCard.getByRole("button",{name:"会議を開く",exact:true}).click();
+  await activateNotice(completedCard.getByRole("button",{name:"会議を開く",exact:true}));
   await page.getByRole("heading",{name:"会議A",exact:true}).waitFor();await noWork();
   results.push("verified completion notifies once across navigation and opens only its own meeting");
 
@@ -64,7 +63,7 @@ async page => {
 
   await boot();await start();await dismiss();await update({state:"failed",errorCode:"engine_failed"});
   await alert("engine_failed").waitFor();
-  await host().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
+  await activateNotice(host().getByRole("button",{name:"エラー通知を閉じる",exact:true}));
   await page.getByRole("button",{name:"設定",exact:true}).click();await openHistory();
   check(await history().locator(".toast-card").filter({hasText:"engine_failed"}).count()===1,"failure history duplicated or disappeared");
   check(await page.getByRole("region",{name:"解析の通知と要対応状態",exact:true}).count()===0,"removed inline history returned");
@@ -121,8 +120,12 @@ async page => {
   await page.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
   const field=page.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("通知で失われない本文");
   await page.evaluate(()=>window.monBrowserFixture.failSave=true);await start({meetingId:"meeting-1",meetingTitle:"会議B"});
-  await host().getByRole("button",{name:"会議を開く",exact:true}).click();
-  await host().locator('[data-sonner-toast][data-front=true] .toast-card').hover();
+  await activateNotice(host().getByRole("button",{name:"会議を開く",exact:true}));
+  // Saving and guarded navigation can publish two errors and replace the
+  // front card. Wait for the exact result, then use the notification shortcut
+  // to expand/read the stack without hovering a front card that is changing.
+  await host().locator(".toast-card").filter({hasText:"編集内容はこの画面に保持"}).waitFor({state:"attached"});
+  await page.keyboard.press("Alt+t");
   await alert("編集内容はこの画面に保持").waitFor();
   check(await field.inputValue()==="通知で失われない本文"&&await page.getByRole("heading",{name:"会議A",exact:true}).isVisible(),"notification navigation discarded unsaved input");await noWork();
   results.push("notification navigation respects failed edit saving and retains original meeting/input");
@@ -130,7 +133,7 @@ async page => {
   await boot();await page.evaluate(()=>window.monBrowserFixture.emitWorkerError("模擬ワーカー停止"));
   await alert("模擬ワーカー停止").waitFor();
   check(!(await alert("模擬ワーカー停止").innerText()).includes("再起動後"),"ordinary generation error acquired a restart recommendation");
-  await host().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
+  await activateNotice(host().getByRole("button",{name:"エラー通知を閉じる",exact:true}));
   await page.getByRole("button",{name:"設定",exact:true}).click();await openHistory();
   check(await history().locator(".toast-card").filter({hasText:"模擬ワーカー停止"}).count()===1,"worker failure history lost");
   await closeHistory();await noWork();
