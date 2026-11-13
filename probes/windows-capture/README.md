@@ -4,6 +4,8 @@ WASAPI録音ヘルパーの時間指定による検証用CLI。マイクは録�
 
 Windows 11 24H2以降・x64を対象とし、デスクトップの録音ヘルパーとして構築・同梱します。製品側の録音・5秒テスト・入力列挙・取り込み・保存との接続は[録音仕様](../../docs/spec/recording.md)、アプリ全体の準備は[Windowsビルド](../../docs/guides/build-windows.md)を参照してください。
 
+製品の「PC全体」は全ての有効な出力エンドポイントを直接取得し、QPC時刻に合わせて合成します。以下の時間指定CLIの標準モードは、指定または既定の出力エンドポイント1件を検証する用途です。アプリ選択録音だけがApplication Loopbackを使います。
+
 ## ビルド
 
 Visual Studio 2022、Desktop development with C++、Windows 11 SDKを入れたx64 Native Tools Command Promptで実行する。
@@ -35,6 +37,6 @@ probes\windows-capture\build\Release\mon-windows-capture.exe --output C:\mon-eva
 
 録音スレッドの失敗は指定時間を待たず検出し、停止時は両トラックの終了処理を試みる。受信フレームがゼロなら`state: failed`を記録する。失敗マニフェストにもシナリオ・モード・要求時間・対象PID・エラーを残すので、音声解析が作れない試行も評価記録の不合格証拠にできる。無音フレームを受信しただけでは、会議音声を取得できたとは判定しない。
 
-Teamsデスクトップ版のApplication Loopbackが無音になる報告がMicrosoftのサンプルリポジトリにある。対象バージョン・出力先・PIDを記録し、標準モードとの違いを優先的に実機で調べる。無音の原因や回避策を実測前に断定しない。
+Teamsデスクトップ版のApplication Loopbackが、全体取得を意図したプロセス除外モードでも無音になる報告がMicrosoftのサンプルリポジトリにある。製品の全体録音はこの方式を使わない。アプリ選択録音でTeamsが無音になる場合は「PC全体」で確認する。対象Teamsバージョン・出力先・Windowsビルドを記録し、メーターと保存音声の双方を検証する。プロセス範囲を広げる自動フォールバックは行わない。
 
 参考: [Microsoft Application Loopback sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/)、[WASAPI loopback recording](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)、[IAudioCaptureClient::GetBuffer](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)、[Teamsの無音報告](https://github.com/microsoft/Windows-classic-samples/issues/414)。

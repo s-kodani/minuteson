@@ -1,5 +1,4 @@
 #include "input_preparation.h"
-#include "loopback_scope.h"
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -25,10 +24,6 @@ struct Value {
 int main(){
   try{
     using Preparation=product::InputPreparation<Value,Context>;
-    auto global=product::loopback_target(0,123);
-    auto application=product::loopback_target(456,123);
-    require(global.pid==123&&global.exclude_tree,"system capture must exclude the helper tree across endpoints");
-    require(application.pid==456&&!application.exclude_tree,"application scope changed or fell back to global");
     // Exercise the actual producer's schedule with a virtual control clock:
     // timeout is observable after five seconds, but is not operation completion.
     product::PreparationSchedule schedule;

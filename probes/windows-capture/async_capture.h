@@ -1,7 +1,7 @@
 #pragma once
 // Included inside namespace product after InputFailure. Acquisition owns no
 // filesystem work. GetBuffer and ReleaseBuffer always run on this one thread.
-class AsyncCapture {
+class AsyncCapture final : public CaptureReader {
   UINT32 channels_;
   std::atomic<bool> stopping_{false};
   std::thread thread_;
@@ -33,7 +33,6 @@ class AsyncCapture {
     }
   }
  public:
-  PacketQueue queue;
   AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels):channels_(channels) {
     thread_=std::thread([this,client=std::move(client)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
@@ -63,6 +62,6 @@ class AsyncCapture {
     std::unique_lock lock(startup_mutex_);startup_changed_.wait(lock,[&]{return startup_finished_;});
     if(startup_error_){auto error=startup_error_;lock.unlock();if(thread_.joinable())thread_.join();std::rethrow_exception(error);}
   }
-  void stop(){stopping_.store(true,std::memory_order_release);if(thread_.joinable())thread_.join();}
-  ~AsyncCapture(){stop();}
+  void stop() override{stopping_.store(true,std::memory_order_release);if(thread_.joinable())thread_.join();}
+  ~AsyncCapture() override{stop();}
 };

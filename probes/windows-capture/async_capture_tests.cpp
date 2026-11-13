@@ -65,6 +65,21 @@ int main(){
     pending.holding_for_window=false;pending.window_start=100200000;pending.window_end=150200000;
     pending.append(preparation_audio.data(),480,100000000,480,0,100300000);
     require(!pending.frames&&pending.file.value==INVALID_HANDLE_VALUE,"queued pre-window audio was saved");
+    // A silent output device must not zero another output's signal on its
+    // way through the real meter and saved-lane consumer.
+    const auto meter_path=fs::temp_directory_path()/(L"mon-endpoint-meter-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc())+L".caf");
+    {
+      product::Lane meter(meter_path,2,true);meter.clock.begin_stream(true);
+      product::EndpointMixer mixer;
+      mixer.add(480000,480,nullptr,2);
+      std::vector<float> stereo(960,0.25f);mixer.add(480000,480,stereo.data(),0);
+      mixer.flush(480480,100100000,[&](product::CapturePacket packet){
+        meter.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
+      });
+      auto level=meter.level();meter.close();
+      require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
+    }
+    fs::remove(meter_path);
     for(bool fail:{false,true}) {
       ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(fail);capture.Attach(input);
       ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
