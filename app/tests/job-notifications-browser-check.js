@@ -18,7 +18,12 @@ async page => {
       const selector=`.toast-card[data-toast-id=${JSON.stringify(id)}]`;
       const active=host().locator(`[data-sonner-toast]:not([data-removed=true]) ${selector}`);
       if(await active.count()===0)continue;
-      await active.getByRole("button",{name:/通知を閉じる$/}).click();
+      // Pointer entry expands/repositions Sonner cards on WebKit. This suite
+      // tests notification state; activate the visible close control by
+      // keyboard so a moving stack cannot turn its click into a list focus.
+      const close=active.getByRole("button",{name:/通知を閉じる$/});
+      await close.focus();
+      await close.press("Enter");
       await host().locator(selector).waitFor({state:"hidden"});
     }
     await cards.waitFor({state:"hidden"});
