@@ -188,6 +188,11 @@ class StoreProvenanceTests(unittest.TestCase):
         self.assertIn("/commits/refs%2Fheads%2Fmain", fixture.requests)
         command, options = next((argv, kwargs) for argv, kwargs in fixture.commands if argv[1:3] == ["attestation", "verify"])
         self.assertNotIn("--bundle", command)
+        # gh treats these signer selectors as mutually exclusive. Keep the
+        # exact main-workflow certificate identity as the single selector.
+        selectors = {"--cert-identity", "--cert-identity-regex", "--signer-repo", "--signer-workflow"}
+        self.assertEqual([argument for argument in command if argument in selectors], ["--cert-identity"])
+        self.assertIn("--deny-self-hosted-runners", command)
         for flag, value in (("--repo", "owner/repo"), ("--cert-identity", "https://github.com/owner/repo/.github/workflows/release-build.yml@refs/heads/main"),
                             ("--cert-oidc-issuer", "https://token.actions.githubusercontent.com"), ("--source-ref", "refs/heads/main")):
             self.assertEqual(command[command.index(flag) + 1], value)
