@@ -119,5 +119,26 @@
   "licenseReview": "not_verified",
   "distributionReady": false,
   "releaseRebuildSigningNotarizationAndDeviceQa": "not_performed",
-  "publishedArtifactsReplaced": false
+  "publishedArtifactsReplaced": false,
+  "localValidation": {
+    "focusedSuites": {
+      "tests": 62,
+      "skipped": 4,
+      "result": "passed"
+    },
+    "wholePythonSuiteOnWindows": {
+      "tests": 427,
+      "passed": 333,
+      "skipped": 92,
+      "failed": 2,
+      "note": "Unchanged acquisition timing tests observed zero elapsed time; same type of failure reproduced on the unmodified main baseline. Long-path and sandbox junction issues resolved using short isolated path and appropriate test permissions."
+    },
+    "githubPythonJob": {
+      "runId": 43365359739,
+      "jobId": 131688374432,
+      "headSha": "cc11f08737be4e5cb184b75934a7128eb2444974",
+      "conclusion": "success",
+      "note": "Applies to the first PR commit; later documentation-only updates do not alter tested Python code."
+    }
+  }
 }

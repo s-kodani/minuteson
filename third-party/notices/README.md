@@ -15,7 +15,7 @@
 | objc2の9961247のLICENSE.txt | 同じリポジトリの履歴にあるSteven SheldonのMIT通知を改変せず保持。Mads Marquartの通知だけで追加著作権表示が十分と断定しない |
 | SPDX v3.26.0のMIT本文template | 過去の参照資料。objc2の補完は上流の全文へ切り替え、雛形を個別の著作権通知にしない |
 
-資料は出典の全バイトを保持する。改行のない原文はそのまま改行なしで保持する。取得日は2026-10-10。すべての本文・追加NOTICE・著作権・対応ソース・Apple SDK由来等の条件が満たされたとの承認ではない。`licenseReview: not_verified`と`distributionReady: false`を維持する。
+資料は出典の全バイトを保持する。改行のない原文はそのまま改行なしで保持する。初期資料の取得日は2026-10-10、今回のobjc2原文追加は2026-11-13。すべての本文・追加NOTICE・著作権・対応ソース・Apple SDK由来等の条件が満たされたとの承認ではない。`licenseReview: not_verified`と`distributionReady: false`を維持する。
 
 MIT templateの`<year>`・`<copyright holders>`は原文のまま残す。MONや上流作者の名前・年を推測して置き換えない。templateを個別ソフトウェアの著作権通知として扱わず、生成通知にもその区別を表示する。Apple SDK由来の上流注意も削除しない。本文は[版固定のSPDX資料](https://github.com/spdx/license-list-data/blob/v3.26.0/text/MIT.txt)に全バイト一致する（1087bytes／SHA256 `6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9`）。
 
