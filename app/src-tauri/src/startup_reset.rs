@@ -34,6 +34,8 @@ pub(crate) struct Snapshot {
     completed: bool,
     message: String,
     error: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    restore: bool,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +50,7 @@ struct Prepared {
     id: String,
     selection: reset::Selection,
     destination: Option<reset::Archive>,
+    restore: bool,
 }
 #[derive(Default)]
 struct Inner {
@@ -98,8 +101,14 @@ impl Reset {
             operation_id: Some(operation_id),
             busy: true,
             completed: false,
-            message: "初期化を受け付けました".into(),
+            message: if prepared.restore {
+                "データ復元を受け付けました"
+            } else {
+                "初期化を受け付けました"
+            }
+            .into(),
             error: None,
+            restore: prepared.restore,
         };
         Ok((Some(prepared), inner.snapshot.clone()))
     }
@@ -161,6 +170,7 @@ pub(crate) fn availability(app: &tauri::AppHandle) -> Availability {
 #[tauri::command]
 pub(crate) async fn get_startup_reset_preview(
     window: WebviewWindow,
+    restore: Option<bool>,
 ) -> Result<Preview, mon_contracts::AppError> {
     let result: Result<Preview, String> = async move {
         require(&window)?;
@@ -189,6 +199,7 @@ pub(crate) async fn get_startup_reset_preview(
                             id: id.clone(),
                             selection,
                             destination: None,
+                            restore: restore.unwrap_or(false),
                         });
                         Ok(Preview {
                             availability: Availability {
@@ -315,6 +326,7 @@ pub(crate) fn start_startup_reset(
             let Some(prepared) = prepared else {
                 return Ok(response);
             };
+            let restore = prepared.restore;
             tauri::async_runtime::spawn_blocking(move || {
                 let result = (|| {
                     let (config, data) = paths(&app)?;
@@ -348,20 +360,26 @@ pub(crate) fn start_startup_reset(
                             .ok_or("退避先を選択してください")?
                             .verify()?;
                     }
-                    reset::execute(
-                        b,
-                        &prepared.selection,
-                        &prepared.id,
-                        if archive {
-                            prepared
-                                .destination
-                                .as_ref()
-                                .map(|destination| destination.path())
-                        } else {
-                            None
-                        },
-                        &|m| app.state::<Reset>().progress(m),
-                    )
+                    if prepared.restore {
+                        reset::execute_restore(b, &prepared.selection, &prepared.id, &|m| {
+                            app.state::<Reset>().progress(m)
+                        })
+                    } else {
+                        reset::execute(
+                            b,
+                            &prepared.selection,
+                            &prepared.id,
+                            if archive {
+                                prepared
+                                    .destination
+                                    .as_ref()
+                                    .map(|destination| destination.path())
+                            } else {
+                                None
+                            },
+                            &|m| app.state::<Reset>().progress(m),
+                        )
+                    }
                 })();
                 let state = app.state::<Reset>();
                 if result.is_ok() {
@@ -373,9 +391,19 @@ pub(crate) fn start_startup_reset(
                     inner.snapshot.busy = false;
                     inner.snapshot.completed = result.is_ok();
                     inner.snapshot.message = if result.is_ok() {
-                        "初期化が完了しました。アプリを再起動しています".into()
+                        if restore {
+                            "データ復元が完了しました。アプリを再起動しています"
+                        } else {
+                            "初期化が完了しました。アプリを再起動しています"
+                        }
+                        .into()
                     } else {
-                        "初期化を完了できませんでした".into()
+                        if restore {
+                            "データ復元を完了できませんでした"
+                        } else {
+                            "初期化を完了できませんでした"
+                        }
+                        .into()
                     };
                     inner.snapshot.error = result
                         .err()
@@ -388,8 +416,12 @@ pub(crate) fn start_startup_reset(
                         if let Err(e) = crate::startup_instance::retry_startup(main) {
                             if let Ok(mut inner) = state.inner.lock() {
                                 inner.snapshot.error = Some(e.to_string());
-                                inner.snapshot.message =
-                                    "初期化は完了しました。アプリを再起動してください".into();
+                                inner.snapshot.message = if restore {
+                                    "データ復元は完了しました。アプリを再起動してください"
+                                } else {
+                                    "初期化は完了しました。アプリを再起動してください"
+                                }
+                                .into();
                             }
                         }
                     }
@@ -474,6 +506,7 @@ mod tests {
             id: id.clone(),
             selection,
             destination: None,
+            restore: true,
         });
         assert!(state.accept(id.clone(), true).is_err());
         assert!(!state.busy());
@@ -483,6 +516,8 @@ mod tests {
         let (first, receipt) = state.accept(id.clone(), false).unwrap();
         assert!(first.is_some());
         assert!(receipt.busy);
+        assert!(receipt.restore);
+        assert_eq!(serde_json::to_value(&receipt).unwrap()["restore"], true);
         assert!(state.busy());
         // A lost response is recovered by status. Changing the archive bit in a
         // duplicate must not change the already accepted operation.
@@ -503,5 +538,6 @@ mod tests {
         let (again, done) = state.accept(id, false).unwrap();
         assert!(again.is_none());
         assert!(done.completed);
+        assert!(done.restore);
     }
 }

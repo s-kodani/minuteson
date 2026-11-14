@@ -24,7 +24,7 @@ async page => {
       results.push(`${variant}: diagnostic remains read-only until explicit restart; pending restart is exclusive`);
     }
     await boot("windows", "MinutesOn QA");
-    await page.getByRole("heading", { name: "MinutesOn QAの起動と復旧", exact: true }).waitFor();
+    await page.getByText("保存先の検証に失敗したため、起動を中止しました。", { exact: true }).waitFor();
     check(await page.title() === "MinutesOn QA — 会議記録", "QA title did not use native product name");
     await page.evaluate(() => { window.startupFixture.retryFail = true; });
     await retry().click();

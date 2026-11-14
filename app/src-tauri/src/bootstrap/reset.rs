@@ -1,6 +1,8 @@
-//! Startup-only reset. The old SQLite image is never admitted or queried.
+//! Startup-only reset and typed recovery. A plain reset never queries the old
+//! database; recovery reads only a private copy and reconstructs user content.
 //! A private write-ahead record owns every rename and the publication hash is
-//! the commit point. Model payloads are moved and erased, never read for backup.
+//! the commit point. Plain-reset archives exclude model payloads; recovery
+//! verifies and collects registered model files before moving any old data.
 use super::*;
 use std::{collections::BTreeSet, sync::Arc};
 const JOURNAL: &str = ".startup-reset.json";
@@ -333,6 +335,8 @@ struct Workspace {
 struct Fresh {
     name: String,
     identity: Identity,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    app_data: bool,
 }
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -364,6 +368,27 @@ struct Journal {
     committed: bool,
 }
 impl Journal {
+    fn fresh_path(&self, fresh: &Fresh) -> PathBuf {
+        (if fresh.app_data {
+            &self.data.path
+        } else {
+            &self.meeting.path
+        })
+        .join(&fresh.name)
+    }
+    fn fresh_workspace(&self, fresh: &Fresh) -> Result<PathBuf, String> {
+        let parent = self
+            .fresh_path(fresh)
+            .parent()
+            .ok_or("復元先の親がありません")?
+            .to_owned();
+        let root = self
+            .roots
+            .iter()
+            .position(|root| root.path == parent)
+            .ok_or("復元先の保存領域がありません")?;
+        Ok(self.workspace(root).join(format!("new-{}", fresh.name)))
+    }
     fn matches_fresh(&self, fresh: &Fresh, metadata: &Metadata) -> bool {
         let Ok(actual) = Identity::read(metadata) else {
             return false;
@@ -377,7 +402,7 @@ impl Journal {
         #[cfg(windows)]
         if actual.device == fresh.identity.device && actual.inode == fresh.identity.inode {
             return self.entries.iter().any(|entry| {
-                self.source(entry) == self.meeting.path.join(&fresh.name)
+                self.source(entry) == self.fresh_path(fresh)
                     && actual.birth_ns == entry.identity.birth_ns
             });
         }
@@ -497,7 +522,12 @@ impl Journal {
             }
         }
         for f in &self.fresh {
-            if !fresh_names().contains(&f.name.as_str()) {
+            if if f.app_data {
+                f.name != "models"
+            } else {
+                !fresh_names().contains(&f.name.as_str())
+                    && !["meetings", "voices"].contains(&f.name.as_str())
+            } {
                 return Err("新DBの作業対象が不正です".into());
             }
         }
@@ -832,6 +862,24 @@ pub(crate) fn execute(
     archive: Option<&Path>,
     progress: &impl Fn(&str),
 ) -> Result<(), String> {
+    execute_mode(b, s, id, archive, false, progress)
+}
+pub(crate) fn execute_restore(
+    b: Bootstrap,
+    s: &Selection,
+    id: &str,
+    progress: &impl Fn(&str),
+) -> Result<(), String> {
+    execute_mode(b, s, id, None, true, progress)
+}
+fn execute_mode(
+    b: Bootstrap,
+    s: &Selection,
+    id: &str,
+    archive: Option<&Path>,
+    restore: bool,
+    progress: &impl Fn(&str),
+) -> Result<(), String> {
     let lease = RootLease::acquire(s.root(), true)?;
     let mut j = create_journal(&b, s, id)?;
     let mut writer_leases = Some(capture_writer_leases(s.app_data())?);
@@ -839,6 +887,55 @@ pub(crate) fn execute(
     // This control record does not alter any original payload or old DB.
     j.save()?;
     let result = (|| {
+        let recovered = if restore {
+            // Every source remains in place until reconstruction and validation
+            // of all requested content have completed in owned private workspaces.
+            for root in 0..j.roots.len() {
+                let path = j.workspace(root);
+                create_directory(&path)?;
+                j.workspaces.push(Workspace {
+                    root,
+                    identity: Identity::read(&directory(&path)?)?,
+                });
+                j.save()?;
+            }
+            let meeting = j
+                .roots
+                .iter()
+                .position(|root| root.path == s.meeting.path)
+                .ok_or("会議保存先がありません")?;
+            let data = j
+                .roots
+                .iter()
+                .position(|root| root.path == s.data.path)
+                .ok_or("モデル保存先がありません")?;
+            let input = j.workspace(meeting).join("source");
+            create_directory(&input)?;
+            let mut inventory = vec![];
+            for name in &fresh_names()[..4] {
+                let path = s.root().join(name);
+                if exists(&path)? {
+                    copy_tree(&path, &input.join(name), &[], &mut inventory, 0)?;
+                }
+            }
+            let result = crate::storage::backup::startup::prepare(
+                &input.join(DB),
+                s.root(),
+                &s.app_data().join("models"),
+                &j.workspace(meeting),
+                &j.workspace(data),
+                progress,
+            )?;
+            for source in inventory {
+                if fingerprint(&source.path)? != source {
+                    return Err("回収中に元DBが変更されています。元データを保持します".into());
+                }
+            }
+            checkpoint("recovered")?;
+            Some(result)
+        } else {
+            None
+        };
         if let Some(to) = archive {
             j.phase = Phase::Archiving;
             j.save()?;
@@ -907,6 +1004,9 @@ pub(crate) fn execute(
         j.save()?;
         write_new(&s.root().join(PENDING), id.as_bytes())?;
         for root in 0..j.roots.len() {
+            if j.workspaces.iter().any(|workspace| workspace.root == root) {
+                continue;
+            }
             let path = j.workspace(root);
             create_directory(&path)?;
             j.workspaces.push(Workspace {
@@ -951,6 +1051,7 @@ pub(crate) fn execute(
             j.fresh.push(Fresh {
                 name: (*name).into(),
                 identity: Identity::read(&meta(&reserved)?)?,
+                app_data: false,
             });
             j.save()?;
             checkpoint("fresh_reserved")?;
@@ -961,6 +1062,31 @@ pub(crate) fn execute(
             Storage::open_for_reset(s.root().into(), s.app_data().join("models"), lease.clone())
                 .map_err(err)?;
         storage.validate_startup_reset()?;
+        if let Some(recovered) = &recovered {
+            progress("回収したデータを初期化後の保存先へ再登録しています");
+            for (name, source, app_data) in [
+                ("meetings", recovered.root.join("meetings"), false),
+                ("voices", recovered.root.join("voices"), false),
+                ("models", recovered.models.clone(), true),
+            ] {
+                if !exists(&source)? {
+                    continue;
+                }
+                let fresh = Fresh {
+                    name: name.into(),
+                    identity: Identity::read(&directory(&source)?)?,
+                    app_data,
+                };
+                let destination = j.fresh_path(&fresh);
+                j.fresh.push(fresh);
+                j.save()?;
+                checkpoint("restore_reserved")?;
+                rename(&source, &destination, false)?;
+                checkpoint("restore_installed")?;
+            }
+            recovered.install(&storage)?;
+            checkpoint("restored")?;
+        }
         let current = Root::bound(&storage)?;
         let revision = b
             .state
@@ -1010,7 +1136,12 @@ pub(crate) fn execute(
         j.save()?;
         drop(storage);
         checkpoint("committed")?;
-        progress("旧データとモデル本体を削除しています");
+        progress(if restore {
+            "データ復元を確定しています"
+        } else {
+            "旧データとモデル本体を削除しています"
+        });
+        drop(recovered);
         finish(&j)?;
         Ok(())
     })();
@@ -1102,13 +1233,19 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
     }
     // Unexpected SQLite files could belong to a newer database generation.
     // Leave the entire transaction intact rather than attach them to the old DB.
-    for name in fresh_names() {
-        let path = j.meeting.path.join(name);
+    let candidates = fresh_names()
+        .into_iter()
+        .map(|name| j.meeting.path.join(name))
+        .chain([
+            j.meeting.path.join("meetings"),
+            j.meeting.path.join("voices"),
+            j.data.path.join("models"),
+        ]);
+    for path in candidates {
         if exists(&path)?
-            && !j
-                .fresh
-                .iter()
-                .any(|f| f.name == name && meta(&path).is_ok_and(|m| j.matches_fresh(f, &m)))
+            && !j.fresh.iter().any(|f| {
+                j.fresh_path(f) == path && meta(&path).is_ok_and(|m| j.matches_fresh(f, &m))
+            })
             && !j
                 .entries
                 .iter()
@@ -1129,8 +1266,7 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
             }
             if exists(&old)?
                 && !j.fresh.iter().any(|f| {
-                    old == j.meeting.path.join(&f.name)
-                        && meta(&old).is_ok_and(|m| j.matches_fresh(f, &m))
+                    old == j.fresh_path(f) && meta(&old).is_ok_and(|m| j.matches_fresh(f, &m))
                 })
             {
                 return Err("初期化後に別データが作られています。上書きしません".into());
@@ -1140,11 +1276,18 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
         }
     }
     for f in &j.fresh {
-        let p = j.meeting.path.join(&f.name);
+        let p = j.fresh_path(f);
         if exists(&p)? {
             let metadata = meta(&p)?;
             if j.matches_fresh(f, &metadata) {
-                remove_owned(&p, &Identity::read(&metadata)?)?;
+                if metadata.is_dir() {
+                    // Move only our recorded new tree out of the way. Rollback
+                    // retains it with the private workspace rather than erasing
+                    // any unconfirmed content while returning the originals.
+                    rename(&p, &j.fresh_workspace(f)?, false)?;
+                } else {
+                    remove_owned(&p, &Identity::read(&metadata)?)?;
+                }
             } else if !j
                 .entries
                 .iter()
@@ -1156,7 +1299,9 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
         for w in &j.workspaces {
             let reserved = j.workspace(w.root).join(format!("new-{}", f.name));
             if exists(&reserved)? {
-                remove_owned(&reserved, &f.identity)?;
+                if !meta(&reserved)?.is_dir() {
+                    remove_owned(&reserved, &f.identity)?;
+                }
             }
         }
     }

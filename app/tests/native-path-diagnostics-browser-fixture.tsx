@@ -22,6 +22,7 @@ const fixture=Object.assign(window,{pathDiagnosticsFixture:{path,unc,diagnostic,
 mockIPC(async(command,args)=>{
   if(command==="get_startup_report")return structuredClone(report);
   if(command==="get_startup_reset_state")return {operationId:null,busy:false,completed:false,message:diagnostic,error:diagnostic};
+  if(command==="get_startup_reset_preview")return {availability:report.reset,operationId:null,meetingRoot:null,archivePath:null};
   if(command==="get_internal_logs"){
     const query=args?.query as {filter:{kind:string};after?:number};
     return {entries:query.filter.kind==="engine" && !query.after?[structuredClone(entry)]:[],olderCursor:1,newerCursor:1,hasMore:false,expired:false,status:{storageError:diagnostic,droppedEntries:0,historyTruncated:false}};

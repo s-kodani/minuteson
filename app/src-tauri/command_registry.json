@@ -162,7 +162,14 @@
       ],
       "signature": {
         "async": true,
-        "arguments": [],
+        "arguments": [
+          {
+            "name": "restore",
+            "wireName": "restore",
+            "type": "Option<bool>",
+            "optional": true
+          }
+        ],
         "response": {
           "type": "Result<Preview,mon_contracts::AppError>",
           "ok": "Preview",
