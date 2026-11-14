@@ -16,13 +16,11 @@ on:
       full:
         type: boolean
         default: false
-      skip_windows_msix:
-        description: 'Release build delegates Store package validation to its required store job'
+      build_release:
+        description: 'Prepare final distributables in the validated main job'
         type: boolean
         default: false
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -37,22 +35,23 @@ jobs:
     timeout-minutes: 10
     outputs:
       native: ${{ steps.scope.outputs.native }}
+      browser: ${{ steps.scope.outputs.browser }}
+      python: ${{ steps.scope.outputs.python }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate delegated Microsoft Store check
+      - name: Validate main packaging request
         env:
-          MON_SKIP_WINDOWS_MSIX: ${{ inputs.skip_windows_msix }}
+          MON_BUILD_RELEASE: ${{ inputs.build_release }}
           MON_CI_FULL: ${{ inputs.full || inputs.suite == 'full' }}
-          MON_CALLER: ${{ github.workflow }}
         run: |
           python3 - <<'PY'
           import os
-          if os.environ['MON_SKIP_WINDOWS_MSIX'] == 'true' and (os.environ['MON_CI_FULL'] != 'true' or os.environ['MON_CALLER'] != 'Release build'):
-              raise SystemExit('Only full Release build validation may delegate its Store package check')
+          if os.environ['MON_BUILD_RELEASE'] == 'true' and (os.environ['MON_CI_FULL'] != 'true' or os.environ['GITHUB_REF'] != 'refs/heads/main'):
+              raise SystemExit('Final packaging requires full validation on main')
           PY
       - id: scope
         env:
@@ -60,6 +59,8 @@ jobs:
           MON_FULL: ${{ inputs.full || github.event_name == 'workflow_dispatch' }}
         run: python3 tools/mon_ci_scope.py
   python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -80,7 +81,7 @@ jobs:
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/playwright
       MON_SAVE_CI_CACHE: ${{ github.ref == 'refs/heads/main' && github.workflow != 'Release build' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.source_ref == '' || inputs.source_ref == github.sha) }}
-    if: needs.changes.outputs.native == 'true'
+    if: needs.changes.outputs.browser == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +180,7 @@ jobs:
     env:
       PYTHONUTF8: '1'
       MON_CI_FULL: ${{ inputs.full || inputs.suite == 'full' }}
-      MON_SKIP_WINDOWS_MSIX: ${{ inputs.skip_windows_msix }}
+      MON_BUILD_RELEASE: ${{ inputs.build_release }}
       MON_SAVE_CI_CACHE: ${{ github.ref == 'refs/heads/main' && github.workflow != 'Release build' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.source_ref == '' || inputs.source_ref == github.sha) }}
     strategy:
       fail-fast: false
@@ -312,7 +313,7 @@ jobs:
         if: env.MON_CI_FULL != 'true'
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: python tools/mon_ci_native_tests.py --suite quick --all-targets --processes 2 --threads 4 --timings-json output/rust-tests/${{ runner.os }}.json
+        run: python tools/mon_ci_native_tests.py --suite quick --processes 2 --threads 4 --timings-json output/rust-tests/${{ runner.os }}.json
       - name: Windows public signing preflight fails without a certificate
         if: runner.os == 'Windows'
         run: python -m unittest discover -s tests -p test_windows_release_signing.py -v
@@ -334,7 +335,7 @@ jobs:
           ctest --test-dir probes/windows-capture/build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MON_WINDOWS_MODEL_OPTIONS = Join-Path $env:RUNNER_TEMP 'mon-windows-model-options.json'
-          python tools/mon_ci_native_tests.py --suite full --all-targets --timings-json output/rust-tests/${{ runner.os }}.json
+          python tools/mon_ci_native_tests.py --suite full --timings-json output/rust-tests/${{ runner.os }}.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
       - name: macOS Swift compiler and capture regression tests
@@ -360,7 +361,7 @@ jobs:
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
-        run: python tools/mon_ci_native_tests.py --suite full --all-targets --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
+        run: python tools/mon_ci_native_tests.py --suite full --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
       - name: Prepare macOS resident workers for runtime regression
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         run: python tools/mon_inference_runtime.py
@@ -368,23 +369,48 @@ jobs:
         if: env.MON_CI_FULL == 'true'
         run: python tools/mon_llama_runtime_check.py --report output/rust-tests/llama-runtime-${{ runner.os }}.json
       - name: Build Windows QA installer
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE != 'true'
         run: python tools/mon_windows_preparation.py run --phase windows-qa-packaging --report output/rust-tests/Windows-phases.json -- npm.cmd --prefix app run tauri:windows:qa:build
-      - name: Verify DPI declarations in the linked Windows QA executable
+      - name: Build final unsigned Windows installer
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE == 'true'
+        run: |
+          python tools/mon_windows_preparation.py run --phase windows-release-packaging --report output/rust-tests/Windows-phases.json -- npm.cmd --prefix app run tauri:windows:unsigned:build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/mon_release_artifacts.py collect --flavor windows --output output/release-windows
+      - name: Save final Windows installer
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: output/release-windows/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify DPI declarations in the linked Windows installer executable
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: |
           $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - name: Build and verify Microsoft Store MSIX
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: python tools/mon_windows_preparation.py run --phase windows-store-packaging --report output/rust-tests/Windows-phases.json -- npm.cmd --prefix app run tauri:windows:store:build
       - name: Verify DPI declarations in the linked Windows Store executable
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         run: |
           $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
+      - name: Collect final Microsoft Store MSIX
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE == 'true'
+        run: python tools/mon_release_artifacts.py collect --flavor store --output output/release-store
+      - name: Save final Microsoft Store MSIX
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-store
+          path: output/release-store/
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload Microsoft Store build identity
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SKIP_WINDOWS_MSIX != 'true'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: minuteson-windows-x64-store-identity
@@ -394,7 +420,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows build identity
-        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        if: env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_BUILD_RELEASE != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mon-windows-x64-qa-identity
@@ -412,6 +438,19 @@ jobs:
           executable="$GITHUB_WORKSPACE/app/src-tauri/target/debug/mon-desktop"
           digest=$(shasum -a 256 "$executable" | cut -d ' ' -f 1)
           node tools/mon_owned_engine_check.mjs --executable "$executable" --sha256 "$digest"
+      - name: Prepare final macOS app without signing credentials
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_BUILD_RELEASE == 'true'
+        run: python tools/mon_macos_release.py --prepare --output-dir "$GITHUB_WORKSPACE/output/macos-prepare"
+      - name: Save final macOS app for signing
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_BUILD_RELEASE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: prepared-macos
+          path: |
+            output/macos-prepare/prepared-app.zip
+            output/macos-prepare/prepared-app.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Save windows-runtime build intermediates
         if: success() && env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SAVE_CI_CACHE == 'true' && steps.windows_runtime_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -463,14 +502,18 @@ jobs:
       MON_PYTHON: ${{ needs.python.result }}
       MON_BROWSER: ${{ needs.browser.result }}
       MON_NATIVE: ${{ needs.native.result }}
-      MON_REQUIRED: ${{ needs.changes.outputs.native }}
+      MON_REQUIRE_PYTHON: ${{ needs.changes.outputs.python }}
+      MON_REQUIRE_BROWSER: ${{ needs.changes.outputs.browser }}
+      MON_REQUIRE_NATIVE: ${{ needs.changes.outputs.native }}
     steps:
       - run: |
           python3 - <<'PY'
           import os
-          required = ['MON_CHANGES', 'MON_PYTHON']
-          if os.environ['MON_REQUIRED'] == 'true':
-              required += ['MON_BROWSER', 'MON_NATIVE']
-          if any(os.environ[key] != 'success' for key in required):
-              raise SystemExit('Required CI job failed, was cancelled, or was skipped')
+          if os.environ['MON_CHANGES'] != 'success':
+              raise SystemExit('Change classification failed')
+          for job in ('PYTHON', 'BROWSER', 'NATIVE'):
+              planned = os.environ['MON_REQUIRE_' + job]
+              expected = {'true': 'success', 'false': 'skipped'}.get(planned)
+              if expected is None or os.environ['MON_' + job] != expected:
+                  raise SystemExit('Required CI job failed, was cancelled, or was unexpectedly skipped')
           PY

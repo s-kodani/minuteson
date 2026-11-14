@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -105,6 +106,11 @@ def assemble(source, output, commit, tag):
         records.append(receipt)
     manifest = {"schemaVersion": 1, "sourceSha": commit, "tag": tag, "publicFiles": public, "artifacts": records,
                 "runtimeQA": "not_verified", "licenseReview": "not_verified", "distributionReady": False}
+    if os.environ.get("MON_MAIN_CANDIDATE") == "true":
+        manifest.update(schemaVersion=2, producer={
+            "kind": "main-build", "runId": int(os.environ["GITHUB_RUN_ID"]),
+            "runAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "event": os.environ["GITHUB_EVENT_NAME"],
+        })
     manifest_file = output / "release-manifest.json"
     manifest_file.write_text(json.dumps(manifest, indent=2) + "\n")
     sums = {**public, manifest_file.name: digest(manifest_file)}

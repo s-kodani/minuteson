@@ -14,7 +14,7 @@ okf_version: "0.2"
 
 ## 保守と開発
 
-- [GitHubでの開発とリリース](guides/development-workflow.md) — PR、文書更新、必須検査、Releases画面でのタグ管理と自動公開。
+- [GitHubでの開発とリリース](guides/development-workflow.md) — PR、文書更新、必須検査、main成果物の検証、手動公開と承認後のStore送信。
 - [DevSecOpsの検査と運用](guides/devsecops.md) — セキュリティ検査と初期設定・障害対応。
 
 - [現行仕様](spec/index.md) — 録音・解析・モデル・議事録・保存とアーキテクチャ。

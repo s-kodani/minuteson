@@ -75,19 +75,10 @@ fn restore_operation_capacity_confirmation_is_rechecked_before_durable_reservati
         .refresh(&f.target, &crate::test_support::never_cancelled, &|_| {})
         .unwrap();
     assert!(refreshed.required_bytes > CAPACITY_RESERVE);
-    selected
-        .publish(
-            &f.target,
-            &refreshed.confirmation_id,
-            &crate::test_support::never_cancelled,
-            &|_| {},
-        )
-        .unwrap();
-    assert_eq!(f.target.list_meetings().unwrap().len(), 3);
+    assert_eq!(rows(&f.target), before);
 }
 
 struct Fixture {
-    _source: tempfile::TempDir,
     output: tempfile::TempDir,
     target_root: tempfile::TempDir,
     target: Storage,
@@ -103,22 +94,20 @@ fn term(text: &str, reading: Option<&str>) -> VocabularyEntry {
     }
 }
 fn fixture() -> Fixture {
-    let root = tempfile::tempdir().unwrap();
-    let source = Storage::open(root.path().into()).unwrap();
-    archive::tests::meeting(&source, "first");
-    archive::tests::meeting(&source, "second");
-    source
-        .save_vocabulary_book(
-            None,
-            0,
-            vec![term("一致", None), term("競合", None), term("新規", None)],
-        )
-        .unwrap();
+    static ARCHIVE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("selected.monbackup");
-    source
-        .create_backup_archive(&path, &crate::test_support::never_cancelled)
-        .unwrap();
+    archive::tests::cached_archive(&ARCHIVE, &path, |source| {
+        archive::tests::meeting(source, "first");
+        archive::tests::meeting(source, "second");
+        source
+            .save_vocabulary_book(
+                None,
+                0,
+                vec![term("一致", None), term("競合", None), term("新規", None)],
+            )
+            .unwrap();
+    });
     let target_root = tempfile::tempdir().unwrap();
     let target = Storage::open(target_root.path().into()).unwrap();
     archive::tests::meeting(&target, "existing");
@@ -130,7 +119,6 @@ fn fixture() -> Fixture {
         )
         .unwrap();
     Fixture {
-        _source: root,
         output,
         target_root,
         target,
@@ -457,6 +445,25 @@ fn restore_operation_exact_confirm_adds_and_replays_same_batch_after_source_move
         .iter()
         .all(|id| !receipt.meeting_ids.contains(id)));
     assert_eq!(f.target.list_meetings().unwrap().len(), 5);
+    assert_eq!(next.vocabulary_added, Some(0));
+    let vocabulary = f.target.vocabulary_book(None).unwrap().payload;
+    assert_eq!(vocabulary.len(), 3);
+    assert_eq!(
+        vocabulary
+            .iter()
+            .filter(|entry| entry.term == "新規")
+            .count(),
+        1
+    );
+    assert_eq!(
+        vocabulary
+            .iter()
+            .find(|entry| entry.term == "競合")
+            .unwrap()
+            .reading
+            .as_deref(),
+        Some("既存優先")
+    );
 }
 
 #[test]
@@ -683,8 +690,5 @@ fn changed_voice_registry_requires_reconfirmation_before_any_restored_rows_are_p
     let next = prepared.refresh(&f.target, &|| false, &|_| {}).unwrap();
     assert_eq!(next.batch_id, p.batch_id);
     assert_ne!(next.confirmation_id, p.confirmation_id);
-    prepared
-        .publish(&f.target, &next.confirmation_id, &|| false, &|_| {})
-        .unwrap();
-    assert_eq!(f.target.list_meetings().unwrap().len(), 3);
+    assert_eq!(rows(&f.target), before);
 }

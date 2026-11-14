@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 WORKFLOW = ".github/workflows/release-build.yml"
 PUBLISH_STEP = "Revalidate draft, attach assets, and publish"
+CANDIDATE_STEP = "Record completed main candidate"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 PREDICATE = "https://slsa.dev/provenance/v1"
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -31,7 +32,7 @@ def gh_json(arguments):
     return json.loads(result.stdout)
 
 
-def certificate_identity(result, repository, repository_id, manifest_hash):
+def certificate_identity(result, repository, repository_id, manifest_hash, event="workflow_dispatch"):
     verified = result["verificationResult"]
     certificate = verified["signature"]["certificate"]
     repository_url = "https://github.com/" + repository
@@ -44,7 +45,7 @@ def certificate_identity(result, repository, repository_id, manifest_hash):
         "sourceRepositoryURI": repository_url,
         "sourceRepositoryIdentifier": str(repository_id),
         "sourceRepositoryRef": "refs/heads/main",
-        "buildTrigger": "workflow_dispatch",
+        "buildTrigger": event,
     }.items():
         require(certificate.get(key) == expected)
     workflow_sha = certificate["sourceRepositoryDigest"]
@@ -65,7 +66,7 @@ def certificate_identity(result, repository, repository_id, manifest_hash):
     return int(match[1]), int(match[2]), workflow_sha
 
 
-def publication_complete(github, repository_id, workflow_id, identity):
+def publication_complete(github, repository_id, workflow_id, identity, *, candidate=False, event="workflow_dispatch"):
     run_id, attempt, workflow_sha = identity
     endpoint = f"/actions/runs/{run_id}/attempts/{attempt}"
     run = github.call(endpoint)
@@ -73,7 +74,7 @@ def publication_complete(github, repository_id, workflow_id, identity):
     require(type(run["run_attempt"]) is int and run["run_attempt"] == attempt)
     require(type(run["workflow_id"]) is int and run["workflow_id"] == workflow_id)
     require(run["path"] in (WORKFLOW, WORKFLOW + "@main", WORKFLOW + "@refs/heads/main"))
-    require(run["event"] == "workflow_dispatch" and run["head_branch"] == "main")
+    require(run["event"] == event and run["head_branch"] == "main")
     require(run["head_sha"] == workflow_sha)
     for key in ("repository", "head_repository"):
         require(type(run[key]["id"]) is int and run[key]["id"] == repository_id)
@@ -100,7 +101,7 @@ def publication_complete(github, repository_id, workflow_id, identity):
         require(len(batch) == 100)
     else:
         raise ValueError(ERROR)
-    publications = [job for job in jobs if job.get("name") == "publish"]
+    publications = [job for job in jobs if job.get("name") == ("candidate" if candidate else "publish")]
     require(len(publications) == 1)
     job = publications[0]
     require(type(job["run_id"]) is int and job["run_id"] == run_id)
@@ -112,19 +113,22 @@ def publication_complete(github, repository_id, workflow_id, identity):
     require(job["status"] == "completed" and job["conclusion"] == "success")
     steps = job["steps"]
     require(isinstance(steps, list) and all(isinstance(step, dict) for step in steps))
-    publications = [step for step in steps if step.get("name") == PUBLISH_STEP]
+    publications = [step for step in steps if step.get("name") == (CANDIDATE_STEP if candidate else PUBLISH_STEP)]
     require(len(publications) == 1)
     require(publications[0].get("status") == "completed" and publications[0].get("conclusion") == "success")
     return True
 
 
-def store_receipt(github, release, manifest):
-    require(type(manifest["schemaVersion"]) is int and manifest["schemaVersion"] == 1)
+def store_receipt(github, release, manifest, *, draft=False):
+    require(type(manifest["schemaVersion"]) is int and manifest["schemaVersion"] in (1, 2))
     source = manifest["sourceSha"]
     require(isinstance(source, str) and SHA.fullmatch(source))
     require(manifest["tag"] == release["tag_name"])
-    tag = github.call("/commits/" + quote("refs/tags/" + release["tag_name"], safe=""))
-    require(tag["sha"] == source)
+    if not draft:
+        tag = github.call("/commits/" + quote("refs/tags/" + release["tag_name"], safe=""))
+        require(tag["sha"] == source)
+    else:
+        require(release["draft"] and release["target_commitish"] == source and manifest["schemaVersion"] == 2)
     main = github.call("/commits/" + quote("refs/heads/main", safe=""))["sha"]
     require(isinstance(main, str) and SHA.fullmatch(main))
     # GitHub.call rejects '..' in paths; use gh for this API's required separator.
@@ -145,7 +149,7 @@ def store_receipt(github, release, manifest):
     return receipt
 
 
-def verify_manifest(github, release, manifest_file):
+def verify_manifest(github, release, manifest_file, *, draft=False, expected_run=None):
     """Return (signed receipt, authenticated run ID), or None while publishing."""
     try:
         require(manifest_file.is_file() and not manifest_file.is_symlink())
@@ -167,15 +171,27 @@ def verify_manifest(github, release, manifest_file):
         workflow = github.call("/actions/workflows/release-build.yml")
         workflow_id = workflow["id"]
         require(positive_integer(workflow_id) and workflow["path"] == WORKFLOW)
-        receipt = store_receipt(github, release, json.loads(raw))
+        manifest = json.loads(raw)
+        receipt = store_receipt(github, release, manifest, draft=draft)
+        candidate = manifest["schemaVersion"] == 2
+        event = "workflow_dispatch"
+        if candidate:
+            producer = manifest["producer"]
+            event = producer["event"]
+            require(producer["kind"] == "main-build" and event in ("push", "workflow_dispatch"))
+            require(positive_integer(producer["runId"]) and positive_integer(producer["runAttempt"]))
         waiting, seen = False, set()
         for attestation in attestations:
             try:
-                identity = certificate_identity(attestation, github.repository, repository_id, manifest_hash)
+                identity = certificate_identity(attestation, github.repository, repository_id, manifest_hash, event)
+                if candidate:
+                    require(identity == (producer["runId"], producer["runAttempt"], manifest["sourceSha"]))
+                if expected_run is not None:
+                    require(identity[0] == expected_run)
                 if identity in seen:
                     continue
                 seen.add(identity)
-                if publication_complete(github, repository_id, workflow_id, identity):
+                if publication_complete(github, repository_id, workflow_id, identity, candidate=candidate, event=event):
                     return receipt, identity[0]
                 waiting = True
             except (ValueError, KeyError, TypeError, AttributeError):

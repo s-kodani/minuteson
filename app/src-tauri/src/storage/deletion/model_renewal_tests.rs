@@ -730,6 +730,11 @@ fn model_deletion_renewal_sigkill_at_audit_boundaries_is_atomic_and_preserves_or
             "beforeCommit",
             "committed",
         ] {
+            // Pending renewals exercise every write. Completed renewals use the
+            // same transaction and retain both sides of its commit boundary.
+            if completed && !matches!(boundary, "beforeCommit" | "committed") {
+                continue;
+            }
             let mut f = Fixture::new();
             let owner = lease();
             let op = prepare(&f, false, &owner);

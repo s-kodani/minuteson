@@ -10,7 +10,7 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_rust_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/mon_ci_native_tests.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/tools/rust-test-suites.json"
-  - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_llama_runtime_check.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/rust-test-efficiency-2026-10-09.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/evaluation/README.md"
@@ -57,7 +57,7 @@ macOSの準備には`python3 tools/mon_inference_runtime.py`、Windowsの準備�
 
 JSONには既存の`directSeconds`・`residentThreeRequestsSeconds`に加え、`preparationSeconds`、取得・照合・展開・直接実行・常駐実行の`phaseSeconds`、モデルごとの`totalSeconds`、検査全体の`runTotalSeconds`を記録します。取得には台帳更新などの小さな付随処理もあり、その時間は`acquisitionOverhead`です。`preparationSeconds`は準備全体の時間なので、内訳の`phaseSeconds`へ重ねて加算しません。途中失敗やtimeoutでも、それまでの結果、失敗した`stage`、終了状態を保存します。workerやcatalogを読めない初期段階の失敗は`choice: null`の記録となります。
 
-full CIはJSONの実行記録・ビルド証跡・時間計測と必要な診断だけを残します。QAインストーラー・MSIX・モデル・実行ファイルの生成と、配布・アップロードは別に扱います。
+手動fullはJSONの実行記録・ビルド証跡・時間計測と診断を残します。mainの正式ビルドでは、同じ検証jobで作成した配布物も保存します。
 
 ## 通常・重い検証・全件の使い分け
 
@@ -65,15 +65,29 @@ Rustランナーの`--suite quick|heavy|full`で実行範囲を選びます。�
 
 分類の正本は[スイート定義](../../tools/rust-test-suites.json)です。通常の保存・削除・同意と一覧の検査、音声削除の基本完了、現行バックアップ形式の往復、登録音声の保持、完了音声クリーンアップの基本検証は通常側に残します。ネイティブ保存先の切替やWALコピー、FLAC作業領域の移動後再開、複数世代の再確認、各SQL段階での破損・取消・SIGKILLの組合せは重い側で確認します。文字列だけを扱う履歴上限の検査は通常側です。定義に一致しない新しい通常テストは`quick`に入ります。重いモジュールへの追加はそのモジュールと同じ分類になります。分類はMacとWindowsで共通ですが、OS条件により存在するテストは異なります。
 
-PRとmain更新は通常スイートを使い、QAインストーラー・MSIX・ネイティブ資材の準備を待ちません。日次04:17（日本時間）と全検証の手動実行、リリース前は全件と既存のSwift／Windows連携・配布物検証を実行します。日次の開始時刻はGitHub側で遅れる場合があります。セキュリティ検証の実行条件は変更しません。構成は[開発フロー](development-workflow.md)を参照してください。
+PRは変更範囲に応じて通常スイートを実行します。mainのコード変更は全件検証と最終配布物作成を一度実行します。文書だけのPR・main更新ではPython・ブラウザー・ネイティブ・CodeQLを省略し、文書と秘密情報等の軽い検査を維持します。日次ネイティブ全件実行は廃止し、手動fullを残します。日次の脆弱性検査は継続します。[開発フロー](development-workflow.md)が実行条件の正本です。
 
-Windows全件CIは、同じrunner内で「資材準備→native全件・実モデル検証→QA NSISとQA本体のDPI検査→MSIXとStore本体のDPI検査」の順に実行します。テストは準備したhelper／runtimeを直接使うため、インストーラー作成を待ちません。QAとStoreは識別子が異なり、本体とビルド証跡をそれぞれ作ります。
+Windows全件CIは同じrunner内で「資材準備→native全件・実モデル→正式unsigned EXEとDPI検査→MSIXとDPI検査」の順に実行します。mainは`build_release: true`で正式配布物を保存します。手動の診断用fullでは正式EXEの代わりにQAインストーラーを検証し、バイナリを配布しません。資材の照合・各フレーバーの本体リンク・ビルド証跡は維持します。
 
-全件CIで作るQAインストーラーとMSIXは、ビルド・内容照合の検証用です。バイナリはActions成果物へアップロードせず、ビルド証跡JSONとテスト時間・CargoのHTML診断を保持します。パッケージ生成の成功を、実機確認や配布条件の承認とは扱いません。
-
-日次と手動fullはQA／MSIXの両方が必須です。リリース内の再利用workflowだけは`skip_windows_msix: true`を指定し、MSIX作成・内容照合・DPI検査を後続の必須Storeジョブへ委譲します。QAと本番unsigned NSISは別の識別子なので個別に検証します。通常の呼出しでMSIXを省略する指定は拒否し、公開処理はStoreジョブの成功を要求します。
+CIのRustテストは`--lib`相当だけをコンパイル・実行します。0件のバイナリテストとdoctestの追加コンパイルを省略し、実アプリのリンクは最終パッケージで確認します。手動CLIの`--all-targets`は必要な診断用に残します。パッケージ生成や全件CIの成功を実機確認・配布条件の承認とは扱いません。
 
 実モデル・実機・専用連携を必要とする既存のignoredテストは、各テストの条件を満たした専用コマンドで呼び出します。`full`でも全ignoredテストを一括実行しません。
+
+## 重複削減と残す保証
+
+本番実装・SQLiteのFULL/WAL・fsync・ハッシュ照合・debug assertionsは変更しません。削減するのは重複する準備や同じ経路の組合せです。
+
+| 削減するケース・準備 | 残す保証と確認先 |
+| --- | --- |
+| 下位の`restore_publication_new_explicit_batch_adds_again_without_duplicating_global_terms` | 上位の`restore_operation_exact_confirm_adds_and_replays_same_batch_after_source_moves_but_explicit_new_selection_adds_another_batch`で別バッチの追加・同一バッチの再実行・語彙追加0件・重複なし・既存競合語の保持を検証 |
+| 容量再確認テストの末尾の成功復元 | 容量不足の拒否・対象不変・refresh後の容量根拠を維持。refreshから成功までの経路はグローバル語彙再確認テストで保持 |
+| 声の人物台帳変更テストの末尾の成功復元 | 拒否・対象不変・同じバッチと新しい確認IDを維持。成功経路は同じ上位の再確認テストで保持 |
+| operations／publicationのテストごとの重いソース生成 | 各fixtureに`OnceLock<Vec<u8>>`で不変のバックアップだけを共有。実APIで一度生成し、元の一時領域を破棄。archive・復元DB・書き込み先はテストごとに独立 |
+| モデル削除更新のSIGKILL 10組→7組 | pendingの全5地点、completedのcommit直前・直後を維持 |
+| 会議削除更新の取消／panic 8組→5組 | 全4地点の取消とcommit直前のpanicを維持。commit後のpanicは独立テストで維持 |
+| 会議削除更新の通常／reserved root SIGKILL 10組→7組 | 通常の全5地点、reserved rootのcommit直前・直後を維持 |
+
+音声・モデル・会議それぞれの32世代上限は独立実装のため残します。実データ保持、パス／内容の改ざん、既知の不具合回帰、不完全な取り込みや失敗状態の保持も削除しません。所要時間の削減予測と計測条件は[開発フローの見積もり](development-workflow.md#削減効果の見積もり)を参照してください。
 
 ## CIのキャッシュ
 

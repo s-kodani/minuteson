@@ -10,8 +10,8 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/tools/prepare-windows-store-test.ps1"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/windows-store-test.md"
   - resource: "https://github.com/s-kodani/minuteson/blob/2d4d96801cdb1b6f849f20d370aa295905409cec/docs/verification/windows-store-dpi-process-audit-2026-11-01.md"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_submission.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_store_submission.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_store_provenance.py"
 ---
 
 # Microsoft StoreのMSIX配布
@@ -74,3 +74,9 @@ Store版の識別子は`jp.mon.desktop.store`です。EXE版・QA版と保存先
 名称・説明・スクリーンショット、録音と声の特徴量・ログの保存／削除、モデル取得の通信を説明するプライバシーポリシー、第三者条件を準備します。存在を確認していない公開URLを記載しません。
 
 WACK実行記録にはDPIのInfrastructureエラーと任意のプロセス検出指摘が残っています。静的な名前一致だけで実際のシェル起動や誤検知を断定せず、同梱プログラムの呼出し元と実動作を確認します。検査を通すためにバイナリ文字列やWindowsAppsのACLを変更しません。過去の詳細はフロントマターの出典、現在の公開状況は[製品概要](../spec/overview.md#配布と評価の確認状況)を参照してください。
+
+## Actionsでの送信承認と状況照会
+
+mainの全件検証で作成した`release-store`のMSIX原本を、最終ローカル検証・Release公開後も使います。公開時に再ビルドしません。GitHub ReleaseのPublish後、Actionsの**Review deployments → release-store → Approve and deploy**で承認してから送信します。初回公開・資格情報・Environmentの設定は[DevSecOps運用](devsecops.md#store更新の有効化と再開)に従います。
+
+定期処理は既存提出IDのGET statusだけです。`PendingCommit`でもPUT・upload・commitへ進みません。中断した送信の再開は`operation=submit`と公開済み`release_id`を指定し、承認後に同じID・原本で実行します。

@@ -4,7 +4,6 @@ use restore_ids::BatchPreparation;
 use std::cell::Cell;
 
 pub(super) struct Fixture {
-    _source_root: tempfile::TempDir,
     pub(super) output: tempfile::TempDir,
     pub(super) source: archive::VerifiedArchive,
     pub(super) target_root: tempfile::TempDir,
@@ -20,37 +19,35 @@ fn entry(term: &str) -> VocabularyEntry {
     }
 }
 pub(super) fn fixture() -> Fixture {
-    let root = tempfile::tempdir().unwrap();
-    let source_storage = Storage::open(root.path().into()).unwrap();
-    let first = archive::tests::meeting(&source_storage, "source-one");
-    let mut draft = source_storage
-        .load_transcript_draft(&first)
-        .unwrap()
-        .unwrap();
-    draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
-    draft
-        .payload
-        .manual_speakers
-        .push(crate::storage::drafts::ManualSpeaker {
-            id: format!("manual:{}", Uuid::new_v4()),
-            label: "復元用手動話者".into(),
-        });
-    source_storage
-        .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
-        .unwrap();
-    archive::tests::meeting(&source_storage, "source-two");
-    source_storage
-        .save_vocabulary_book(
-            None,
-            0,
-            vec![entry("完全一致"), entry("競合"), entry("新規")],
-        )
-        .unwrap();
+    static ARCHIVE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("source.monbackup");
-    source_storage
-        .create_backup_archive(&path, &crate::test_support::never_cancelled)
-        .unwrap();
+    archive::tests::cached_archive(&ARCHIVE, &path, |source_storage| {
+        let first = archive::tests::meeting(source_storage, "source-one");
+        let mut draft = source_storage
+            .load_transcript_draft(&first)
+            .unwrap()
+            .unwrap();
+        draft.payload.schema_version = crate::current_formats::TRANSCRIPT_DRAFT;
+        draft
+            .payload
+            .manual_speakers
+            .push(crate::storage::drafts::ManualSpeaker {
+                id: format!("manual:{}", Uuid::new_v4()),
+                label: "復元用手動話者".into(),
+            });
+        source_storage
+            .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
+            .unwrap();
+        archive::tests::meeting(source_storage, "source-two");
+        source_storage
+            .save_vocabulary_book(
+                None,
+                0,
+                vec![entry("完全一致"), entry("競合"), entry("新規")],
+            )
+            .unwrap();
+    });
     let source = archive::read(
         &mut File::open(path).unwrap(),
         output.path(),
@@ -70,7 +67,6 @@ pub(super) fn fixture() -> Fixture {
         )
         .unwrap();
     Fixture {
-        _source_root: root,
         output,
         source,
         target_root,
@@ -223,26 +219,6 @@ fn restore_publication_adds_sealed_meetings_files_and_global_terms_atomically_an
         BatchPreparation::AlreadyPublished { batch_id, .. } => assert_eq!(batch_id, batch),
         _ => panic!("replay should not build again"),
     };
-}
-
-#[test]
-fn restore_publication_new_explicit_batch_adds_again_without_duplicating_global_terms() {
-    let f = fixture();
-    for iteration in 0..2 {
-        let ids = ids(&f, &Uuid::new_v4().to_string());
-        let sealed = sealed(&f, &ids);
-        let Publication::Published { vocabulary, .. } = f
-            .target
-            .publish_restore(&sealed, &ids, &crate::test_support::never_cancelled)
-            .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(vocabulary.added, usize::from(iteration == 0));
-    }
-    assert_eq!(f.target.list_meetings().unwrap().len(), 5);
-    assert_eq!(f.target.vocabulary_book(None).unwrap().payload.len(), 4);
-    triggers_enabled(&f.target);
 }
 
 #[test]

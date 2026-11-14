@@ -1,6 +1,28 @@
 use super::*;
 use crate::audio_import::ImportOptions;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
+
+// Cache only immutable archive bytes. Every caller still gets its own archive,
+// validation workspace, writable database, and restored files.
+pub(in crate::storage::backup) fn cached_archive(
+    cache: &OnceLock<Vec<u8>>,
+    path: &Path,
+    populate: impl FnOnce(&Storage),
+) {
+    let bytes = cache.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        populate(&storage);
+        let archive = output.path().join("fixture.monbackup");
+        storage
+            .create_backup_archive(&archive, &crate::test_support::never_cancelled)
+            .unwrap();
+        std::fs::read(archive).unwrap()
+    });
+    std::fs::write(path, bytes).unwrap();
+}
 
 pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
     meeting_source(storage, operation, false)
