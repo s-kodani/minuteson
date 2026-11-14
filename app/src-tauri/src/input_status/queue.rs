@@ -495,8 +495,18 @@ mod tests {
         )
         .unwrap();
         let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+        reader.clock = super::super::clock::Clock::fixed(
+            std::fs::metadata(temp.path().join("input-status.json"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+        );
         let snap = reader.read(OWNER, Some("main")).unwrap();
-        let id = &snap.notices[0].id;
+        let id = &snap
+            .notices
+            .first()
+            .expect("fresh fixture must offer a notice")
+            .id;
         assert_eq!(snap.schema_version, 4);
         for (recipient, target, visible, generation, nonce) in [
             (A, "main", false, 1, Some(OP)),
@@ -523,7 +533,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.schema_version, 2);
         let mut stale = snap.clone();
-        stale.observed_at = Instant::now() - Duration::from_secs(2);
+        stale.observed_at = reader.clock.instant() - Duration::from_secs(2);
         assert!(reader
             .queued_action(&stale, id, A, "main", true, 1, Action::Render, None)
             .is_err());
@@ -531,6 +541,11 @@ mod tests {
         stale.microphone.source_epoch += 1;
         assert!(reader
             .queued_action(&stale, id, A, "main", true, 1, Action::Render, None)
+            .is_err());
+        let mut expired = snap.clone();
+        expired.report_age_ms = super::super::FRESH_MS + 1;
+        assert!(reader
+            .queued_action(&expired, id, A, "main", true, 1, Action::Render, None)
             .is_err());
         let reread = reader.read(OWNER, None).unwrap();
         assert_eq!(reread.notices[0].recipient_id.as_deref(), Some(A));
@@ -545,6 +560,52 @@ mod tests {
             reader.read(OWNER, Some("main")).unwrap().notices[0].kind,
             "recovered"
         );
+    }
+    #[test]
+    fn native_delivery_accepts_the_exact_freshness_limit_and_rejects_the_next_millisecond() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("input-status.json");
+        std::fs::write(&path, serde_json::to_vec(&publication(2)).unwrap()).unwrap();
+        let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+        reader.clock = super::super::clock::Clock::fixed(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+        );
+        let snapshot = reader.read(OWNER, Some("main")).unwrap();
+        let notice = snapshot
+            .notices
+            .first()
+            .expect("fresh fixture must offer a notice");
+        reader.clock.advance(Duration::from_millis(
+            super::super::FRESH_MS - snapshot.report_age_ms,
+        ));
+        reader
+            .queued_action(
+                &snapshot,
+                &notice.id,
+                A,
+                "main",
+                true,
+                1,
+                Action::Receive,
+                Some(OP),
+            )
+            .unwrap();
+        reader.clock.advance(Duration::from_millis(1));
+        assert!(reader
+            .queued_action(
+                &snapshot,
+                &notice.id,
+                A,
+                "main",
+                true,
+                1,
+                Action::Render,
+                None
+            )
+            .is_err());
+        let expired = reader.read(OWNER, Some("main")).unwrap();
+        assert!(!expired.connected());
+        assert!(expired.notices.is_empty());
     }
     #[test]
     fn unclaimed_destination_changes_fence_previous_offers_without_resetting_event_order() {

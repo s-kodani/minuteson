@@ -55,7 +55,7 @@ async page => {
 
   const version = await page.evaluate(() => window.monBrowserFixture.promptPreferences.lockVersion);
   await extract.dispatchEvent("compositionstart"); await extract.fill("日本語変換中");
-  await page.waitForTimeout(900);
+  await page.clock.runFor(900);
   check(await page.evaluate(() => window.monBrowserFixture.promptPreferences.lockVersion)===version, "saved during IME composition");
   await extract.dispatchEvent("compositionend");await saved();
   check((await payload()).extractPrompt==="日本語変換中", "composition end did not save");

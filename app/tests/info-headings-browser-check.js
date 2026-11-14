@@ -40,7 +40,7 @@ async (page, capturePath) => {
     }
   }
   await info("設定").click(); await popup("設定").waitFor();
-  await page.waitForTimeout(1200);
+  await page.clock.runFor(1200);
   check(await popup("設定").isVisible(), "background state polling dismissed help");
   await page.locator(".sidebar").getByRole("button", { name: "会議一覧", exact: true }).click();
   check(await page.locator(".info-popover:popover-open").count() === 0, "navigation left old help open");

@@ -38,19 +38,19 @@ async page => {
     results.push("held reception neither displays nor acknowledges a historical event; actual current input remains connected");
 
     await page.evaluate(() => { const d = document.createElement("dialog"); d.id = "render-cover"; d.textContent = "合成表示遮蔽";d.style.opacity="0"; document.body.append(d); d.showModal(); });
-    await release("receive"); await page.waitForFunction(() => !!window.closeFixture.queueState.lanes.microphone[0].recipientId); await mic().waitFor({state:"attached"}); await page.waitForTimeout(400);
+    await release("receive"); await page.waitForFunction(() => !!window.closeFixture.queueState.lanes.microphone[0].recipientId); await mic().waitFor({state:"attached"}); await page.clock.runFor(400);
     check(await calls("render_recording_input_notice") === 0, "invisible modal card acknowledged rendering");
-    await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.waitForTimeout(400);
+    await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.clock.runFor(400);
     check(await calls("render_recording_input_notice") === 0, "transparent ancestor acknowledged rendering");
     results.push("transparent ancestors prevent rendering confirmation despite an attached card");
     // Sonner transitions transforms for 400ms. Keep the synthetic move
     // instantaneous so the card cannot really render during that transition.
-    await page.evaluate(() => { const host=document.querySelector(".mon-notification-stack"); host.style.transition="none"; host.style.transform="translateY(-2000px)"; host.style.opacity="1"; }); await page.waitForTimeout(400);
+    await page.evaluate(() => { const host=document.querySelector(".mon-notification-stack"); host.style.transition="none"; host.style.transform="translateY(-2000px)"; host.style.opacity="1"; }); await page.clock.runFor(400);
     check(await calls("render_recording_input_notice") === 0, "off-viewport card acknowledged rendering");
     results.push("off-viewport cards do not acknowledge rendering");
     await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.transform=""; document.querySelector("#render-cover").showModal(); });
     await page.evaluate(() => { window.closeFixture.showQueueBlockers(); document.querySelector("#render-cover").close(); });
-    await page.waitForTimeout(500); check(await mic().count() === 0 && await calls("render_recording_input_notice") === 0, "queued card acknowledged before promotion");
+    await page.clock.runFor(500); check(await mic().count() === 0 && await calls("render_recording_input_notice") === 0, "queued card acknowledged before promotion");
     results.push("modal-covered and queued cards do not emit rendering confirmation");
 
     const old = await page.evaluate(() => window.closeFixture.calls.find(c => c.command === "receive_recording_input_notice").args);
@@ -65,7 +65,7 @@ async page => {
     check(await page.evaluate(() => Object.values(window.closeFixture.queueState.closed)[0].delivery.sequence) === 1, "recovery bypassed interruption");
     results.push("only confirmed interruption closure advances the lane to its retained recovery event");
     await mic().getByRole("button", { name: "情報通知を閉じる", exact: true }).click(); await mic().waitFor({ state: "hidden" });
-    await reload(); await page.waitForTimeout(600); check(await mic().count() === 0, "closed event replayed after reload");
+    await reload(); await page.clock.runFor(600); check(await mic().count() === 0, "closed event replayed after reload");
     results.push("confirmed closed events do not replay in a replacement WebView");
 
     // A new synthetic recording owns new event identities and source counters.
@@ -78,7 +78,7 @@ async page => {
 
     await page.goto("http://127.0.0.1:1420/?window=recorder"); await page.waitForFunction(() => !!window.closeFixture); await page.setViewportSize({ width: 360, height: 116 });
     await page.evaluate(() => window.closeFixture.recordChanged({ phase: "recording", sessionId: crypto.randomUUID(), meetingId: crypto.randomUUID() })); await set(1, true, 1);
-    await page.waitForFunction(()=>document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState==="connected");await page.waitForTimeout(650);
+    await page.waitForFunction(()=>document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState==="connected");await page.clock.runFor(650);
     check(await calls("receive_recording_input_notice")===0&&await calls("render_recording_input_notice")===0&&await calls("close_recording_input_notice")===0,"mini consumed its unshown queue");
     await page.screenshot({ path: "input-queue-mini-360x116.png" });
     const bounds=await page.locator(".mini-shell").evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,width:e.clientWidth,scrollWidth:e.scrollWidth,rows:[...e.children].map(child=>({class:child.className,height:child.getBoundingClientRect().height,top:child.getBoundingClientRect().top,width:child.getBoundingClientRect().width}))}));

@@ -18,7 +18,7 @@ async page => {
   check(await calls("get_meeting") === before + 1 && await page.evaluate(id => window.monImportFixture.calls.filter(c => c.command === "get_meeting").at(-1).args.id === id, saved.meetingId), "open action used another saved meeting");
   results.push("selection is not saving; confirmed import notifies audio-only success and opens the exact saved meeting without another import");
   await host.getByRole("button", { name: "成功通知を閉じる", exact: true }).click();
-  await page.waitForTimeout(1200);
+  await page.clock.runFor(1200);
   check(await host.locator(".toast-success").count() === 0 && await calls("start_audio_import") === 1 && await page.evaluate(id => window.monImportFixture.import.saved.id === id, saved.id), "poll or dismissal resurrected notification, altered receipt or repeated admission");
   results.push("dismissal preserves receipt and polling neither resurrects the result nor repeats import");
 

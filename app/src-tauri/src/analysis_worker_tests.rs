@@ -46,14 +46,18 @@ fn deletion_never_holds_analysis_lock_while_waiting_for_another_meetings_databas
 fn shared_history_five_second_timeout_and_unwind_keep_files_protected() {
     let c = AnalysisController::default();
     let writer = c.begin_notice_storage().unwrap();
-    let started = Instant::now();
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    let clock = |_: Instant| {
+        let value = elapsed.get();
+        elapsed.set(value + Duration::from_secs(5));
+        value
+    };
     assert!(c
-        .begin_deletion_wait(false, false, &|| false)
+        .begin_data_maintenance_with_elapsed(false, false, &|| false, false, true, &clock)
         .err()
         .unwrap()
         .contains("通知履歴の処理が終わらないため"));
-    assert!(started.elapsed() >= Duration::from_secs(5));
-    assert!(started.elapsed() < Duration::from_secs(7));
+    assert_eq!(elapsed.get(), Duration::from_secs(10));
     assert!(c.state.lock().unwrap().data_maintenance.is_none());
     writer.validate_active().unwrap();
     let calls = std::cell::Cell::new(0);

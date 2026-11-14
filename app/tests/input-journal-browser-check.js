@@ -29,17 +29,17 @@ async (page,capturePath=path=>path)=>{
     await waitLog("live-journal",null);await quiet();
     results.push("only owned recordings read journal status; read failure and recovery stay internal");
 
-    await set("pending",1000,999);await page.waitForTimeout(2500);await quiet();
+    await set("pending",1000,999);await page.clock.runFor(2500);await quiet();
     check((await writerLogs()).length===0,"pending journal was logged as a write failure");
     await set("failed",1001,1000);await waitLog("live-journal-notice",'"state":"failed"');await quiet();
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-input-state")==="connected","journal failure changed live acquisition");
-    await page.waitForTimeout(650);check((await writerLogs()).length===1,"heartbeat duplicated a confirmed writer failure");
+    await page.clock.runFor(650);check((await writerLogs()).length===1,"heartbeat duplicated a confirmed writer failure");
     results.push("writer failure stays internal and is logged once while input is connected");
 
     await page.evaluate(()=>window.closeFixture.holdJournal=true);
     await page.waitForFunction(()=>window.closeFixture.pendingJournal.length===1);
     const held=await calls("get_recording_input_history_status"),reads=await calls("get_recording_input_status");
-    await page.waitForTimeout(1600);await quiet();
+    await page.clock.runFor(1600);await quiet();
     check(await calls("get_recording_input_history_status")===held,"hung journal poll overlapped");
     check(await calls("get_recording_input_status")>reads,"hung journal stopped independent input polling");
     await page.evaluate(()=>{const f=window.closeFixture;f.holdJournal=false;f.pendingJournal.splice(0).forEach(resolve=>resolve());});
@@ -60,7 +60,7 @@ async (page,capturePath=path=>path)=>{
     await waitLog("live-journal-notice",'"state":"invalid"');await quiet();
     check((await writerLogs()).filter(c=>c.sessionId===originalOwner).length===2,"late reply added a writer failure for the old recording");
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"saved"}));
-    await page.waitForTimeout(350);const stopped=await calls("get_recording_input_history_status");await page.waitForTimeout(650);
+    await page.clock.runFor(350);const stopped=await calls("get_recording_input_history_status");await page.clock.runFor(650);
     check(await calls("get_recording_input_history_status")===stopped,"terminal owner retained live journal polling");
     results.push("late replies cannot cross recording owners; terminal recording stops live polling");
 
@@ -68,7 +68,7 @@ async (page,capturePath=path=>path)=>{
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID()}));
     await set("failed",2,1);await waitLog("live-journal-notice",'"state":"failed"');await quiet();
     for(const theme of ["light","dark"]){
-      await page.emulateMedia({colorScheme:theme});await page.waitForTimeout(150);
+      await page.emulateMedia({colorScheme:theme});await page.clock.runFor(150);
       check(await page.locator(".mini-shell").evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1),"mini history diagnostic overflowed native geometry");
       await page.screenshot({path:capturePath("journal-save-mini-"+theme+"-227x101.png")});
     }

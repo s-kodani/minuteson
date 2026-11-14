@@ -73,7 +73,7 @@ async (page, _capturePath, detailUI) => {
     await details.getByText("job-synthetic", {exact:true}).waitFor();
     check(await details.getAttribute("aria-modal") === "false" && await page.locator("dialog[open]").count() === 0, "details opened a blocking modal");
     await details.hover();
-    await page.waitForTimeout(250);
+    await page.clock.runFor(250);
     check(await details.isVisible(), "moving into details closed the hover popup");
     check(await details.locator("pre").innerText().then(text => text.includes("会議本文🦀")), "details lost complete raw text");
     check(await details.evaluate(el => { const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight; }), "details overflow the viewport");
@@ -168,7 +168,7 @@ async (page, _capturePath, detailUI) => {
     await waitRows(200);
     await logs.getByRole("button", { name: "自動更新を一時停止", exact: true }).click();
     await page.evaluate(() => window.internalLogsFixture.add({ message: "一時停止中の追記" }));
-    await page.waitForTimeout(1200);
+    await page.clock.runFor(1200);
     check(await logs.getByText("一時停止中の追記", { exact: true }).count() === 0, "paused viewer updated");
     await logs.getByRole("button", { name: "自動更新を再開", exact: true }).click();
     await logs.getByText("一時停止中の追記", { exact: true }).waitFor();
@@ -189,7 +189,7 @@ async (page, _capturePath, detailUI) => {
     check(await list.evaluate((el,anchor) => Math.abs(el.querySelector(`tr[data-log-id="${anchor.id}"]`).getBoundingClientRect().top-el.getBoundingClientRect().top-anchor.offset)<2,anchor), "prepending history moved the visible row");
     check(await toolbar.getByRole("button", {name:"自動更新を再開",exact:true}).count() === 1, "history did not pause updates");
     await page.evaluate(() => window.internalLogsFixture.add({message:"読んでいる途中の追記"}));
-    await page.waitForTimeout(1200);
+    await page.clock.runFor(1200);
     check(await logs.getByText("読んでいる途中の追記", {exact:true}).count() === 0, "history reading admitted live updates");
     results.push("top scrolling loads older logs once, pauses live updates and preserves the visible row");
     results.push("pause/resume and reading position");
@@ -209,7 +209,7 @@ async (page, _capturePath, detailUI) => {
     await logs.locator(".internal-logs-notice").filter({hasText:/画面の上限1,000件/}).waitFor();
     await logs.locator(".internal-logs-history-status").filter({hasText:/^これより古いログはありません。$/}).waitFor();
     const endCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
-    await top(); await page.waitForTimeout(1200);
+    await top(); await page.clock.runFor(1200);
     check(await page.evaluate(() => window.internalLogsFixture.calls.length) === endCalls, "exhausted history kept requesting");
     await page.evaluate(() => window.internalLogsFixture.add({message:"読んでいる途中の追記"}));
     await toolbar.getByRole("button", {name:"最新ログへ移動",exact:true}).click();
@@ -243,7 +243,7 @@ async (page, _capturePath, detailUI) => {
     await top();
     await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"合成の履歴取得エラー"}).waitFor();
     const failedCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
-    await top(); await page.waitForTimeout(1200);
+    await top(); await page.clock.runFor(1200);
     check(await page.evaluate(() => window.internalLogsFixture.calls.length) === failedCalls && (await rowState()).count === 200, "failed history retried itself or cleared rows");
     await page.evaluate(() => { window.internalLogsFixture.failOlder = false; });
     await toolbar.getByRole("button",{name:"更新",exact:true}).click();
@@ -252,7 +252,7 @@ async (page, _capturePath, detailUI) => {
     await page.evaluate(() => { window.internalLogsFixture.stallOlder = true; });
     await top(); await page.getByRole("complementary", {name:"通知",exact:true}).getByRole("alert").filter({hasText:"読み込み位置が進みません"}).waitFor();
     const stalledCalls=await page.evaluate(() => window.internalLogsFixture.calls.length);
-    await page.waitForTimeout(1200);
+    await page.clock.runFor(1200);
     check(await page.evaluate(() => window.internalLogsFixture.calls.length) === stalledCalls, "nonadvancing cursor looped");
     results.push("a nonadvancing history cursor stops rather than looping");
     await reset();

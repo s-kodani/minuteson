@@ -42,7 +42,8 @@ async (page, capturePath, detailUI) => {
   await page.getByRole('region', { name: '文字起こし編集', exact: true }).waitFor();
   await page.evaluate(() => document.fonts.ready);
   const baseline = await geometry();
-  const introStarted = Date.now();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 100);
+  const introStarted = await page.evaluate(() => Date.now());
   await page.evaluate(async () => {
     const f = window.monBrowserFixture, now = Date.now();
     f.notificationJobs = [{ id: crypto.randomUUID(), meetingId: 'meeting-0', meetingTitle: '週次ミーティング', operationId: crypto.randomUUID(), kind: 'transcription', state: 'running', completedUnits: 2, totalUnits: 4, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), retryOfJobId: null, attempt: 1, createdAt: now - 134000, updatedAt: now }];
@@ -52,12 +53,16 @@ async (page, capturePath, detailUI) => {
   check(await banner.getByRole('progressbar').getAttribute('value') === '50', 'new progress did not show initial details');
   await unchanged(baseline);
   await page.screenshot({ path: capturePath('job-banner-initial.png') });
-  await page.waitForTimeout(3500);
+  await page.clock.runFor(3500);
   check(await trigger().getAttribute('aria-expanded') === 'true', 'initial details collapsed before five seconds');
-  await patch({ updatedAt: Date.now() });
+  await patch({ updatedAt: introStarted + 3500 });
+  await page.clock.runFor(1499);
+  check(await trigger().getAttribute('aria-expanded') === 'true', 'initial details collapsed before the exact deadline');
+  await page.clock.runFor(1);
   await state(false);
-  const introElapsed = Date.now() - introStarted;
-  check(introElapsed >= 4900 && introElapsed < 6500, 'initial details did not collapse after five seconds or updates restarted the timer');
+  const introElapsed = await page.evaluate(() => Date.now()) - introStarted;
+  check(introElapsed === 5000, 'initial details did not collapse after five seconds or updates restarted the timer');
+  await page.clock.resume();
   results.push('new progress starts expanded and collapses after five seconds without resetting on updates');
   check(await ring.getAttribute('data-value') === '50%' && (await trigger().getAttribute('aria-description')).includes('50%'), 'ring lost measured progress');
   check(await banner.getByRole('progressbar').count() === 0, 'collapsed ring exposes the detail bar');
@@ -147,7 +152,7 @@ async (page, capturePath, detailUI) => {
   });
   await state(true);
   await banner.getByRole('button', { name: /進行中の処理 2 件/ }).focus();
-  await page.waitForTimeout(5200);
+  await page.clock.runFor(5200);
   await state(true);
   await trigger().click(); await state(false);
   check(!await banner.getByRole('button', { name: /ジョブ一覧で確認/ }).isVisible(), 'job inventory link visible while collapsed');

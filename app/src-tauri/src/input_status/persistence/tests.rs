@@ -42,14 +42,27 @@ fn journal_diagnostics_readback_cannot_refresh_same_heartbeat_or_clear_invalid_f
     let temp = tempfile::tempdir().unwrap();
     let directory =
         crate::input_levels::open_capture_directory(&temp.path().canonicalize().unwrap()).unwrap();
-    let mut reader = Reader::default();
+    let wall = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let mut reader = Reader {
+        clock: super::super::clock::Clock::fixed(wall),
+        ..Reader::default()
+    };
+    let write = |directory: &std::path::Path, name: &str, value: &Value| {
+        write(directory, name, value);
+        std::fs::File::options()
+            .write(true)
+            .open(directory.join(name))
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(wall))
+            .unwrap();
+    };
     write(
         temp.path(),
         "input-journal-status.json",
         &report(1, 2, 1, "failed"),
     );
     let first = reader.read(&directory, OWNER).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    reader.clock.advance(std::time::Duration::from_millis(5));
     write(
         temp.path(),
         "input-journal-status.json",

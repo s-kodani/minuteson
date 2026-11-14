@@ -44,7 +44,7 @@ async page => {
   await page.evaluate(() => window.modelProfileFixture.complete()); await modal().waitFor({ state: "hidden" });
   await host().getByRole("alert").filter({ hasText: "注意：" }).filter({ hasText: "保存結果の確認が必要" }).waitFor();
   check(await host().getByRole("status").count() === 0 && await page.evaluate(() => window.modelProfileFixture.profiles[0].profileVersion) === 1, "late committed application presented as rollback or success");
-  await page.waitForTimeout(4300);
+  await page.clock.runFor(4300);
   check(await host().getByRole("alert").filter({ hasText: "注意：" }).count() === 1, "important uncertain warning expired automatically");
   await host().getByRole("button", { name: "注意通知を閉じる", exact: true }).click();
   await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.getByRole("button", { name: "設定", exact: true }).click();

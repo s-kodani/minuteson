@@ -206,7 +206,7 @@ fn internal_logs_phase_deduplication_and_long_unicode_are_preserved() {
 
 #[test]
 fn internal_logs_saturated_queue_drops_without_waiting() {
-    let (tx, _rx) = mpsc::sync_channel(1);
+    let (tx, rx) = mpsc::sync_channel(1);
     let logs = LogService {
         tx,
         dropped: Arc::new(AtomicU64::new(0)),
@@ -214,13 +214,16 @@ fn internal_logs_saturated_queue_drops_without_waiting() {
         transitions: Arc::new(Mutex::new(Default::default())),
     };
     logs.record(record("first"));
-    let started = Instant::now();
     for _ in 0..100 {
         logs.record(record("overflow"));
     }
-    assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(logs.dropped.load(Ordering::Relaxed), 100);
     assert!(logs.query(Query::default()).is_err());
+    match rx.try_recv().unwrap() {
+        Command::Record(entry) => assert_eq!(entry.message, "first"),
+        _ => panic!("overflow replaced the queued record"),
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
 #[test]

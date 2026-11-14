@@ -39,6 +39,80 @@
       "title": "AppError",
       "type": "object"
     },
+    "AppUpdateStatus": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "AppUpdateChannel": {
+          "enum": [
+            "windows_store",
+            "macos_release",
+            "unsupported"
+          ],
+          "type": "string"
+        },
+        "AppUpdateState": {
+          "enum": [
+            "not_checked",
+            "checking",
+            "available",
+            "no_update",
+            "unavailable",
+            "unsupported"
+          ],
+          "type": "string"
+        }
+      },
+      "description": "Availability is distinct from downloading, registration and installation.",
+      "properties": {
+        "availableVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel": {
+          "$ref": "#/definitions/AppUpdateChannel"
+        },
+        "checkedAtMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentVersion": {
+          "type": "string"
+        },
+        "errorMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/definitions/AppUpdateState"
+        },
+        "updateAvailable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channel",
+        "currentVersion",
+        "revision",
+        "state",
+        "updateAvailable"
+      ],
+      "title": "AppUpdateStatus",
+      "type": "object"
+    },
     "ArchiveMember": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,

@@ -8,7 +8,7 @@ async (page, capturePath, detailUI) => {
   await boot();
   const text = editor().getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await text.fill("未保存の点検日を保持"); await editor().getByRole("button", { name: "再読込", exact: true }).click();
-  const discard = "文字起こし編集の破棄を確認"; await modal(discard).waitFor(); await page.waitForTimeout(900);
+  const discard = "文字起こし編集の破棄を確認"; await modal(discard).waitFor(); await page.clock.runFor(900);
   check((await calls("save_transcript_draft")).length === 0, "autosave ran during discard choice");
   await page.keyboard.press("Escape"); await modal(discard).waitFor({ state: "hidden" });
   check(await text.inputValue() === "未保存の点検日を保持", "cancel discarded local transcript");

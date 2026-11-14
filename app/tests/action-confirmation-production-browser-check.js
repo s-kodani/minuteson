@@ -60,7 +60,7 @@ async (page, capturePath, detailUI) => {
   const threads = diar().getByRole("spinbutton", { name: "話者分離CPUスレッド数", exact: true });
   await threads.fill("6"); await diar().getByRole("button", { name: "話者分離設定を再読込", exact: true }).click();
   const settingsTitle = "話者分離設定の入力破棄を確認"; await modal(settingsTitle).waitFor();
-  await page.waitForTimeout(900); check((await calls("save_diarization_preferences")).length === 0, "diarization autosave ran during discard choice");
+  await page.clock.runFor(900); check((await calls("save_diarization_preferences")).length === 0, "diarization autosave ran during discard choice");
   await dismiss(settingsTitle); check(await threads.inputValue() === "6", "cancel discarded diarization settings");
   await threads.fill("7"); await diar().getByRole("button", { name: "話者分離設定を再読込", exact: true }).click();
   await modal(settingsTitle).getByRole("button", { name: "入力を破棄して再読込する", exact: true }).click(); await modal(settingsTitle).waitFor({ state: "hidden" });
@@ -75,7 +75,7 @@ async (page, capturePath, detailUI) => {
     const term = panel.getByRole("textbox", { name: "用語（必須）", exact: true });
     await term.fill("未保存の点検日"); await panel.getByRole("button", { name: "用語を再読込", exact: true }).click();
     const title = "用語入力の破棄を確認"; await modal(title).waitFor();
-    await page.waitForTimeout(900); check((await calls("save_vocabulary_book")).length === 0, `${scope} autosave ran while awaiting discard choice`);
+    await page.clock.runFor(900); check((await calls("save_vocabulary_book")).length === 0, `${scope} autosave ran while awaiting discard choice`);
     await dismiss(title); check(await term.inputValue() === "未保存の点検日", `${scope} cancelled reload lost input`);
     await panel.getByRole("button", { name: "用語を再読込", exact: true }).click();
     await modal(title).getByRole("button", { name: "入力を破棄して再読込する", exact: true }).click(); await modal(title).waitFor({ state: "hidden" });

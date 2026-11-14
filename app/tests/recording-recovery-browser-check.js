@@ -23,7 +23,7 @@ async (page, capturePath, platform = "windows") => {
   await page.keyboard.press("Escape");
   results.push("native deletion blocks active work only");
   await page.evaluate(()=>{window.recordingRecoveryFixture.fail=true;});
-  await page.waitForTimeout(1200);
+  await page.clock.runFor(1200);
   check(await page.locator(".toast-card").filter({hasText:"回復状態を確認できません"}).count()===0,"automatic recovery read notified");
   await common().getByText("録音を回復中",{exact:true}).waitFor();
   await page.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
@@ -36,7 +36,7 @@ async (page, capturePath, platform = "windows") => {
   await common().waitFor({state:"hidden"});
   await page.getByRole("heading",{name:"進行中のジョブはありません",exact:true}).waitFor();
   await page.evaluate(()=>{window.recordingRecoveryFixture.stale=true;});
-  await page.waitForTimeout(1200);
+  await page.clock.runFor(1200);
   check(await common().count()===0,"stale reply revived recovery");
   await page.getByRole("button",{name:"会議一覧",exact:true}).first().click();
   check(await page.getByRole("cell",{name:"録音済み",exact:true}).count()===2,"missed events left stale meeting rows");

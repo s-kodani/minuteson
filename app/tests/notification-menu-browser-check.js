@@ -18,7 +18,7 @@ async page=>{
   check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"notification batch was truncated");
   check(await page.evaluate(()=>window.monBrowserFixture.draft===null),"opening menu saved unfinished transcription");
   results.push("all simultaneous notifications are listed without saving or replacing the current editor");
-  await page.waitForTimeout(4300);check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"notifications auto-expired in menu");
+  await page.clock.runFor(4300);check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"notifications auto-expired in menu");
   results.push("ordinary notifications remain until explicitly closed");
   await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知 0"}).getByRole("button",{name:"エラー通知を削除",exact:true}).click();
   await page.evaluate(()=>window.monBrowserFixture.showToast({key:"menu-test-0",message:"一覧だけの通知 0",level:"error",eventId:"op-0"}));

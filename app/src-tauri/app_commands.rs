@@ -155,4 +155,7 @@ pub const COMMANDS: &[&str] = &[
     "get_model_download_guidance",
     "dismiss_model_download_guidance",
     "list_job_history",
+    "get_app_update_status",
+    "check_app_update",
+    "open_app_update_page",
 ];

@@ -72,7 +72,7 @@ async page => {
       await page.waitForFunction(() => document.querySelector('main.content').scrollTop > 0);
       await workspace.evaluate(main => { main.scrollTop = main.scrollHeight; });
       await page.mouse.move(size.width - 50, size.height - 50); await page.mouse.wheel(0, 1000);
-      await page.waitForTimeout(100);
+      await page.clock.runFor(100);
       const bottom = await bounds();
       check(bottom.mainScroll > 0 && bottom.pageY === 0 && bottom.frameScroll === 0 && bottom.headerTop === bottom.contentTop && bottom.sidebarTop === bottom.contentTop, `settings body scroll moved navigation: ${JSON.stringify(bottom)}`);
       check(await page.getByRole('region', { name: 'データと保存', exact: true }).evaluate(section => {

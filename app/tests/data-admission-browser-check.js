@@ -50,7 +50,7 @@ async page => {
   await choose();
   await region().getByText('準備の終了待ち。停止・完了後にバックアップ／復元できます。', { exact: true }).waitFor();
   const notices = await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length);
-  await page.waitForTimeout(1200); // Cross two normal 500 ms notice polling ticks.
+  await page.clock.runFor(1200); // Cross two normal 500 ms notice polling ticks.
   check(await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length) === notices,
     'ready backup restarted historical notification writes before publication');
   await finish();

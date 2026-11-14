@@ -8,7 +8,7 @@ async page=>{
   await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
   await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"通知一覧の点検会議",both:true,loss:2,issue:"missing"})];return f.recordChanged({phase:"idle"});});
   await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="acknowledge_archived_recording_input_notice"));
-  await page.waitForTimeout(600);
+  await page.clock.runFor(600);
   check(await page.locator(".archived-input-notices,.issue-status").count()===0,"archive banner escaped workspace");
   check(await page.locator(".toast-host").count()===1,"Sonner presenter missing");
   results.push("archived input events reach Sonner while retained diagnostics have no workspace banner");
