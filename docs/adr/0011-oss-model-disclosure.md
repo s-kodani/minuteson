@@ -41,4 +41,4 @@ Store変更の直前にmanifest実バイトのGitHub attestationを検証し、�
 - [AIモデルの導入と実行](../spec/models.md)
 - [利用条件原文の管理](../../third-party/model-licenses/README.md)
 - [DevSecOpsの検査と運用](../guides/devsecops.md)
-- [ADR 0010 PR検査と下書きからの自動公開](0010-devsecops-release.md)
+- [ADR 0010 範囲別PR検査とmain成果物の公開](0010-devsecops-release.md)

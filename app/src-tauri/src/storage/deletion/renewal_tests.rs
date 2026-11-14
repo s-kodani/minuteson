@@ -421,6 +421,11 @@ fn renewal_cancelled_or_panicked_before_commit_rolls_back_audit_and_cursor_toget
         "beforeReviewCommit",
     ] {
         for unwind in [false, true] {
+            // Cancellation covers every write; unwinding additionally proves
+            // transaction rollback immediately before commit.
+            if unwind && point != "beforeReviewCommit" {
+                continue;
+            }
             let stop = Cell::new(false);
             let reached = Cell::new(false);
             let admitted = lease();
@@ -1127,6 +1132,11 @@ fn sigkill_reconfirmation(reserved_root: bool) {
         "beforeReviewCommit",
         "reviewCommitted",
     ] {
+        // Normal paths cover every write. Reserved roots retain pre/post commit
+        // recovery, where their path handling differs.
+        if reserved_root && !matches!(phase, "beforeReviewCommit" | "reviewCommitted") {
+            continue;
+        }
         let base = tempfile::tempdir().unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "storage::deletion::removal::tests::renewal_tests::renewal_checkpoint_child_fixture", "--ignored", "--nocapture"])

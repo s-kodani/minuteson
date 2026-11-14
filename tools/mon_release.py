@@ -1,4 +1,4 @@
-"""GitHub draft release controller. Only explicit opt-in drafts are actionable."""
+"""Attach saved main artifacts to stable drafts; publication stays in GitHub UI."""
 import argparse
 import base64
 import hashlib
@@ -8,12 +8,12 @@ from pathlib import Path
 import re
 import subprocess
 import tomllib
+import tempfile
 import urllib.error
 from urllib.parse import quote
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-OPT_IN = "- [x] 自動公開を開始"
 STATE = re.compile(r"\n?<!-- mon-release:([A-Za-z0-9+/=]+) -->")
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
@@ -27,17 +27,6 @@ def state(release):
     if len(matches) > 1:
         raise ValueError("multiple release state records")
     return json.loads(base64.b64decode(matches[0], validate=True)) if matches else None
-
-
-def fingerprint(release):
-    fields = {key: release.get(key) for key in ("id", "tag_name", "target_commitish", "name", "prerelease")}
-    fields["body"] = clean_body(release.get("body"))
-    return hashlib.sha256(json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-
-
-def opted_in(release):
-    # Exact whole line, never evaluate release notes as shell or template code.
-    return OPT_IN in clean_body(release.get("body")).splitlines()
 
 
 class GitHub:
@@ -105,8 +94,8 @@ def validate_versions(tag, read):
 
 
 def validate_draft(release):
-    if not release.get("draft") or release.get("prerelease") or not opted_in(release):
-        raise ValueError("release must be an explicitly opted-in stable draft")
+    if not release.get("draft") or release.get("prerelease"):
+        raise ValueError("release must be a stable draft")
     if not TAG.fullmatch(release.get("tag_name", "")):
         raise ValueError("invalid release tag")
     target = release.get("target_commitish", "")
@@ -129,44 +118,115 @@ def candidate(api, release):
     return commit
 
 
-def discover(api):
-    for release in api.releases():
-        if not release.get("draft") or not opted_in(release) or state(release) is not None:
-            continue
-        # A draft can only be claimed by the trusted default-branch controller.
-        author = quote(release["author"]["login"], safe="")
-        permission = api.call(f"/collaborators/{author}/permission")["permission"]
-        if permission not in ("admin", "maintain", "write"):
-            raise ValueError("release author cannot publish")
-        commit = candidate(api, release)
-        record = {"schemaVersion": 1, "sourceSha": commit, "status": "claimed", "runId": os.environ["GITHUB_RUN_ID"]}
-        release = api.save_state(release, record, target_commitish=commit)
-        record["fingerprint"] = fingerprint(release)
-        api.save_state(release, record)
-        # workflow_dispatch is an explicit exception to GITHUB_TOKEN recursion
-        # protection. It runs the workflow definition on main, not draft code.
-        try:
-            api.call("/actions/workflows/release-build.yml/dispatches", {
-                "ref": "main", "inputs": {"release_id": str(release["id"]), "source_sha": commit,
-                                           "dry_run": "false" if os.environ.get("RELEASE_PUBLISH_ENABLED") == "true" else "true"}})
-        except Exception:
-            record["status"] = "dispatch_failed"
-            api.save_state(api.release(release["id"]), record)
-            raise
-        print(f"Dispatched draft release {release['id']} at {commit}")
-
-
-def preflight(api, release_id, commit):
-    if os.environ.get("GITHUB_REF") != "refs/heads/main":
-        raise ValueError("release workflow must run from main")
+def assert_draft(api, release_id, commit, tag, *, resolve=False):
     release = api.release(release_id)
-    record = state(release)
-    if (not record or record.get("sourceSha") != commit or record.get("fingerprint") != fingerprint(release)
-            or record.get("status") not in ("claimed", "failed", "dispatch_failed")):
-        raise ValueError("draft claim or fingerprint differs")
-    if candidate(api, release) != commit:
-        raise ValueError("draft tag moved after claim")
+    validate_draft(release)
+    if release["target_commitish"] != commit or release["tag_name"] != tag:
+        raise ValueError("draft source or tag changed; saved artifacts will not be substituted")
+    if resolve and candidate(api, release) != commit:
+        raise ValueError("draft tag moved; saved artifacts will not be substituted")
     return release
+
+
+def asset_metadata(files):
+    return {name: {"digest": "sha256:" + hashlib.sha256(file.read_bytes()).hexdigest(),
+                   "size": file.stat().st_size} for name, file in files.items()}
+
+
+def matching_assets(release, expected):
+    existing = {}
+    for asset in release.get("assets", []):
+        name = asset["name"]
+        if name in existing or name not in expected:
+            raise ValueError("draft contains duplicate or unexpected assets; nothing will be overwritten")
+        if any(asset.get(key) != value for key, value in expected[name].items()):
+            raise ValueError("draft asset conflicts with saved main artifacts; nothing will be overwritten")
+        existing[name] = asset
+    return set(existing) == set(expected)
+
+
+def public_files(directory, commit, tag):
+    manifest_file = directory / "release-manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    if manifest.get("sourceSha") != commit or manifest.get("tag") != tag or manifest.get("schemaVersion") != 2:
+        raise ValueError("main candidate source/tag differs")
+    expected = manifest["publicFiles"]
+    files = {p.name: p for p in directory.iterdir()}
+    if (any(not p.is_file() or p.is_symlink() for p in files.values()) or
+            set(files) != {*expected, "release-manifest.json", "SHA256SUMS", "provenance.json"}):
+        raise ValueError("candidate contains missing or unexpected assets")
+    for name, digest in expected.items():
+        if hashlib.sha256(files[name].read_bytes()).hexdigest() != digest:
+            raise ValueError("public artifact hash differs")
+    checksums = {**expected, "release-manifest.json": hashlib.sha256(manifest_file.read_bytes()).hexdigest()}
+    wanted = "".join(f"{value}  {name}\n" for name, value in sorted(checksums.items()))
+    if files["SHA256SUMS"].read_text() != wanted:
+        raise ValueError("public checksum manifest differs")
+    return files, manifest
+
+
+def attach(api, release_id, commit, saved, directory):
+    from mon_store_provenance import verify_manifest
+    release = api.release(release_id)
+    tag = release["tag_name"]
+    files, manifest = public_files(directory, commit, tag)
+    proof = verify_manifest(api, release, directory / "release-manifest.json", draft=True, expected_run=saved["runId"])
+    if proof is None:
+        raise ValueError("main candidate is not complete yet")
+    expected = asset_metadata(files)
+    release = assert_draft(api, release_id, commit, tag, resolve=True)
+    matching_assets(release, expected)
+    for name, file in sorted(files.items()):
+        release = assert_draft(api, release_id, commit, tag)
+        matching_assets(release, expected)
+        if any(asset["name"] == name for asset in release.get("assets", [])):
+            continue
+        api.call(f"/releases/{release_id}/assets?name={quote(name, safe='')}", binary=file.read_bytes())
+    release = assert_draft(api, release_id, commit, tag, resolve=True)
+    if not matching_assets(release, expected):
+        raise ValueError("draft attachment is incomplete")
+    record = state(release) or {}
+    record.update(schemaVersion=2, sourceSha=commit, status="attached", buildRunId=saved["runId"],
+                  candidateArtifactId=saved["artifactId"], buildRunAttempt=manifest["producer"]["runAttempt"],
+                  assets=expected, store=record.get("store", "awaiting_approval"))
+    api.save_state(release, record)  # Never set draft=False or create/push a tag.
+    print(f"Attached main candidate to draft {release_id}; Publish release remains manual")
+
+
+def discover(api):
+    from mon_main_build import find_candidate, PREFIX
+    if os.environ.get("GITHUB_REF") != "refs/heads/main":
+        raise ValueError("draft controller must run from main")
+    failures = []
+    for release in api.releases():
+        if not release.get("draft") or release.get("prerelease") or not TAG.fullmatch(release.get("tag_name", "")):
+            continue
+        try:
+            author = quote(release["author"]["login"], safe="")
+            if api.call(f"/collaborators/{author}/permission")["permission"] not in ("admin", "maintain", "write"):
+                raise ValueError("release author cannot publish")
+            commit = candidate(api, release)
+            record = state(release) or {}
+            if record.get("sourceSha") not in (None, commit):
+                raise ValueError("draft source changed; create a new draft for a different candidate")
+            if record.get("status") == "attached" and matching_assets(release, record["assets"]):
+                continue
+            saved = find_candidate(api, commit)
+            if not saved:
+                raise ValueError("no completed main candidate; wait for main build or check artifact retention")
+            if record.get("candidateArtifactId") not in (None, saved["artifactId"]):
+                raise ValueError("draft candidate changed; refusing artifact substitution")
+            record.update(schemaVersion=2, sourceSha=commit, candidateArtifactId=saved["artifactId"], status="attaching")
+            api.save_state(release, record, target_commitish=commit)
+            with tempfile.TemporaryDirectory(prefix="mon-candidate-") as temporary:
+                subprocess.run(["gh", "run", "download", str(saved["runId"]), "--repo", api.repository,
+                                "--name", PREFIX + commit, "--dir", temporary], check=True)
+                attach(api, release["id"], commit, saved, Path(temporary))
+        except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError) as error:
+            print(f"Draft {release['id']}: {error}")
+            failures.append(str(release["id"]))
+    if failures:
+        raise ValueError("draft attachment failed for release IDs " + ", ".join(failures))
 
 
 def checkout_source(commit):
@@ -184,74 +244,17 @@ def checkout_source(commit):
     subprocess.run(["git", "checkout", "--detach", commit], cwd=ROOT, check=True)
 
 
-def publish(api, release_id, commit, directory):
-    release = preflight(api, release_id, commit)
-    manifest = json.loads((directory / "release-manifest.json").read_text())
-    if manifest.get("sourceSha") != commit or manifest.get("tag") != release["tag_name"]:
-        raise ValueError("release manifest source/tag differs")
-    expected = manifest["publicFiles"]
-    files = {p.name: p for p in directory.iterdir() if p.is_file()}
-    if set(files) != {*expected, "release-manifest.json", "SHA256SUMS", "provenance.json"}:
-        raise ValueError("release directory contains missing or unexpected assets")
-    for name, digest in expected.items():
-        if hashlib.sha256(files[name].read_bytes()).hexdigest() != digest:
-            raise ValueError("public artifact hash differs")
-    checksums = {**expected, "release-manifest.json": hashlib.sha256(files["release-manifest.json"].read_bytes()).hexdigest()}
-    wanted = "".join(f"{value}  {name}\n" for name, value in sorted(checksums.items()))
-    if files["SHA256SUMS"].read_text() != wanted:
-        raise ValueError("public checksum manifest differs")
-    if release.get("assets"):
-        raise ValueError("draft already has assets; remove partial assets before retry")
-    for name, file in sorted(files.items()):
-        api.call(f"/releases/{release_id}/assets?name={quote(name, safe='')}", binary=file.read_bytes())
-    # Re-fetch after uploads to detect user edits during the build/upload.
-    release = preflight(api, release_id, commit)
-    uploaded = {item["name"]: item for item in release.get("assets", [])}
-    if set(uploaded) != set(files):
-        raise ValueError("draft asset set changed before publication")
-    for name, file in files.items():
-        expected_digest = "sha256:" + hashlib.sha256(file.read_bytes()).hexdigest()
-        if uploaded[name].get("digest") != expected_digest or uploaded[name].get("size") != file.stat().st_size:
-            raise ValueError("uploaded artifact digest/size differs")
-    record = state(release)
-    record.update(status="published", buildRunId=os.environ["GITHUB_RUN_ID"], store="pending" if os.environ.get("STORE_PUBLISH_ENABLED") == "true" else "initial_setup_required")
-    notes = clean_body(release.get("body")) + "\n\nWindows EXEは未署名です。実機確認・ライセンス審査の未確認項目は配布証跡を参照してください。"
-    release["body"] = notes
-    api.save_state(release, record, draft=False, make_latest="true")
-    print(f"Published release {release_id}")
-
-
-def failure(api, release_id):
-    release = api.release(release_id)
-    record = state(release)
-    if release.get("draft") and record and record.get("status") != "published":
-        record.update(status="failed", buildRunId=os.environ["GITHUB_RUN_ID"])
-        release["body"] = clean_body(release.get("body")) + f"\n\n自動公開の失敗: https://github.com/{api.repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-        # A diagnostic link is our own edit; retain a retryable fingerprint.
-        record["fingerprint"] = fingerprint(release)
-        api.save_state(release, record)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("discover", "preflight", "publish", "failure", "checkout"))
-    parser.add_argument("--release-id", type=int)
+    parser.add_argument("mode", choices=("discover", "checkout"))
     parser.add_argument("--source-sha")
-    parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
     try:
         if args.mode == "checkout":
             checkout_source(args.source_sha)
             return 0
         api = GitHub()
-        if args.mode == "discover":
-            discover(api)
-        elif args.mode == "failure":
-            failure(api, args.release_id)
-        elif args.mode == "preflight":
-            preflight(api, args.release_id, args.source_sha)
-        else:
-            publish(api, args.release_id, args.source_sha, args.directory)
+        discover(api)
     except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError) as error:
         print(f"Release operation failed: {error}")
         return 1

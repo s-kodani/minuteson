@@ -12,11 +12,13 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def install(downloads=None):
+def install(downloads=None, names=None):
     destination = ROOT / ".cache/security-tools"
     destination.mkdir(parents=True, exist_ok=True)
     target = f"{platform.system().lower()}-{platform.machine().lower()}"
     for name, tool in json.loads((ROOT / "tools/security-tools.json").read_text()).items():
+        if names is not None and name not in names:
+            continue
         asset = tool["platforms"][target]
         if downloads:
             data = (downloads / asset["asset"]).read_bytes()
@@ -46,4 +48,6 @@ def install(downloads=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--downloads", type=Path)
-    install(parser.parse_args().downloads)
+    parser.add_argument("--tools", nargs="+", choices=("actionlint", "gitleaks", "osv-scanner"))
+    args = parser.parse_args()
+    install(args.downloads, args.tools)

@@ -3,6 +3,7 @@ import base64
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -64,6 +65,19 @@ class Fixture:
             "runInvocationURI": f"https://github.com/owner/repo/actions/runs/{run_id}/attempts/{attempt}",
         }}, "statement": {"predicateType": "https://slsa.dev/provenance/v1", "subject": [],
                             "predicate": {"runDetails": {"metadata": {"invocationId": "https://github.com/attacker/repo/actions/runs/999/attempts/1"}}}}}}
+
+    def main_candidate(self, event="push"):
+        self.manifest.update(schemaVersion=2, producer={
+            "kind": "main-build", "runId": 42, "runAttempt": 2, "event": event,
+        })
+        self.run.update(event=event, head_sha=SOURCE)
+        self.job.update(name="candidate", head_sha=SOURCE, steps=[{
+            "name": provenance.CANDIDATE_STEP, "status": "completed", "conclusion": "success",
+        }])
+        certificate = self.attestations[0]["verificationResult"]["signature"]["certificate"]
+        certificate.update(buildTrigger=event, sourceRepositoryDigest=SOURCE,
+                           buildSignerDigest=SOURCE, buildConfigDigest=SOURCE)
+        return self
 
     def save_state(self, value, record):
         self.value = deepcopy(value)
@@ -147,6 +161,63 @@ class Fixture:
 
 
 class StoreProvenanceTests(unittest.TestCase):
+    def test_completed_main_candidate_can_submit_the_same_saved_package(self):
+        for event in ("push", "workflow_dispatch"):
+            fixture = Fixture().main_candidate(event)
+            provider = self.run_boundary(fixture)
+            provider.upload.assert_called_once()
+            self.assertEqual(fixture.record["sourceSha"], SOURCE)
+            self.assertEqual(fixture.record["store"], "CommitStarted")
+
+    def test_main_candidate_cannot_select_a_different_run_attempt_source_or_step(self):
+        for change in ({"runId": 999}, {"runAttempt": 3}, {"kind": "release-build"}, {"event": "pull_request"}):
+            fixture = Fixture().main_candidate()
+            fixture.manifest["producer"].update(change)
+            self.assert_rejected(fixture)
+        fixture = Fixture().main_candidate()
+        fixture.job["steps"][0]["conclusion"] = "skipped"
+        self.assert_rejected(fixture)
+        fixture = Fixture().main_candidate()
+        fixture.run["head_sha"] = WORKFLOW_SOURCE
+        self.assert_rejected(fixture)
+
+    def test_draft_candidate_proof_does_not_require_a_tag_until_manual_publication(self):
+        fixture = Fixture().main_candidate()
+        fixture.value.update(draft=True, target_commitish=SOURCE)
+        with tempfile.TemporaryDirectory() as temporary, patch.object(store.subprocess, "run", side_effect=fixture.command):
+            file = Path(temporary) / "release-manifest.json"
+            file.write_text(json.dumps(fixture.manifest))
+            self.assertEqual(provenance.verify_manifest(fixture, fixture.release(123), file, draft=True, expected_run=42)[1], 42)
+        self.assertFalse(any("/commits/refs%2Ftags" in endpoint for endpoint in fixture.requests))
+
+    def test_polling_pending_commit_and_existing_legacy_ids_never_resumes_writes(self):
+        for status in ("PendingCommit", "Certification", "Published", "error"):
+            fixture = Fixture()
+            fixture.record.update(storeSubmissionId="S1", store=status)
+            fixture.save_state(fixture.value, fixture.record)
+            provider = fixture.provider()
+            provider.call.side_effect = None
+            provider.call.return_value = {"status": "PendingCommit" if status == "error" else status}
+            with patch.object(store, "GitHub", return_value=fixture), patch.object(store, "Store", return_value=provider) as constructor, \
+                    patch.dict(os.environ, {"MON_STORE_RELEASE_ID": "123" if status == "Published" else ""}), patch.object(store.subprocess, "run") as download:
+                store.main("poll")
+                constructor.assert_called_once_with(read_only=True)
+                download.assert_not_called()
+            provider.call.assert_called_once_with("/submissions/S1/status")
+            provider.upload.assert_not_called()
+            self.assertEqual(fixture.record["storeSubmissionId"], "S1")
+
+    def test_read_only_store_client_rejects_every_mutating_api_and_upload(self):
+        provider = object.__new__(store.Store)
+        provider.read_only, provider.app, provider.token = True, "app", "inert"
+        with patch.object(store, "http", return_value={"status": "PendingCommit"}) as http:
+            provider.call("/submissions/S1/status")
+            for suffix, data, method in (("/submissions", None, "POST"), ("/submissions/S1", {}, "PUT"),
+                                          ("/submissions/S1/commit", None, "POST"), ("", None, None)):
+                with self.assertRaises(ValueError): provider.call(suffix, data, method)
+            with self.assertRaises(ValueError): provider.upload("https://example.blob.core.windows.net/upload", Path("unused"))
+            http.assert_called_once()
+
     def run_boundary(self, fixture, provider=None):
         provider = provider or fixture.provider()
         with tempfile.TemporaryDirectory() as temporary, patch.object(store.subprocess, "run", side_effect=fixture.command):
@@ -248,9 +319,9 @@ class StoreProvenanceTests(unittest.TestCase):
         fixture = Fixture()
         fixture.run.update(status="in_progress", conclusion=None)
         provider = fixture.provider()
-        with patch.object(store, "GitHub", return_value=fixture), patch.object(store, "Store", return_value=provider), \
-                patch.object(store.subprocess, "run", side_effect=fixture.command), patch.dict(store.os.environ, {"MON_STORE_RELEASE_ID": ""}):
-            store.main()
+        with patch.dict(os.environ, {"MON_STORE_RELEASE_ID": "123", "GITHUB_REF": "refs/heads/main"}), patch.object(store, "GitHub", return_value=fixture), patch.object(store, "Store", return_value=provider), \
+                patch.object(store.subprocess, "run", side_effect=fixture.command):
+            store.main("submit")
         provider.call.assert_not_called()
         provider.upload.assert_not_called()
         self.assertEqual(fixture.record["store"], "pending")

@@ -1,4 +1,5 @@
 """Resume MSIX updates by submission ID; never modify listings/pricing or log SAS URLs."""
+import argparse
 import io
 import json
 import os
@@ -15,7 +16,7 @@ from mon_release import GitHub, TAG, state
 from mon_release_artifacts import digest
 from mon_store_provenance import verify_manifest
 
-TERMINAL = {"Published", "Canceled", "CommitFailed", "PublishFailed", "PreProcessingFailed", "CertificationFailed", "ReleaseFailed", "error"}
+TERMINAL = {"Published", "Canceled", "CommitFailed", "PublishFailed", "PreProcessingFailed", "CertificationFailed", "ReleaseFailed"}
 
 
 def http(url, data=None, method=None, headers=None):
@@ -31,7 +32,8 @@ def http(url, data=None, method=None, headers=None):
 
 
 class Store:
-    def __init__(self):
+    def __init__(self, *, read_only=False):
+        self.read_only = read_only
         tenant = os.environ["STORE_TENANT_ID"]
         self.app = os.environ["STORE_APPLICATION_ID"]
         if not re.fullmatch(r"[0-9a-fA-F-]{36}", tenant) or not re.fullmatch(r"[A-Za-z0-9]+", self.app):
@@ -45,11 +47,15 @@ class Store:
     def call(self, suffix="", data=None, method=None):
         if not re.fullmatch(r"(?:/submissions(?:/[A-Za-z0-9]+(?:/(?:status|commit))?)?)?", suffix):
             raise ValueError("invalid submission API path")
+        if self.read_only and (method not in (None, "GET") or data is not None or not suffix.endswith("/status")):
+            raise ValueError("Store polling only permits GET submission status")
         return http(f"https://manage.devcenter.microsoft.com/v1.0/my/applications/{self.app}{suffix}",
                     json.dumps(data).encode() if data is not None else None, method,
                     {"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
 
     def upload(self, url, package):
+        if self.read_only:
+            raise ValueError("Store polling cannot upload packages")
         parsed = urlsplit(url)
         if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".blob.core.windows.net") or parsed.username or parsed.password:
             raise ValueError("Store returned an invalid Azure upload URL")
@@ -80,7 +86,8 @@ def update_submission(submission, package_name):
 
 
 def resume(github, store, release, directory):
-    record = state(release)
+    record = state(release) or {}
+    record["status"] = "published"
     if record.get("storeSubmissionId"):
         submission_id = record["storeSubmissionId"]
         result = store.call(f"/submissions/{submission_id}/status")
@@ -99,6 +106,7 @@ def resume(github, store, release, directory):
         print(f"Store release {release['id']}: release publication pending")
         return
     receipt, build_run_id = proof
+    record["sourceSha"] = receipt["sourceSha"]
     package_directory = directory / "package"
     package_directory.mkdir()
     subprocess.run(["gh", "run", "download", str(build_run_id), "--repo", github.repository,
@@ -131,32 +139,71 @@ def resume(github, store, release, directory):
     print(f"Store release {release['id']}: submission committed; publication pending")
 
 
-def main():
-    github, store = GitHub(), Store()
-    retry = os.environ.get("MON_STORE_RELEASE_ID", "")
+def poll(github, store, release):
+    """Observe an existing ID, including PendingCommit, without resuming writes."""
+    record = state(release) or {}
+    submission_id = record.get("storeSubmissionId")
+    if not submission_id:
+        return
+    result = store.call(f"/submissions/{submission_id}/status")
+    # Merge the current state so a concurrent approved submission keeps its ID
+    # and package binding. No build download, creation, PUT, upload, or commit.
+    current = github.release(release["id"])
+    latest = state(current) or {}
+    if latest.get("storeSubmissionId") != submission_id:
+        raise ValueError("Store submission changed during status polling")
+    latest["store"] = result["status"]
+    github.save_state(current, latest)
+    print(f"Store release {release['id']}: {result['status']}")
+
+
+def main(mode="submit"):
+    github = GitHub()
+    selected = os.environ.get("MON_STORE_RELEASE_ID", "")
+    if selected and not re.fullmatch(r"[1-9][0-9]*", selected):
+        raise ValueError("positive release ID required")
+    if mode == "request":
+        release = github.release(int(selected))
+        if release.get("draft") or release.get("prerelease") or not TAG.fullmatch(release.get("tag_name", "")):
+            raise ValueError("Store approval requires a published stable release")
+        github.call("/actions/workflows/store-submission.yml/dispatches", {
+            "ref": "main", "inputs": {"release_id": selected, "operation": "submit"}})
+        return
+    if mode == "submit" and not selected:
+        raise ValueError("Store submission requires an explicit release ID and Environment approval")
+    if mode == "submit" and os.environ.get("GITHUB_REF") != "refs/heads/main":
+        raise ValueError("Store submission must run from main")
+    store = Store(read_only=mode == "poll")
     failures = []
-    for release in github.releases():
+    releases = [github.release(int(selected))] if selected else github.releases()
+    for release in releases:
         record = state(release)
-        if not record or release.get("draft") or record.get("status") != "published":
+        if release.get("draft") or release.get("prerelease"):
             continue
-        if retry and str(release["id"]) != str(int(retry)):
-            continue
-        if not retry and (record.get("store") in TERMINAL or record.get("store") == "initial_setup_required"):
+        if mode == "poll" and (not record or not record.get("storeSubmissionId") or
+                               (not selected and record.get("store") in TERMINAL)):
             continue
         try:
-            with tempfile.TemporaryDirectory(prefix="mon-store-") as temporary:
-                resume(github, store, release, Path(temporary))
+            if mode == "poll":
+                poll(github, store, release)
+            else:
+                with tempfile.TemporaryDirectory(prefix="mon-store-") as temporary:
+                    resume(github, store, release, Path(temporary))
         except (ValueError, KeyError, OSError, subprocess.SubprocessError):
-            record = state(github.release(release["id"]))
-            record["store"] = "error"
-            github.save_state(github.release(release["id"]), record)
+            if mode == "submit":
+                current = github.release(release["id"])
+                record = state(current) or {}
+                record["store"] = "error"
+                github.save_state(current, record)
             failures.append(str(release["id"]))
     if failures:
         raise ValueError("Store updates failed for release IDs " + ", ".join(failures) + "; credentials/response redacted")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("submit", "poll", "request"))
     try:
-        main()
+        main(parser.parse_args().mode)
     except (ValueError, KeyError, OSError):
         raise SystemExit("Store operation failed; inspect release state and Partner Center (credentials redacted)")

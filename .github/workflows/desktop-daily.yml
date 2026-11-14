@@ -1,9 +1,6 @@
-name: Desktop daily validation
+name: Desktop full validation
 
 on:
-  schedule:
-    # 04:17 JST; GitHub may start scheduled workflows later under load.
-    - cron: '17 19 * * *'
   workflow_dispatch:
 
 permissions:

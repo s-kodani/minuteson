@@ -25,7 +25,7 @@ sources:
 
 ## 検査と判定
 
-セキュリティ検査はPR、main更新、毎日09:30（日本時間）、リリース前に実行します。この実行条件と`Security gate`は維持します。通常テストと重いネイティブ・配布物検証の分離は[GitHubでの開発とリリース](development-workflow.md#pr日次リリース前の検証)に集約します。全件の日次検証は別ワークフローで04:17（日本時間）に実行し、リリース前には対象SHAで全検証を再実行します。
+セキュリティ検査はPRの変更範囲、mainの全件検証、毎日09:30（日本時間）に実行します。Release公開時の再検査は行いません。文書と秘密情報・ワークフロー方針の検査は常時維持し、PRのCodeQLは該当言語、依存検査は該当変更時に実行します。日次は全言語・全依存を検査します。`Security gate`は予定した省略だけを許可し、範囲判定の失敗では停止します。ネイティブ・配布物検証の条件は[開発フロー](development-workflow.md#pr日次リリース前の検証)を参照してください。
 
 | 検査 | 対象と停止条件 |
 | --- | --- |
@@ -84,7 +84,7 @@ cargo tree --frozen --target x86_64-unknown-linux-gnu --edges normal,build --inv
 2. main上のワークフローを有効にし、標準ランナーの利用上限・権限・資材取得を確認します。Desktop platform validationの`full`とSecurity validationをmainで実行し、`CI gate`・`Security gate`とCodeQL各言語の結果を確認します。
 3. CodeQLはこのリポジトリのadvanced setupを使い、default setupとの重複実行を避けます。Dependency graph・Dependabot alerts/security updatesとSecret scanning・Push protectionを有効化します。Private vulnerability reportingを有効化し、[非公開報告のリンク](../../SECURITY.md#非公開の報告)が利用できることを確認します。
 4. mainのrulesetでPR、`CI gate`と`Security gate`の成功、force push・削除の禁止を設定します。チェック名は初回実行結果から選択します。承認数は0とし、本人が自分のPRを確認してマージできるようにします。通常のバイパスは設けません。
-5. `v*`タグの更新・削除を禁止します。新規作成はReleasesと公開用ワークフローに許可します。Actionsの既定権限はread-only、forkワークフローの実行承認を有効化します。各ジョブで必要な権限だけを宣言します。
+5. `v*`タグの更新・削除を禁止します。新規作成はReleases画面での手動Publishに許可します。成果物の添付処理はタグを作成しません。Actionsの既定権限はread-only、forkワークフローの実行承認を有効化します。各ジョブで必要な権限だけを宣言します。
 
 設定や検査が未完了の状態を導入済みの保護と扱いません。
 
@@ -94,48 +94,59 @@ Dependabotは[定義](../../.github/dependabot.yml)に従い、npm・Cargo・Git
 
 ## 自動配布の初期設定
 
-配布条件と動作確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)で確認します。第三者通知・SDK・CRT等の条件と、対象経路の実機・署名・Store確認が完了するまで、`RELEASE_AUTOMATION_ENABLED`・`RELEASE_PUBLISH_ENABLED`・`STORE_PUBLISH_ENABLED`は未設定または`false`を維持します。通常CIのQAインストーラー・MSIX生成は検証用で、バイナリをActions成果物へアップロードしません。
+配布条件と確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)を参照してください。`RELEASE_AUTOMATION_ENABLED=true`でmainの正式配布物保存と下書きへの添付を有効化します。公開は担当者のPublish releaseです。旧`RELEASE_PUBLISH_ENABLED`と`release-publish` Environmentは新フローで参照せず、自動Publishは行いません。
 
-環境`release-macos`、`release-publish`、`release-store`を作成し、deployment branchesを**mainのみ**に限定します。ワークフロー定義はmainで実行し、検査対象コードは固定SHAで取得します。自動公開のためrequired reviewersや待機時間は設定しません。
+Environmentの構成は次のとおりです。いずれもdeployment branchesを**mainのみ**に限定します。
+
+| Environment | 用途 | Required reviewers |
+| --- | --- | --- |
+| `release-macos` | main最終アプリの署名・公証 | なし。公開前のローカル確認に使う最終版をmainで作る |
+| `release-store` | Storeへの作成・更新・アップロード・commit | 保守担当者を必須に設定。1名運用ではPrevent self-reviewを無効にし、管理者の承認バイパスも無効 |
+| `release-store-status` | 既存の提出IDの状態照会 | なし。コードはStoreへのGET statusだけを許可 |
+
+YAMLの`environment: release-store`だけでは承認待ちになりません。Settings → Environments → release-store → **Required reviewers**を設定してください。新規作成したEnvironmentの既定では承認者は未設定です。
 
 `release-macos`のSecrets:
 
 - `MACOS_CERTIFICATE_P12_BASE64`: Developer ID Application証明書と秘密鍵を含むP12のBase64
 - `MACOS_CERTIFICATE_PASSWORD`: P12のパスワード
-- `APPLE_NOTARY_KEY_BASE64`: 公証に利用できるApp Store ConnectチームAPIキー（P8）のBase64
+- `APPLE_NOTARY_KEY_BASE64`: 公証に利用できるチームAPIキー（P8）のBase64
 
 同環境のVariables:
 
-- `APPLE_SIGNING_IDENTITY`: 対象Teamの完全なDeveloper ID Application署名名
+- `APPLE_SIGNING_IDENTITY`: Teamの完全なDeveloper ID Application署名名
 - `APPLE_TEAM_ID`: Team ID
 - `APPLE_NOTARY_KEY_ID`、`APPLE_NOTARY_ISSUER_ID`: 公証APIキーの識別子
 
-資格情報をGitやPR本文へ記載しません。ビルドジョブには渡さず、準備済みアーカイブを検証した署名ジョブだけで一時ファイル・キーチェーンへ導入します。署名ジョブはビルド処理を実行せず、終了時に削除します。Secretsへ登録するための値をCIログへ出力しません。
+資格情報をGitやPR本文へ記載しません。ビルドjobには渡さず、準備済みアプリを検証する署名jobだけで一時キーチェーン等へ導入して終了時に削除します。署名jobは再ビルドしません。mainの組立jobはOIDCで来歴証明を作り、候補を30日保存します。公開用PATは不要です。
 
-`release-publish`には独自PATを登録せず、ジョブの`GITHUB_TOKEN`とOIDCで公開・証明を行います。下書き受付の`guard`も、GitHubの下書き参照に必要な`contents: write`を持ちます。この権限は受付ジョブに限定し、アプリのビルドやコード検査には書き込み権限を渡しません。macOS準備処理は`cargo fetch --locked`で依存を先に取得してから、オフラインのライセンス収集を含むビルドへ進みます。
-
-所有者が公開設定、CI、資格情報を確認してから、Repository variable **`RELEASE_AUTOMATION_ENABLED=true`**を設定します。未設定では下書きの自動処理を行いません。**`RELEASE_PUBLISH_ENABLED`は未設定または`false`のまま**、公開開始指定のある下書きで試行します。この状態の検出処理は`dry_run=true`を指定し、公開せずに成果物を作成します。試行結果を確認してから**`RELEASE_PUBLISH_ENABLED=true`**にし、claim済み下書きはmainのRelease buildを`dry_run=false`で実行します。以降に作成する下書きは通常どおり自動公開します。実際のApple署名・公証は別途成功を確認し、模擬検査の結果から成功を推測しません。
+有効化後は**Main build**の成功とサマリーの候補を確認します。ローカル確認、下書き作成、添付完了、手動Publishの手順は[開発フロー](development-workflow.md#releases画面でバージョンタグを管理する)に従います。模擬検査を実署名・公証・Store認定の成功とは扱いません。
 
 ## Store更新の有効化と再開
 
-初回公開はPartner Centerで行い、年齢区分・掲載情報・プライバシー情報等を整えます。初回公開完了後、Partner Centerへ関連付けたEntraアプリの認証を用意します。[Store配布](distribution-store.md)も参照してください。
+初回公開はPartner Centerで行い、年齢区分・掲載情報・プライバシー情報を整えます。初回公開後、Partner Centerへ関連付けたEntraアプリを用意します。[Store配布](distribution-store.md)も参照してください。
 
-`release-store`のVariablesは`STORE_TENANT_ID`、`STORE_APPLICATION_ID`（Store ID）、`STORE_CLIENT_ID`です。Secretは`STORE_CLIENT_SECRET`です。価格・掲載情報は変更せず、前回公開の提出を基にMSIXだけを差し替えます。
+`release-store`と`release-store-status`のそれぞれにVariables `STORE_TENANT_ID`、`STORE_APPLICATION_ID`（Store ID）、`STORE_CLIENT_ID`とSecret `STORE_CLIENT_SECRET`を登録します。照会用資格情報は承認不要の別Environmentで管理し、Store送信jobの承認は維持します。既存SecretはGitHubから平文で読み出せないため、照会用Environmentへは所有者が再登録します。照会クライアントは認証後のStore APIを`GET .../submissions/{id}/status`に制限し、作成・PUT・upload・commitを拒否します。
 
-設定と初回公開を確認してから、Repository variable **`STORE_PUBLISH_ENABLED=true`**を設定します。以降に公開するリリースが自動提出の対象です。Store処理は毎時07分・37分（UTC、日本時間も同じ分）に実行し、提出IDと状態をリリースの状態コメントへ記録します。提出済みとStore公開済みを区別し、認定失敗を公開成功にしません。
+初回公開・資格情報・Required reviewers・main限定を確認して、Repository variable **`STORE_PUBLISH_ENABLED=true`**を設定します。
 
-失敗時はPartner Centerと状態を確認し、main上の**Microsoft Store submission → Run workflow**に対象の`release_id`を指定して同じ提出を再開します。PUT後にアップロード等が中断した場合も、追加済みのMSIXのIDとアップロード状態を保って再利用し、同名の削除・追加レコードを重複作成しません。別のpending submissionがある場合は自動で流用・削除せず停止します。作成直後に状態保存が失敗した場合も重複提出を避けるため停止し、既存提出を手動で照合します。API作成した提出をPartner Centerから同時編集しません。
+1. 担当者がGitHub ReleaseをPublishすると、releaseイベントからmainのStore送信workflowをdispatchします。
+2. **Review deployments → release-store → Approve and deploy**で承認するまで、Storeの作成・更新・アップロード・commitは実行しません。
+3. 承認後、公開済みmanifestの来歴、タグSHA、保存MSIXのサイズとSHAを確認し、価格・掲載情報を保持してパッケージだけを差し替えます。
+4. 提出IDと状態をReleaseの状態コメントへ記録します。毎時07分・37分の照会は既存IDの状態だけを読み、承認を再要求しません。提出・認定・Store一般公開を区別します。
 
-Store提出前に、Release assetのmanifestの実バイトへ付いたGitHub attestationを検証します。現在の数値リポジトリID、main上の正式なRelease build、GitHubの署名発行元、証明書が示すrun・attemptを照合し、実際の公開ステップが成功していることを要求します。dry runの証明だけでは提出しません。ワークフロー版のSHAとビルド対象のSHAは区別し、タグの解決先・main包含・署名済みStore receipt・取得MSIXの容量とSHAを確認します。Release本文の状態・sourceSha・buildRunIdは出自の証明ではありません。
+`PendingCommit`でも照会から送信は再開しません。失敗・アップロード中断を再開する場合は、mainの**Microsoft Store submission → Run workflow**で`operation=submit`と対象`release_id`を指定し、改めてその送信を承認します。`operation=poll`は状態だけを確認します。
 
-GitHub CLIの署名者指定には、mainの正式ワークフローを完全一致で指定する`--cert-identity`を使います。これと排他的な`--signer-workflow`等を併用せず、発行元・source ref・GitHubホスト環境の制限と、検証済み証明書内のワークフロー照合を維持します。申請前検証だけの修正では、公開済みアプリやMSIXを再ビルドせず、同じ成果物の出自を再検証して提出を再開します。
+PUT後に中断した場合も、同じ提出ID・MSIXのIDとアップロード状態を保持し、同名パッケージを重複作成しません。別のpending submissionは流用・削除せず停止します。ID保存に失敗した場合も既存提出を確認するまで新規作成しません。Partner Centerからの同時編集は避けます。旧フローで進行中の提出IDも照会を継続できます。
 
-証明不足・不一致・期限切れではStoreを変更せず停止します。公開処理が実行中なら次の定期確認を待ち、別runへの切替や再ビルドで補いません。提出済みでPendingCommitを超えた処理は成果物を再取得せず状態確認を継続します。PendingCommitからの再開では再度出自を確認します。
+出自はRelease本文の`sourceSha`・`buildRunId`ではなく、manifestの実バイトに対するGitHub attestationで判断します。現在の数値リポジトリID、mainの正式workflow、GitHubの署名発行元、証明書が示すrun・attemptと完了ステップを照合します。新形式はmainのビルド対象SHAと証明書のsource SHAも一致させます。旧schema v1は旧公開ステップの成功を要求し、既存の公開済みRelease・提出との互換性を維持します。
 
-MSIXはActionsに30日保持します。保持期限を過ぎた提出は別ソースで勝手に再構築せず、原本の保管状況と提出を確認します。失敗状態は自動で繰り返し提出せず、修正後に明示再開します。
+GitHub CLIの署名者指定はmain workflowと完全一致する`--cert-identity`だけを使い、排他的な`--signer-workflow`等を併用しません。タグの解決先・main包含・Store receipt・MSIXの容量とSHAの既存照合も維持します。
+
+不足・不一致・期限切れではStoreを書き換えず停止します。main候補が実行中でも別runや最新mainへ切り替えず、対象が完了してから明示再開します。MSIXは30日保持し、期限切れを別ソースの再ビルドで補いません。送信が進んでいる既存IDは原本の再取得なしに状況照会できます。
 
 ## 資格情報の更新と停止
 
-証明書・APIキー・クライアントシークレットの期限を所有者が保守時に確認し、期限前に更新して試行します。疑わしい資格情報はサービス側で失効し、Secretsを更新します。
+証明書・APIキー・クライアントシークレットの期限を所有者が保守時に確認し、期限前に更新します。疑わしい資格情報はサービス側で失効し、両EnvironmentのSecretを更新します。
 
-公開処理を止める場合は`RELEASE_AUTOMATION_ENABLED=false`と`RELEASE_PUBLISH_ENABLED=false`、Store提出は`STORE_PUBLISH_ENABLED=false`に設定します。既に実行中の公開処理はActionsでも取消します。検査の停止や例外の無期限化で回避せず、原因を修正して再実行します。既に公開したバイナリは上書きせず、新しい版で修正します。
+下書きへの添付・mainの正式配布物保存は`RELEASE_AUTOMATION_ENABLED=false`、Store送信・照会は`STORE_PUBLISH_ENABLED=false`で停止します。既に承認待ち・実行中の処理はActionsでも取消します。公開済みバイナリは上書きせず、新しい版で修正します。

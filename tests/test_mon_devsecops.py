@@ -28,6 +28,8 @@ import mon_ci_scope as scope
 import mon_docs as docs
 import mon_macos_release as mac
 import mon_release as release
+import mon_main_build as main_build
+import mon_store_provenance as provenance
 import mon_release_artifacts as artifacts
 import mon_security as security
 import mon_store_submission as store
@@ -47,7 +49,7 @@ class Provider:
     def __init__(self):
         self.repository = "owner/repo"
         self.value = {"id": 123, "tag_name": "v1.2.3", "target_commitish": "main", "draft": True,
-                      "prerelease": False, "name": "Release", "body": release.OPT_IN, "author": {"login": "owner"}, "assets": []}
+                      "prerelease": False, "name": "Release", "body": "Release notes", "author": {"login": "owner"}, "assets": []}
         self.dispatches, self.uploads = [], []
         self.compare_status, self.commit = "identical", SHA
 
@@ -109,18 +111,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(git('rev-parse', 'HEAD'), admitted)
             self.assertEqual(source.read_text(encoding='utf8'), 'admitted version')
 
-    def test_release_builds_bootstrap_source_admission_from_main(self):
-        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text(encoding='utf8'))
-        for name in ('macos-prepare', 'macos-sign', 'windows', 'store', 'publish'):
-            steps = workflow['jobs'][name]['steps']
-            with self.subTest(job=name):
-                self.assertEqual(steps[0]['with']['ref'], 'main')
-                self.assertEqual(steps[0]['with']['fetch-depth'], 0)
-                admission = next(s for s in steps if s.get('name') == 'Check out admitted source with trusted main code')
-                self.assertEqual(admission['env']['MON_SOURCE_SHA'], '${{ needs.guard.outputs.source_sha }}')
-                self.assertIn('mon_release.py checkout', admission['run'])
-                self.assertLess(next(i for i,s in enumerate(steps) if s.get('name') == admission['name']),
-                                next(i for i,s in enumerate(steps) if 'run' in s and 'mon_release.py checkout' not in s['run']))
+    def test_main_tests_and_builds_once_before_saving_candidate(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text())
+        events = workflow.get('on', workflow.get(True))
+        self.assertEqual(events['push']['branches'], ['main'])
+        self.assertNotIn('release', events)
+        self.assertNotIn('release_id', events.get('workflow_dispatch') or {})
+        self.assertTrue(workflow['jobs']['ci']['with']['full'])
+        self.assertIn('build_release', workflow['jobs']['ci']['with'])
+        self.assertIn('needs.guard.outputs.build', workflow['jobs']['security']['with']['full'])
+        self.assertEqual(set(workflow['jobs']['candidate']['needs']), {'guard', 'ci', 'security', 'macos-sign'})
+        self.assertNotIn('publish', workflow['jobs'])
+        for name in ('macos-sign', 'candidate'):
+            self.assertEqual(workflow['jobs'][name]['steps'][0]['with']['ref'], '${{ github.sha }}')
+        steps = workflow['jobs']['candidate']['steps']
+        self.assertEqual(steps[-1]['name'], provenance.CANDIDATE_STEP)
+        upload = next(step for step in steps if step.get('id') == 'candidate')
+        self.assertEqual(upload['with']['retention-days'], 30)
+        self.assertNotIn('overwrite', upload['with'])
+        commands = '\n'.join(step.get('run', '') for step in steps)
+        self.assertNotIn('mon_release.py publish', commands)
 
     def test_checkout_source_rejects_untrusted_refs_dirty_trees_and_non_main_commits(self):
         for values in ({'GITHUB_REF': 'refs/heads/other'}, {'GITHUB_REF': 'refs/heads/main'}):
@@ -142,33 +152,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     release.checkout_source(SHA)
                     self.assertEqual(calls[-1], ['git', 'checkout', '--detach', SHA])
 
-    def test_guard_can_read_drafts_without_giving_build_jobs_write_access(self):
-        workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
-        guard = workflow["jobs"]["guard"]
-        permissions = guard.get("permissions", workflow["permissions"])
-        api = Provider()
-        read_release = api.release
-
-        def read_draft(release_id):
-            if permissions.get("contents") != "write":
-                raise ValueError("GitHub request failed (404): draft requires push access")
-            return read_release(release_id)
-
-        step = next(step for step in guard["steps"] if step.get("id") == "guard")
-        script = "\n".join(step["run"].splitlines()[1:-1])
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-            "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ID": "42", "GITHUB_OUTPUT": str(Path(temporary) / "output"),
-            "MON_RELEASE_ID": "123", "MON_SOURCE_SHA": SHA, "MON_PRIVATE": "false", "MON_ENABLED": "true",
-            "MON_PUBLISH_ENABLED": "false", "MON_DRY_RUN": "true",
-        }):
-            release.discover(api)
-            with patch.object(api, "release", side_effect=read_draft), patch.object(release, "GitHub", return_value=api):
-                exec(compile(script, "release-guard", "exec"), {})
-            self.assertEqual(Path(os.environ["GITHUB_OUTPUT"]).read_text(), "tag=v1.2.3\nsource_sha=" + SHA + "\n")
-        for name in ("ci", "security", "macos-prepare", "macos-sign", "windows", "store"):
-            with self.subTest(job=name):
-                effective = workflow["jobs"][name].get("permissions", workflow["permissions"])
-                self.assertEqual(effective.get("contents"), "read")
+    def test_only_draft_controller_can_attach_and_never_dispatches_a_build(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-controller.yml').read_text())
+        self.assertEqual(workflow['permissions']['contents'], 'write')
+        self.assertEqual(workflow['permissions']['actions'], 'read')
+        commands = '\n'.join(step.get('run', '') for step in workflow['jobs']['discover']['steps'])
+        self.assertIn('mon_release.py discover', commands)
+        self.assertNotIn('publish', commands)
 
 
 class DesktopWorkflowTests(unittest.TestCase):
@@ -186,9 +176,9 @@ class DesktopWorkflowTests(unittest.TestCase):
         return eval(value, {"__builtins__": {}}, {"always": lambda: True, "success": lambda: True})
 
     def native_steps(self, event="pull_request", full=False, suite="", operating_system="Windows", rust_cache_hit=False,
-                     skip_windows_msix=False, workflow="Desktop platform validation"):
+                     build_release=False, workflow="Desktop platform validation"):
         context = {"inputs.full": full, "inputs.suite": suite, "github.event_name": event,
-                   "inputs.skip_windows_msix": skip_windows_msix,
+                   "inputs.build_release": build_release,
                    "runner.os": operating_system, "github.ref": "refs/heads/main",
                    "github.workflow": workflow, "inputs.source_ref": "", "github.sha": SHA,
                    "steps.native_downloads.outputs.cache-hit": "false",
@@ -198,7 +188,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         native = self.workflow["jobs"]["native"]
         context["env.MON_CI_FULL"] = str(self.expression(native["env"]["MON_CI_FULL"], context)).lower()
         context["env.MON_SAVE_CI_CACHE"] = str(self.expression(native["env"]["MON_SAVE_CI_CACHE"], context)).lower()
-        context["env.MON_SKIP_WINDOWS_MSIX"] = str(skip_windows_msix).lower()
+        context["env.MON_BUILD_RELEASE"] = str(build_release).lower()
         return [step for step in native["steps"] if self.expression(step.get("if", "True"), context)]
 
     def native_commands(self, event="pull_request", full=False, suite="", operating_system="Windows"):
@@ -258,7 +248,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         native = names.index('Validate Windows capture and model catalog')
         llm = names.index('Validate upgraded LLM runtimes with representative weights')
         qa = names.index('Build Windows QA installer')
-        qa_dpi = names.index('Verify DPI declarations in the linked Windows QA executable')
+        qa_dpi = names.index('Verify DPI declarations in the linked Windows installer executable')
         store = names.index('Build and verify Microsoft Store MSIX')
         store_dpi = names.index('Verify DPI declarations in the linked Windows Store executable')
         self.assertLess(prepare, native)
@@ -273,39 +263,33 @@ class DesktopWorkflowTests(unittest.TestCase):
         for index in (prepare, qa, store):
             self.assertIn('mon_windows_preparation.py run --phase', steps[index]['run'])
 
-    def test_release_delegates_only_msix_to_its_required_store_job(self):
-        self.assertFalse(self.events['workflow_call']['inputs']['skip_windows_msix']['default'])
-        steps = self.native_steps(event='workflow_dispatch', full=True, skip_windows_msix=True, workflow='Release build')
-        commands = '\n'.join(s.get('run', '') for s in steps)
-        self.assertIn('tauri:windows:qa:build', commands)
-        self.assertIn('--suite full --all-targets', commands)
-        self.assertIn('mon_llama_runtime_check.py', commands)
-        self.assertNotIn('tauri:windows:store:build', commands)
-        uploads = [s['with']['name'] for s in steps if s.get('uses', '').startswith('actions/upload-artifact@')]
-        self.assertIn('mon-windows-x64-qa-identity', uploads)
-        self.assertNotIn('minuteson-windows-x64-store-identity', uploads)
-        workflow = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text())
-        self.assertTrue(workflow['jobs']['ci']['with']['skip_windows_msix'])
-        store = workflow['jobs']['store']
-        store_commands = '\n'.join(s.get('run', '') for s in store['steps'])
-        self.assertEqual(store_commands.count('tauri:windows:store:build'), 1)
-        self.assertIn('MON_WINDOWS_DPI_BINARY', store_commands)
-        self.assertIn('test_mon_windows_dpi.py', store_commands)
-        self.assertIn('ci', store['needs'])
-        self.assertIn('store', workflow['jobs']['publish']['needs'])
+    def test_main_collects_final_exe_before_store_build_in_the_validated_job(self):
+        steps = self.native_steps(event='push', full=True, build_release=True, workflow='Main build')
+        commands = '\n'.join(step.get('run', '') for step in steps)
+        self.assertNotIn('tauri:windows:qa:build', commands)
+        self.assertEqual(commands.count('tauri:windows:unsigned:build'), 1)
+        self.assertEqual(commands.count('tauri:windows:store:build'), 1)
+        self.assertLess(commands.index('collect --flavor windows'), commands.index('tauri:windows:store:build'))
+        self.assertIn('--suite full', commands)
+        self.assertNotIn('--all-targets', commands)
+        uploads = [step['with'] for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')]
+        for name in ('release-windows', 'release-store'):
+            upload = next(item for item in uploads if item['name'] == name)
+            self.assertEqual(upload['retention-days'], 30)
+        mac_steps = self.native_steps(event='push', full=True, build_release=True, workflow='Main build', operating_system='macOS')
+        self.assertTrue(any('mon_macos_release.py --prepare' in step.get('run', '') for step in mac_steps))
 
-    def test_store_delegation_is_rejected_outside_full_release_validation(self):
-        step = next(s for s in self.workflow['jobs']['changes']['steps'] if s.get('name') == 'Validate delegated Microsoft Store check')
+    def test_final_packaging_requires_main_and_full_validation(self):
+        step = next(s for s in self.workflow['jobs']['changes']['steps'] if s.get('name') == 'Validate main packaging request')
         script = '\n'.join(step['run'].splitlines()[1:-1])
-        for skip, full, caller in (('true', 'false', 'Release build'), ('true', 'true', 'Desktop platform validation'),
-                                    ('true', 'true', 'Release build'), ('false', 'false', 'Desktop platform validation')):
-            with self.subTest(skip=skip, full=full, caller=caller), patch.dict(os.environ, {
-                    'MON_SKIP_WINDOWS_MSIX': skip, 'MON_CI_FULL': full, 'MON_CALLER': caller}):
-                if skip == 'true' and (full != 'true' or caller != 'Release build'):
-                    with self.assertRaises(SystemExit):
-                        exec(compile(script, 'store-delegation', 'exec'), {})
+        for build, full, ref in (('true', 'false', 'refs/heads/main'), ('true', 'true', 'refs/heads/feature'),
+                                 ('true', 'true', 'refs/heads/main'), ('false', 'false', 'refs/pull/1/merge')):
+            with self.subTest(build=build, full=full, ref=ref), patch.dict(os.environ, {
+                    'MON_BUILD_RELEASE': build, 'MON_CI_FULL': full, 'GITHUB_REF': ref}):
+                if build == 'true' and (full != 'true' or ref != 'refs/heads/main'):
+                    with self.assertRaises(SystemExit): exec(compile(script, 'main-packaging', 'exec'), {})
                 else:
-                    exec(compile(script, 'store-delegation', 'exec'), {})
+                    exec(compile(script, 'main-packaging', 'exec'), {})
 
     def test_swift_analysis_cache_preserves_extraction_and_trusted_main_writes(self):
         workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
@@ -346,7 +330,7 @@ class DesktopWorkflowTests(unittest.TestCase):
             for operating_system in ("Windows", "macOS"):
                 with self.subTest(event=event, os=operating_system):
                     commands = self.native_commands(event=event, operating_system=operating_system)
-                    self.assertIn("--suite quick --all-targets --processes 2 --threads 4", commands)
+                    self.assertIn("--suite quick --processes 2 --threads 4", commands)
                     self.assertIn("--timings-json", commands)
                     for excluded in ("tauri:windows:qa:build", "tauri:windows:store:build", "--swift-fixture",
                                      "build-core.sh", "swift build", "ctest --test-dir", "--suite full"):
@@ -362,31 +346,23 @@ class DesktopWorkflowTests(unittest.TestCase):
             self.assertIn("tauri:windows:store:build", windows)
             self.assertIn("ctest --test-dir", windows)
             self.assertIn("test_mon_windows_dpi.py", windows)
-            self.assertIn("--suite full --all-targets", windows)
+            self.assertIn("--suite full", windows)
             macos = self.native_commands(event, full, suite, "macOS")
             self.assertIn("build-core.sh", macos)
             self.assertIn("swift test", macos)
-            self.assertIn("--suite full --all-targets --swift-fixture", macos)
+            self.assertIn("--suite full --swift-fixture", macos)
             self.assertNotIn("--suite quick", windows + macos)
             self.assertNotIn("--processes", windows + macos)
             self.assertNotIn("--threads", windows + macos)
         self.assertIn("--suite quick", self.native_commands("workflow_dispatch", False, "quick"))
 
-    def test_validation_uploads_are_limited_to_diagnostics_and_json_build_identity(self):
-        allowed_paths = {
-            "output/playwright/",
-            "output/rust-tests/",
-            "output/windows-store-work/*/source.json",
-            "output/windows-store-work/*/build.json",
-            "output/windows-qa-work/*-build.json",
-        }
-        for job, definition in self.workflow["jobs"].items():
-            for step in definition.get("steps", []):
-                if step.get("uses", "").startswith("actions/upload-artifact@"):
-                    with self.subTest(job=job, step=step.get("name")):
-                        paths = set(step["with"]["path"].splitlines())
-                        self.assertTrue(paths)
-                        self.assertLessEqual(paths, allowed_paths)
+    def test_final_binaries_are_saved_only_by_explicit_main_packaging(self):
+        for definition in self.workflow['jobs'].values():
+            for step in definition.get('steps', []):
+                if step.get('uses', '').startswith('actions/upload-artifact@'):
+                    if step['with']['name'] in ('prepared-macos', 'release-windows', 'release-store'):
+                        self.assertIn("env.MON_BUILD_RELEASE == 'true'", step['if'])
+                        self.assertIn("env.MON_CI_FULL == 'true'", step['if'])
 
     def test_quick_and_full_keep_diagnostics_without_uploading_installers(self):
         for event, full, suite in (("pull_request", False, ""), ("push", False, ""),
@@ -401,52 +377,70 @@ class DesktopWorkflowTests(unittest.TestCase):
                         expected |= {"minuteson-windows-x64-store-identity", "mon-windows-x64-qa-identity"}
                     self.assertEqual(uploads, expected)
 
-    def test_daily_and_release_call_full_at_the_selected_source(self):
-        daily = yaml.safe_load((release.ROOT / ".github/workflows/desktop-daily.yml").read_text())
-        events = daily.get("on", daily.get(True))
-        self.assertEqual(events["schedule"], [{"cron": "17 19 * * *"}])
-        self.assertEqual(set(events), {"schedule", "workflow_dispatch"})
-        job = daily["jobs"]["validate"]
-        self.assertEqual(job["uses"], "./.github/workflows/desktop-platform-build.yml")
-        self.assertEqual(job["with"], {"source_ref": "${{ github.sha }}", "full": True})
-        self.assertFalse(daily["concurrency"]["cancel-in-progress"])
-        self.assertEqual(daily["permissions"], {"contents": "read"})
-        release_workflow = yaml.safe_load((release.ROOT / ".github/workflows/release-build.yml").read_text())
-        release_ci = release_workflow["jobs"]["ci"]
-        self.assertTrue(release_ci["with"]["full"])
-        self.assertEqual(release_ci["with"]["source_ref"], "${{ needs.guard.outputs.source_sha }}")
-        self.assertNotEqual(daily["concurrency"]["group"], self.workflow["concurrency"]["group"])
+    def test_full_native_schedule_is_removed_and_main_owns_push_validation(self):
+        daily = yaml.safe_load((release.ROOT / '.github/workflows/desktop-daily.yml').read_text())
+        self.assertEqual(set(daily.get('on', daily.get(True))), {'workflow_dispatch'})
+        self.assertTrue(daily['jobs']['validate']['with']['full'])
+        self.assertNotIn('push', self.events)
+        security = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
+        events = security.get('on', security.get(True))
+        self.assertNotIn('push', events)
+        self.assertIn('schedule', events)
+        main = yaml.safe_load((release.ROOT / '.github/workflows/release-build.yml').read_text())
+        self.assertTrue(main['jobs']['ci']['with']['full'])
 
-    def test_gate_rejects_required_failure_cancellation_or_skip_but_allows_docs_only(self):
-        gate = self.workflow["jobs"]["gate"]
-        self.assertEqual(gate["if"], "always()")
-        self.assertEqual(set(gate["needs"]), {"changes", "python", "browser", "native"})
-        script = "\n".join(gate["steps"][0]["run"].splitlines()[1:-1])
-        successful = {"MON_CHANGES": "success", "MON_PYTHON": "success", "MON_BROWSER": "success",
-                      "MON_NATIVE": "success", "MON_REQUIRED": "true"}
-        with patch.dict(os.environ, successful):
-            exec(compile(script, "ci-gate", "exec"), {})
-        for name in ("MON_CHANGES", "MON_PYTHON", "MON_BROWSER", "MON_NATIVE"):
-            for result in ("failure", "cancelled", "skipped"):
-                with self.subTest(job=name, result=result), patch.dict(os.environ, {**successful, name: result}):
-                    with self.assertRaises(SystemExit):
-                        exec(compile(script, "ci-gate", "exec"), {})
-        with patch.dict(os.environ, {**successful, "MON_REQUIRED": "false", "MON_BROWSER": "skipped", "MON_NATIVE": "skipped"}):
-            exec(compile(script, "ci-gate", "exec"), {})
+    def test_gate_accepts_only_planned_skips_and_fails_when_scope_is_unavailable(self):
+        gate = self.workflow['jobs']['gate']
+        self.assertEqual(gate['if'], 'always()')
+        script = '\n'.join(gate['steps'][0]['run'].splitlines()[1:-1])
+        for affected in ((), ('PYTHON',), ('BROWSER',), ('NATIVE',), ('PYTHON', 'BROWSER', 'NATIVE')):
+            values = {'MON_CHANGES': 'success'}
+            for job in ('PYTHON', 'BROWSER', 'NATIVE'):
+                values['MON_REQUIRE_' + job] = str(job in affected).lower()
+                values['MON_' + job] = 'success' if job in affected else 'skipped'
+            with patch.dict(os.environ, values): exec(compile(script, 'ci-gate', 'exec'), {})
+            for key in ('MON_CHANGES', *('MON_' + job for job in affected)):
+                for result in ('failure', 'cancelled', 'skipped'):
+                    with self.subTest(affected=affected, key=key, result=result), patch.dict(os.environ, {**values, key: result}):
+                        with self.assertRaises(SystemExit): exec(compile(script, 'ci-gate', 'exec'), {})
+            with patch.dict(os.environ, {**values, 'MON_REQUIRE_NATIVE': ''}):
+                with self.assertRaises(SystemExit): exec(compile(script, 'ci-gate', 'exec'), {})
 
-    def test_docs_scope_and_full_scope_run_through_the_actual_scope_program(self):
+    def test_scoped_jobs_and_gate_use_the_same_classification_output(self):
+        for job in ('python', 'browser', 'native'):
+            self.assertEqual(self.workflow['jobs'][job]['if'], f"needs.changes.outputs.{job} == 'true'")
+            self.assertEqual(self.workflow['jobs']['gate']['env']['MON_REQUIRE_' + job.upper()],
+                             '${{ needs.changes.outputs.' + job + ' }}')
+
+    def test_security_gate_rejects_scope_failure_and_unplanned_codeql_skips(self):
+        workflow = yaml.safe_load((release.ROOT / '.github/workflows/security.yml').read_text())
+        gate = workflow['jobs']['gate']
+        self.assertEqual(gate['if'], 'always()')
+        script = '\n'.join(gate['steps'][0]['run'].splitlines()[1:-1])
+        values = {'MON_CHANGES': 'success', 'MON_POLICY': 'success', 'MON_DOCS': 'success',
+                  'MON_CODEQL': 'success', 'MON_HAS_CODEQL': 'true', 'MON_PRIVATE': 'false'}
+        for change in ({}, {'MON_HAS_CODEQL': 'false', 'MON_CODEQL': 'skipped'}):
+            with patch.dict(os.environ, {**values, **change}): exec(compile(script, 'security-gate', 'exec'), {})
+        for change in ({'MON_CHANGES': 'failure'}, {'MON_POLICY': 'cancelled'}, {'MON_DOCS': 'skipped'},
+                       {'MON_HAS_CODEQL': ''}, {'MON_CODEQL': 'skipped'}):
+            with patch.dict(os.environ, {**values, **change}):
+                with self.assertRaises(SystemExit): exec(compile(script, 'security-gate', 'exec'), {})
+
+    def test_docs_and_full_scope_run_through_the_actual_scope_program(self):
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "output"
-            with patch.dict(os.environ, {"MON_BASE": SHA, "MON_FULL": "false", "GITHUB_OUTPUT": str(output)}), \
-                    patch.object(scope.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"docs/guides/testing.md\0README.md\0")):
+            output = Path(temporary) / 'output'
+            with patch.dict(os.environ, {'MON_BASE': SHA, 'MON_FULL': 'false', 'GITHUB_OUTPUT': str(output)}), \
+                    patch.object(scope.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'docs/guides/testing.md\0README.md\0')) as diff:
                 scope.main()
-            self.assertEqual(output.read_text(), "native=false\n")
+                self.assertIn('--no-renames', diff.call_args.args[0])
+            values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            self.assertTrue(all(values[key] == 'false' for key in (*scope.CHECKS, 'has_codeql', 'code')))
             output.unlink()
-            with patch.dict(os.environ, {"MON_BASE": SHA, "MON_FULL": "true", "GITHUB_OUTPUT": str(output)}), \
-                    patch.object(scope.subprocess, "run") as diff:
+            with patch.dict(os.environ, {'MON_BASE': SHA, 'MON_FULL': 'true', 'GITHUB_OUTPUT': str(output)}), patch.object(scope.subprocess, 'run') as diff:
                 scope.main()
                 diff.assert_not_called()
-            self.assertEqual(output.read_text(), "native=true\n")
+            values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            self.assertTrue(all(values[key] == 'true' for key in scope.CHECKS))
 
 
 class SecurityPolicyTests(unittest.TestCase):
@@ -505,11 +499,17 @@ class SecurityPolicyTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     security.scan(output)
 
-    def test_scope_keeps_required_native_changes_and_docs_can_skip_heavy_jobs(self):
-        self.assertFalse(scope.needs_native(["docs/guides/testing.md", "README.md"]))
-        self.assertTrue(scope.needs_native(["docs/guides/testing.md", "app/src/main.ts"]))
-        self.assertTrue(scope.needs_native([".github/workflows/security.yml"]))
-        self.assertTrue(scope.needs_native(["tools/mon_release.py"]))
+    def test_scope_selects_components_and_unknown_changes_fail_closed(self):
+        cases = [(['docs/guides/testing.md', 'README.md'], set()),
+                 (['app/src/main.ts'], {'browser'}), (['tools/mon_release.py'], {'python'}),
+                 (['app/src-tauri/src/storage.rs'], {'native'}),
+                 (['crates/mon-contracts/src/model.rs'], {'browser', 'native'}),
+                 (['.github/workflows/security.yml'], set(scope.CHECKS)),
+                 (['new-directory/file.md'], set(scope.CHECKS)),
+                 (['third-party/notice.md'], set(scope.CHECKS))]
+        for paths, expected in cases:
+            self.assertEqual({key for key in scope.CHECKS if scope.select(paths)[key]}, expected, paths)
+        self.assertTrue(all(scope.select(['app/src/main.ts'], main=True)[key] for key in scope.CHECKS))
 
 
 class DocumentationTests(unittest.TestCase):
@@ -574,102 +574,88 @@ class ReleaseTests(unittest.TestCase):
             api.save_state(draft, {"status": "claimed"})
             self.assertEqual(call.call_args.args[1]["tag_name"], "v1.2.3")
 
-    def test_draft_claim_is_idempotent_and_pins_source_before_dispatch(self):
-        api = Provider()
-        with patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
-            release.discover(api)
-            release.discover(api)
-        self.assertEqual(len(api.dispatches), 1)
-        self.assertEqual(api.value["target_commitish"], SHA)
-        self.assertEqual(api.dispatches[0]["ref"], "main")
-        self.assertEqual(release.state(api.value)["fingerprint"], release.fingerprint(api.value))
-        self.assertEqual(api.dispatches[0]["inputs"]["dry_run"], "true")
+    @staticmethod
+    def candidate_files(root):
+        (root / 'app.dmg').write_bytes(b'verified binary')
+        expected = artifacts.digest(root / 'app.dmg')
+        manifest = {'schemaVersion': 2, 'sourceSha': SHA, 'tag': 'v1.2.3',
+                    'producer': {'kind': 'main-build', 'runId': 42, 'runAttempt': 1, 'event': 'push'},
+                    'publicFiles': {'app.dmg': expected}}
+        (root / 'release-manifest.json').write_text(json.dumps(manifest))
+        hashes = {'app.dmg': expected, 'release-manifest.json': artifacts.digest(root / 'release-manifest.json')}
+        (root / 'SHA256SUMS').write_text(''.join(f'{value}  {name}\n' for name, value in sorted(hashes.items())))
+        (root / 'provenance.json').write_text('{}')
 
-    def test_dispatch_failure_is_retained_without_automatic_duplicate_dispatch(self):
+    def test_draft_without_checkbox_attaches_idempotently_and_never_publishes(self):
         api = Provider()
-        original = api.call
-        def call(endpoint, *args, **kwargs):
-            if endpoint.endswith('/dispatches'):
-                raise ValueError('temporary provider failure')
-            return original(endpoint, *args, **kwargs)
-        with patch.object(api, 'call', side_effect=call), patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
-            with self.assertRaises(ValueError):
-                release.discover(api)
-            self.assertEqual(release.state(api.value)["status"], "dispatch_failed")
+        saved = {'artifactId': 7, 'runId': 42, 'sourceSha': SHA}
+        def download(argv, **kwargs):
+            self.candidate_files(Path(argv[argv.index('--dir') + 1]))
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), \
+                patch.object(main_build, 'find_candidate', return_value=saved), \
+                patch.object(release.subprocess, 'run', side_effect=download) as run, \
+                patch.object(provenance, 'verify_manifest', return_value=({}, 42)):
             release.discover(api)
-
-    def test_unchecked_draft_does_not_dispatch_and_non_main_source_fails(self):
-        api = Provider()
-        api.value["body"] = "Notes only"
-        release.discover(api)
+            api.value['body'] += '\nEdited release notes'
+            release.discover(api)
+        self.assertEqual(api.value['target_commitish'], SHA)
+        self.assertTrue(api.value['draft'])
+        self.assertEqual(release.state(api.value)['status'], 'attached')
+        self.assertEqual(len(api.uploads), 4)
         self.assertEqual(api.dispatches, [])
-        api.value["body"] = release.OPT_IN
-        api.compare_status = "diverged"
-        with self.assertRaises(ValueError):
-            release.candidate(api, api.value)
+        run.assert_called_once()
+
+    def test_partial_attachment_resumes_but_conflicting_or_unexpected_assets_stop(self):
+        saved = {'artifactId': 7, 'runId': 42, 'sourceSha': SHA}
+        with tempfile.TemporaryDirectory() as temporary, patch.object(provenance, 'verify_manifest', return_value=({}, 42)):
+            root = Path(temporary)
+            self.candidate_files(root)
+            api = Provider()
+            api.value['target_commitish'] = SHA
+            expected = release.asset_metadata({'app.dmg': root / 'app.dmg'})
+            api.value['assets'] = [{'name': 'app.dmg', **expected['app.dmg']}]
+            release.attach(api, 123, SHA, saved, root)
+            self.assertEqual(len(api.uploads), 3)
+            self.assertTrue(api.value['draft'])
+            for changes in ({'name': 'unknown.exe'}, {'digest': 'sha256:bad'}, {'size': 0}):
+                api = Provider()
+                api.value['target_commitish'] = SHA
+                api.value['assets'] = [{'name': 'app.dmg', **expected['app.dmg'], **changes}]
+                with self.assertRaises(ValueError): release.attach(api, 123, SHA, saved, root)
+                self.assertEqual(api.uploads, [])
+
+    def test_missing_candidate_or_changed_source_never_dispatches_a_rebuild(self):
+        api = Provider()
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), patch.object(main_build, 'find_candidate', return_value=None):
+            with self.assertRaises(ValueError): release.discover(api)
+        self.assertEqual(api.dispatches, [])
+        self.assertEqual(api.uploads, [])
+        api.compare_status = 'diverged'
+        with self.assertRaises(ValueError): release.candidate(api, api.value)
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/feature'}):
+            with self.assertRaises(ValueError): release.discover(api)
+
+    def test_changed_bytes_and_published_release_are_rejected_before_upload(self):
+        api = Provider()
+        api.value['target_commitish'] = SHA
+        saved = {'artifactId': 7, 'runId': 42, 'sourceSha': SHA}
+        with tempfile.TemporaryDirectory() as temporary, patch.object(provenance, 'verify_manifest', return_value=({}, 42)):
+            root = Path(temporary)
+            self.candidate_files(root)
+            (root / 'app.dmg').write_bytes(b'tampered')
+            with self.assertRaises(ValueError): release.attach(api, 123, SHA, saved, root)
+            self.candidate_files(root)
+            api.value['draft'] = False
+            with self.assertRaises(ValueError): release.attach(api, 123, SHA, saved, root)
+        self.assertEqual(api.uploads, [])
 
     def test_version_and_draft_validation_reject_untrusted_values(self):
-        release.validate_versions("v1.2.3", versions)
-        for tag in ("v1.2.4", "v01.2.3", "v1.2.3-beta", "$(false)", "../v1.2.3"):
-            with self.assertRaises(ValueError):
-                release.validate_versions(tag, versions)
+        release.validate_versions('v1.2.3', versions)
+        for tag in ('v1.2.4', 'v01.2.3', 'v1.2.3-beta', '$(false)', '../v1.2.3'):
+            with self.assertRaises(ValueError): release.validate_versions(tag, versions)
         api = Provider()
-        for change in ({"target_commitish": "feature"}, {"draft": False}, {"prerelease": True}):
-            with self.assertRaises(ValueError):
-                release.validate_draft({**api.value, **change})
-
-    def test_edit_after_claim_and_branch_dispatch_fail_preflight(self):
-        api = Provider()
-        with patch.dict(os.environ, {"GITHUB_RUN_ID": "42", "GITHUB_REF": "refs/heads/main"}):
-            release.discover(api)
-            release.preflight(api, 123, SHA)
-            api.value["body"] += "\nEdited notes"
-            with self.assertRaises(ValueError):
-                release.preflight(api, 123, SHA)
-        with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/feature"}):
-            with self.assertRaises(ValueError):
-                release.preflight(api, 123, SHA)
-
-    def test_publish_refuses_tampered_artifact_before_upload(self):
-        api = Provider()
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"GITHUB_RUN_ID": "42", "GITHUB_REF": "refs/heads/main"}):
-            release.discover(api)
-            root = Path(temporary)
-            expected = hashlib.sha256(b"expected").hexdigest()
-            (root / "app.dmg").write_bytes(b"tampered")
-            (root / "release-manifest.json").write_text(json.dumps({"sourceSha": SHA, "tag": "v1.2.3", "publicFiles": {"app.dmg": expected}}))
-            (root / "SHA256SUMS").write_text("")
-            (root / "provenance.json").write_text("{}")
-            with self.assertRaises(ValueError):
-                release.publish(api, 123, SHA, root)
-            self.assertEqual(api.uploads, [])
-            self.assertTrue(api.value["draft"])
-
-    def test_failure_does_not_publish_and_same_draft_remains_retryable(self):
-        api = Provider()
-        with patch.dict(os.environ, {"GITHUB_RUN_ID": "42", "GITHUB_REF": "refs/heads/main"}):
-            release.discover(api)
-            release.failure(api, 123)
-            self.assertTrue(api.value["draft"])
-            self.assertEqual(release.state(api.value)["status"], "failed")
-            release.preflight(api, 123, SHA)
-
-    def test_publish_waits_for_complete_verified_assets(self):
-        api = Provider()
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"GITHUB_RUN_ID": "42", "GITHUB_REF": "refs/heads/main"}):
-            release.discover(api)
-            root = Path(temporary)
-            (root / "app.dmg").write_bytes(b"verified binary")
-            expected = artifacts.digest(root / "app.dmg")
-            manifest = {"sourceSha": SHA, "tag": "v1.2.3", "publicFiles": {"app.dmg": expected}}
-            (root / "release-manifest.json").write_text(json.dumps(manifest))
-            hashes = {"app.dmg": expected, "release-manifest.json": artifacts.digest(root / "release-manifest.json")}
-            (root / "SHA256SUMS").write_text(''.join(f'{value}  {name}\n' for name, value in sorted(hashes.items())))
-            (root / "provenance.json").write_text('{}')
-            release.publish(api, 123, SHA, root)
-            self.assertFalse(api.value['draft'])
-            self.assertEqual(len(api.value['assets']), 4)
-            self.assertEqual(release.state(api.value)['status'], 'published')
+        for change in ({'target_commitish': 'feature'}, {'draft': False}, {'prerelease': True}):
+            with self.assertRaises(ValueError): release.validate_draft({**api.value, **change})
 
     def test_artifact_assembly_rejects_wrong_commit_and_changed_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -678,6 +664,31 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(release, "validate_versions"):
                 with self.assertRaises(ValueError):
                     artifacts.assemble(root, root / "public", SHA, "v1.2.3")
+
+    def test_main_assembly_binds_all_flavors_to_one_run_and_keeps_msix_private(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+            'MON_MAIN_CANDIDATE': 'true', 'GITHUB_RUN_ID': '42', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_EVENT_NAME': 'push',
+        }):
+            root = Path(temporary)
+            for flavor, suffix, status in (('macos', 'dmg', 'developer_id_signed_and_notarized'),
+                                           ('windows', 'exe', 'unsigned_verified'),
+                                           ('store', 'msix', 'store_payload_verified_unsigned')):
+                binary, bom = root / ('app.' + suffix), root / (flavor + '.cdx.json')
+                binary.write_bytes(b'inert fixture')
+                bom.write_text('{}')
+                (root / (flavor + '-receipt.json')).write_text(json.dumps({
+                    'schemaVersion': 1, 'sourceSha': SHA, 'flavor': flavor, 'verification': status,
+                    'binary': binary.name, 'sha256': artifacts.digest(binary), 'bytes': binary.stat().st_size,
+                    'sbom': bom.name, 'sbomSha256': artifacts.digest(bom),
+                }))
+            tag = 'v' + json.loads((artifacts.ROOT / 'app/package.json').read_text())['version']
+            artifacts.assemble(root, root / 'public', SHA, tag)
+            manifest = json.loads((root / 'public/release-manifest.json').read_text())
+            self.assertEqual(manifest['schemaVersion'], 2)
+            self.assertEqual(manifest['producer'], {'kind': 'main-build', 'runId': 42, 'runAttempt': 2, 'event': 'push'})
+            self.assertFalse((root / 'public/app.msix').exists())
+            self.assertIn('store.cdx.json', manifest['publicFiles'])
+            self.assertEqual(manifest['artifacts'][2]['sha256'], artifacts.digest(root / 'app.msix'))
 
 
 class HandoffTests(unittest.TestCase):
@@ -781,6 +792,7 @@ class StoreTests(unittest.TestCase):
 
     def test_azure_upload_cannot_send_packages_to_an_arbitrary_host(self):
         provider = object.__new__(store.Store)
+        provider.read_only = False
         with self.assertRaises(ValueError):
             provider.upload("https://attacker.example/upload", Path("unused"))
 
@@ -789,7 +801,7 @@ class StoreTests(unittest.TestCase):
         api.value['draft'] = False
         api.save_state(api.value, {'status': 'published', 'store': 'pending', 'sourceSha': SHA, 'buildRunId': '42'})
         package_bytes = b'synthetic inert MSIX'
-        receipt = {'flavor': 'store', 'binary': 'test.msix', 'sha256': hashlib.sha256(package_bytes).hexdigest(), 'bytes': len(package_bytes)}
+        receipt = {'sourceSha': SHA, 'flavor': 'store', 'binary': 'test.msix', 'sha256': hashlib.sha256(package_bytes).hexdigest(), 'bytes': len(package_bytes)}
         manifest = {'sourceSha': SHA, 'tag': 'v1.2.3', 'artifacts': [receipt]}
         def download(argv, **kwargs):
             directory = Path(argv[argv.index('--dir') + 1])
