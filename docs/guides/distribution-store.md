@@ -41,6 +41,12 @@ python tools/mon_windows_msix.py verify --manifest 'output/windows-store-work/<b
 
 `installedVerification`と`certification`は`pending`、`distributionReady`は`false`として生成します。実際の検証・認定は別に記録します。
 
+### 起動中の更新延期
+
+生成する`AppxManifest.xml`は、`Properties`配下に`uap17:UpdateWhileInUse`の値`defer`を宣言します。最低OSのWindows 11 24H2（build 26100）はこの設定に対応しています。録音・解析中とトレイ常駐中を含め、起動中の更新適用を延期し、正常終了後の適用を待つ方針です。OS更新やシステム再起動による終了は対象外です。[Microsoftの仕様](https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap17-updatewhileinuse)を参照してください。
+
+パッケージ照合はこの宣言を含むマニフェスト全体を比較します。設定を削除・書換えしたパッケージは、ハッシュ記録だけを作り直しても拒否します。初導入の旧版からの更新と、設定を含む版同士の更新は分けて検証します。実機手順は[MSIXのローカル実機検証](testing-windows-msix.md#起動中の更新延期を確認する)に記載します。
+
 ## 原本と同じ内容のローカル検証
 
 署名済みコピーを用意した後の証明書登録・導入コマンドと機能チェックリストは[MSIXのローカル実機検証](testing-windows-msix.md)を参照してください。同じ版数で検証する場合も、インストール済みの本体ハッシュを照合して今回のビルドを識別します。

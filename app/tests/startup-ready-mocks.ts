@@ -5,6 +5,7 @@ import { defaultVadOptions } from "../src/vad-state";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 export { mockWindows } from "@tauri-apps/api/mocks";
 export const mockIPC: typeof nativeMockIPC = (callback, options) => nativeMockIPC((command, args) => {
+  if (command === "get_app_update_status") return {revision:0,channel:"unsupported",state:"unsupported",currentVersion:"1.0.1",updateAvailable:false,availableVersion:null,checkedAtMs:null,errorMessage:null};
   if (command === "get_model_download_guidance" && !(window as Window & {lifecycleFixture?:unknown}).lifecycleFixture) return {pending:false};
   if (command === "list_job_history" && !(window as Window & {lifecycleFixture?:unknown}).lifecycleFixture) return {items:[],nextCursor:null,storageError:null};
   if (command === "get_window_environment") return { schemaVersion: 1, productName: "MinutesOn", role: getCurrentWindow().label, platform: new URLSearchParams(location.search).get("resident") ?? (navigator.platform.startsWith("Win") ? "windows" : "macos"), capabilities: { voiceIdentity: true } };

@@ -154,6 +154,9 @@ export interface CommandArguments {
   "get_model_download_guidance": Record<string, never>;
   "dismiss_model_download_guidance": Record<string, never>;
   "list_job_history": { "query": unknown };
+  "get_app_update_status": Record<string, never>;
+  "check_app_update": Record<string, never>;
+  "open_app_update_page": Record<string, never>;
 }
 export type CommandName = keyof CommandArguments;
 export type CommandArgs<C extends CommandName> = CommandArguments[C];
@@ -2847,6 +2850,33 @@ export const commandContracts = {
     "response": {
       "type": "Result<Page,mon_contracts::AppError>",
       "ok": "Page",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_app_update_status": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<AppUpdateStatus,mon_contracts::AppError>",
+      "ok": "AppUpdateStatus",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "check_app_update": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<AppUpdateStatus,mon_contracts::AppError>",
+      "ok": "AppUpdateStatus",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "open_app_update_page": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
       "error": "mon_contracts::AppError"
     }
   }

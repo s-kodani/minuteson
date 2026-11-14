@@ -121,6 +121,35 @@ class StorePackageTests(unittest.TestCase):
                 msix.configuration(self.root)
         self.assertFalse((self.root / "output").exists())
 
+    def test_running_application_updates_are_deferred_and_policy_tampering_is_rejected(self):
+        xml = msix.ET.fromstring(msix.manifest_xml(self.config))
+        policy = xml.find(f"{{{msix.FOUNDATION}}}Properties/{{{msix.UAP17}}}UpdateWhileInUse")
+        self.assertIsNotNone(policy)
+        self.assertEqual(policy.text, "defer")
+        self.assertIn("uap17", xml.get("IgnorableNamespaces").split())
+        self.assertGreaterEqual(tuple(map(int, self.config["minimumOsVersion"].split("."))), (10, 0, 26100, 0))
+        # Recompute the frozen hashes too: verification must enforce the policy,
+        # rather than accepting a self-consistent but unprotected package.
+        for change in ("remove", "change"):
+            with self.subTest(change=change):
+                self.package_stage()
+                path = self.stage / "AppxManifest.xml"
+                tree = msix.ET.fromstring(path.read_bytes())
+                properties = tree.find(f"{{{msix.FOUNDATION}}}Properties")
+                element = properties.find(f"{{{msix.UAP17}}}UpdateWhileInUse")
+                if change == "remove": properties.remove(element)
+                else: element.text = "force"
+                path.write_bytes(msix.ET.tostring(tree))
+                with zipfile.ZipFile(self.package, "w") as archive:
+                    for source in self.stage.rglob("*"):
+                        if source.is_file(): archive.write(source, source.relative_to(self.stage).as_posix())
+                    archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                    archive.writestr("[Content_Types].xml", "<Types/>")
+                with self.assertRaisesRegex(ValueError, "identity or manifest"):
+                    msix.verify_payload(self.package, self.config, msix.inventory(self.root, self.stage))
+                self.package.unlink()
+                shutil.rmtree(self.stage)
+
     def test_stage_keeps_runtime_archive_workers_and_notices_without_loose_binaries(self):
         files = self.package_stage()
         names = {f["path"] for f in files}

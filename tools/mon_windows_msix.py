@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FOUNDATION = "http://schemas.microsoft.com/appx/manifest/foundation/windows10"
 UAP = "http://schemas.microsoft.com/appx/manifest/uap/windows10"
 UAP10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+UAP17 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/17"
 RESCAP = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 MIN_OS = "10.0.26100.0"
 RUNTIME_FILES = (
@@ -92,16 +93,17 @@ def sdk_tool(name):
 
 
 def manifest_xml(config):
-    for prefix, uri in (("", FOUNDATION), ("uap", UAP), ("uap10", UAP10), ("rescap", RESCAP)):
+    for prefix, uri in (("", FOUNDATION), ("uap", UAP), ("uap10", UAP10), ("uap17", UAP17), ("rescap", RESCAP)):
         ET.register_namespace(prefix, uri)
     def add(parent, name, attributes=None, text=None):
         element = ET.SubElement(parent, name if name.startswith("{") else f"{{{FOUNDATION}}}{name}", attributes or {})
         element.text = text
         return element
-    package = ET.Element(f"{{{FOUNDATION}}}Package", {"IgnorableNamespaces": "uap uap10 rescap"})
+    package = ET.Element(f"{{{FOUNDATION}}}Package", {"IgnorableNamespaces": "uap uap10 uap17 rescap"})
     add(package, "Identity", {"Name": config["identityName"], "Publisher": config["publisher"],
                               "Version": config["version"], "ProcessorArchitecture": "x64"})
     properties = add(package, "Properties")
+    add(properties, f"{{{UAP17}}}UpdateWhileInUse", text="defer")
     for key, value in (("DisplayName", config["displayName"]), ("PublisherDisplayName", config["publisherDisplayName"]),
                        ("Description", "会議の録音・文字起こし・議事録生成"), ("Logo", "Assets\\StoreLogo.png")):
         add(properties, key, text=value)

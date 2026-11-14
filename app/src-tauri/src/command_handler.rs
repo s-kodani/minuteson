@@ -154,4 +154,7 @@ tauri::generate_handler![
     get_model_download_guidance,
     dismiss_model_download_guidance,
     job_history::list_job_history,
+    app_updates::get_app_update_status,
+    app_updates::check_app_update,
+    app_updates::open_app_update_page,
 ]
