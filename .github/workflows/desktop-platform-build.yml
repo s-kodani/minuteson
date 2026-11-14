@@ -163,7 +163,7 @@ jobs:
         run: npm run test:browser
       - name: Save verified browser engine
         if: success() && env.MON_SAVE_CI_CACHE == 'true' && steps.browser_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/playwright
           key: ${{ steps.browser_cache.outputs.cache-primary-key }}
@@ -455,31 +455,31 @@ jobs:
           retention-days: 7
       - name: Save windows-runtime build intermediates
         if: success() && env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SAVE_CI_CACHE == 'true' && steps.windows_runtime_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.windows_runtime_key.outputs.paths }}
           key: ${{ steps.windows_runtime_key.outputs.key }}
       - name: Save windows-capture build intermediates
         if: success() && env.MON_CI_FULL == 'true' && runner.os == 'Windows' && env.MON_SAVE_CI_CACHE == 'true' && steps.windows_capture_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.windows_capture_key.outputs.paths }}
           key: ${{ steps.windows_capture_key.outputs.key }}
       - name: Save macos-capture build intermediates
         if: success() && env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_SAVE_CI_CACHE == 'true' && steps.macos_capture_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.macos_capture_key.outputs.paths }}
           key: ${{ steps.macos_capture_key.outputs.key }}
       - name: Save macos-workers build intermediates
         if: success() && env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_SAVE_CI_CACHE == 'true' && steps.macos_workers_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.macos_workers_key.outputs.paths }}
           key: ${{ steps.macos_workers_key.outputs.key }}
       - name: Save checksum-verified native downloads
         if: success() && env.MON_CI_FULL == 'true' && env.MON_SAVE_CI_CACHE == 'true' && runner.os == 'Windows' && steps.native_downloads.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .cache/windows-parity/assets
