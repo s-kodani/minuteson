@@ -15,7 +15,7 @@ async page=>{
     const monitor=()=>page.locator('.toast-card').filter({hasText:"常駐監視:"});
     const operation=()=>page.locator('.toast-card').filter({hasText:"常駐の操作:"});
     await page.evaluate(()=>window.emitResidencyFixture("residency-error","合成トレイ障害"));await operation().waitFor();
-    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));await page.waitForTimeout(300);
+    await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status","合成パイプ障害"));await page.clock.runFor(300);
     check(await monitor().count()===0,"internal residency monitor notified");
     await page.evaluate(()=>window.emitResidencyFixture("residency-monitor-status",null));
     check(await operation().count()===1,"monitor recovery erased unrelated operation failure");

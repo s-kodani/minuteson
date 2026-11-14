@@ -53,11 +53,11 @@ async(page)=>{
   const aboutTrigger=footer.getByRole("button",{name:"このアプリについて",exact:true});
   const about=page.getByRole("dialog",{name:"このアプリについて",exact:true});
   await page.evaluate(()=>{window.creditsFixture.about.hold=true;});
-  await aboutTrigger.click();await about.getByRole("status").waitFor();
+  await aboutTrigger.click();await about.getByText("アプリ情報を読み込んでいます。",{exact:true}).waitFor();
   await page.waitForFunction(()=>window.creditsFixture.about.pending.length===2);
   await page.keyboard.press("Escape");await about.waitFor({state:"hidden"});
   check(await aboutTrigger.evaluate(element=>element===document.activeElement),"loading about did not restore focus");
-  await aboutTrigger.click();await about.getByRole("status").waitFor();
+  await aboutTrigger.click();await about.getByText("アプリ情報を読み込んでいます。",{exact:true}).waitFor();
   check(await page.evaluate(()=>window.creditsFixture.about.calls.length===2),"reopening duplicated pending metadata requests");
   await page.evaluate(()=>{const about=window.creditsFixture.about;about.hold=false;about.pending.splice(0).forEach(resolve=>resolve());});
   await about.getByRole("alert").waitFor();

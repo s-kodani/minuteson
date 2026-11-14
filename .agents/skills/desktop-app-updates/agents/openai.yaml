@@ -1,0 +1,3 @@
+interface:
+  display_name: "デスクトップアプリの更新"
+  short_description: "配布経路と実行中の処理を踏まえ、更新確認・適用・再起動を設計する"

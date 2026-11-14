@@ -31,7 +31,7 @@ async page=>{
     await page.evaluate(()=>window.closeFixture.recordChanged({sessionId:"invalid-synthetic-owner"}));
     await waitStates("unavailable","unavailable");
     const invalidOwnerReads=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length);
-    await page.waitForTimeout(250);
+    await page.clock.runFor(250);
     check(await panel().isVisible()&&await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length)===invalidOwnerReads,"invalid telemetry owner crashed recording UI or began reads");
     await page.evaluate(id=>window.closeFixture.recordChanged({sessionId:id}),validOwner);
     results.push("an invalid telemetry owner fails closed without crashing the recording workspace or requesting audio");
@@ -75,7 +75,7 @@ async page=>{
     await waitStates("unavailable","unavailable");
     const stopped=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length);
     await page.evaluate(()=>{const f=window.closeFixture;f.holdInputLevels=false;f.pendingInputLevels.splice(0).forEach(resolve=>resolve());});
-    await page.waitForTimeout(450);
+    await page.clock.runFor(450);
     check(await panel().getByRole("meter").count()===0&&await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_levels").length)===stopped,"stopping recording continued polling or adopted a late reply");
     results.push("stopping immediately clears levels and stops reads; a late accepted reply cannot resurrect meters");
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording"}));

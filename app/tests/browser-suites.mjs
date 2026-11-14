@@ -36,6 +36,7 @@ export const browserSuites = [
   ["model-deletion-admission", null, "model-deletion-enabled-browser-check.js"],
   ["settings-layout", "browser-fixture.js", "settings-layout-browser-check.js"],
   ["credits", "credits-browser-fixture.js", "credits-browser-check.js"],
+  ["app-updates", "app-updates-browser-fixture.js", "app-updates-browser-check.js"],
   ["transcription-controls", "browser-fixture.js", "transcription-controls-browser-check.js"],
   ["vad-settings", "model-download-browser-fixture.tsx", "vad-settings-browser-check.js"],
   ["speaker-completion-settings", "browser-fixture.js", "speaker-completion-browser-check.js"],

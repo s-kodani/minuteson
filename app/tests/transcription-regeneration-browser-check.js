@@ -54,7 +54,7 @@ async page => {
   await page.screenshot({path:"output/playwright/transcription-replacement-20261016/transcription-replacement-confirmation.png"});
   await page.getByRole("button",{name:"確認をキャンセル",exact:true}).click();
   await replacement().waitFor({state:"hidden"});
-  await page.waitForTimeout(3300);
+  await page.clock.runFor(3300);
   check(await replacement().count()===0,"cancelled confirmation reopened on polling");
   check(await edit().innerText()==="処理中に書いた未保存本文","cancellation lost human text");
   const starts=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length);

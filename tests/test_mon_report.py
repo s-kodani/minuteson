@@ -475,10 +475,21 @@ class ReportTests(unittest.TestCase):
         }
         facts = {"platform": "macos", "architecture": "arm64", "memory_gib_rounded": 32,
                  "physical_memory_bytes": 32 * 1024 ** 3, "os_version": "test"}
+        real_popen = mon_eval.subprocess.Popen
+        def spawn(argv, **kwargs):
+            if sys.platform != "darwin":
+                kwargs["stdin"] = mon_eval.subprocess.PIPE
+            return real_popen(argv, **kwargs)
+        def sample(process):
+            # This tests report provenance, not RSS sampling accuracy. Keep the
+            # fixture alive until its first sample, regardless of host load.
+            process.stdin.close()
+            return 4096
         for stage in mon_report.REQUIRED_STAGES:
             output = outputs[stage]
-            script = (f"from pathlib import Path; import time; "
-                      f"Path({str(output)!r}).write_text({stage!r}); time.sleep(0.12)")
+            script = (f"from pathlib import Path; import sys; "
+                      f"Path({str(output)!r}).write_text({stage!r}); "
+                      "sys.stdin.buffer.read() if sys.platform != 'darwin' else None")
             args = SimpleNamespace(
                 run=str(self.run), stage=stage, engine=f"fixture-{stage}", profile="standard",
                 run_kind="cold", variant="baseline", trial_id="candidate",
@@ -489,6 +500,8 @@ class ReportTests(unittest.TestCase):
                 cwd=None, executable=["--", sys.executable, "-c", script],
             )
             with (patch.object(mon_eval, "host_facts", return_value=facts),
+                  patch.object(mon_eval.subprocess, "Popen", side_effect=spawn),
+                  patch.object(mon_eval, "process_rss_kib", side_effect=sample),
                   redirect_stdout(io.StringIO())):
                 self.assertEqual(mon_eval.command_benchmark(args), 0)
         recorded = json.loads((self.run / "run.json").read_text(encoding="utf-8"))["measurements"]

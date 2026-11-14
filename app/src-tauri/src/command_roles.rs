@@ -156,6 +156,9 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_model_download_guidance" => matches!(role, "main"),
         "dismiss_model_download_guidance" => matches!(role, "main"),
         "list_job_history" => matches!(role, "main"),
+        "get_app_update_status" => matches!(role, "main"),
+        "check_app_update" => matches!(role, "main"),
+        "open_app_update_page" => matches!(role, "main"),
         _ => false,
     }
 }

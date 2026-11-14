@@ -29,7 +29,7 @@ async page => {
   });
   await showProgress('受付中');
   check(await common.getByRole('progressbar').getAttribute('value')===null,'acceptance must be indeterminate');
-  await page.waitForTimeout(2100);
+  await page.clock.runFor(2100);
   await page.evaluate(async()=>{
     const f=window.monBrowserFixture;
     f.analysisPreparations=[{meetingId:'meeting-0',meetingTitle:'会議A',operationId:f.operationId,phase:'mix',completed:400,total:1000,startedAtMs:Date.now(),sequence:1}];

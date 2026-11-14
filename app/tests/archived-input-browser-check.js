@@ -21,23 +21,23 @@ async page=>{
     await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.hold.receive=true;const d=document.createElement("dialog");d.id="archive-cover";d.textContent="合成表示遮蔽";document.body.append(d);d.showModal();});
     await seed({both:true,loss:2,issue:"missing",title:"終了した点検会議"});
-    await page.waitForFunction(()=>window.closeFixture.archived.replies.length===2);await page.waitForTimeout(1100);
+    await page.waitForFunction(()=>window.closeFixture.archived.replies.length===2);await page.clock.runFor(1100);
     check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"held receipt invented rendering");
     check(await page.locator('[data-input-kind]').count()===0,"closed history became current input badge");
     results.push("closed recordings claim independent microphone/system events without inventing current input state or rendering");
     await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";});
-    await release("receive");await card().waitFor({state:"attached"});await page.waitForTimeout(350);
+    await release("receive");await card().waitFor({state:"attached"});await page.clock.runFor(350);
     check((await calls()).every(c=>c.action==="receive"),"transparent modal presenter was rendered");
-    await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";document.querySelector("#archive-cover").close();});await page.waitForTimeout(350);
+    await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";document.querySelector("#archive-cover").close();});await page.clock.runFor(350);
     check((await calls()).every(c=>c.action==="receive"),"transparent archive toast was rendered");
     // The host uses display:contents, so translating it does not move cards.
     // Move the actual cards and assert their geometry before judging receipts.
-    await page.evaluate(()=>{for(const card of document.querySelectorAll('.toast-host .toast-card'))card.style.transform="translateY(-2000px)";document.querySelector(".toast-host").style.opacity="1";});await page.waitForTimeout(350);
+    await page.evaluate(()=>{for(const card of document.querySelectorAll('.toast-host .toast-card'))card.style.transform="translateY(-2000px)";document.querySelector(".toast-host").style.opacity="1";});await page.clock.runFor(350);
     check((await card().boundingBox()).y<0,"archive card was not actually moved out of view");
     check((await calls()).every(c=>c.action==="receive"),"off-viewport archive toast was rendered");
     results.push("modal coverage, transparency and off-viewport cards cannot acknowledge archived rendering");
     await page.evaluate(()=>{document.querySelector("#archive-cover").showModal();for(const card of document.querySelectorAll('.toast-host .toast-card'))card.style.transform="";window.closeFixture.showQueueBlockers();document.querySelector("#archive-cover").close();});
-    await page.waitForTimeout(400);check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"queued archive card fabricated render");
+    await page.clock.runFor(400);check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"queued archive card fabricated render");
     const old=(await calls())[0];await reload();await card().waitFor();
     // Both lanes must actually be exposed before either render receipt counts.
     await readStack();
@@ -59,7 +59,7 @@ async page=>{
     await readStack();
     for(const input of ["マイク","PC音声"]){const n=card(input);if(await n.count())await n.getByRole("button",{name:input==="マイク"?"情報通知を閉じる":"注意通知を閉じる",exact:true}).click();}
     await card("PC音声").filter({hasText:"復帰していました"}).waitFor();await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.rendered);
-    await reload();await page.waitForTimeout(700);check(await card().count()===0&&await card("PC音声").count()===0,"rendered past event replayed after reload");
+    await reload();await page.clock.runFor(700);check(await card().count()===0&&await card("PC音声").count()===0,"rendered past event replayed after reload");
     await openHistory();check(await diagnosis().count()===0,"replacement WebView exposed archive diagnostics");await closeHistory();
     results.push("render-confirmed events do not replay in replacement WebView");
 
@@ -70,21 +70,21 @@ async page=>{
     results.push("lost receive/render replies are reconciled by exact native readback, not local completion assumptions");
     await page.evaluate(()=>{window.closeFixture.archived.holdRead=true;return window.closeFixture.recordChanged({phase:"idle"});});await page.waitForFunction(()=>window.closeFixture.archived.reads.length===1);
     const before=await page.evaluate(()=>window.closeFixture.calls.filter(c=>["get_archived_recording_input_notices","get_archived_recording_input_notice_rows"].includes(c.command)).length);
-    await page.waitForTimeout(1800);check(await card().count()===0,"stale archived read kept presentation");
+    await page.clock.runFor(1800);check(await card().count()===0,"stale archived read kept presentation");
     check(await page.locator(".toast-host .toast-card").filter({hasText:"終了済み録音の通知履歴を確認中です"}).count()===0,"background read exposed a pending toast");
     check(await page.evaluate(()=>window.closeFixture.calls.filter(c=>["get_archived_recording_input_notices","get_archived_recording_input_notice_rows"].includes(c.command)).length)===before,"hung archive read caused overlapping request");
     await page.evaluate(()=>{const state=window.closeFixture.archived;state.holdRead=false;state.reads.splice(0).forEach(resolve=>resolve());state.failRead=true;});
-    await page.waitForTimeout(1200);check(await readWarning().count()===0,"automatic archive read notified");check(await card().count()===0,"late old page resurrected expired display");
+    await page.clock.runFor(1200);check(await readWarning().count()===0,"automatic archive read notified");check(await card().count()===0,"late old page resurrected expired display");
     results.push("hung page reads remain single-flight, stale delivery disappears, and failed reads remain silent");
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.failRead=false;f.archived.lost.render=false;f.archived.lost.receive=false;f.archived.hold.receive=true;});await seed({title:"受付保留の会議"});
-    await page.waitForFunction(()=>window.closeFixture.archived.replies.length===1);await page.waitForTimeout(1200);
+    await page.waitForFunction(()=>window.closeFixture.archived.replies.length===1);await page.clock.runFor(1200);
     check(await page.evaluate(()=>window.closeFixture.archived.replies.length)===1,"hung receive duplicated request");
-    await page.evaluate(()=>{window.closeFixture.archived.failRead=true;});await page.waitForTimeout(1200);check(await readWarning().count()===0,"automatic archive read notified");
+    await page.evaluate(()=>{window.closeFixture.archived.failRead=true;});await page.clock.runFor(1200);check(await readWarning().count()===0,"automatic archive read notified");
     await release("receive");check(await card().count()===0,"failed source resurrected via old receipt");
     await page.evaluate(()=>{window.closeFixture.archived.failRead=false;});await card().waitFor();
     results.push("read failure preserves pending acknowledgement slots, with no duplicate hung receives or optimistic late display");
     await page.evaluate(()=>window.dataFixture.changed({kind:"backup",phase:"writing",busy:true}));await card().waitFor({state:"hidden"});
-    const held=await calls();await page.waitForTimeout(1100);check((await calls()).length===held.length,"maintenance continued archive writes");
+    const held=await calls();await page.clock.runFor(1100);check((await calls()).length===held.length,"maintenance continued archive writes");
     await page.evaluate(()=>window.dataFixture.changed({kind:null,phase:"idle",busy:false}));await card().waitFor();
     results.push("known maintenance suppresses delivery and writes until a fresh post-maintenance read");
 
@@ -115,7 +115,7 @@ async page=>{
     await readStack();
     await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0]?.delivery.rendered));
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
-      await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
+      await page.setViewportSize({width,height:900});await page.clock.runFor(200);
       check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`archive UI overflows ${width} ${theme}`);
       check(await card().evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}),"archive card outside viewport");
       await page.screenshot({path:`output/playwright/archive-expanded-${theme}-${width}-20261012.png`});
@@ -127,7 +127,7 @@ async page=>{
     results.push("960/360px light/dark layouts retain historical warnings and distinguish them from present acquisition");
     const forbidden=["start_capture_test","start_recording","stop_recording","prepare_meeting_playback","prepare_playback","prepare_capture_test_playback"];
     check(await page.evaluate(forbidden=>window.closeFixture.calls.every(c=>!forbidden.includes(c.command)),forbidden),"archive workflow requested recording or playback");
-    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.waitForTimeout(700);
+    await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.clock.runFor(700);
     check(await page.evaluate(()=>window.closeFixture.calls.every(c=>c.command!=="get_archived_recording_input_notices")),"mini window polled closed-recording delivery");
     results.push("archive workflow never requests capture/playback, and mini window does not own archived delivery");
     return {passed:results.length,results};

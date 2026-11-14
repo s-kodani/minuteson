@@ -16,7 +16,7 @@ async (page, capturePath, detailUI) => {
     await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools();
     await editor.getByRole("button",{ name: "編集を開始",exact: true }).click(); await name("話者A").waitFor();
   };
-  await boot(); await name("話者A").fill("入力中の名前"); await page.waitForTimeout(950);
+  await boot(); await name("話者A").fill("入力中の名前"); await page.clock.runFor(950);
   check((await writes()).length === 0 && (await payload()).speaker_names.length === 0 && await editor.getByRole("checkbox",{ name: "田中",exact: true }).first().isVisible() && await editor.getByText("未保存",{ exact: true }).isVisible(),"typing published name or changed speaker labels");
   results.push("idle name typing stays unpublished and labels retain their confirmed names");
   await name("話者B").fill("別の未確定名"); await editor.getByRole("button",{ name: "00:00:00の発言を編集",exact: true }).click(); await field.fill("別の未確定本文"); await commit("話者A"); await group("話者A").getByRole("button",{ name: "確定",exact: true }).waitFor({ state: "hidden" });
@@ -24,7 +24,7 @@ async (page, capturePath, detailUI) => {
   check(await name("話者A").evaluate(e => document.activeElement === e),"name confirmation lost focus when its action button was removed");
   check(await editor.getByRole("combobox",{ name: "話者で絞り込み",exact: true }).locator('option[value="speaker-a"]').textContent() === "入力中の名前","confirmed name did not propagate by speaker ID");
   results.push("one confirmation persists only its name and updates matching labels, retaining other names and text");
-  await cancel("話者B"); await field.press("Escape"); await page.waitForTimeout(400);
+  await cancel("話者B"); await field.press("Escape"); await page.clock.runFor(400);
   check((await writes()).length === 1 && await name("話者B").inputValue() === "佐藤","cancelling unpublished names wrote or changed another name");
   results.push("cancelling an unpublished name restores its saved display without publishing other input");
   await name("話者A").fill(""); await name("話者A").press("Enter"); await waitName("speaker-a",null);
@@ -33,7 +33,7 @@ async (page, capturePath, detailUI) => {
 
   await boot(); await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 250; });
   await name("話者A").fill("最初の確定名"); await commit("話者A"); await name("話者A").fill("保存待ち中の新しい名"); await waitName("speaker-a","最初の確定名");
-  await group("話者A").getByRole("button",{ name: "確定",exact: true }).waitFor({ state: "visible" }); await page.waitForTimeout(900);
+  await group("話者A").getByRole("button",{ name: "確定",exact: true }).waitFor({ state: "visible" }); await page.clock.runFor(900);
   check(await name("話者A").inputValue() === "保存待ち中の新しい名" && (await writes()).length === 1 && await editor.getByText("未保存",{ exact: true }).isVisible(),"old response replaced or implicitly confirmed newer name");
   await commit("話者A"); await waitName("speaker-a","保存待ち中の新しい名");
   results.push("a delayed acknowledgement preserves newer name input; a second explicit confirmation is required");
@@ -54,7 +54,7 @@ async (page, capturePath, detailUI) => {
   await editor.getByRole("button",{ name: "本文の保存結果を確認",exact: true }).waitFor(); await cancel("話者A");
   await editor.getByRole("alert").filter({ hasText: "先行する保存結果を確認できません" }).waitFor();
   check(await name("話者A").inputValue() === "応答を失う名前" && (await writes()).length === 1,"unknown advanced result allowed blind cancellation");
-  await name("話者A").fill("結果確認後に確定する名"); await editor.getByRole("button",{ name: "本文の保存結果を確認",exact: true }).click(); await page.waitForTimeout(900);
+  await name("話者A").fill("結果確認後に確定する名"); await editor.getByRole("button",{ name: "本文の保存結果を確認",exact: true }).click(); await page.clock.runFor(900);
   check((await writes()).length === 1 && await name("話者A").inputValue() === "結果確認後に確定する名","read-only result check published newer name");
   await commit("話者A"); await waitName("speaker-a","結果確認後に確定する名");
   results.push("lost response refuses blind cancellation; read-only result checking never publishes new input");
@@ -62,7 +62,7 @@ async (page, capturePath, detailUI) => {
   await boot(); await name("話者A").fill("再試行する確認済み名"); await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await commit("話者A");
   await editor.getByRole("button",{ name: "保存を再試行",exact: true }).waitFor(); await name("話者A").fill("まだ確定しない最新名"); await name("話者B").fill("未確定の別名");
   await editor.getByRole("button",{ name: "00:00:00の発言を編集",exact: true }).click(); await field.fill("再試行で確定しない本文");
-  await page.evaluate(() => { window.monBrowserFixture.failSave = false; }); await editor.getByRole("button",{ name: "保存を再試行",exact: true }).click(); await waitName("speaker-a","再試行する確認済み名"); await page.waitForTimeout(900);
+  await page.evaluate(() => { window.monBrowserFixture.failSave = false; }); await editor.getByRole("button",{ name: "保存を再試行",exact: true }).click(); await waitName("speaker-a","再試行する確認済み名"); await page.clock.runFor(900);
   check((await payload()).speaker_names.length === 1 && (await payload()).utterances.length === 0 && (await writes()).length === 2 && await name("話者A").inputValue() === "まだ確定しない最新名" && await name("話者B").inputValue() === "未確定の別名" && await field.inputValue() === "再試行で確定しない本文","retry implicitly published newer buffers");
   results.push("explicit retry resolves only the frozen confirmed payload, not newer names or open text");
 
@@ -99,7 +99,7 @@ async (page, capturePath, detailUI) => {
   for(const theme of ["light","dark"]) for(const width of [960,1200]) {
     await page.setViewportSize({ width,height: 900 }); await detailUI.closeSpeakerPanel(); await page.getByRole("banner").getByRole("combobox",{ name: "表示テーマ",exact: true }).selectOption(theme); await detailUI.openSpeakerPanel(); await name("話者A").focus();
     check(await group("話者A").evaluate(e => e.scrollWidth <= e.clientWidth && e.querySelector("input").getBoundingClientRect().right <= e.getBoundingClientRect().right) && await name("話者A").inputValue() === "幅とテーマを変えても保持する名","name layout overflowed or lost input");
-    await group("話者A").scrollIntoViewIfNeeded(); await page.waitForTimeout(150); await page.screenshot({ path: `speaker-name-${theme}-${width}.png` });
+    await group("話者A").scrollIntoViewIfNeeded(); await page.clock.runFor(150); await page.screenshot({ path: `speaker-name-${theme}-${width}.png` });
   }
   results.push("light/dark at 960px and 1200px retain name input with contained labelled controls");
   return { passed: results.length,results };

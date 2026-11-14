@@ -6,6 +6,7 @@ import { VoicePeopleSettings } from "./voice";
 import { MinutesPromptSettings } from "./minutes-prompt-settings";
 import { InternalLogs } from "./internal-logs";
 import { SettingsFooter } from "./settings-footer";
+import { AppUpdateBanner, AppUpdateProvider } from "./app-updates";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import { usePlatform } from "./platform";
 import { ResidencyNotifications } from "./residency-notifications";
@@ -422,6 +423,7 @@ function MainWindow() {
         <header className="topbar"><nav className="screen-navigation" aria-label="画面の移動">{history.previous && <IconButton label="前の画面へ戻る" icon="previous" data-screen-navigation disabled={navigationLocked} onClick={() => void goBack()} />}{screen !== "meetings" && <><button type="button" className="breadcrumb-button" data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => { setSelectedMeeting(null);  setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button><span aria-hidden="true">/</span></>}<span aria-current="page">{detail ? "会議詳細" : screen === "recording" ? preparation ? "新しい録音" : "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : screen === "jobs" ? "ジョブ一覧" : screen === "logs" ? "内部ログ" : screen === "voices" ? "ボイス一覧" : screen === "prompts" ? "プロンプト" : "設定"}</span></nav><div className="topbar-actions"><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <button type="button" className="small-secondary" data-screen-navigation disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && screen!=="recording" && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={event => void stopRecording(event.currentTarget)}>録音を終了</button>}</div><NotificationPopover open={notificationsOpen} onOpenChange={setNotificationsOpen}><NotificationList visible={notificationsOpen} onOpen={openNotifiedMeeting} locked={navigationLocked}/></NotificationPopover></div><ToastHost docked={detail}/></header>
         <CommonOperationProgress onOpenJobs={showJobs} />
         {detail && <div className="meeting-detail-status"><div><div className="meeting-title-row"><h1 title={selectedMeeting!.title}>{selectedMeeting!.title}</h1><IconButton ref={renameOpener} label="会議名を変更" icon="edit" disabled={writeLocked || meetingBusy} onClick={() => { setRenameTitle(selectedMeeting!.title); setRenameOpen(true); }} /></div><p className="lead">作成 {new Date(selectedMeeting!.createdAt).toLocaleString("ja-JP")}</p></div><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
+        <AppUpdateBanner />
         {detail && <div className="meeting-detail-navigation"><div className="meeting-detail-tabs" role="tablist" aria-label="会議詳細">
           {(["transcript", "minutes"] as const).map(tab => <button key={tab} type="button" role="tab" id={`meeting-tab-${tab}`} aria-controls={`meeting-panel-${tab}`} aria-selected={detailTab === tab} tabIndex={detailTab === tab ? 0 : -1} data-screen-navigation disabled={navigationLocked} onClick={() => void switchDetailTab(tab)} onKeyDown={event => {
             if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
@@ -525,5 +527,5 @@ function MainWindow() {
 }
 
 export function MainDesktopWindow() {
-  return <RecorderOperationProvider><RecordingInputProvider windowLabel="main"><SettingsModalScope><MainWindow /></SettingsModalScope><ConfirmationHost /></RecordingInputProvider></RecorderOperationProvider>;
+  return <AppUpdateProvider><RecorderOperationProvider><RecordingInputProvider windowLabel="main"><SettingsModalScope><MainWindow /></SettingsModalScope><ConfirmationHost /></RecordingInputProvider></RecorderOperationProvider></AppUpdateProvider>;
 }

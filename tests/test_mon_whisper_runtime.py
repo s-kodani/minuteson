@@ -263,8 +263,23 @@ class RuntimeTests(unittest.TestCase):
         self.assertLessEqual(oversized.stat().st_size, 5)
 
     def test_source_transport_timeout_reaps_only_its_owned_child(self):
-        with self.assertRaises(ValueError):
-            runtime.download_source([sys.executable, "-c", "import time; time.sleep(2)"], self.root / "timeout-source", 5, timeout=0.02)
+        # An owned child blocked on input stays alive until the parent's exact
+        # virtual deadline; neither interpreter startup nor a sleep is a clock.
+        process = runtime.subprocess.Popen
+        children = []
+        def spawn(argv, **kwargs):
+            kwargs["stdin"] = runtime.subprocess.PIPE
+            child = process(argv, **kwargs)
+            children.append(child)
+            return child
+        with (patch.object(runtime.subprocess, "Popen", side_effect=spawn),
+              patch.object(runtime.time, "monotonic", side_effect=[0.0, 130.0]),
+              self.assertRaisesRegex(ValueError, "exceeded its time limit")):
+            runtime.download_source([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                                    self.root / "timeout-source", 5)
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll(), "the timed-out owned child must be reaped")
+        children[0].stdin.close()
 
 
 if __name__ == "__main__":

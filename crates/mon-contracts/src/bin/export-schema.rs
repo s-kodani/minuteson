@@ -9,6 +9,7 @@ fn main() {
     let mut entries = serde_json::Map::new();
     entry::<WindowEnvironment>("WindowEnvironment", &mut entries);
     entry::<AppError>("AppError", &mut entries);
+    entry::<AppUpdateStatus>("AppUpdateStatus", &mut entries);
     entry::<JobKind>("JobKind", &mut entries);
     entry::<JobState>("JobState", &mut entries);
     entry::<PauseReason>("PauseReason", &mut entries);

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getName, getVersion } from "@tauri-apps/api/app";
 import { CommonModal } from "./common-modal";
 import { Credits } from "./credits";
+import { AppUpdateDetails, useAppUpdates } from "./app-updates";
 import "./settings-footer.css";
 
 function Disclaimer() {
@@ -25,6 +26,7 @@ function Disclaimer() {
 }
 
 function About() {
+  const updates = useAppUpdates();
   const [open, setOpen] = useState(false);
   const [metadata, setMetadata] = useState<{ name: string; version: string } | null>(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState("");
@@ -41,7 +43,7 @@ function About() {
     } catch (cause) { if (alive.current) setError(String(cause)); }
     finally { requesting.current = false; if (alive.current) setLoading(false); }
   };
-  const show = () => { setOpen(true); if (!metadata) void load(); };
+  const show = () => { setOpen(true); if (!metadata) void load(); void updates.refresh(); };
   return <>
     <button ref={trigger} type="button" className="settings-footer-link" aria-haspopup="dialog" aria-expanded={open} onClick={show}>このアプリについて</button>
     <CommonModal portal open={open} onDismiss={() => setOpen(false)} restoreTarget={() => trigger.current} dismissLabel="閉じる" dismissText="このアプリについてを閉じる" aria-label="このアプリについて" className="settings-info-modal about-modal">
@@ -55,6 +57,7 @@ function About() {
         <dt>作者</dt><dd>s-kodani</dd>
         <dt>ライセンス</dt><dd>MIT License</dd>
       </dl>
+      <AppUpdateDetails />
       <p className="about-copyright">Copyright (c) 2026 s-kodani</p>
     </CommonModal>
   </>;

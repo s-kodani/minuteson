@@ -1,0 +1,15 @@
+.app-update-banner { display:flex; flex:none; align-items:flex-start; gap:12px; padding:14px 16px; margin:16px 28px 0; border:1px solid var(--border); border-radius:10px; background:var(--raised); color:var(--text); }
+.app-update-banner>.action-icon { flex:none; margin-top:3px; }
+.app-update-banner-copy { flex:1; min-width:0; }
+.app-update-banner p { margin:0 0 6px; color:var(--secondary-text); font-size:13px; overflow-wrap:anywhere; }
+.app-update-banner .app-update-title,.app-update-details .app-update-title { font-weight:600; color:var(--text); }
+.app-update-banner button,.app-update-actions button { display:inline-flex; align-items:center; justify-content:center; gap:8px; max-width:100%; }
+.app-update-banner-copy>button { margin-top:4px; }
+.app-update-banner>.icon-button { flex:none; }
+.app-update-details { border-top:1px solid var(--border); padding-top:16px; margin-top:20px; }
+.app-update-details h3 { margin:0 0 12px; }
+.app-update-details p { margin:8px 0; overflow-wrap:anywhere; }
+.app-update-details .app-update-caption,.app-update-details .app-update-policy { font-size:12px; color:var(--muted); }
+.app-update-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 0; }
+.app-update-details .app-update-policy { border-top:1px solid var(--border); padding-top:12px; }
+@media(max-width:640px) { .app-update-banner { margin:12px 16px 0; gap:8px; padding:12px; } .app-update-banner>.action-icon { display:none; } }

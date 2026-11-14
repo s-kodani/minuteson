@@ -31,7 +31,7 @@ async (page, capturePath = path => path) => {
   results.push("one lead, vertical cause, four actions on one row; diagnostics remain plain text without refresh");
 
   await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status","合成監視障害"));
-  await page.waitForTimeout(300);
+  await page.clock.runFor(300);
   check(await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).count()===0,"internal monitor notified during startup");
   await page.evaluate(()=>window.startupFixture.emitResidency("residency-monitor-status",null));
   await page.getByRole("alert").filter({hasText:"常駐監視: 合成監視障害"}).waitFor({state:"hidden"});
@@ -62,7 +62,7 @@ async (page, capturePath = path => path) => {
     if (phase === "ready") await page.getByRole("main", { name: "通常画面", exact: true }).waitFor();
     else { await quit().waitFor(); await noWorkspace(); }
     const settled = (await commands()).length;
-    await page.waitForTimeout(450);
+    await page.clock.runFor(450);
     check((await commands()).length === settled && settled >= 2,
       "startup did not reread pending memory or kept polling a settled result");
     check((await commands()).every(c => ["get_startup_report", "get_startup_reset_state"].includes(c)), "pending startup invoked storage work");

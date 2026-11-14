@@ -1,5 +1,6 @@
 //! Binding telemetry is neither PCM arrival nor persistence. Pin its directory
 //! before spawning the helper, and age repeated publications conservatively.
+mod clock;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
@@ -215,6 +216,7 @@ fn millis(duration: Duration) -> Result<u64, String> {
         .ok_or_else(|| "入力状態の時計が範囲外です".into())
 }
 pub(crate) struct StatusReader {
+    clock: clock::Clock,
     directory: File,
     previous: Option<(Publication, u64, Instant, SystemTime)>,
     queue: queue::Queue,
@@ -225,6 +227,7 @@ impl StatusReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
         Ok(Self {
             directory: crate::input_levels::open_capture_directory(directory)?,
+            clock: clock::Clock::default(),
             previous: None,
             queue: Default::default(),
             ledger: None,
@@ -235,14 +238,14 @@ impl StatusReader {
         self.persistence.read(&self.directory, owner)
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
-        let started = Instant::now();
+        let started = self.clock.instant();
         let file = crate::input_levels::open_capture_file_at(&self.directory, "input-status.json")?;
         let before = file.metadata().map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() > LIMIT {
             return Err("入力状態のファイルが不正です".into());
         }
         let modified = before.modified().map_err(|e| e.to_string())?;
-        let now = SystemTime::now();
+        let now = self.clock.wall();
         let age = now
             .duration_since(modified)
             .map_err(|_| "入力状態の時計が逆行しました")?;
@@ -267,7 +270,7 @@ impl StatusReader {
             }
         }
         let p = parse(&bytes, owner)?;
-        let mut age_ms = millis(age)?.saturating_add(millis(started.elapsed())?);
+        let mut age_ms = millis(age)?.saturating_add(millis(self.clock.elapsed(started))?);
         if let Some((previous, first_age, first_read, first_wall)) = &self.previous {
             if now < *first_wall {
                 return Err("入力状態の時計が逆行しました".into());
@@ -298,21 +301,21 @@ impl StatusReader {
                 if p != *previous {
                     return Err("同じ入力状態の版に異なる内容があります".into());
                 }
-                let elapsed = first_read.elapsed().max(
+                let elapsed = self.clock.elapsed(*first_read).max(
                     now.duration_since(*first_wall)
                         .map_err(|_| "入力状態の時計が逆行しました")?,
                 );
                 age_ms = age_ms.max(first_age.saturating_add(millis(elapsed)?));
             } else {
-                self.previous = Some((p.clone(), age_ms, Instant::now(), now));
+                self.previous = Some((p.clone(), age_ms, self.clock.instant(), now));
             }
         } else {
-            self.previous = Some((p.clone(), age_ms, Instant::now(), now));
+            self.previous = Some((p.clone(), age_ms, self.clock.instant(), now));
         }
         if age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
-        let queue_started = Instant::now();
+        let queue_started = self.clock.instant();
         if self.ledger.is_none() {
             let (mut ledger, restored) = queue::Ledger::open(&self.directory, owner)?;
             if let Some((prior, mut queue)) = restored {
@@ -323,12 +326,12 @@ impl StatusReader {
             self.ledger = Some(ledger);
         }
         let mut candidate = self.queue.clone();
-        let mut notices = candidate.observe(&p, age_ms, target, Instant::now());
+        let mut notices = candidate.observe(&p, age_ms, target, self.clock.instant());
         self.ledger.as_mut().unwrap().commit(&p, &candidate)?;
         self.queue = candidate;
         // File sync is not a new producer heartbeat. Account for time spent
         // persisting before any connection flag or delivery offer leaves Rust.
-        age_ms = age_ms.saturating_add(millis(queue_started.elapsed())?);
+        age_ms = age_ms.saturating_add(millis(self.clock.elapsed(queue_started))?);
         if age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
@@ -346,8 +349,8 @@ impl StatusReader {
             system: p.system,
             notices,
             notice_loss: Some(notice_loss),
-            observed_at: Instant::now(),
-            observed_wall: SystemTime::now(),
+            observed_at: self.clock.instant(),
+            observed_wall: self.clock.wall(),
         })
     }
     // Receipt is owned by the live recorder, not the disposable WebView. It is
@@ -364,8 +367,9 @@ impl StatusReader {
         receive_id: Option<&str>,
     ) -> Result<Receipt, String> {
         let p = &self.previous.as_ref().ok_or("入力報告がありません")?.0;
-        let elapsed = snapshot.observed_at.elapsed().max(
-            SystemTime::now()
+        let elapsed = self.clock.elapsed(snapshot.observed_at).max(
+            self.clock
+                .wall()
                 .duration_since(snapshot.observed_wall)
                 .map_err(|_| "通知の時計が逆行しました")?,
         );
@@ -387,7 +391,7 @@ impl StatusReader {
             return Err("通知の録音・報告・表示状態または受付世代が不正です".into());
         }
         let mut candidate = self.queue.clone();
-        let action_started = Instant::now();
+        let action_started = self.clock.instant();
         let mut receipt = candidate.act(
             &p.owner_id,
             notice_id,
@@ -404,7 +408,7 @@ impl StatusReader {
             .commit(p, &candidate)?;
         self.queue = candidate;
         if let Some(delivery) = &mut receipt.delivery {
-            delivery.account_persistence_time(action_started.elapsed());
+            delivery.account_persistence_time(self.clock.elapsed(action_started));
         }
         Ok(receipt)
     }

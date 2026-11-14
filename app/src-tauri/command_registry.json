@@ -3796,6 +3796,54 @@
           "error": "mon_contracts::AppError"
         }
       }
+    },
+    {
+      "name": "get_app_update_status",
+      "handler": "app_updates::get_app_update_status",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<AppUpdateStatus,mon_contracts::AppError>",
+          "ok": "AppUpdateStatus",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "check_app_update",
+      "handler": "app_updates::check_app_update",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<AppUpdateStatus,mon_contracts::AppError>",
+          "ok": "AppUpdateStatus",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "open_app_update_page",
+      "handler": "app_updates::open_app_update_page",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
     }
   ]
 }

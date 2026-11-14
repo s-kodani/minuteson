@@ -77,8 +77,19 @@ fn current_producer_format_is_required_without_legacy_notification_fallback() {
 #[test]
 fn current_reader_keeps_publication_age_and_rejects_revision_rewrite() {
     let temp = tempfile::tempdir().unwrap();
+    let wall = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let write = |directory: &Path, value: &Value| {
+        write(directory, value);
+        fs::File::options()
+            .write(true)
+            .open(directory.join("input-status.json"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(wall))
+            .unwrap();
+    };
     write(temp.path(), &publication(0));
     let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+    reader.clock = clock::Clock::fixed(wall);
     let first = reader.read(OWNER, Some("main")).unwrap();
     assert_eq!(first.schema_version, 4);
     assert!(first.connected());

@@ -27,7 +27,7 @@ async (page, capturePath = name => `output/playwright/${name}`) => {
   await links.nth(0).click();await ready();
   await links.nth(1).evaluate(el=>{window.savedAudioTag=el;});
   const box=await links.nth(1).boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
-  await page.mouse.down();await page.waitForTimeout(350);
+  await page.mouse.down();await page.clock.runFor(350);
   check(await page.evaluate(()=>window.savedAudioTag.isConnected&&window.savedAudioTag===document.querySelectorAll('.markdown-audio-link')[1]),'playback clock replaced the clicked tag');
   await page.mouse.up();await ready();check(await latest()===4000000,'held click during playback did not select the next interval');
   results.push('button identity and pointer click survive multiple playback clock renders; playing A switches to B');
@@ -40,7 +40,7 @@ async (page, capturePath = name => `output/playwright/${name}`) => {
   await player().getByRole('button',{name:'再生',exact:true}).waitFor();
   await links.nth(2).evaluate(el=>{window.completedAudioTag=el;});
   const idleBox=await links.nth(2).boundingBox();await page.mouse.move(idleBox.x+idleBox.width/2,idleBox.y+idleBox.height/2);
-  await page.mouse.down();await page.waitForTimeout(3200);
+  await page.mouse.down();await page.clock.runFor(3200);
   check(await page.evaluate(()=>window.completedAudioTag.isConnected&&window.completedAudioTag===document.querySelectorAll('.markdown-audio-link')[2]),'idle metadata refresh replaced the tag');
   await page.mouse.up();await ready();check(await latest()===6000000,'click after natural completion failed');
   const before=(await calls('prepare_meeting_playback')).length;

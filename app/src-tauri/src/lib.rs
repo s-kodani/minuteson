@@ -1,6 +1,7 @@
 mod analysis_flow;
 mod analysis_preparation;
 mod analysis_worker;
+mod app_updates;
 mod application_close;
 mod audio;
 mod audio_clock;
@@ -3076,6 +3077,7 @@ pub fn run() {
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
         .manage(recording_recovery::Recovery::default())
+        .manage(app_updates::Updates::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
         .manage(recorder_panel::PanelVisibility::default())
@@ -3270,6 +3272,7 @@ pub fn run() {
                     }
                     storage.finish_pending_meeting_audio()?;
                     handle.state::<startup_attention::Startup>().ready()?;
+                    app_updates::start(&handle);
                     if let Err(error) = storage.retry_voice_audio_cleanup() {
                         internal_logs::report_error("voice_audio", &error);
                     }
@@ -3387,6 +3390,7 @@ pub fn run() {
                 startup_instance::activate(app);
             }
             if let RunEvent::Exit = event {
+                app_updates::stop(app);
                 residency::stopping(app);
                 if let Err(error) = job_history::flush() {
                     internal_logs::report_error("job_history", &error);

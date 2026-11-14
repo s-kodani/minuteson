@@ -13,6 +13,9 @@ const failed = process.env.MON_BROWSER_FAILED_TESTS ? new Set(JSON.parse(process
 for (const [name, fixture, source] of suites) {
   if (failed && !failed.has(name)) continue;
   test(name, async ({ page, baseURL, request }, info) => {
+    // One virtual clock covers reloads and popup pages in this isolated context.
+    // Time-window assertions advance it explicitly instead of sleeping on CI.
+    await page.clock.install();
     page.setDefaultTimeout(name.startsWith("internal-logs-") ? 30_000 : 10_000);
     // Cold Vite module loads have a separate budget from control interactions.
     page.setDefaultNavigationTimeout(30_000);
