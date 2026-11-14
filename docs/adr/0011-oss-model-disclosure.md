@@ -9,7 +9,7 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/model-catalog/model-license-policy.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src-tauri/src/model_license.rs"
   - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/app/src/model-inspection.tsx"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_store_provenance.py"
 ---
 
 # ADR 0011 モデル利用条件の確認とStore成果物の出自検証

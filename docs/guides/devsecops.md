@@ -5,19 +5,19 @@ description: "セキュリティ検査、例外、GitHub保護設定、署名と
 tags: ["security", "ci", "maintenance"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/security.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/Cargo.lock"
   - resource: "https://github.com/s-kodani/minuteson/blob/6512783dfb31263f73e7abad572d736f972811b2/app/src-tauri/Cargo.toml"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_security.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/tools/mon_macos_ci_sign.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_submission.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_store_submission.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/95ec6d6e28e6cccbba792a534da44341157008a1/tools/mon_macos_release.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/6d0dedff432144125524e2a18584fb4ffba0ba5d/tools/mon_store_provenance.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_store_provenance.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/.github/security-exceptions.json"
   - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_windows_runtime.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/744afeca545faf1ef75f1f34feffa3228f76d274/tools/mon_llama_runtime_check.py"
-  - resource: "https://github.com/s-kodani/minuteson/blob/0648448fa12d6997d9611c34d4a65a1d6a53727f/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/desktop-platform-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/cd647f3d8c5917619f266eba8d2112d909182862/.github/dependabot.yml"
 ---
 

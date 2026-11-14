@@ -5,9 +5,9 @@ description: "重大な指摘を停止条件とし、mainで正式ビルドを�
 tags: ["security", "release", "github"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/security.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/release-controller.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/130c3902eea205bc0ca599c9da45635bb8974ede/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/security.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-controller.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-build.yml"
 ---
 
 # ADR 0010 範囲別PR検査とmain成果物の公開

@@ -5,12 +5,12 @@ description: "ブランチ・PR・文書更新・必須検査と、mainの最終
 tags: ["development", "github", "release"]
 status: "stable"
 sources:
-  - resource: "https://github.com/s-kodani/minuteson/blob/440c05a262fd614368da16e35451b503ea698d2e/.github/workflows/desktop-platform-build.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/440c05a262fd614368da16e35451b503ea698d2e/.github/workflows/desktop-daily.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/desktop-platform-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/desktop-daily.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/cd647f3d8c5917619f266eba8d2112d909182862/.github/dependabot.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/440c05a262fd614368da16e35451b503ea698d2e/.github/workflows/release-controller.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/440c05a262fd614368da16e35451b503ea698d2e/.github/workflows/release-build.yml"
-  - resource: "https://github.com/s-kodani/minuteson/blob/440c05a262fd614368da16e35451b503ea698d2e/tools/mon_release.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-controller.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-build.yml"
+  - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_release.py"
 ---
 
 # GitHubでの開発とリリース
