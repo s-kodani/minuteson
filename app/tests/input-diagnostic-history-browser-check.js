@@ -15,8 +15,12 @@ async (page,capturePath=path=>path)=>{
     &&(state===null?c.args.message===null:c.args.message&&JSON.parse(c.args.message).state===state)),{owner,state});
   for(const platform of ["windows","macos"]){
     await page.setViewportSize({width:1200,height:900});
-    await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);
+    await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);await page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).waitFor();
     await page.evaluate(()=>{const f=window.closeFixture;f.failJournal=true;f.archived.failRead=true;return f.recordChanged({phase:"recording",sessionId:crypto.randomUUID()});});
+    // Fixture construction precedes startup admission and the subscription
+    // effects. Advance retry time only after both readers have actually failed.
+    await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="get_archived_recording_input_notices")
+      &&window.closeFixture.calls.some(c=>c.command==="record_input_diagnostic_log"&&c.args.stage==="live-journal"&&c.args.message));
     await page.clock.runFor(6200);await quiet();
     check(await page.locator(".toast-card").count()===0,"automatic journal or archive warning appeared");
     const failedReads=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_archived_recording_input_notices").length);
@@ -32,7 +36,7 @@ async (page,capturePath=path=>path)=>{
     await page.clock.runFor(1200);await quiet();await open();
     check(await rows().count()===0,"automatic recovery added a resolved history row");
     check(!(await history().innerText()).includes("解消済み"),"resolved label survived");
-    await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);await page.clock.runFor(700);await quiet();
+    await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);await page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).waitFor();await page.clock.runFor(700);await quiet();
     results.push(`${platform}: long live/archive failures, recovery and replacement WebView remain silent while retries continue`);
 
     const owner=await page.evaluate(()=>{const f=window.closeFixture;f.journalStatus={state:"failed",requestedRevision:2,committedRevision:1,closed:false};const owner=crypto.randomUUID();f.recordChanged({phase:"recording",sessionId:owner});return owner;});
@@ -61,7 +65,7 @@ async (page,capturePath=path=>path)=>{
     results.push(`${platform}: actual archived interruptions keep their next step in wide and narrow layouts`);
     await history().getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();
     await page.setViewportSize({width:1200,height:900});
-    await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);
+    await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);await page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).waitFor();
     await page.evaluate(()=>{const f=window.closeFixture;f.captureInputs.microphonePermission="denied";f.captureApplications.systemPermission="permissionRequired";});
     await page.getByRole("button",{name:"新しい録音",exact:true}).click();
     await page.locator(".toast-host .toast-error").filter({hasText:platform==="windows"?"Windowsの設定":"マイクの利用を許可"}).waitFor();

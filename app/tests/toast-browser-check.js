@@ -3,16 +3,23 @@ async page => {
   const host = page.getByRole("complementary", { name: "通知", exact: true }), input = page.getByRole("textbox", { name: "保持する入力", exact: true });
   const clear = async () => { await page.evaluate(() => window.toastFixture.clear()); await page.waitForFunction(() => !document.querySelector('.toast-host .toast-card')); };
   const show = async notice => { await page.evaluate(n => window.toastFixture.show(n), notice); };
+  const running = key => page.waitForFunction(key => window.toastFixture.debugState().entries.some(e => e.key === key && e.started !== null), key);
+  const expire = async (key, duration = 4000) => {
+    // DOM insertion precedes visibility confirmation and the expiry timer.
+    await running(key);
+    await page.clock.runFor(duration);
+    await host.getByRole("status").waitFor({ state: "hidden" });
+  };
   try {
   await input.focus(); await show({ key: "ordinary", level: "success", message: "会議を書き出しました" });
   await host.getByRole("status").waitFor(); check(await input.evaluate(e => e === document.activeElement), "notification stole typing focus");
   check((await host.innerText()).includes("成功："), "success lacks a non-color label");
-  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  await expire("ordinary");
   results.push("success is labelled, polite, does not steal input focus, and expires after about four seconds");
 
   await show({ key: "hover", level: "info", message: "読み取り中の情報" }); await host.locator(".toast-card").hover();
   await page.clock.runFor(4300); check(await host.getByRole("status").isVisible(), "hovered notification expired");
-  await page.mouse.move(8, 8); await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  await page.mouse.move(8, 8); await expire("hover");
   results.push("hover pauses automatic dismissal and leaving resumes the remaining interval");
 
   await input.focus(); await show({ key: "focus", level: "warning", message: "確認が必要です" });
@@ -86,18 +93,19 @@ async page => {
   await show({ key: "modal-info", level: "info", message: "確認中に届いた情報" });
   await host.getByRole('status').waitFor();
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" }); await page.mouse.move(8, 8);
-  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  await expire("modal-info");
   results.push("errors remain visible and dismissible inside native modals; notifications survive returning to the workspace without stealing focus");
 
-  await page.evaluate(() => window.toastFixture.showAction()); await page.clock.runFor(4300);
+  await page.evaluate(() => window.toastFixture.showAction()); await running("action"); await page.clock.runFor(4300);
   check(await host.getByRole("button", { name: "元に戻す", exact: true }).isVisible(), "action notice used the ordinary four-second timeout");
-  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5000 });
+  await page.clock.runFor(3701);
+  await host.getByRole("status").waitFor({ state: "hidden" });
   check(await page.evaluate(() => window.toastFixture.actionCalls) === 0, "expiry executed undo");
   results.push("action notifications last about eight seconds and never execute actions on expiry");
   await clear(); await input.focus(); await page.evaluate(() => window.toastFixture.showAction());
   await host.getByRole("button", { name: "元に戻す", exact: true }).click(); await input.focus(); await page.mouse.move(8, 8);
   check(await page.evaluate(() => window.toastFixture.actionCalls) === 1, "explicit action was not exactly once");
-  await host.getByRole("status").waitFor({ state: "hidden", timeout: 9500 });
+  await expire("action", 8000);
   results.push("an explicit action runs once; its temporary disabled state cannot leave dismissal permanently paused after focus leaves");
 
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("button", { name: "保存を再試行", exact: true }).waitFor();
