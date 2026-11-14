@@ -204,11 +204,11 @@ pub(crate) fn prepare(
         "model_packages",
         "model_files",
         "model_compatibility_checks",
-        "model_profiles",
-        "profile_components",
-        "voice_policies",
-        "app_settings",
     ] {
+        copy_table(&source, &tx, table)?;
+    }
+    copy_model_profiles(&source, &tx)?;
+    for table in ["voice_policies", "app_settings"] {
         copy_table(&source, &tx, table)?;
     }
     tx.commit().map_err(err)?;
@@ -341,6 +341,50 @@ fn validate_settings(db: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn copy_model_profiles(source: &Connection, target: &Connection) -> Result<(), String> {
+    let mut query = source
+        .prepare("SELECT id,name,profile_version,state FROM model_profiles ORDER BY rowid")
+        .map_err(err)?;
+    let mut rows = query.query([]).map_err(err)?;
+    let mut completed = Vec::new();
+    while let Some(row) = rows.next().map_err(err)? {
+        if completed.len() >= 200_000 {
+            return Err("回収するモデル構成が上限を超えています".into());
+        }
+        let id: String = row.get(0).map_err(err)?;
+        let name: String = row.get(1).map_err(err)?;
+        let version: i64 = row.get(2).map_err(err)?;
+        let state: String = row.get(3).map_err(err)?;
+        // Components can only be inserted while their profile is preparing.
+        // Reapply the original terminal state after all components exist,
+        // following the same immutable-profile transitions as ordinary setup.
+        let staging_state = if matches!(state.as_str(), "ready" | "unavailable") {
+            "preparing"
+        } else {
+            &state
+        };
+        target
+            .execute(
+                "INSERT INTO model_profiles(id,name,profile_version,state) VALUES(?1,?2,?3,?4)",
+                params![id, name, version, staging_state],
+            )
+            .map_err(err)?;
+        completed.push((id, state));
+    }
+    copy_table(source, target, "profile_components")?;
+    for (id, state) in completed {
+        if matches!(state.as_str(), "ready" | "unavailable") {
+            target
+                .execute(
+                    "UPDATE model_profiles SET state=?1 WHERE id=?2 AND state='preparing'",
+                    params![state, id],
+                )
+                .map_err(err)?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_table(source: &Connection, target: &Connection, table: &str) -> Result<(), String> {
     // All identifiers come from the fixed inventory above and trusted schema.
     let mut query = source
@@ -387,5 +431,51 @@ impl Prepared {
         // Keep the scratch registration alive until all staged files are installed.
         let _ = self.stage.path();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_reconstruction_preserves_components_and_sealed_states() {
+        let source = Connection::open_in_memory().unwrap();
+        let target = Connection::open_in_memory().unwrap();
+        for db in [&source, &target] {
+            db.execute_batch(crate::storage::SCHEMA_SQL).unwrap();
+            db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        }
+        source.execute("INSERT INTO model_packages(id,engine,model_name,model_version,source_type,manifest_json,manifest_hash,state) VALUES('model','whisper_cpp','fixture','1','manual_import','{}',?1,'unavailable')", ["a".repeat(64)]).unwrap();
+        for (version, state) in ["preparing", "ready", "unavailable", "incompatible"]
+            .into_iter()
+            .enumerate()
+        {
+            let id = Uuid::new_v4().to_string();
+            source.execute(
+                "INSERT INTO model_profiles(id,name,profile_version,state) VALUES(?1,'standard',?2,?3)",
+                params![id, version as i64 + 1, if state == "incompatible" { state } else { "preparing" }],
+            ).unwrap();
+            if state != "incompatible" {
+                source.execute("INSERT INTO profile_components(profile_id,role,package_id,settings_json) VALUES(?1,'asr','model','{}')", [&id]).unwrap();
+            }
+            if matches!(state, "ready" | "unavailable") {
+                source
+                    .execute(
+                        "UPDATE model_profiles SET state=?1 WHERE id=?2",
+                        params![state, id],
+                    )
+                    .unwrap();
+            }
+        }
+        let snapshot = |db: &Connection| -> String {
+            db.query_row("SELECT json_array((SELECT json_group_array(json_array(id,name,profile_version,state)) FROM model_profiles),(SELECT json_group_array(json_array(profile_id,role,package_id,settings_json)) FROM profile_components))", [], |row| row.get(0)).unwrap()
+        };
+        let before = snapshot(&source);
+        copy_table(&source, &target, "model_packages").unwrap();
+        copy_model_profiles(&source, &target).unwrap();
+        assert_eq!(snapshot(&target), before);
+        assert_eq!(snapshot(&source), before);
+        assert!(target.execute("INSERT INTO profile_components SELECT profile_id,'extra',package_id,settings_json FROM profile_components WHERE profile_id IN (SELECT id FROM model_profiles WHERE state='ready')", []).is_err());
     }
 }
