@@ -143,7 +143,7 @@ jobs:
           npm run build
       - name: Restore browser engine
         id: browser_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/playwright
           key: playwright-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('app/package-lock.json') }}
@@ -238,7 +238,7 @@ jobs:
       - name: Restore windows-runtime build intermediates
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         id: windows_runtime_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.windows_runtime_key.outputs.paths }}
           key: ${{ steps.windows_runtime_key.outputs.key }}
@@ -250,7 +250,7 @@ jobs:
       - name: Restore windows-capture build intermediates
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         id: windows_capture_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.windows_capture_key.outputs.paths }}
           key: ${{ steps.windows_capture_key.outputs.key }}
@@ -262,7 +262,7 @@ jobs:
       - name: Restore macos-capture build intermediates
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         id: macos_capture_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.macos_capture_key.outputs.paths }}
           key: ${{ steps.macos_capture_key.outputs.key }}
@@ -274,14 +274,14 @@ jobs:
       - name: Restore macos-workers build intermediates
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         id: macos_workers_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.macos_workers_key.outputs.paths }}
           key: ${{ steps.macos_workers_key.outputs.key }}
       - name: Restore checksum-verified native downloads
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
         id: native_downloads
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .cache/windows-parity/assets
