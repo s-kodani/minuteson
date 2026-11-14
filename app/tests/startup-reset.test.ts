@@ -29,6 +29,8 @@ test("reset progress cannot unlock startup or overwrite its diagnostic", () => {
   assert.throws(() => checkedResetSnapshot({ operationId: id, busy: true, completed: true, message: "", error: null }));
   assert.throws(() => checkedResetSnapshot({ operationId: null, busy: true, completed: false, message: "", error: null }));
   assert.doesNotThrow(() => checkedResetSnapshot({ operationId: id, busy: true, completed: false, message: "退避しています", error: null }));
+  assert.doesNotThrow(() => checkedResetSnapshot({ operationId: id, busy: true, completed: false, message: "モデルを回収しています", error: null, restore: true }));
+  assert.throws(() => checkedResetSnapshot({ operationId: id, busy: true, completed: false, message: "", error: null, restore: "yes" }));
 });
 const bundle = await build({ stdin: { contents: readFileSync(new URL("../src/startup-reset-form.tsx", import.meta.url), "utf8"), loader: "tsx", resolveDir: fileURLToPath(new URL("../src/", import.meta.url)) }, bundle: true, write: false, platform: "node", format: "esm", jsx: "automatic" });
 const { StartupResetForm } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
@@ -60,4 +62,16 @@ test("reset IPC is startup-only and available only to the main window", () => {
   const ipc = readFileSync(new URL("../src-tauri/src/startup_reset.rs", import.meta.url), "utf8");
   assert.match(ipc, /admit_command\(window.label\(\), "get_startup_reset_state"\)/u);
   assert.doesNotMatch(ipc, /message\.contains|削除対象DBが現行形式/u);
+});
+
+test("startup recovery confirms all categories and stops before reset if any data cannot be collected", () => {
+  const html = renderToStaticMarkup(StartupResetForm({ ...props, restoring: true, archive: false }));
+  assert.match(html, /会議（音声・文字起こし・話者分離・議事録）、ボイス登録、モデル、設定/u);
+  assert.match(html, /すべてのデータを回収・検証できない場合は初期化せず、元データを保持/u);
+  assert.doesNotMatch(html, /type="radio"|退避先を選択|再ダウンロード/u);
+  assert.match(html, />復元して再起動<\/button>/u);
+  const busy = renderToStaticMarkup(StartupResetForm({ ...props, restoring: true, archive: false, busy: true, message: "モデルを回収しています" }));
+  assert.match(busy, /<progress aria-label="データ復元の進捗"/u);
+  assert.doesNotMatch(busy, /<progress[^>]*\bvalue=/u);
+  assert.match(busy, /モデルを回収しています/u);
 });
