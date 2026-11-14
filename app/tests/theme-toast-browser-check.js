@@ -8,7 +8,7 @@ async (page,capturePath)=>{
   const open=async()=>{await nav().getByRole('button',{name:'設定',exact:true}).click();await select().waitFor();};
   const waitTheme=t=>page.waitForFunction(t=>document.documentElement.dataset.theme===t,t);
   await page.evaluate(()=>window.themeFixture.reset());await page.reload();await open();
-  await page.waitForTimeout(2700);
+  await page.clock.runFor(2700);
   check(await host.locator('.toast-card').filter({hasText:/表示設定/}).count()===0,'periodic theme reads notified');
   await select().selectOption('dark');await host.getByRole('status').filter({hasText:'表示設定を保存しました'}).waitFor();
   const first=await host.locator('.toast-success').getAttribute('data-toast-id');
@@ -26,7 +26,7 @@ async (page,capturePath)=>{
   await host.locator('.toast-error').hover();
   const failed=await count();await host.getByRole('button',{name:'エラー通知を閉じる',exact:true}).click();
   check(await settings().getByRole('button',{name:'テーマの保存を再試行',exact:true}).isVisible()&&await select().inputValue()==='dark','dismissal lost retained choice or safe retry');
-  await page.waitForTimeout(2700);check(await count()===failed&&await host.locator('.toast-error').count()===0,'poll replayed failure or write');
+  await page.clock.runFor(2700);check(await count()===failed&&await host.locator('.toast-error').count()===0,'poll replayed failure or write');
   await page.evaluate(()=>window.themeFixture.mode='success');await settings().getByRole('button',{name:'テーマの保存を再試行',exact:true}).click();await waitTheme('dark');
   check(await count()===failed+1,'explicit retry duplicated write');
   results.push('dismissed failure preserves issue and choice; polling stays silent; explicit save retry resolves');

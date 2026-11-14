@@ -6,20 +6,20 @@ async (page) => {
   const open = async (name = "PCの音声") => { await trigger(name).click(); await popup(name).waitFor(); };
   const background = page.getByRole("textbox", { name: "背景の入力" });
   await background.focus();
-  await trigger().hover(); await page.waitForTimeout(80);
+  await trigger().hover(); await page.clock.runFor(80);
   check(!await popup().isVisible(), "hover opened before the delay");
   await popup().waitFor();
   check(await background.evaluate(e => e === document.activeElement), "hover stole background focus");
-  await popup().hover(); await page.waitForTimeout(300);
+  await popup().hover(); await page.clock.runFor(300);
   check(await popup().isVisible(), "crossing into popup closed hover help");
   await page.mouse.move(700, 500); await popup().waitFor({ state: "hidden" });
   check(await background.evaluate(e => e === document.activeElement), "hover dismissal stole focus");
   await trigger().hover(); await popup().waitFor(); await trigger().click();
-  await page.mouse.move(700, 500); await page.waitForTimeout(300);
+  await page.mouse.move(700, 500); await page.clock.runFor(300);
   check(await popup().isVisible(), "clicking a hover popup failed to pin it");
   await trigger().click(); await popup().waitFor({ state: "hidden" });
   await page.mouse.move(700, 500);
-  await trigger().hover(); await page.mouse.move(700, 500); await page.waitForTimeout(300);
+  await trigger().hover(); await page.mouse.move(700, 500); await page.clock.runFor(300);
   check(!await popup().isVisible(), "cancelled hover timer reopened help");
   results.push("delayed hover preserves focus, survives popup entry, closes on leave, pins on click and cancels pending opening");
 
@@ -98,7 +98,7 @@ async (page) => {
   results.push("confirmation takes precedence; nested help Escape/outside close only help and retain visible loss warning");
 
   await trigger().hover(); await page.evaluate(() => window.infoFixture.confirm());
-  await modal.waitFor(); await page.waitForTimeout(300);
+  await modal.waitFor(); await page.clock.runFor(300);
   check(!await popup().isVisible(), "pending hover opened above a confirmation");
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" });
   results.push("a pending hover cannot open after a confirmation takes precedence");

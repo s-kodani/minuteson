@@ -34,6 +34,9 @@ libc = "0.2"
 semver = "1"
 tokio = { version = "1", features = ["time", "sync"] }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tray-icon = { version = "0.25.1", default-features = false }

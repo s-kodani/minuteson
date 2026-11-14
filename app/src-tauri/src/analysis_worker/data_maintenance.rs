@@ -288,6 +288,25 @@ impl AnalysisController {
         deletion_resume: bool,
         wait_notices: bool,
     ) -> Result<DataMaintenanceLease, String> {
+        self.begin_data_maintenance_with_elapsed(
+            recording_active,
+            import_blocked,
+            cancelled,
+            deletion_resume,
+            wait_notices,
+            &|started: Instant| started.elapsed(),
+        )
+    }
+
+    pub(super) fn begin_data_maintenance_with_elapsed(
+        &self,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+        deletion_resume: bool,
+        wait_notices: bool,
+        elapsed: &impl Fn(Instant) -> Duration,
+    ) -> Result<DataMaintenanceLease, String> {
         let mut state = self
             .state
             .lock()
@@ -317,7 +336,7 @@ impl AnalysisController {
         let mut state = self.state.lock().map_err(|_| "削除予約を確認できません")?;
         let started = Instant::now();
         while !state.notice_writers.is_empty() {
-            if cancelled() || lease.cancelled() || started.elapsed() >= Duration::from_secs(5) {
+            if cancelled() || lease.cancelled() || elapsed(started) >= Duration::from_secs(5) {
                 drop(state);
                 return Err("通知履歴の処理が終わらないため、削除を開始できませんでした".into());
             }

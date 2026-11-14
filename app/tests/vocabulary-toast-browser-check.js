@@ -40,7 +40,7 @@ async (page, capturePath, detailUI) => {
     await panel.getByRole("button", { name: "用語を再読込", exact: true }).click();
     const modal = page.getByRole("dialog", { name: "用語入力の破棄を確認", exact: true }); await modal.waitFor();
     const paused = (await writes()).length;
-    await page.waitForTimeout(850); check((await writes()).length === paused, "pending discard resubmitted failed save");
+    await page.clock.runFor(850); check((await writes()).length === paused, "pending discard resubmitted failed save");
     await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" });
     check(await term.inputValue() === "再度失敗した点検日", "cancelled discard lost input");
     await page.evaluate(() => { window.monBrowserFixture.failVocabulary = false; window.monBrowserFixture.persistenceDelayMs = 250; });

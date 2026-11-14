@@ -17,7 +17,7 @@ async (page,capturePath=path=>path)=>{
     await page.setViewportSize({width:1200,height:900});
     await page.goto(`http://127.0.0.1:1420/?resident=${platform}`);await page.waitForFunction(()=>!!window.closeFixture);
     await page.evaluate(()=>{const f=window.closeFixture;f.failJournal=true;f.archived.failRead=true;return f.recordChanged({phase:"recording",sessionId:crypto.randomUUID()});});
-    await page.waitForTimeout(6200);await quiet();
+    await page.clock.runFor(6200);await quiet();
     check(await page.locator(".toast-card").count()===0,"automatic journal or archive warning appeared");
     const failedReads=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_archived_recording_input_notices").length);
     check(failedReads>1,"silent failure stopped automatic retries");
@@ -27,12 +27,12 @@ async (page,capturePath=path=>path)=>{
     check(logs.some(c=>c.args.stage==="live-journal"&&c.args.message),"silent failure stopped being logged");
     await page.evaluate(()=>{const f=window.closeFixture;f.failJournal=false;f.archived.failRead=false;
       const row=f.newArchivedRow({count:0,title:"自動再確認",historySaveIssue:"unconfirmed"});row.unavailable=true;f.archived.rows=[row];return f.recordChanged({phase:"idle"});});
-    await page.waitForTimeout(1200);await quiet();
+    await page.clock.runFor(1200);await quiet();
     await page.evaluate(()=>{const f=window.closeFixture;const row=f.archived.rows[0];row.unavailable=false;row.historySaveIssue=null;row.revision++;return f.recordChanged({phase:"idle"});});
-    await page.waitForTimeout(1200);await quiet();await open();
+    await page.clock.runFor(1200);await quiet();await open();
     check(await rows().count()===0,"automatic recovery added a resolved history row");
     check(!(await history().innerText()).includes("解消済み"),"resolved label survived");
-    await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);await page.waitForTimeout(700);await quiet();
+    await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);await page.clock.runFor(700);await quiet();
     results.push(`${platform}: long live/archive failures, recovery and replacement WebView remain silent while retries continue`);
 
     const owner=await page.evaluate(()=>{const f=window.closeFixture;f.journalStatus={state:"failed",requestedRevision:2,committedRevision:1,closed:false};const owner=crypto.randomUUID();f.recordChanged({phase:"recording",sessionId:owner});return owner;});
@@ -43,7 +43,7 @@ async (page,capturePath=path=>path)=>{
     await page.evaluate(()=>window.closeFixture.journalStatus={state:"invalid",requestedRevision:3,committedRevision:2,closed:false});
     await waitWriter(owner,"invalid");await quiet();
     await page.evaluate(owner=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({sessionId:owner,count:0,title:"保存診断",historySaveIssue:"invalid",issue:"missing",loss:2})];return f.recordChanged({phase:"idle"});},owner);
-    await page.waitForTimeout(650);await quiet();
+    await page.clock.runFor(650);await quiet();
     check(await page.evaluate(()=>!window.closeFixture.calls.some(c=>c.command==="acknowledge_archived_recording_input_notice")),"silent recovery emitted a native receipt");
     results.push(`${platform}: writer failures, invalidity and recovery are logged while saved input diagnostics stay out of notifications`);
 

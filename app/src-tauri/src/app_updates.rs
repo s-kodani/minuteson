@@ -1,6 +1,8 @@
 //! Availability checks only: never installs, exits or acquires meeting/storage locks.
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod metadata;
 mod policy;
 #[cfg(windows)]
 mod windows;

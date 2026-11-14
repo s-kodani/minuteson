@@ -11,19 +11,19 @@ async page => {
   results.push("success is labelled, polite, does not steal input focus, and expires after about four seconds");
 
   await show({ key: "hover", level: "info", message: "読み取り中の情報" }); await host.locator(".toast-card").hover();
-  await page.waitForTimeout(4300); check(await host.getByRole("status").isVisible(), "hovered notification expired");
+  await page.clock.runFor(4300); check(await host.getByRole("status").isVisible(), "hovered notification expired");
   await page.mouse.move(8, 8); await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
   results.push("hover pauses automatic dismissal and leaving resumes the remaining interval");
 
   await input.focus(); await show({ key: "focus", level: "warning", message: "確認が必要です" });
-  await host.getByRole("button", { name: "注意通知を閉じる", exact: true }).focus(); await page.waitForTimeout(4300);
+  await host.getByRole("button", { name: "注意通知を閉じる", exact: true }).focus(); await page.clock.runFor(4300);
   check(await host.getByRole("status").isVisible(), "keyboard-focused notification expired");
   await page.keyboard.press("Enter"); await host.getByRole("status").waitFor({ state: "hidden" });
   check(await input.evaluate(e => e === document.activeElement), "dismissal did not restore the user's preceding input");
   results.push("keyboard reading pauses dismissal; Enter dismisses only the notification and restores the preceding field");
 
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
-  await page.waitForTimeout(4500); check(await host.getByRole("alert").isVisible(), "important save error automatically expired");
+  await page.clock.runFor(4500); check(await host.getByRole("alert").isVisible(), "important save error automatically expired");
   await host.getByRole("button", { name: "エラー通知の詳細の説明を開く", exact: true }).click();
   const details = page.getByRole("dialog", { name: "エラー通知の詳細", exact: true }); await details.waitFor();
   check((await details.innerText()).includes("容量が不足"), "notification explanation lost the actual cause"); await page.keyboard.press("Escape");
@@ -89,7 +89,7 @@ async page => {
   await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
   results.push("errors remain visible and dismissible inside native modals; notifications survive returning to the workspace without stealing focus");
 
-  await page.evaluate(() => window.toastFixture.showAction()); await page.waitForTimeout(4300);
+  await page.evaluate(() => window.toastFixture.showAction()); await page.clock.runFor(4300);
   check(await host.getByRole("button", { name: "元に戻す", exact: true }).isVisible(), "action notice used the ordinary four-second timeout");
   await host.getByRole("status").waitFor({ state: "hidden", timeout: 5000 });
   check(await page.evaluate(() => window.toastFixture.actionCalls) === 0, "expiry executed undo");

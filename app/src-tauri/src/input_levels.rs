@@ -391,7 +391,9 @@ mod tests {
         write(&path, &report());
         let mut reader = LevelReader::default();
         let first = reader.read(&path, OWNER).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Advance the retained heartbeat's monotonic age, independently of
+        // scheduler delays and filesystem timestamp resolution.
+        reader.previous.as_mut().unwrap().2 -= std::time::Duration::from_millis(30);
         write(&path, &report());
         let second = reader.read(&path, OWNER).unwrap();
         assert_eq!(first.revision, second.revision);

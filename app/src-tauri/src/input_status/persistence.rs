@@ -137,20 +137,21 @@ fn parse(data: &[u8], owner: &str) -> Result<Report, String> {
 }
 #[derive(Default)]
 pub(super) struct Reader {
+    clock: super::clock::Clock,
     previous: Option<(Report, u64, Instant, SystemTime)>,
 }
 impl Reader {
     pub(super) fn read(&mut self, directory: &File, owner: &str) -> Result<Snapshot, String> {
-        let started = Instant::now();
+        let started = self.clock.instant();
         let (data, modified) = bytes(directory, "input-journal-status.json", 4096)?
             .ok_or("入力履歴診断の報告がありません")?;
-        let now = SystemTime::now();
+        let now = self.clock.wall();
         let report = parse(&data, owner)?;
         let mut age = millis(
             now.duration_since(modified)
                 .map_err(|_| "入力履歴診断の時計が逆行しました")?,
         )?
-        .saturating_add(millis(started.elapsed())?);
+        .saturating_add(millis(self.clock.elapsed(started))?);
         if let Some((prior, first_age, at, wall)) = &self.previous {
             if now < *wall
                 || report.owner_id != prior.owner_id
@@ -165,17 +166,17 @@ impl Reader {
                 }
                 age = age.max(
                     first_age.saturating_add(millis(
-                        at.elapsed().max(
+                        self.clock.elapsed(*at).max(
                             now.duration_since(*wall)
                                 .map_err(|_| "入力履歴診断の時計が逆行しました")?,
                         ),
                     )?),
                 );
             } else {
-                self.previous = Some((report.clone(), age, Instant::now(), now));
+                self.previous = Some((report.clone(), age, self.clock.instant(), now));
             }
         } else {
-            self.previous = Some((report.clone(), age, Instant::now(), now));
+            self.previous = Some((report.clone(), age, self.clock.instant(), now));
         }
         if age > SAFE {
             return Err("入力履歴診断の年齢が範囲外です".into());

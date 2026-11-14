@@ -7,7 +7,7 @@ async page => {
   await page.evaluate(() => { window.dataFixture.blocker = "録音通知履歴の確認・更新中"; });
   for (let sample = 0; sample < 30; sample++) {
     if (!await button.isEnabled()) throw Error("notification polling disabled idle backup entry");
-    await page.waitForTimeout(100);
+    await page.clock.runFor(100);
   }
   await page.evaluate(() => { window.dataFixture.blocker = "録音・音声保存中"; });
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === "バックアップを作成" && button.disabled));

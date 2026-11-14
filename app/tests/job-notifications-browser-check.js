@@ -50,7 +50,7 @@ async page => {
 
   for(const mode of ["lost","foreign","hidden"]){
     await boot();await start();await dismiss();await page.evaluate(mode=>window.monBrowserFixture.notificationProofMode=mode,mode);
-    await update({state:"succeeded",outputAnalysisId:"unverified"});await page.waitForTimeout(500);
+    await update({state:"succeeded",outputAnalysisId:"unverified"});await page.clock.runFor(500);
     check(await status("処理が完了しました").count()===0,"unverified output announced completion");
     check(await alert("解析通知の読込・結果確認").count()===0,"automatic output verification notified");
     await openHistory();
