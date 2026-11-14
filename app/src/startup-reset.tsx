@@ -54,7 +54,7 @@ export function StartupReset({ availability, disabled = false, onBusy, children 
       <button type="button" className="secondary" ref={restoreOpener} disabled={disabled || busy || loading || selecting || !!snapshot?.operationId} onClick={() => void prepare(true)}>データ復元</button>,
       <button type="button" className="secondary" ref={opener} disabled={disabled || busy || loading || selecting || !!snapshot?.operationId} onClick={() => void prepare(false)}>データを初期化</button>,
     )}
-    {allowed?.available === false && <p role="status">利用できない理由：{displayNativePathsInText(allowed.reason ?? "")}</p>}
+    {preview && allowed?.available === false && <p role="status">利用できない理由：{displayNativePathsInText(allowed.reason ?? "")}</p>}
     {!preview && !snapshot?.busy && snapshot?.message && <p role="status">{displayNativePathsInText(snapshot.message)}</p>}
     {snapshot?.operationId && !snapshot.busy && <button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>{appName}を再起動</button>}
     {!preview && (error || snapshot?.error) && <p role="alert">{displayNativePathsInText(error || snapshot?.error || "")}</p>}

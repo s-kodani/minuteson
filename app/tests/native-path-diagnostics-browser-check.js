@@ -34,8 +34,11 @@ async(page,capturePath,detailUI)=>{
   const cause=startup.getByRole("region",{name:"起動を続けられない理由",exact:true});
   await cause.getByRole("heading",{name:"原因",exact:true}).waitFor();
   await cause.getByLabel("保持した起動診断",{exact:true}).waitFor();
-  await startup.getByRole("status").filter({hasText:"利用できない理由："}).waitFor();
   await startup.getByRole("alert").waitFor();
+  check(await startup.getByRole("status").filter({hasText:"利用できない理由："}).count()===0,"initial recovery availability duplicated the startup cause");
+  await withoutPrefix(startup);
+  await startup.getByRole("button",{name:"データ復元",exact:true}).click();
+  await startup.getByRole("status").filter({hasText:"利用できない理由："}).waitFor();
   await withoutPrefix(startup);
   check(await unchanged(),"startup rendering changed retained diagnostics");
   results.push("startup cause, recovery availability, status and error format without mutating report");
