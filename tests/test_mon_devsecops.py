@@ -279,6 +279,22 @@ class DesktopWorkflowTests(unittest.TestCase):
         mac_steps = self.native_steps(event='push', full=True, build_release=True, workflow='Main build', operating_system='macOS')
         self.assertTrue(any('mon_macos_release.py --prepare' in step.get('run', '') for step in mac_steps))
 
+    def test_installer_dpi_uses_the_selected_build_output_and_store_keeps_its_own(self):
+        for build_release, target in ((False, 'target'), (True, 'target-unsigned')):
+            with self.subTest(build_release=build_release):
+                steps = self.native_steps(full=True, build_release=build_release)
+                installer = next(s for s in steps if s.get('name') == 'Verify DPI declarations in the linked Windows installer executable')
+                selected = self.expression(installer['env']['MON_WINDOWS_DPI_TARGET'], {
+                    'env.MON_BUILD_RELEASE': str(build_release).lower(),
+                })
+                self.assertEqual(selected, target)
+                self.assertIn('app/src-tauri/$env:MON_WINDOWS_DPI_TARGET/', installer['run'])
+                self.assertIn('MON_WINDOWS_DPI_BINARY', installer['run'])
+                self.assertIn('test_mon_windows_dpi.py', installer['run'])
+                store = next(s for s in steps if s.get('name') == 'Verify DPI declarations in the linked Windows Store executable')
+                self.assertIn('app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe', store['run'])
+                self.assertNotIn('MON_WINDOWS_DPI_TARGET', store.get('env', {}))
+
     def test_final_packaging_requires_main_and_full_validation(self):
         step = next(s for s in self.workflow['jobs']['changes']['steps'] if s.get('name') == 'Validate main packaging request')
         script = '\n'.join(step['run'].splitlines()[1:-1])

@@ -387,8 +387,10 @@ jobs:
           retention-days: 30
       - name: Verify DPI declarations in the linked Windows installer executable
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
+        env:
+          MON_WINDOWS_DPI_TARGET: ${{ env.MON_BUILD_RELEASE == 'true' && 'target-unsigned' || 'target' }}
         run: |
-          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/target/x86_64-pc-windows-msvc/release/mon-desktop.exe'
+          $env:MON_WINDOWS_DPI_BINARY = Join-Path $env:GITHUB_WORKSPACE "app/src-tauri/$env:MON_WINDOWS_DPI_TARGET/x86_64-pc-windows-msvc/release/mon-desktop.exe"
           python -m unittest discover -s tests -p test_mon_windows_dpi.py -v
       - name: Build and verify Microsoft Store MSIX
         if: env.MON_CI_FULL == 'true' && runner.os == 'Windows'
