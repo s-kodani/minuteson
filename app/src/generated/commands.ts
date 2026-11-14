@@ -7,7 +7,7 @@ export interface CommandArguments {
   "get_internal_logs": { "query": unknown };
   "get_recording_recovery": Record<string, never>;
   "get_startup_report": Record<string, never>;
-  "get_startup_reset_preview": Record<string, never>;
+  "get_startup_reset_preview": { "restore"?: (boolean) | null };
   "choose_startup_reset_backup_directory": { "operationId": string };
   "start_startup_reset": { "operationId": string; "archive": boolean };
   "get_startup_reset_state": Record<string, never>;
@@ -262,7 +262,14 @@ export const commandContracts = {
   },
   "get_startup_reset_preview": {
     "async": true,
-    "arguments": [],
+    "arguments": [
+      {
+        "name": "restore",
+        "wireName": "restore",
+        "type": "Option<bool>",
+        "optional": true
+      }
+    ],
     "response": {
       "type": "Result<Preview,mon_contracts::AppError>",
       "ok": "Preview",

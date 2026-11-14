@@ -67,6 +67,34 @@ npm.cmd --prefix app run tauri:windows:qa:build
 
 ソース・本体・ヘルパー・インストーラーの一致とネイティブCTestが成功した後に配布用コピーを更新します。失敗時は以前のコピーを保持するため、古いファイルを今回の成功と取り違えないよう証跡のビルドIDを確認します。ビルド自体はインストール・起動しません。
 
+## 起動回復画面をQA版で再現する
+
+Windows QA版の専用保存先で、一時的なファイルロックにより起動検証を停止させます。DB・音声・モデルを書き換えずに、実際の起動回復画面を表示できます。
+
+1. `MinutesOn QA`を起動し、設定から**検証専用の空フォルダー**を会議保存先に選びます。通常版の会議保存先とは分けます。復元まで確認する場合は、QA版でテスト会議・音声・ボイス登録・モデル・設定を準備します。
+2. QA版をトレイのメニューから完全終了します。
+3. PowerShellで次を実行し、選んだ検証用の会議保存先を入力します。QA版が作成した既存の空ロックファイルを一時的に保持します。
+
+   ```powershell
+   $recoveryRoot = (Read-Host 'QA版で選んだ検証用の会議保存先（絶対パス）').Trim('"')
+   $recoveryLockPath = Join-Path $recoveryRoot '.mon-startup-reset.lock'
+   $recoveryShare = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+   $recoveryLock = [IO.File]::Open($recoveryLockPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, $recoveryShare)
+   try {
+       $recoveryLock.Lock(0, 1)
+       Read-Host 'MinutesOn QAを起動し、起動回復画面が表示されたら、ここでEnterを押してください'
+   } finally {
+       $recoveryLock.Dispose()
+   }
+   ```
+
+4. PowerShellが入力待ちの間にQA版を起動します。「原因」と4個の操作ボタンが表示され、同じ保存先の使用中・排他取得の失敗が原因に含まれることを確認します。
+5. PowerShellに戻ってEnterを押し、一時ロックを解放します。その後、QA版の「データ復元」から対象を確認し、「復元して再起動」を選びます。モーダルの進捗バー・工程表示と、再起動後の会議・登録内容を確認します。データ量が少ない場合は短時間で完了します。
+
+表示確認だけで終える場合は、手順5でロックを解放した後に「起動をやり直す」を選びます。一時ロックはPowerShellを閉じても解放されます。会議保存先の選択を戻す場合は、QA版の設定で元の保存先を選び直します。
+
+この一時ロックは「起動回復画面の表示」を確認するためのものです。DB破損やモデル欠損の救出試験とは区別し、それらの状態は隔離したネイティブテストで検証します。
+
 ## CIでの準備済み資材の再利用
 
 全件CIは`app/prepare-windows.ps1 -Receipt <絶対パス>`で資材を先に準備し、native検証が終わってからQA／MSIXを作ります。receiptは同じActions jobの`RUNNER_TEMP`内に作成し、`MON_WINDOWS_PREPARATION_RECEIPT`でビルドフックへ渡します。ソース、実際のcompiler、run／attempt／job、unsignedモード、frontend・runtime・helper・通知文のサイズとSHAが一致する場合だけ再準備を省略します。

@@ -359,7 +359,7 @@ fn place_reviewed_with_manifest(
     result
 }
 
-fn copy_package(
+pub(crate) fn copy_package(
     source: &Path,
     expected: &Report,
     destination: &fs::Directory,

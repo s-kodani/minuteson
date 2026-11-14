@@ -21,6 +21,8 @@ pub(crate) mod recovery;
 pub(crate) mod relocation;
 pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) mod scratch;
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) mod startup;
 
 #[cfg(test)]
 pub(in crate::storage) fn published_restore_for_rebinding_test(

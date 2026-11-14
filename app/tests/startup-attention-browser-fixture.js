@@ -8,10 +8,12 @@ const variant = new URLSearchParams(location.search).get("fixture") ?? "blocked"
 const productName = new URLSearchParams(location.search).get("productName") ?? "MinutesOn";
 const report = { schemaVersion: 1, phase: "blocked", failure: { stage: "storage_admission", message: "一時領域台帳が不正です。<img src=x onerror=alert(1)>\n元の音声を保持します。", messageTruncated: false, meetingRoot: "/safe/会議保存先", configRoot: "/safe/起動設定" } };
 const f = window.startupFixture = { calls: [], report, readFail: variant === "read-fail", quitFail: false, delay: false, pendingRead: null, pendingQuit: null };
+f.resetState = { operationId: null, busy: false, completed: false, message: "", error: null };
+if (variant === "restore-running") f.resetState = { operationId: "12345678-1234-4123-8123-123456789012", busy: true, completed: false, message: "モデル本体と設定を回収しています", error: null, restore: true };
 f.emitResidency = (event,payload) => emit(event,payload);
 if (variant.startsWith("windows")) {
   f.report.platform = "windows";
-  f.report.failure.message = "他のMONが同じ保存先を使用しています。終了してから起動し直してください。";
+  f.report.failure.message = "ほかのMinutesOnが同じ保存先を使用しています。";
 }
 if (variant === "ready") f.report = { schemaVersion: 1, phase: "ready", failure: null };
 if (variant === "starting" || variant.startsWith("transition-")) f.report = { schemaVersion: 1, phase: "starting", failure: null };
@@ -23,7 +25,16 @@ mockIPC(async (command, args) => {
   if (command === "plugin:window|title") return document.title;
   if (command === "plugin:window|is_maximized") return false;
   f.calls.push({ command, args });
-  if (command === "get_startup_reset_state") return { operationId: null, busy: false, completed: false, message: "", error: null };
+  if (command === "get_startup_reset_state") return structuredClone(f.resetState);
+  if (command === "get_startup_reset_preview") {
+    f.preparedRestore = args.restore;
+    return { availability: { available: true, reason: null }, operationId: "12345678-1234-4123-8123-123456789012", meetingRoot: "/safe/会議保存先", archivePath: null };
+  }
+  if (command === "start_startup_reset") {
+    f.resetState = { operationId: args.operationId, busy: true, completed: false, message: "会議・文字起こし・話者分離・議事録・ボイス登録を回収しています", error: null, restore: f.preparedRestore === true };
+    if (f.startReplyFail) throw Error("合成受付応答の喪失");
+    return structuredClone(f.resetState);
+  }
   if (command === "retry_startup") { if (f.holdRetry) await new Promise(resolve => { f.pendingRetry = resolve; }); if (f.retryFail) throw Error("合成再起動失敗"); return null; }
   if (command === "get_startup_report") { if (f.delay) await new Promise(resolve => { f.pendingRead = resolve; }); if (f.readFail) throw Error("合成診断の読込失敗"); return structuredClone(f.report); }
   if (command === "quit_blocked_startup") { if (f.delay) await new Promise(resolve => { f.pendingQuit = resolve; }); if (f.quitFail) throw Error("合成終了の応答喪失"); return null; }
