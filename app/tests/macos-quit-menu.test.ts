@@ -31,7 +31,7 @@ test("Quit still enters the existing fail-closed save and worker shutdown barrie
   assert.match(exit, /api\.prevent_exit\(\)/u);
   assert.match(exit, /StopDecisionStore/u);
   assert.match(exit, /main\.emit\("main-close-requested", serde_json::json!\(\{"quit": true\}\)\)/u);
-  assert.match(lib, /ExitGuard>\(\)\.0\.store\(true, Ordering::SeqCst\);\s+window\.app_handle\(\)\.exit\(0\)/u);
+  assert.match(lib, /ExitGuard>\(\)\.0\.store\(true, Ordering::SeqCst\);\s+if updating \{\s+window\.app_handle\(\)\.restart\(\);\s+\}\s+window\.app_handle\(\)\.exit\(0\)/u);
 });
 
 test("native termination is cancelled and queued through the same save barrier", () => {

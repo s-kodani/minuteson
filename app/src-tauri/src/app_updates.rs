@@ -1,8 +1,6 @@
-//! Availability checks only: never installs, exits or acquires meeting/storage locks.
+//! Native update ownership. Installation is admitted only through the normal saved-edit close path.
 #[cfg(target_os = "macos")]
-mod macos;
-#[cfg(any(target_os = "macos", test))]
-mod metadata;
+pub(crate) mod macos;
 mod policy;
 #[cfg(windows)]
 mod windows;
@@ -16,12 +14,16 @@ use tauri::{Emitter, Manager, WebviewWindow};
 
 pub(crate) struct Updates {
     model: Mutex<policy::Model>,
+    #[cfg(target_os = "macos")]
+    pending: Mutex<Option<macos::Pending>>,
     started: AtomicBool,
     stopped: AtomicBool,
 }
 impl Default for Updates {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "macos")]
+            pending: Mutex::new(None),
             model: Mutex::new(policy::Model::new(Channel::Unsupported, String::new())),
             started: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -86,6 +88,12 @@ pub(crate) fn start(app: &tauri::AppHandle) {
 }
 pub(crate) fn stop(app: &tauri::AppHandle) {
     app.state::<Updates>().stopped.store(true, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    app.state::<Updates>()
+        .pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
 }
 fn request(app: &tauri::AppHandle) {
     let state = app.state::<Updates>();
@@ -105,9 +113,7 @@ fn request(app: &tauri::AppHandle) {
         Channel::MacosRelease => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                let current = app.state::<Updates>().snapshot().current_version;
-                let result = macos::check(&current).await;
-                complete(&app, result);
+                macos::check_and_download(&app).await;
             });
         }
         #[cfg(windows)]
@@ -175,9 +181,8 @@ pub(crate) async fn open_app_update_page(
             .destination()?;
         #[cfg(target_os = "macos")]
         {
-            return tauri::async_runtime::spawn_blocking(move || macos::open(&destination))
-                .await
-                .map_err(|e| e.to_string())?;
+            let _ = destination;
+            return Err("更新はアプリ内の「再起動して更新」から適用してください".into());
         }
         #[cfg(windows)]
         {
@@ -199,4 +204,26 @@ pub(crate) async fn open_app_update_page(
             "配布元を開けませんでした。もう一度お試しください。".into(),
         )
     })
+}
+
+/// Ask the main window to save edits; never install directly from this command.
+#[tauri::command]
+pub(crate) fn apply_app_update(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
+    let result: Result<(), String> = (|| {
+        require_main(&window)?;
+        #[cfg(target_os = "macos")]
+        {
+            macos::require_ready(window.app_handle())?;
+            macos::require_idle(window.app_handle())?;
+            window
+                .emit(
+                    "main-close-requested",
+                    serde_json::json!({"quit": true, "update": true}),
+                )
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(not(target_os = "macos"))]
+        Err("この配布版はアプリ内更新の対象外です".into())
+    })();
+    result.map_err(|e| mon_contracts::AppError::from_command("apply_app_update", e))
 }

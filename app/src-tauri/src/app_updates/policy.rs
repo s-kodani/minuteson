@@ -1,15 +1,11 @@
 //! Pure channel, cadence and release validation. No storage or meeting locks.
 use mon_contracts::{AppUpdateChannel as Channel, AppUpdateState as Phase, AppUpdateStatus};
-use serde::Deserialize;
 use std::time::{Duration, Instant};
 
 pub(super) const CACHE: Duration = Duration::from_secs(30 * 60);
 pub(super) const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub(super) const DEADLINE: Duration = Duration::from_secs(20);
-pub(super) const MAX_BODY: usize = 256 * 1024;
 pub(super) const STORE_PAGE: &str = "ms-windows-store://downloadsandupdates";
-pub(super) const RELEASE_API: &str =
-    "https://api.github.com/repos/s-kodani/minuteson/releases/latest";
 const RELEASES: &str = "https://github.com/s-kodani/minuteson/releases";
 
 pub(super) fn channel(os: &str, identifier: &str, debug: bool, store_package: bool) -> Channel {
@@ -41,6 +37,8 @@ impl Model {
                 available_version: None,
                 checked_at_ms: None,
                 error_message: None,
+                downloaded_bytes: 0,
+                total_bytes: None,
             },
             attempted: None,
             succeeded: None,
@@ -52,10 +50,14 @@ impl Model {
     }
     pub fn begin(&mut self, now: Instant) -> bool {
         if self.status.channel == Channel::Unsupported
-            || self.status.state == Phase::Checking
-            || self
-                .succeeded
-                .is_some_and(|last| now.saturating_duration_since(last) < CACHE)
+            || matches!(
+                self.status.state,
+                Phase::Checking | Phase::Downloading | Phase::Ready | Phase::Installing
+            )
+            || self.status.state != Phase::Failed
+                && self
+                    .succeeded
+                    .is_some_and(|last| now.saturating_duration_since(last) < CACHE)
         {
             return false;
         }
@@ -94,6 +96,19 @@ impl Model {
             }
         }
     }
+    pub fn transfer(
+        &mut self,
+        phase: Phase,
+        bytes: u64,
+        total: Option<u64>,
+        error: Option<String>,
+    ) {
+        self.status.revision += 1;
+        self.status.state = phase;
+        self.status.downloaded_bytes = bytes;
+        self.status.total_bytes = total;
+        self.status.error_message = error;
+    }
     pub fn destination(&self) -> Result<String, String> {
         if !self.status.update_available {
             return Err("利用可能な更新を確認してから配布元を開いてください".into());
@@ -121,52 +136,13 @@ fn stable(value: &str) -> Result<semver::Version, String> {
     }
     Ok(parsed)
 }
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    draft: bool,
-    prerelease: bool,
-    html_url: String,
-    assets: Vec<Asset>,
-}
-#[derive(Deserialize)]
-struct Asset {
-    name: String,
-    state: String,
-    browser_download_url: String,
-}
-
-pub(super) fn macos_release(body: &[u8], current: &str) -> Result<(bool, Option<String>), String> {
-    if body.len() > MAX_BODY {
-        return Err("更新情報の容量が上限を超えています".into());
+pub(super) fn validate_download(version: &str, url: &str, arch: &str) -> Result<(), String> {
+    stable(version)?;
+    let expected = format!("https://github.com/s-kodani/minuteson/releases/download/v{version}/MinutesOn_{version}_aarch64.app.tar.gz");
+    if arch != "aarch64" || url != expected {
+        return Err("このMacに対応する更新の配布元を確認できません".into());
     }
-    let release: Release =
-        serde_json::from_slice(body).map_err(|_| "公開版情報の形式を確認できません")?;
-    if release.draft || release.prerelease {
-        return Err("公開された安定版ではありません".into());
-    }
-    let version = release
-        .tag_name
-        .strip_prefix('v')
-        .ok_or("公開版のタグを確認できません")?;
-    let target = stable(version)?;
-    let page = format!("{RELEASES}/tag/v{version}");
-    if release.html_url != page {
-        return Err("公開版の配布元が一致しません".into());
-    }
-    if target <= stable(current)? {
-        return Ok((false, None));
-    }
-    let name = format!("MinutesOn_{version}_aarch64.dmg");
-    let url = format!("{RELEASES}/download/v{version}/{name}");
-    if !release
-        .assets
-        .iter()
-        .any(|a| a.name == name && a.state == "uploaded" && a.browser_download_url == url)
-    {
-        return Err("このMacに対応する公開版のDMGを確認できません".into());
-    }
-    Ok((true, Some(version.into())))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -215,38 +191,32 @@ mod tests {
         let mut unsupported = Model::new(Channel::Unsupported, "1.0.1".into());
         assert!(!unsupported.begin(t));
     }
-    fn release(version: &str) -> serde_json::Value {
-        serde_json::json!({"tag_name":format!("v{version}"),"draft":false,"prerelease":false,
-            "html_url":format!("{RELEASES}/tag/v{version}"),"assets":[{"name":format!("MinutesOn_{version}_aarch64.dmg"),
-            "state":"uploaded","browser_download_url":format!("{RELEASES}/download/v{version}/MinutesOn_{version}_aarch64.dmg")}]})
+    #[test]
+    fn downloads_require_stable_version_fixed_origin_and_supported_cpu() {
+        let url = "https://github.com/s-kodani/minuteson/releases/download/v1.0.4/MinutesOn_1.0.4_aarch64.app.tar.gz";
+        assert!(validate_download("1.0.4", url, "aarch64").is_ok());
+        for (version, uri, arch) in [
+            ("1.0.4-beta.1", url, "aarch64"),
+            ("1.0.4", "https://example.test/app", "aarch64"),
+            ("1.0.4", url, "x86_64"),
+            ("1.0.5", url, "aarch64"),
+        ] {
+            assert!(validate_download(version, uri, arch).is_err());
+        }
     }
     #[test]
-    fn releases_require_a_new_stable_matching_platform_asset_and_fixed_origin() {
-        let check = |r: &serde_json::Value| macos_release(&serde_json::to_vec(r).unwrap(), "1.0.9");
-        assert_eq!(
-            check(&release("1.0.10")).unwrap(),
-            (true, Some("1.0.10".into()))
-        );
-        for version in ["1.0.9", "1.0.8"] {
-            assert_eq!(check(&release(version)).unwrap(), (false, None));
+    fn transfer_coalesces_checks_and_failed_downloads_allow_immediate_retry() {
+        let now = Instant::now();
+        let mut m = Model::new(Channel::MacosRelease, "1.0.3".into());
+        assert!(m.begin(now));
+        m.finish(Ok((true, Some("1.0.4".into()))), now, 1);
+        for phase in [Phase::Downloading, Phase::Ready, Phase::Installing] {
+            m.transfer(phase, 100, Some(200), None);
+            assert!(!m.begin(now + INTERVAL));
+            assert_eq!(m.status.downloaded_bytes, 100);
         }
-        for version in ["1.1.0-beta.1", "1.0.10+build.1", "01.2.3", "../../bad"] {
-            assert!(check(&release(version)).is_err());
-        }
-        for field in ["draft", "prerelease"] {
-            let mut r = release("1.0.10");
-            r[field] = true.into();
-            assert!(check(&r).is_err());
-        }
-        for field in ["name", "state", "browser_download_url"] {
-            let mut r = release("1.0.10");
-            r["assets"][0][field] = "wrong".into();
-            assert!(check(&r).is_err());
-        }
-        let mut r = release("1.0.10");
-        r["html_url"] = "https://example.test/".into();
-        assert!(check(&r).is_err());
-        assert!(macos_release(b"invalid", "1.0.1").is_err());
-        assert!(macos_release(&vec![b' '; MAX_BODY + 1], "1.0.1").is_err());
+        m.transfer(Phase::Failed, 0, None, Some("offline".into()));
+        assert!(m.status.update_available);
+        assert!(m.begin(now));
     }
 }

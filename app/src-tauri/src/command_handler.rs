@@ -157,4 +157,5 @@ tauri::generate_handler![
     app_updates::get_app_update_status,
     app_updates::check_app_update,
     app_updates::open_app_update_page,
+    app_updates::apply_app_update,
 ]

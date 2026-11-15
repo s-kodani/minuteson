@@ -110,7 +110,7 @@ export interface CommandArguments {
   "prepare_draft_utterance_playback": { "request": unknown; "preparationId": string };
   "read_playback_chunk": { "token": string; "offsetFrames": number };
   "close_playback": { "token": string };
-  "finish_main_close": { "quit": boolean; "expected"?: (unknown) | null };
+  "finish_main_close": { "quit": boolean; "update"?: (boolean) | null; "expected"?: (unknown) | null };
   "get_analysis_flow": { "meetingId": string };
   "get_transcription_regeneration_target": { "meetingId": string };
   "regenerate_transcription": { "request": unknown };
@@ -157,6 +157,7 @@ export interface CommandArguments {
   "get_app_update_status": Record<string, never>;
   "check_app_update": Record<string, never>;
   "open_app_update_page": Record<string, never>;
+  "apply_app_update": Record<string, never>;
 }
 export type CommandName = keyof CommandArguments;
 export type CommandArgs<C extends CommandName> = CommandArguments[C];
@@ -2143,6 +2144,12 @@ export const commandContracts = {
         "optional": false
       },
       {
+        "name": "update",
+        "wireName": "update",
+        "type": "Option<bool>",
+        "optional": true
+      },
+      {
         "name": "expected",
         "wireName": "expected",
         "type": "Option<application_close::CloseExpectations>",
@@ -2880,6 +2887,15 @@ export const commandContracts = {
   },
   "open_app_update_page": {
     "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "apply_app_update": {
+    "async": false,
     "arguments": [],
     "response": {
       "type": "Result<(),mon_contracts::AppError>",

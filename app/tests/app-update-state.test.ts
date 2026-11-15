@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { checkedAppUpdateStatus, updateHeading, updateInstructions, type AppUpdateStatus } from "../src/app-update-state.ts";
-const state = (patch: Partial<AppUpdateStatus> = {}): AppUpdateStatus => ({ revision:1,channel:"windows_store",state:"available",currentVersion:"1.0.1",updateAvailable:true,availableVersion:null,checkedAtMs:10,errorMessage:null,...patch });
+const state = (patch: Partial<AppUpdateStatus> = {}): AppUpdateStatus => ({ revision:1,channel:"windows_store",state:"available",currentVersion:"1.0.1",updateAvailable:true,availableVersion:null,checkedAtMs:10,downloadedBytes:0,totalBytes:null,errorMessage:null,...patch });
 test("checks schema and availability without claiming an installed or downloaded version", () => {
   assert.equal(updateHeading(checkedAppUpdateStatus(state())), "Microsoft Storeに更新があります");
   assert.match(updateHeading(state({channel:"macos_release",availableVersion:"1.0.2"})), /1\.0\.2/);
@@ -12,5 +12,15 @@ test("checks schema and availability without claiming an installed or downloaded
   assert.throws(() => checkedAppUpdateStatus(state({state:"no_update"})));
   assert.throws(() => checkedAppUpdateStatus(state({channel:"unsupported"})));
   assert.match(updateInstructions(state()), /終了/);
-  assert.match(updateInstructions(state({channel:"macos_release"})), /入れ替え/);
+  assert.match(updateInstructions(state({channel:"macos_release"})), /再起動して更新/);
+});
+
+test("download, ready and failure remain distinct and validate availability", () => {
+  for (const phase of ["downloading", "ready", "installing"] as const) {
+    assert.throws(() => checkedAppUpdateStatus(state({ state: phase, updateAvailable: false })));
+    assert.doesNotMatch(updateHeading(checkedAppUpdateStatus(state({state:phase}))), /見つかりません/);
+  }
+  assert.match(updateHeading(state({state:"ready"})), /準備/);
+  assert.match(updateHeading(state({state:"failed"})), /取得できません/);
+  assert.throws(() => checkedAppUpdateStatus(state({downloadedBytes:-1})));
 });
