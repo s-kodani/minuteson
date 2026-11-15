@@ -17,12 +17,26 @@ CHECKS = ("python", "browser", "native", "dependencies")
 NATIVE_TOOLS = ("mon_ci_", "mon_rust_", "mon_contracts", "mon_model_catalog",
                 "mon_inference_", "mon_llama_", "mon_whisper_", "mon_windows_",
                 "mon_macos_", "mon_owned_engine", "mon_minutes_models_native")
+DOCUMENTATION_FILES = {
+    "README.md", "SECURITY.md", "AGENTS.md", ".github/pull_request_template.md",
+    "tests/fixtures/audio-import/README.md",
+    "third-party/model-licenses/README.md", "third-party/notices/README.md",
+    "third-party/runtime-notices/README.md", "evaluation/runs/.gitkeep",
+}
 
 
 def documentation(name):
-    # Markdown shipped with the app and license notices are runtime inputs.
-    return (name in ("README.md", "SECURITY.md") or name.startswith(("docs/", "assets/readme/"))
-            or (name.startswith("evaluation/") and name.endswith(".md")))
+    # Only reviewed guidance and agent display metadata skip application checks.
+    # App Markdown, license texts and notice indexes remain runtime inputs.
+    path = PurePosixPath(name)
+    if name in DOCUMENTATION_FILES or name.startswith(("docs/", "assets/readme/")):
+        return True
+    if name.startswith("evaluation/") and path.suffix == ".md":
+        return True
+    if name.startswith(".agents/skills/"):
+        return path.suffix == ".md" or (
+            len(path.parts) == 5 and path.parts[3:] == ("agents", "openai.yaml"))
+    return False
 
 
 def select(names, *, full=False, main=False):

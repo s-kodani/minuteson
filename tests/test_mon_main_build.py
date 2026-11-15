@@ -52,7 +52,12 @@ class CandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': SHA, 'GITHUB_EVENT_NAME': 'push',
             'GITHUB_OUTPUT': str(Path(temporary) / 'output'),
-        }), patch.object(main, 'changed_paths', return_value=['README.md']):
+        }), patch.object(main, 'changed_paths', return_value=[
+            'README.md', 'AGENTS.md', '.github/pull_request_template.md',
+            '.agents/skills/desktop-ui-quality/agents/openai.yaml',
+            'third-party/notices/README.md', 'tests/fixtures/audio-import/README.md',
+            'evaluation/runs/.gitkeep',
+        ]):
             main.guard(api)
             api.call.assert_not_called()
             self.assertIn('build=false', Path(os.environ['GITHUB_OUTPUT']).read_text())
@@ -76,6 +81,59 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(scope.select(['README.md', 'docs/spec/storage.md'])['has_codeql'])
         for path in ('app/src/prompt.md', 'third-party/LICENSE.md', '.github/workflows/new.yml', 'unknown.txt'):
             self.assertTrue(scope.select([path])['code'])
+
+    def test_development_docs_and_agent_metadata_skip_expensive_pr_and_main_checks(self):
+        paths = (
+            'AGENTS.md', '.github/pull_request_template.md',
+            '.agents/skills/desktop-ui-quality/SKILL.md',
+            '.agents/skills/desktop-app-updates/references/macos.md',
+            '.agents/skills/desktop-ui-quality/agents/openai.yaml',
+            'tests/fixtures/audio-import/README.md',
+            'third-party/model-licenses/README.md',
+            'third-party/notices/README.md',
+            'third-party/runtime-notices/README.md',
+            'evaluation/runs/.gitkeep',
+        )
+        for path in paths:
+            for on_main in (False, True):
+                with self.subTest(path=path, main=on_main):
+                    result = scope.select([path], main=on_main)
+                    for key in (*scope.CHECKS, 'code', 'has_codeql'):
+                        self.assertFalse(result[key], key)
+                    self.assertEqual(result['codeql']['include'], [])
+
+    def test_documentation_exceptions_keep_executable_assets_and_unknown_paths_checked(self):
+        paths = (
+            '.agents/skills/example/scripts/check.py',
+            '.agents/skills/example/agents/settings.yaml',
+            '.agents/skills/example/scripts/agents/openai.yaml',
+            '.github/workflows/security.yml', '.github/security-exceptions.json',
+            'app/model-catalog/model-license-policy.json', 'app/package-lock.json',
+            'tests/fixtures/audio-import/structure-chapter.m4a',
+            'third-party/notices/objc2-7b1abfd-LICENSE.md',
+            'third-party/notices/index.json', 'third-party/runtime-notices/index.json',
+            'third-party/model-licenses/model.txt',
+            'third-party/new-materials/README.md', 'unknown/AGENTS.md',
+            'evaluation/config.toml',
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                result = scope.select([path])
+                self.assertTrue(all(result[key] for key in scope.CHECKS))
+                self.assertEqual(len(result['codeql']['include']), 6)
+        for path in ('app/src/prompt.md', 'app/src-tauri/prompt.md',
+                     'tests/fixtures/audio-import/manifest.json'):
+            with self.subTest(path=path):
+                self.assertTrue(scope.select([path])['code'])
+
+    def test_docs_do_not_hide_code_changes_or_explicit_full_validation(self):
+        for path in ('app/src/main.tsx', 'app/src-tauri/src/storage.rs',
+                     'tools/mon_ci_scope.py', '.github/workflows/security.yml'):
+            with self.subTest(path=path):
+                self.assertEqual(scope.select(['AGENTS.md', path]), scope.select([path]))
+        result = scope.select(['AGENTS.md'], full=True)
+        self.assertTrue(all(result[key] for key in (*scope.CHECKS, 'code', 'has_codeql')))
+        self.assertEqual(len(result['codeql']['include']), 6)
 
     def test_python_frontend_rust_and_contracts_select_corresponding_languages(self):
         cases = {'tools/mon_release.py': {'python'}, 'app/src/main.tsx': {'javascript-typescript'},
