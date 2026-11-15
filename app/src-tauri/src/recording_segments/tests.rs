@@ -665,19 +665,24 @@ fn swift_generated_recording_segments_bind_actual_storage_and_encode_flac_withou
     )
     .unwrap()
     .unwrap();
-    assert_eq!(prefix.frames(), 204_000);
+    assert_eq!(prefix.frames(), 68_000);
     let first = std::fs::read(audio_root.join("raw-microphone-00000001.caf")).unwrap();
     let pointer = std::fs::read(audio_root.join("raw-microphone.json")).unwrap();
     let check = || false;
     let mut source = prefix.source(0, 2, &check).unwrap();
     let path = audio_root.join("native-derived.flac");
     let saved =
-        crate::audio::flac::write_segment(&mut source, 0, 204000, &path, &check, &|_| {}).unwrap();
+        crate::audio::flac::write_segment(&mut source, 0, prefix.frames(), &path, &check, &|_| {})
+            .unwrap();
     let mut verified =
         VerifiedAudio::open(File::open(&path).unwrap(), saved.size, &saved.sha256).unwrap();
-    assert_eq!(verified.format.sample_rate, 48000);
-    let expected = source.read_frames(191999, 2).unwrap();
-    assert_eq!(verified.read_frames(191999, 2).unwrap(), expected);
+    assert_eq!(verified.format.sample_rate, 16000);
+    assert_eq!(verified.format.channels, 1);
+    // The converter retains a filter halo, so the first segment may finish
+    // just before 64,000 frames. Exercise the actual physical boundary.
+    let crossing = prefix.entries().next().unwrap().frames - 1;
+    let expected = source.read_frames(crossing, 2).unwrap();
+    assert_eq!(verified.read_frames(crossing, 2).unwrap(), expected);
     let saved_session = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved_session.state, "saved");
     assert_eq!(std::fs::read(manifest).unwrap(), original);
@@ -688,7 +693,7 @@ fn swift_generated_recording_segments_bind_actual_storage_and_encode_flac_withou
     );
     assert!(!first.is_empty());
     // Finalization retains capture geometry as provenance and publishes one
-    // canonical PCM16 WAV, without producing intermediate per-input FLACs.
+    // canonical PCM16 WAV after retiring intermediate per-input audio.
     let (plan, known) = storage.recorded_analysis_input(&meeting.id).unwrap();
     known.unwrap().validate(&plan).unwrap();
     assert_eq!(plan.tracks.len(), 1);
