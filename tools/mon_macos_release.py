@@ -82,6 +82,10 @@ def build_environment(environment, cache):
     # Signing/notarization happens below, never implicitly inside Tauri.
     for key in (*NOTARY_ENV, "APPLE_SIGNING_IDENTITY"):
         result.pop(key, None)
+    import mon_updater_artifacts as updater
+    result["TAURI_CONFIG"] = updater.configuration(environment)
+    result.pop("TAURI_SIGNING_PRIVATE_KEY", None)
+    result.pop("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", None)
     result.update(CARGO_TARGET_DIR=str(cache), CARGO_INCREMENTAL="0")
     return result
 
@@ -448,6 +452,8 @@ def prepare(output, environment):
         raise ValueError("preparation output must be a new absolute directory")
     private_path(output.parent, directory=True)
     config = release_configuration()
+    import mon_updater_artifacts as updater
+    updater_key = updater.public_key(environment)
     output.mkdir(mode=0o700)
     cache = output / "build-cache"
     # The beforeBuildCommand collects notices with offline Cargo metadata.
@@ -455,7 +461,7 @@ def prepare(output, environment):
     command(["cargo", "fetch", "--locked"], cwd=REPOSITORY / "app/src-tauri",
             env=build_environment(environment, cache))
     stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build",
-                             "--config", "src-tauri/tauri.release.conf.json", "--", "--locked"],
+                             "--config", "src-tauri/tauri.release.conf.json", "--config", updater.configuration(environment), "--", "--locked"],
                             cwd=REPOSITORY / "app", env=build_environment(environment, cache))
     (output / "preparation-build.log").write_bytes(stdout + stderr)
     app = cache / "release/bundle/macos" / (config["productName"] + ".app")
@@ -467,7 +473,8 @@ def prepare(output, environment):
     command(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], timeout=300)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY).decode().strip()
     result = {"schemaVersion": 1, "commit": commit, "version": config["version"],
-              "archiveSha256": digest(archive), "productName": config["productName"], "notices": notices}
+              "archiveSha256": digest(archive), "productName": config["productName"], "notices": notices,
+              "updaterPublicKey": updater_key}
     (output / "prepared-app.json").write_text(json.dumps(result, indent=2) + "\n")
     shutil.rmtree(cache)
     return result
@@ -484,6 +491,10 @@ def build(output, identity, team, profile, environment, prepared=None):
     if shutil.disk_usage(output.parent).free < 4 * 1024 ** 3:
         raise ValueError("at least 4GiB free is required for the temporary build and copies")
     config = release_configuration()
+    import mon_updater_artifacts as updater
+    updater_key = updater.public_key(environment)
+    if profile and not environment.get("TAURI_SIGNING_PRIVATE_KEY"):
+        raise ValueError("TAURI_SIGNING_PRIVATE_KEY is required for notarized releases")
     version = config["version"]
     product_name = config["productName"]
     bundle_name = product_name + ".app"
@@ -501,7 +512,7 @@ def build(output, identity, team, profile, environment, prepared=None):
         started = time.monotonic()
         if prepared is None:
             stdout, stderr = command([str(REPOSITORY / "app/node_modules/.bin/tauri"), "build", "--config",
-                     "src-tauri/tauri.release.conf.json", "--", "--locked"], cwd=REPOSITORY / "app",
+                     "src-tauri/tauri.release.conf.json", "--config", updater.configuration(environment), "--", "--locked"], cwd=REPOSITORY / "app",
                     env=build_environment(environment, cache))
             with (output / "preparation-build.log").open("xb") as stream:
                 stream.write(stdout + stderr)
@@ -510,6 +521,8 @@ def build(output, identity, team, profile, environment, prepared=None):
             # No build commands run in the signing job. The same-run archive
             # and its recorded source/hash are checked before extraction.
             receipt = prepared_receipt(prepared)
+            if receipt.get("updaterPublicKey") != updater_key:
+                raise ValueError("prepared app updater public key differs")
             archive = prepared / "prepared-app.zip"
             command(["/usr/bin/ditto", "-x", "-k", str(archive), str(cache)], timeout=300)
             built = cache / bundle_name
@@ -558,6 +571,7 @@ def build(output, identity, team, profile, environment, prepared=None):
         dependency_notices = verify_notices(app) if prepared is None else verify_notices(app, receipt["notices"])
         asr_runtime = verify_asr_runtime(app, team)
         verify_inference_runtime(app, team)
+        updater_assets = updater.create(app, version, dict(environment)) if profile else []
         # Only this newly-created cache is reclaimed, after all owned commands
         # have returned and final artifacts are verified. Failures preserve it.
         now = cache.lstat()
@@ -571,6 +585,8 @@ def build(output, identity, team, profile, environment, prepared=None):
                   "licenseReview": "not_verified", "manualUpdate": "not_verified", "distributionReady": False,
                   "dependencyNotices": dependency_notices,
                   "asrRuntime": asr_runtime,
+                  "updaterPublicKey": updater_key,
+                  "updaterFiles": {asset.name: digest(asset) for asset in updater_assets},
                   "timings": timings, "buildCache": str(cache), "buildCacheRetained": False}
         # Create-new-only; no credentials or secret material in the report.
         with (output / "build-result.json").open("x") as stream:

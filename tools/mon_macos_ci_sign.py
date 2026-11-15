@@ -16,10 +16,14 @@ def command(*args):
 
 def main():
     required = ("MACOS_CERTIFICATE_P12_BASE64", "MACOS_CERTIFICATE_PASSWORD", "APPLE_NOTARY_KEY_BASE64",
-                "APPLE_NOTARY_KEY_ID", "APPLE_NOTARY_ISSUER_ID", "APPLE_TEAM_ID", "APPLE_SIGNING_IDENTITY")
+                "APPLE_NOTARY_KEY_ID", "APPLE_NOTARY_ISSUER_ID", "APPLE_TEAM_ID", "APPLE_SIGNING_IDENTITY",
+                "TAURI_SIGNING_PRIVATE_KEY", "TAURI_UPDATER_PUBLIC_KEY")
     if any(not os.environ.get(key) for key in required):
         raise ValueError("macOS release credentials are incomplete")
-    release.prepared_receipt((release.REPOSITORY / "output/prepared-macos").resolve())
+    import mon_updater_artifacts as updater
+    receipt = release.prepared_receipt((release.REPOSITORY / "output/prepared-macos").resolve())
+    if receipt.get("updaterPublicKey") != updater.public_key(os.environ):
+        raise ValueError("prepared app updater key differs from signing configuration")
     old_search = shlex.split(command("/usr/bin/security", "list-keychains", "-d", "user").decode())
     old_default = shlex.split(command("/usr/bin/security", "default-keychain", "-d", "user").decode())[0]
     with tempfile.TemporaryDirectory(prefix="mon-sign-", dir=os.environ["RUNNER_TEMP"]) as temporary:

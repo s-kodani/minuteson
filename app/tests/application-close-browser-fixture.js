@@ -236,6 +236,7 @@ mockIPC(async (command, args) => {
     return null;
   }
   if (command === "finish_main_close") {
+    if(args.update && (f.activity.analysisBusy || f.activity.modelPreparationBusy || f.importing.busy || data.snapshot.busy || ["preparing","recording","saving"].includes(f.recording.phase))) throw Error("録音・解析・保存などの処理が完了してから更新してください");
     if(f.captureRecovery.phase==="checking")throw Error("模擬テスト音声の起動時確認中");
     if(f.captureTest)throw Error("模擬テストを回収していません");
     // Mirror native last-hop guards without simulating process exit.

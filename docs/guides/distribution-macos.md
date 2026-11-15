@@ -16,6 +16,8 @@ sources:
 
 ## 準備
 
+Tauri更新用の公開鍵・秘密鍵と検証ツールも用意します。[更新配信の設定](updating.md#macos更新配信の設定)を参照してください。
+
 [macOSビルド環境](build-macos.md)と、有効なDeveloper ID Application証明書・対応する秘密鍵、公証用のキーチェーンプロファイルを用意します。コマンド例の氏名・Team ID・メールアドレスは自分の値へ置き換えます。
 
 DMG作成にはビルド用Python環境へ `python -m pip install --require-hashes --only-binary=:all: -r tools/requirements-macos-release.txt` で固定依存を導入します。Release buildの署名ジョブでは、認証情報を読み込む前に導入します。ローカルではビルドを実行する `python3` と同じ環境を使います。
@@ -71,6 +73,7 @@ DMGは660×440ポイントのアイコン表示で開き、左にMinutesOn、右
 | --- | --- |
 | `MinutesOn.app` | 通常版アプリ |
 | `MinutesOn_<version>_aarch64.dmg` | アプリを収めたDMG |
+| `MinutesOn_<version>_aarch64.app.tar.gz` / `.sig` / `latest.json` | 公証済みアプリの自動更新用成果物（公証付きビルド時） |
 | `build-result.json` | 版、Team、公証要求ID、容量・SHA、処理結果 |
 | `preparation-build.log` | 準備ビルドのログ |
 

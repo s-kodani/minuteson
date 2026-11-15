@@ -56,6 +56,10 @@
             "not_checked",
             "checking",
             "available",
+            "downloading",
+            "ready",
+            "installing",
+            "failed",
             "no_update",
             "unavailable",
             "unsupported"
@@ -85,6 +89,11 @@
         "currentVersion": {
           "type": "string"
         },
+        "downloadedBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "errorMessage": {
           "type": [
             "string",
@@ -99,6 +108,14 @@
         "state": {
           "$ref": "#/definitions/AppUpdateState"
         },
+        "totalBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "updateAvailable": {
           "type": "boolean"
         }
@@ -106,6 +123,7 @@
       "required": [
         "channel",
         "currentVersion",
+        "downloadedBytes",
         "revision",
         "state",
         "updateAvailable"

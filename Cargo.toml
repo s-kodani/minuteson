@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["app/src-tauri", "crates/mon-contracts", "crates/mon-core", "crates/mon-native", "crates/mon-capture-ffi"]
+members = ["app/src-tauri", "crates/mon-contracts", "crates/mon-core", "crates/mon-native", "crates/mon-capture-ffi", "crates/mon-update-verify"]
 default-members = ["app/src-tauri"]
 
 [profile.release.package.mon-desktop]

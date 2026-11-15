@@ -2058,6 +2058,7 @@ fn close_playback(
 async fn finish_main_close(
     window: WebviewWindow,
     quit: bool,
+    update: Option<bool>,
     expected: Option<application_close::CloseExpectations>,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = async move {
@@ -2066,6 +2067,19 @@ async fn finish_main_close(
         }
         if window.label() != "main" {
             return Err("Only the main window can finish closing".into());
+        }
+        let updating = update.unwrap_or(false);
+        #[cfg(not(target_os = "macos"))]
+        if updating {
+            return Err("このOSはアプリ内更新の対象外です".into());
+        }
+        #[cfg(target_os = "macos")]
+        if updating {
+            if !quit {
+                return Err("更新には再起動が必要です".into());
+            }
+            app_updates::macos::require_ready(window.app_handle())?;
+            app_updates::macos::require_idle(window.app_handle())?;
         }
         window
             .state::<capture_test::CaptureTests>()
@@ -2094,8 +2108,14 @@ async fn finish_main_close(
             let app = window.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 RecorderController::with_transition(&app, || {
+                    #[cfg(target_os = "macos")]
+                    if updating {
+                        app_updates::macos::require_idle(&app)?;
+                    }
                     app.state::<capture_test::CaptureTests>().seal_exit()?;
-                    let admission = if expected.is_some() {
+                    let admission = if updating {
+                        app.state::<AnalysisController>().begin_update_exit()
+                    } else if expected.is_some() {
                         app.state::<AnalysisController>().seal_exit()
                     } else {
                         app.state::<AnalysisController>().begin_exit()
@@ -2132,11 +2152,25 @@ async fn finish_main_close(
                     }
                     let _ = AnalysisController::kick(&app);
                 }
+                #[cfg(target_os = "macos")]
+                if result.is_ok() && updating {
+                    if let Err(error) = app_updates::macos::install(&app) {
+                        app.state::<AnalysisController>().abort_shutdown();
+                        app.state::<capture_test::CaptureTests>().abort_exit()?;
+                        ImportController::abort_shutdown(&app);
+                        DataController::abort_shutdown(&app);
+                        let _ = AnalysisController::kick(&app);
+                        return Err(error);
+                    }
+                }
                 result
             })
             .await
             .map_err(|e| e.to_string())??;
             window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
+            if updating {
+                window.app_handle().restart();
+            }
             window.app_handle().exit(0);
             Ok(())
         })
@@ -3076,6 +3110,8 @@ pub fn run() {
     }));
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_dialog::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .manage(startup_attention::Startup::default())
         .manage(startup_reset::Reset::default())

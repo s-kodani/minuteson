@@ -94,9 +94,10 @@ return errors === 0;
 }
 
 export const validateAppUpdateStatus = validate11;
-const schema13 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"AppUpdateChannel":{"enum":["windows_store","macos_release","unsupported"],"type":"string"},"AppUpdateState":{"enum":["not_checked","checking","available","no_update","unavailable","unsupported"],"type":"string"}},"description":"Availability is distinct from downloading, registration and installation.","properties":{"availableVersion":{"type":["string","null"]},"channel":{"$ref":"#/definitions/AppUpdateChannel"},"checkedAtMs":{"minimum":0,"type":["integer","null"],"maximum":9007199254740991},"currentVersion":{"type":"string"},"errorMessage":{"type":["string","null"]},"revision":{"minimum":0,"type":"integer","maximum":9007199254740991},"state":{"$ref":"#/definitions/AppUpdateState"},"updateAvailable":{"type":"boolean"}},"required":["channel","currentVersion","revision","state","updateAvailable"],"title":"AppUpdateStatus","type":"object","$id":"AppUpdateStatus"};
+const schema13 = {"$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"definitions":{"AppUpdateChannel":{"enum":["windows_store","macos_release","unsupported"],"type":"string"},"AppUpdateState":{"enum":["not_checked","checking","available","downloading","ready","installing","failed","no_update","unavailable","unsupported"],"type":"string"}},"description":"Availability is distinct from downloading, registration and installation.","properties":{"availableVersion":{"type":["string","null"]},"channel":{"$ref":"#/definitions/AppUpdateChannel"},"checkedAtMs":{"minimum":0,"type":["integer","null"],"maximum":9007199254740991},"currentVersion":{"type":"string"},"downloadedBytes":{"minimum":0,"type":"integer","maximum":9007199254740991},"errorMessage":{"type":["string","null"]},"revision":{"minimum":0,"type":"integer","maximum":9007199254740991},"state":{"$ref":"#/definitions/AppUpdateState"},"totalBytes":{"minimum":0,"type":["integer","null"],"maximum":9007199254740991},"updateAvailable":{"type":"boolean"}},"required":["channel","currentVersion","downloadedBytes","revision","state","updateAvailable"],"title":"AppUpdateStatus","type":"object","$id":"AppUpdateStatus"};
 const schema14 = {"enum":["windows_store","macos_release","unsupported"],"type":"string"};
-const schema15 = {"enum":["not_checked","checking","available","no_update","unavailable","unsupported"],"type":"string"};
+const schema15 = {"enum":["not_checked","checking","available","downloading","ready","installing","failed","no_update","unavailable","unsupported"],"type":"string"};
+const func2 = Object.prototype.hasOwnProperty;
 
 function validate11(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){
 /*# sourceURL="AppUpdateStatus" */;
@@ -105,14 +106,14 @@ let errors = 0;
 if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
-if((((((data.channel === undefined) && (missing0 = "channel")) || ((data.currentVersion === undefined) && (missing0 = "currentVersion"))) || ((data.revision === undefined) && (missing0 = "revision"))) || ((data.state === undefined) && (missing0 = "state"))) || ((data.updateAvailable === undefined) && (missing0 = "updateAvailable"))){
+if(((((((data.channel === undefined) && (missing0 = "channel")) || ((data.currentVersion === undefined) && (missing0 = "currentVersion"))) || ((data.downloadedBytes === undefined) && (missing0 = "downloadedBytes"))) || ((data.revision === undefined) && (missing0 = "revision"))) || ((data.state === undefined) && (missing0 = "state"))) || ((data.updateAvailable === undefined) && (missing0 = "updateAvailable"))){
 validate11.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
-if(!((((((((key0 === "availableVersion") || (key0 === "channel")) || (key0 === "checkedAtMs")) || (key0 === "currentVersion")) || (key0 === "errorMessage")) || (key0 === "revision")) || (key0 === "state")) || (key0 === "updateAvailable"))){
+if(!(func2.call(schema13.properties, key0))){
 validate11.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
@@ -188,12 +189,26 @@ else {
 var valid0 = true;
 }
 if(valid0){
-if(data.errorMessage !== undefined){
-let data4 = data.errorMessage;
+if(data.downloadedBytes !== undefined){
+let data4 = data.downloadedBytes;
 const _errs11 = errors;
-if((typeof data4 !== "string") && (data4 !== null)){
-validate11.errors = [{instancePath:instancePath+"/errorMessage",schemaPath:"#/properties/errorMessage/type",keyword:"type",params:{type: schema13.properties.errorMessage.type},message:"must be string,null"}];
+if(!(((typeof data4 == "number") && (!(data4 % 1) && !isNaN(data4))) && (isFinite(data4)))){
+validate11.errors = [{instancePath:instancePath+"/downloadedBytes",schemaPath:"#/properties/downloadedBytes/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
+}
+if(errors === _errs11){
+if((typeof data4 == "number") && (isFinite(data4))){
+if(data4 > 9007199254740991 || isNaN(data4)){
+validate11.errors = [{instancePath:instancePath+"/downloadedBytes",schemaPath:"#/properties/downloadedBytes/maximum",keyword:"maximum",params:{comparison: "<=", limit: 9007199254740991},message:"must be <= 9007199254740991"}];
+return false;
+}
+else {
+if(data4 < 0 || isNaN(data4)){
+validate11.errors = [{instancePath:instancePath+"/downloadedBytes",schemaPath:"#/properties/downloadedBytes/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
 }
 var valid0 = _errs11 === errors;
 }
@@ -201,26 +216,12 @@ else {
 var valid0 = true;
 }
 if(valid0){
-if(data.revision !== undefined){
-let data5 = data.revision;
+if(data.errorMessage !== undefined){
+let data5 = data.errorMessage;
 const _errs13 = errors;
-if(!(((typeof data5 == "number") && (!(data5 % 1) && !isNaN(data5))) && (isFinite(data5)))){
-validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+if((typeof data5 !== "string") && (data5 !== null)){
+validate11.errors = [{instancePath:instancePath+"/errorMessage",schemaPath:"#/properties/errorMessage/type",keyword:"type",params:{type: schema13.properties.errorMessage.type},message:"must be string,null"}];
 return false;
-}
-if(errors === _errs13){
-if((typeof data5 == "number") && (isFinite(data5))){
-if(data5 > 9007199254740991 || isNaN(data5)){
-validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/maximum",keyword:"maximum",params:{comparison: "<=", limit: 9007199254740991},message:"must be <= 9007199254740991"}];
-return false;
-}
-else {
-if(data5 < 0 || isNaN(data5)){
-validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
-return false;
-}
-}
-}
 }
 var valid0 = _errs13 === errors;
 }
@@ -228,16 +229,26 @@ else {
 var valid0 = true;
 }
 if(valid0){
-if(data.state !== undefined){
-let data6 = data.state;
+if(data.revision !== undefined){
+let data6 = data.revision;
 const _errs15 = errors;
-if(typeof data6 !== "string"){
-validate11.errors = [{instancePath:instancePath+"/state",schemaPath:"#/definitions/AppUpdateState/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+if(!(((typeof data6 == "number") && (!(data6 % 1) && !isNaN(data6))) && (isFinite(data6)))){
+validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
-if(!((((((data6 === "not_checked") || (data6 === "checking")) || (data6 === "available")) || (data6 === "no_update")) || (data6 === "unavailable")) || (data6 === "unsupported"))){
-validate11.errors = [{instancePath:instancePath+"/state",schemaPath:"#/definitions/AppUpdateState/enum",keyword:"enum",params:{allowedValues: schema15.enum},message:"must be equal to one of the allowed values"}];
+if(errors === _errs15){
+if((typeof data6 == "number") && (isFinite(data6))){
+if(data6 > 9007199254740991 || isNaN(data6)){
+validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/maximum",keyword:"maximum",params:{comparison: "<=", limit: 9007199254740991},message:"must be <= 9007199254740991"}];
 return false;
+}
+else {
+if(data6 < 0 || isNaN(data6)){
+validate11.errors = [{instancePath:instancePath+"/revision",schemaPath:"#/properties/revision/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
 }
 var valid0 = _errs15 === errors;
 }
@@ -245,16 +256,62 @@ else {
 var valid0 = true;
 }
 if(valid0){
+if(data.state !== undefined){
+let data7 = data.state;
+const _errs17 = errors;
+if(typeof data7 !== "string"){
+validate11.errors = [{instancePath:instancePath+"/state",schemaPath:"#/definitions/AppUpdateState/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+if(!((((((((((data7 === "not_checked") || (data7 === "checking")) || (data7 === "available")) || (data7 === "downloading")) || (data7 === "ready")) || (data7 === "installing")) || (data7 === "failed")) || (data7 === "no_update")) || (data7 === "unavailable")) || (data7 === "unsupported"))){
+validate11.errors = [{instancePath:instancePath+"/state",schemaPath:"#/definitions/AppUpdateState/enum",keyword:"enum",params:{allowedValues: schema15.enum},message:"must be equal to one of the allowed values"}];
+return false;
+}
+var valid0 = _errs17 === errors;
+}
+else {
+var valid0 = true;
+}
+if(valid0){
+if(data.totalBytes !== undefined){
+let data8 = data.totalBytes;
+const _errs20 = errors;
+if((!(((typeof data8 == "number") && (!(data8 % 1) && !isNaN(data8))) && (isFinite(data8)))) && (data8 !== null)){
+validate11.errors = [{instancePath:instancePath+"/totalBytes",schemaPath:"#/properties/totalBytes/type",keyword:"type",params:{type: schema13.properties.totalBytes.type},message:"must be integer,null"}];
+return false;
+}
+if(errors === _errs20){
+if((typeof data8 == "number") && (isFinite(data8))){
+if(data8 > 9007199254740991 || isNaN(data8)){
+validate11.errors = [{instancePath:instancePath+"/totalBytes",schemaPath:"#/properties/totalBytes/maximum",keyword:"maximum",params:{comparison: "<=", limit: 9007199254740991},message:"must be <= 9007199254740991"}];
+return false;
+}
+else {
+if(data8 < 0 || isNaN(data8)){
+validate11.errors = [{instancePath:instancePath+"/totalBytes",schemaPath:"#/properties/totalBytes/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
+}
+var valid0 = _errs20 === errors;
+}
+else {
+var valid0 = true;
+}
+if(valid0){
 if(data.updateAvailable !== undefined){
-const _errs18 = errors;
+const _errs22 = errors;
 if(typeof data.updateAvailable !== "boolean"){
 validate11.errors = [{instancePath:instancePath+"/updateAvailable",schemaPath:"#/properties/updateAvailable/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
-var valid0 = _errs18 === errors;
+var valid0 = _errs22 === errors;
 }
 else {
 var valid0 = true;
+}
+}
 }
 }
 }
@@ -881,7 +938,6 @@ const schema25 = {"$schema":"http://json-schema.org/draft-07/schema#","additiona
 const schema26 = {"additionalProperties":false,"properties":{"files":{"additionalProperties":{"type":"string"},"description":"Slot -> package-relative path; the primary model and VAD have common roles.","type":"object"},"id":{"type":"string"}},"required":["files","id"],"type":"object"};
 const schema27 = {"enum":["whisper.cpp","asr","sherpa-onnx","llama.cpp"],"type":"string"};
 const schema30 = {"enum":["macos_aarch64","windows_x86_64"],"type":"string"};
-const func2 = Object.prototype.hasOwnProperty;
 const schema28 = {"additionalProperties":false,"properties":{"expectedHash":{"type":["string","null"]},"expectedSize":{"minimum":0,"type":["integer","null"],"maximum":9007199254740991},"relativePath":{"type":"string"},"role":{"$ref":"#/definitions/Role"}},"required":["relativePath","role"],"type":"object"};
 const schema29 = {"enum":["executable","runtime_library","notice","asr","asr_asset","vad","segmentation","speaker_embedding","llm"],"type":"string"};
 

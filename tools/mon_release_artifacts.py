@@ -45,6 +45,7 @@ def sbom(inventory, flavor, commit):
 
 def collect(flavor, output):
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
+    updater_files = {}
     if flavor == "macos":
         binary = one("output/macos-release/*.dmg")
         receipt = json.loads(one("output/macos-release/build-result.json").read_text())
@@ -53,6 +54,12 @@ def collect(flavor, output):
         # The unsigned build job retained its inventory inside the app handoff;
         # after signing use that exact validated bundle's inventory.
         inventory = one("output/macos-release/MinutesOn.app/Contents/Resources/third-party-inventory.json")
+        import mon_updater_artifacts as updater
+        names = updater.validate_metadata(binary.parent, receipt["version"])
+        updater_files = receipt.get("updaterFiles", {})
+        if set(updater_files) != set(names) or any(digest(binary.parent / name) != updater_files[name] for name in names):
+            raise ValueError("updater assets are missing or differ from signing receipt")
+        updater.verify(binary.parent / names[0], binary.parent / names[1], receipt["updaterPublicKey"], receipt["version"])
         status = "developer_id_signed_and_notarized"
     elif flavor == "windows":
         binary = one("output/windows-unsigned/MinutesOn-unsigned-setup.exe")
@@ -73,11 +80,13 @@ def collect(flavor, output):
     output.mkdir(parents=True, exist_ok=True)
     copied = output / binary.name
     shutil.copyfile(binary, copied)
+    for name in updater_files:
+        shutil.copyfile(binary.parent / name, output / name)
     bom = output / f"{flavor}.cdx.json"
     bom.write_text(json.dumps(sbom(json.loads(inventory.read_text()), flavor, commit), ensure_ascii=False, indent=2) + "\n")
     record = {"schemaVersion": 1, "flavor": flavor, "sourceSha": commit, "binary": binary.name,
               "sha256": digest(copied), "bytes": copied.stat().st_size, "sbom": bom.name, "sbomSha256": digest(bom), "verification": status,
-              "runtimeQA": "not_verified", "licenseReview": "not_verified"}
+              "runtimeQA": "not_verified", "licenseReview": "not_verified", "updaterFiles": updater_files}
     (output / f"{flavor}-receipt.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
@@ -103,6 +112,18 @@ def assemble(source, output, commit, tag):
                 continue
             shutil.copyfile(file, output / name)
             public[name] = receipt[hash_key]
+        if flavor == "macos":
+            import mon_updater_artifacts as updater
+            names = updater.validate_metadata(source, tag.removeprefix("v"))
+            files = receipt.get("updaterFiles", {})
+            if set(files) != set(names):
+                raise ValueError("signed updater assets are required")
+            for name, expected in files.items():
+                file = source / name
+                if file.is_symlink() or not file.is_file() or digest(file) != expected:
+                    raise ValueError("updater artifact hash differs")
+                shutil.copyfile(file, output / name)
+                public[name] = expected
         records.append(receipt)
     manifest = {"schemaVersion": 1, "sourceSha": commit, "tag": tag, "publicFiles": public, "artifacts": records,
                 "runtimeQA": "not_verified", "licenseReview": "not_verified", "distributionReady": False}

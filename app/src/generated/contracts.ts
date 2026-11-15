@@ -17,7 +17,17 @@ export type NativeContract =
   | WindowEnvironment;
 export type RetryDisposition = "not_started" | "reconcile" | "retry" | "never";
 export type AppUpdateChannel = "windows_store" | "macos_release" | "unsupported";
-export type AppUpdateState = "not_checked" | "checking" | "available" | "no_update" | "unavailable" | "unsupported";
+export type AppUpdateState =
+  | "not_checked"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "installing"
+  | "failed"
+  | "no_update"
+  | "unavailable"
+  | "unsupported";
 export type Engine = "whisper.cpp" | "asr" | "sherpa-onnx" | "llama.cpp";
 export type JobKind =
   | "transcription"
@@ -57,9 +67,11 @@ export interface AppUpdateStatus {
   channel: AppUpdateChannel;
   checkedAtMs?: number | null;
   currentVersion: string;
+  downloadedBytes: number;
   errorMessage?: string | null;
   revision: number;
   state: AppUpdateState;
+  totalBytes?: number | null;
   updateAvailable: boolean;
 }
 export interface ArchiveMember {
