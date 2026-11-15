@@ -9,5 +9,6 @@
 .settings-info-modal .about-app-name { margin:0 0 12px; font-size:24px; font-weight:700; color:var(--text); }
 .about-metadata { display:grid; grid-template-columns:auto minmax(0,1fr); margin:24px 0; font-size:13px; }
 .about-metadata dt,.about-metadata dd { margin:0; padding:12px 8px; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.about-metadata dt:last-of-type,.about-metadata dd:last-of-type { border-bottom:0; }
 .about-metadata dt { font-weight:600; padding-right:28px; }
 .settings-info-modal .about-copyright { margin:24px 0 0; color:var(--muted); font-size:12px; text-align:center; }
