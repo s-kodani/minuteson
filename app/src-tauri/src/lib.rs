@@ -264,7 +264,8 @@ async fn apply_model_profile_application(
                             &|| guard.cancelled() || lease.cancelled(),
                         );
                         if applied.is_ok() {
-                            app.state::<AnalysisController>().model_application_finished();
+                            app.state::<AnalysisController>()
+                                .model_application_finished();
                         }
                         applied
                     },
