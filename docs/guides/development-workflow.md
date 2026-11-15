@@ -11,6 +11,7 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-controller.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_release.py"
+  - resource: "https://github.com/s-kodani/minuteson/blob/16fc32b82fe1d521acbc691951e4f47a9d1445fd/tools/mon_ci_scope.py"
 ---
 
 # GitHubでの開発とリリース
@@ -48,7 +49,7 @@ PRは変更した経路の検査だけを実行します。最終ゲートは常
 
 | PRの変更 | 実行する主な検査 |
 | --- | --- |
-| `docs/`・README等のみ | 文書・秘密情報・ワークフロー方針・最終ゲート |
+| 文書・エージェント向け説明と表示設定のみ | 文書・秘密情報・ワークフロー方針・最終ゲート |
 | フロントエンド | フロントエンド／両OSのブラウザー・JS/TS CodeQL |
 | Rust・共通コア | 通常ネイティブ・該当言語CodeQL |
 | IPC契約・生成契約・プラットフォーム設定 | フロントエンドとネイティブ・該当言語CodeQL |
@@ -56,6 +57,10 @@ PRは変更した経路の検査だけを実行します。最終ゲートは常
 | 依存・ワークフロー・未分類ファイル | 関係する検査。未分類・ワークフローは全経路 |
 
 正本は[変更範囲判定](../../tools/mon_ci_scope.py)です。削除を含め、renameは削除＋追加として両方を判定します。アプリ同梱Markdown、第三者通知は文書だけの変更に分類しません。
+
+文書扱いには、`README.md`・`SECURITY.md`・`AGENTS.md`、`docs/`・`assets/readme/`、`evaluation/`のMarkdown、PRテンプレートを含めます。`.agents/skills/`配下のMarkdownと各スキルの`agents/openai.yaml`も、アプリの検査・ビルドを必要としない作業説明・表示設定として扱います。
+
+音声取り込みfixtureと第三者資料の3ディレクトリ（`model-licenses`・`notices`・`runtime-notices`）の案内用`README.md`、`evaluation/runs/.gitkeep`も軽い検査だけを行います。ライセンス本文・通知index・モデル定義・実行スクリプトまで一括除外せず、未知のファイルは引き続き全経路を検査します。文書とコードが混在する変更はコード側の検査を維持し、手動fullは文書だけでも全件を実行します。
 
 通常Rustはライブラリのテストを最大2プロセス×4スレッドで実行します。0件のバイナリテスト・doctestのための追加コンパイルを省き、実行ファイルのリンクは正式パッケージ生成で確認します。全件検証のスレッド設定は維持します。
 
