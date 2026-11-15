@@ -46,7 +46,7 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 Windows・macOSの録音中のディスク書き込み削減と「このアプリについて」画面の区切り線整理を含みます。CIの変更範囲判定、キャッシュ済み音声の変更拒否テストの時刻依存、検証後の後片付けルールも更新しています。mainの初回実行ではmacOSの画面検査で検証用サーバーへの接続リセットが1件発生しました。失敗ジョブを1回再実行して成功し、同じrunの成功済みネイティブ成果物を再利用しています。
 
-Store用の未署名MSIX（`1.0.3.0`・x64）も同じmain実行で生成・照合しています。[承認後の送信](https://github.com/s-kodani/minuteson/actions/runs/43696252719)は成功し、提出ID`1152921505702408109`に対する送信確定（commit）の要求が受理されました。[状態照会](https://github.com/s-kodani/minuteson/actions/runs/43696483196)では`CommitStarted`で、審査・Store一般配信の完了は未確認です。
+Store用の未署名MSIX（`1.0.3.0`・x64）も同じmain実行で生成・照合しています。[承認後の送信](https://github.com/s-kodani/minuteson/actions/runs/43696252719)は成功し、提出ID`1152921505702408109`に対する送信確定（commit）の要求が受理されました。[状態照会](https://github.com/s-kodani/minuteson/actions/runs/43696822845)では`Certification`（審査中）で、審査・Store一般配信の完了は未確認です。
 
 今回の自動検査と公開記録だけでは、実機QA・ライセンス審査を確認済みとしません。配布記録の`runtimeQA`・`licenseReview`は`not_verified`、`distributionReady`は`false`を保持しています。Gatekeeper・実機録音・更新後のデータ保持・Store経由更新の確認結果は、確認した版と環境に基づいて別途記録します。過去版の確認記録は1.0.3の実機確認結果として扱いません。
 
