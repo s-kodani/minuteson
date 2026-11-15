@@ -18,7 +18,7 @@ import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, typ
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 import type { DiarizationPreferences } from "./diarization-state";
-import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, canReuseOfficialModel, isAsrEngine } from "./model-selection-state";
+import { modelChoices, modelChoiceAction, modelDisplayName, installedModelGroups, canReuseOfficialModel, isAsrEngine, runtimeUpdateChoices } from "./model-selection-state";
 import { modelVocabularySupport } from "./model-vocabulary-support";
 import { ToastNotice } from "./toast";
 import { ModelLicenseDialog } from "./model-license";
@@ -48,8 +48,25 @@ function modelOptionLabel(choice: ModelChoice): string {
     ? `【おすすめ】${choice.label}`
     : choice.label;
 }
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
+  const runtimeRequestHandled = useRef(0);
+  useEffect(() => {
+    if (!visible || !runtimeUpdateEpoch || runtimeRequestHandled.current === runtimeUpdateEpoch || !options.length) return;
+    runtimeRequestHandled.current = runtimeUpdateEpoch;
+    const targets: Record<string, string> = {};
+    for (const choice of runtimeUpdateChoices(entries, options, profiles)) {
+      const engine = choice.option!.review.manifest.engine;
+      const slot = isAsrEngine(engine) ? "asr" : engine;
+      targets[slot] ??= choice.value;
+    }
+    setSelection(current => ({ ...current, ...targets }));
+    const frame = requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>('[data-runtime-update-target] button:not(:disabled)') ?? document.querySelector<HTMLElement>('.model-inspection h2');
+      if (target) { if (!target.matches("button")) target.tabIndex = -1; target.focus(); target.scrollIntoView({ block: "center" }); }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible, runtimeUpdateEpoch, options, entries, profiles]);
   const [backends, setBackends] = useState<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>([]);
   useEffect(() => { if (visible && isTauri()) void invoke<{ id: string; vocabularyDescription: string; supportsVadOverlap: boolean; defaultVad: import("./vad-state").VadOptions }[]>("get_asr_backends").then(setBackends).catch(cause => { setBackends([]); setError(modelPreparationError(cause)); }); }, [visible]);
   const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
@@ -108,6 +125,14 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }).catch(cause => { if (mounted.current) setError(modelPreparationError(cause)); });
   }, [visible]);
   useEffect(() => { if (refreshEpoch && isTauri()) { downloads.clear(); setSelection({}); void load().catch(cause => setError(modelPreparationError(cause))); } }, [refreshEpoch]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    const subscription = listen("model-inventory-changed", () => {
+      if (active) void load().catch(cause => { if (active) setError(modelPreparationError(cause)); });
+    });
+    return () => { active = false; void subscription.then(unlisten => unlisten()).catch(() => {}); };
+  }, []);
   const selectedDiarization = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "sherpa-onnx" && entries.some(entry => entry.packageId === item.packageId && entry.bodyRemoved !== true));
   const profileId = profiles.find(item => item.name === "standard")?.id;
   useEffect(() => {
@@ -302,11 +327,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (!canConfirmLicense() || licenseRequest.current?.id !== request.id) return;
       currentLicenseChoice(request);
       if (review.disclosureHash !== request.review.disclosureHash) throw Error("モデルの利用条件が変わりました。利用条件を開き直してください。");
-      const runtimeUpdate = request.engine === "llama.cpp" && modelChoiceAction(choice,current.placed,used) === "update_runtime";
+      const runtimeUpdate = modelChoiceAction(choice,current.placed,used) === "update_runtime";
       setOptions(official); setEntries(current.placed); setProfiles(current.catalog);
       closeLicense();
       const succeeded = await executeModelUse(request.engine, choice, current.placed);
-      if (succeeded && runtimeUpdate) setRuntimeNotice({id:crypto.randomUUID(),message:"議事録生成エンジンを更新しました。"});
+      if (succeeded && runtimeUpdate) setRuntimeNotice({id:crypto.randomUUID(),message:request.engine === "llama.cpp" ? "議事録生成エンジンを更新しました。" : `${request.engine === "asr" ? "文字起こし" : "話者分離"}の実行環境を更新しました。`});
     } catch (cause) { updateLicense(request.id, { confirming: false, acknowledged: false, error: modelPreparationError(cause) }); }
   };
   const recheck = async (): Promise<"waiting" | "resolved" | "applied"> => {
@@ -380,9 +405,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const installed = installedModelGroups(entries, profiles);
 
   const selectedProfile = profiles.find(item => item.name === "standard");
-  const copyStatus = (item: ModelPlacementEntry) => selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
+  const modelStatus = (item: ModelPlacementEntry) => selectedProfile?.components.some(component => component.packageId === item.packageId) ? "使用中" : "導入済み";
   const purposeOf = (item: ModelPlacementEntry) => engines.find(e => e.engine === "asr" ? isAsrEngine(item.engine) : e.engine === item.engine)?.label ?? item.engine;
-  const renderCopy = (item: ModelPlacementEntry, grouped = false) => <InstalledModelCopy key={item.packageId} item={item} name={modelDisplayName(item, options)} status={copyStatus(item)} purpose={purposeOf(item)} vocabularySupport={modelVocabularySupport(item, backends)} grouped={grouped} disabled={disabled} deletion={deletion} />;
+  const renderModel = (item: ModelPlacementEntry) => <InstalledModel key={item.packageId} item={item} name={modelDisplayName(item, options)} status={modelStatus(item)} purpose={purposeOf(item)} vocabularySupport={modelVocabularySupport(item, backends)} disabled={disabled} deletion={deletion} />;
   return <><section className="analysis-card model-inspection" aria-label="AIモデル" hidden={!visible}>
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
@@ -394,11 +419,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const entry = choice?.entry;
       const action = modelChoiceAction(choice, entries, used);
       const actionLabel = { in_use: "使用中", add_vad: "VADを追加して使用", use: "使用", update_runtime: "実行環境を更新して使用", download: "ダウンロードして使用" }[action];
-      return <div className="model-selection-item" key={engine}><div className="model-selection-row"><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
+      return <div className="model-selection-item" data-runtime-update-target={action === "update_runtime" ? true : undefined} key={engine}><div className="model-selection-row"><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{modelOptionLabel(item)}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || action === "in_use"} onClick={event => void useModel(engine, value, true, actionLabel, event.currentTarget)}>{actionLabel}</button></div>
-        {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデル本体は変更しません。再利用できるモデルデータはコピーします。旧コピーを保持するため追加の空き容量が必要です。</p>}
+        {action === "update_runtime" && <p className="model-runtime-update-help">{used && choice?.packageIds.includes(used.packageId) ? "現在は更新前の実行環境を使用中です。" : ""}モデル本体は変更しません。準備中は追加の空き容量が必要です。更新後、不要になった旧モデルデータは自動で整理します。</p>}
         {choice && <div className="model-license-summary"><div><span>{choice.option?.licenseSummary.licenseNames.join(" / ") ?? "条件未確認"}</span><button type="button" disabled={disabled} onClick={event => void useModel(engine, value, false, "使用", event.currentTarget)}>利用条件を見る</button></div>
           <p>{choice.option?.licenseSummary.summary ?? "このモデルと実行エンジンの利用条件は確認できていません。配布元の利用条件を確認してください。"}</p>
           {choice.option?.licenseSummary.restrictions.map((restriction, index) => <p className="model-license-restriction" key={index}>{restriction}</p>)}
@@ -456,16 +481,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   <section className="analysis-card model-inventory" aria-label="導入済みモデル管理" hidden={!visible}>
     <h2 tabIndex={-1}>導入済みモデル管理</h2>
     {!installed.length && <p>導入済みモデルはありません。「ローカルAI」からモデルを導入できます。</p>}
-    <ul>{installed.map(group => {
-      if (group.entries.length === 1) return <li key={group.key}>{renderCopy(group.entry)}</li>;
-      const status = group.entries.some(item => copyStatus(item) === "使用中") ? "使用中" : "導入済み";
-      return <li key={group.key} className="model-inventory-group"><div className="model-inventory-summary"><strong>{modelDisplayName(group.entry, options)}</strong>
-        <span>{purposeOf(group.entry)} · 合計 {bytesLabel(group.totalBytes)} · {group.entries.length}コピー · {status}</span></div>
-        <details className="model-copies"><summary>コピーを管理（{group.entries.length}件）</summary><div role="group" aria-label={`${modelDisplayName(group.entry, options)}のコピー`}>
-          {group.entries.map(item => renderCopy(item, true))}
-        </div></details>
-      </li>;
-    })}</ul>
+    <ul>{installed.map(group => <li key={group.key} className="model-inventory-item">{renderModel(group.entry)}
+      {(group.entries.length > 1 || group.entries.some(entry => entry.cleanupPending)) && <p className="model-cleanup-pending" role="status">未使用データの整理を保留しています。処理の完了後または次回起動時に自動で再確認します。</p>}
+    </li>)}</ul>
     {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{recordingActive ? "録音・音声保存が完了すると削除できます。" : busy || pending ? "モデル準備が完了すると削除できます。" : deletion?.reviewUnavailableReason ?? "ほかの操作が完了すると削除できます。"}</p></div>}
     {deletion?.listing?.items.map(item => <div key={item.operationId} className="model-deletion-pending"><p>{item.modelName ?? "モデル"}：削除の確認が必要です。{item.errorMessage}</p>
       {item.reviewAllowed && <button type="button" className="small-secondary" disabled={!deletion.canReviewPending} onClick={() => void deletion.reviewPending(item.operationId)}>残りの削除を確認</button>}</div>)}
@@ -478,13 +496,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   </>;
 }
 
-function InstalledModelCopy({ item, name, status, purpose, vocabularySupport, grouped, disabled, deletion }: {
-  item: ModelPlacementEntry; name: string; status: string; purpose: string; vocabularySupport: string | null; grouped: boolean; disabled: boolean; deletion?: ModelDeletionControl;
+function InstalledModel({ item, name, status, purpose, vocabularySupport, disabled, deletion }: {
+  item: ModelPlacementEntry; name: string; status: string; purpose: string; vocabularySupport: string | null; disabled: boolean; deletion?: ModelDeletionControl;
 }) {
-  return <div className="model-copy" data-model-copy={item.packageId}><div className="model-inventory-summary">
-    {!grouped && <strong>{name}</strong>}<span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span>
-    <span className="model-copy-id">コピー {item.packageId.slice(0, 8)} · {item.engineVersion}</span></div>
-    <div className="model-inventory-actions"><OptionsModal label={`${name}（${item.packageId.slice(0, 8)}）の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">
+  return <div className="installed-model" data-installed-model={item.packageId}><div className="model-inventory-summary">
+    <strong>{name}</strong><span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span></div>
+    <div className="model-inventory-actions"><OptionsModal label={`${name}の詳細`} triggerLabel="詳細" title="モデルの詳細" className="model-details">
       <h3>{name}</h3><dl className="import-info"><dt>用途</dt><dd>{purpose}</dd>
         <dt>モデル名</dt><dd>{item.modelName || "不明"}</dd><dt>バージョン</dt><dd>{item.modelVersion || "不明"}</dd>
         <dt>量子化</dt><dd>{item.quantization || "不明"}</dd><dt>エンジン</dt><dd>{item.engine || "不明"} · {item.engineVersion || "不明"}</dd>
@@ -493,6 +510,6 @@ function InstalledModelCopy({ item, name, status, purpose, vocabularySupport, gr
         <dt>容量</dt><dd>{bytesLabel(item.totalBytes)}</dd><dt>取得元</dt><dd>{item.sourceType === "download" ? "ダウンロード" : item.sourceType === "manual_import" ? "ローカルからの取り込み" : "不明"}</dd>
         <dt>選択状態</dt><dd>{status}</dd><dt>互換性確認</dt><dd>{placementLabel(item)}</dd>
         <dt>パッケージID</dt><dd className="data-path">{item.packageId}</dd></dl>
-    </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-describedby={(!deletion?.canReviewModel || disabled) ? "model-deletion-unavailable" : undefined} aria-label={`${name}（${item.packageId.slice(0, 8)}）をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
+    </OptionsModal><button type="button" className="small-secondary deletion-trigger" aria-describedby={(!deletion?.canReviewModel || disabled) ? "model-deletion-unavailable" : undefined} aria-label={`${name}をローカルから削除`} disabled={!deletion?.canReviewModel || disabled} onClick={() => void deletion?.reviewModel(item.packageId, item.reviewHash)}>ローカルから削除</button></div>
   </div>;
 }

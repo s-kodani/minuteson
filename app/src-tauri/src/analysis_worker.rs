@@ -115,6 +115,9 @@ pub struct AnalysisController {
     state: std::sync::Arc<Mutex<State>>,
     idle: std::sync::Arc<Condvar>,
     shutdown: std::sync::Arc<AtomicBool>,
+    model_cleanup_failed: Mutex<std::collections::HashSet<String>>,
+    model_cleanup_disabled: AtomicBool,
+    model_cleanup_suspended: AtomicBool,
 }
 
 impl AnalysisController {
@@ -173,11 +176,74 @@ impl AnalysisController {
                     "解析ワーカーが予期せず停止しました。再起動後に再開状態を確認してください",
                 );
             }
+            if result.is_ok() {
+                Self::cleanup_models(&app);
+            }
             if wake {
                 let _ = Self::kick(&app);
             }
         });
         Ok(())
+    }
+
+    fn cleanup_models(app: &AppHandle) {
+        let controller = app.state::<Self>();
+        let storage = app.state::<Storage>();
+        if storage.data_write_blocked()
+            || controller.model_cleanup_disabled.load(Ordering::Acquire)
+            || controller.model_cleanup_suspended.load(Ordering::Acquire)
+        {
+            return;
+        }
+        let recording = app
+            .state::<crate::session::SessionStore>()
+            .snapshot()
+            .is_active();
+        let Ok(importing) = app
+            .state::<crate::import_controller::ImportController>()
+            .snapshot()
+        else {
+            return;
+        };
+        let Ok(lease) = controller.begin_model_deletion(
+            recording,
+            importing.busy || importing.recording_blocked,
+            &|| false,
+        ) else {
+            return;
+        };
+        let Ok(mut failed) = controller.model_cleanup_failed.lock() else {
+            return;
+        };
+        let root = match app.path().app_data_dir() {
+            Ok(path) => path.join("models"),
+            Err(_) => return,
+        };
+        let result = crate::storage::deletion::models::cleanup::sweep(
+            &storage,
+            &root,
+            &lease,
+            &mut failed,
+            &|| lease.cancelled(),
+        );
+        if let Err(error) = &result {
+            if !lease.cancelled() {
+                controller
+                    .model_cleanup_disabled
+                    .store(true, Ordering::Release);
+                crate::internal_logs::report_error("model_cleanup", error);
+            }
+        }
+        drop(lease);
+        // A failed sweep can have retired some packages or saved partial progress.
+        // Readers must refresh both availability and the pending-keeper hint.
+        if !matches!(result, Ok(false)) {
+            let _ = app.emit("model-inventory-changed", ());
+        }
+    }
+
+    pub(crate) fn model_application_finished(&self) {
+        self.model_cleanup_suspended.store(false, Ordering::Release);
     }
 
     fn work(app: &AppHandle) {

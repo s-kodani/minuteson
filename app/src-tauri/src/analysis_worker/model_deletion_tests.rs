@@ -3,6 +3,24 @@ use super::*;
 use std::sync::{Arc, Barrier};
 
 #[test]
+fn automatic_cleanup_waits_across_preparation_steps_until_application_succeeds() {
+    let controller = AnalysisController::default();
+    assert!(!controller.model_cleanup_suspended.load(Ordering::Acquire));
+    let placement = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    drop(placement);
+    assert!(controller.model_cleanup_suspended.load(Ordering::Acquire));
+    let check = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    drop(check);
+    assert!(controller.model_cleanup_suspended.load(Ordering::Acquire));
+    controller.model_application_finished();
+    assert!(!controller.model_cleanup_suspended.load(Ordering::Acquire));
+}
+
+#[test]
 fn model_deletion_coexists_with_existing_and_new_notification_owners() {
     let c = AnalysisController::default();
     let writer = c.begin_notice_storage().unwrap();

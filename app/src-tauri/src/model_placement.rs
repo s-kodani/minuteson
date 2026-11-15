@@ -160,6 +160,7 @@ pub(crate) struct CatalogEntry {
     pub total_bytes: u64,
     pub placement_recorded: bool,
     pub body_removed: bool,
+    pub cleanup_pending: bool,
     pub ready: bool,
     pub review_hash: String,
     pub compatibility: Option<crate::model_compatibility::CheckSummary>,

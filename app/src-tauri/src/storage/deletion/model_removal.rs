@@ -828,6 +828,7 @@ fn run_inner(
 // Informational availability projection, not execution authority. Validate
 // each known completed receipt; never trust a producer hint or raw JSON flag.
 pub(in crate::storage) fn deleted(db: &Connection, package: &str) -> Result<bool, String> {
+    if super::super::cleanup::unavailable(db, package)? { return Ok(true); }
     let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND json_extract(target_manifest_json,'$.subtype')='modelDeletion' AND json_extract(target_manifest_json,'$.packageId')=?1 ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![package],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     if ids.len() > 256 {
         return Err("モデル削除履歴が安全上限を超えています".into());

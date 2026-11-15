@@ -2,7 +2,7 @@ import { errorMessage } from "./app-error";
 import { invoke } from "./ipc";
 
 type BackgroundReadSource =
-  | "restore_labels" | "model_download_guidance"
+  | "restore_labels" | "model_download_guidance" | "model_runtime_guidance"
   | "window_title" | "window_maximized" | "window_resize_subscription" | "window_focus_subscription"
   | "transcription_publication" | "audio_import_status" | "audio_import_subscription";
 

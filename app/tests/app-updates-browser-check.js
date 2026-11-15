@@ -8,6 +8,17 @@ async(page)=>{
   await page.evaluate(()=>window.appUpdateFixture.publish({state:"checking"}));
   check(await search.inputValue()==="会議"&&await search.evaluate(element=>element===document.activeElement),"update took editing focus or discarded text");
   await page.evaluate(()=>window.appUpdateFixture.publish({state:"available"}));
+  await page.locator('.meeting-name').first().click();
+  await page.locator('.meeting-detail-navigation').waitFor();
+  check(await banner.evaluate(element => element.parentElement.classList.contains('workspace-surface')), 'update banner separates the detail header and tabs');
+  const tabs = await page.locator('.meeting-detail-navigation').boundingBox(), box = await banner.boundingBox();
+  check(box.y >= tabs.y + tabs.height - 1, 'banner interrupts detail navigation');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await page.screenshot({path:`output/playwright/app-update-detail-${theme}.png`});
+  }
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+  results.push('banner stays inside the workspace below the detail tabs, preserving a continuous surrounding background in both themes');
   await nav.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
   await banner.waitFor();
   await nav.getByRole("button",{name:"設定",exact:true}).click();

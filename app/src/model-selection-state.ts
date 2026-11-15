@@ -95,3 +95,9 @@ export function modelChoices(engine: string, entries: ModelPlacementEntry[], opt
   }
   return result;
 }
+
+export function runtimeUpdateChoices(entries: ModelPlacementEntry[], options: OfficialModelOption[], profiles: ModelProfileView[]): ModelChoice[] {
+  return ["asr", "sherpa-onnx", "llama.cpp"].flatMap(engine => modelChoices(engine, entries, options, profiles)
+    .filter(choice => modelChoiceAction(choice, entries, profiles.find(profile => profile.name === "standard")?.components
+      .find(component => matchesSlot(component.engine, engine))) === "update_runtime"));
+}

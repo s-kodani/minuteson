@@ -938,6 +938,24 @@ impl Storage {
     }
 }
 
+// Historical profile rows are immutable provenance, not live ownership.
+// Automatic retirement protects only the validated current heads.
+pub(in crate::storage) fn current_packages(db: &Connection) -> Result<BTreeSet<String>, String> {
+    let (heads, _) = heads(db)?;
+    let mut packages = BTreeSet::new();
+    for name in [ProfileName::Standard, ProfileName::HighAccuracy] {
+        if let Some(head) = heads.get(name) {
+            packages.extend(
+                load_profile(db, name, head)?
+                    .bindings
+                    .into_iter()
+                    .map(|b| b.package_id),
+            );
+        }
+    }
+    Ok(packages)
+}
+
 #[cfg(all(test, unix))]
 pub(in crate::storage) mod tests;
 

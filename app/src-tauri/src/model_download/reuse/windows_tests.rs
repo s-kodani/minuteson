@@ -54,6 +54,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, CatalogEntry, Recipe) {
         engine_version: "test".into(),
         placement_recorded: true,
         body_removed: false,
+        cleanup_pending: false,
         ready: false,
         review_hash: "a".repeat(64),
         compatibility: None,

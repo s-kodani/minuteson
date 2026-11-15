@@ -259,6 +259,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        let cleanup_pending = deletion::models::cleanup::pending_keepers(&db)?;
         let ids = db.prepare("SELECT id FROM model_packages WHERE source_type IN ('manual_import','download') ORDER BY rowid DESC").map_err(|e|e.to_string())?.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         ids.into_iter()
             .map(|id| {
@@ -309,6 +310,7 @@ impl Storage {
                     total_bytes: receipt.total_bytes,
                     placement_recorded: placed,
                     body_removed,
+                    cleanup_pending: cleanup_pending.contains(&record.package_id),
                     ready: false,
                     review_hash: record.review_hash,
                     compatibility,

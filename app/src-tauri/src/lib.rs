@@ -256,13 +256,17 @@ async fn apply_model_profile_application(
                     Some(&token),
                     &|| guard.cancelled(),
                     |lease| {
-                        model_application::apply(
+                        let applied = model_application::apply(
                             &app.state::<Storage>(),
                             &models_root,
                             &token,
                             &preview,
                             &|| guard.cancelled() || lease.cancelled(),
-                        )
+                        );
+                        if applied.is_ok() {
+                            app.state::<AnalysisController>().model_application_finished();
+                        }
+                        applied
                     },
                 )
             })
