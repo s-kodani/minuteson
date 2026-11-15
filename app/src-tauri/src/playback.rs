@@ -1,4 +1,4 @@
-use crate::audio::{VerifiedAudio, PREVIEW_FRAMES};
+use crate::audio::PREVIEW_FRAMES;
 use serde::Serialize;
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -6,12 +6,15 @@ use uuid::Uuid;
 mod clock;
 mod meeting;
 mod preparation;
+mod span;
 pub(crate) use clock::ClockAudio;
 pub(crate) use meeting::{MeetingAudio, MeetingIntervalAudio};
 pub(crate) use preparation::PlaybackPreparations;
+pub use span::SpanAudio;
+pub(crate) use span::SpanCache;
 
 pub struct AudioSpan {
-    pub audio: VerifiedAudio,
+    pub audio: SpanAudio,
     pub first_frame: u64,
     pub frames: u64,
 }

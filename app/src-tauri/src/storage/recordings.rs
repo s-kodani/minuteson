@@ -760,6 +760,31 @@ impl Storage {
         } else {
             "{\"timeline_alignment\":\"unverified\"}".into()
         };
+        #[cfg(any(unix, windows))]
+        let publication = if let Some(prefixes) = &raw_prefixes {
+            let origin = prefixes
+                .iter()
+                .filter(|prefix| prefix.frames() > 0)
+                .map(|prefix| prefix.first_capture_nanoseconds())
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .min()
+                .ok_or("保存音声がありません")?;
+            Some(flac::Publication::prepare_completed(
+                self,
+                &base,
+                &manifest_file.hash,
+                origin,
+                prefixes,
+                &|| false,
+            )?)
+        } else {
+            None
+        };
+        #[cfg(any(unix, windows))]
+        let segmented = publication.is_some();
+        #[cfg(not(any(unix, windows)))]
+        let segmented = false;
         let mic_file = if mic_unreceived {
             let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
             if crate::input_levels::open_capture_file_at_optional(&directory, "microphone.caf")?
@@ -767,6 +792,8 @@ impl Storage {
             {
                 return Err("未取得のマイク音声に音声ファイルがあります".into());
             }
+            None
+        } else if segmented {
             None
         } else {
             Some(
@@ -783,6 +810,8 @@ impl Storage {
             {
                 return Err("未取得のPC音声に音声ファイルがあります".into());
             }
+            None
+        } else if segmented {
             None
         } else {
             Some(self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?)
@@ -824,7 +853,19 @@ impl Storage {
             "application/json",
             now,
         )?;
-        {
+        #[cfg(any(unix, windows))]
+        if let Some(publication) = &publication {
+            publication.verify(self)?;
+            publication.insert_completed(
+                &transaction,
+                &session.meeting_id,
+                session_id,
+                &processing_config,
+                duration_us,
+                now,
+            )?;
+        }
+        if !segmented {
             let mut tracks = Vec::new();
             if let (Some(mic_file), Some(mic_format)) = (&mic_file, mic_format) {
                 tracks.push((
@@ -891,8 +932,16 @@ impl Storage {
         }
         self.require_data_writable()?;
         self.read_capture_manifest(&manifest_file)?;
+        #[cfg(any(unix, windows))]
+        if let Some(publication) = &publication {
+            publication.verify(self)?;
+        }
+        #[cfg(test)]
+        flac::crash_point("completed-before-db-commit");
         transaction.commit().map_err(|error| error.to_string())?;
         drop(connection);
+        #[cfg(any(unix, windows))]
+        drop(publication);
         self.publish_single_wav(&session.meeting_id, &|| false, &|completed, total| {
             crate::operation_observation::report("mixing_audio", completed, total, "frames");
         })?;

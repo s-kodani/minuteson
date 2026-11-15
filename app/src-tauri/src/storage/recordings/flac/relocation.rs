@@ -147,9 +147,10 @@ fn valid_source(source: &SourceFacts) -> Result<(), String> {
         )?;
         workspace.recorded.validate(true)?;
         workspace.observed.validate(true)?;
-        if workspace.name != PARTIAL_PLAN
+        if ![PARTIAL_PLAN, COMPLETED_PLAN].contains(&workspace.name.as_str())
             || !inventory::valid_hash(&workspace.plan_hash)
             || workspace.tracks.len() > 2
+            || (workspace.name != PARTIAL_PLAN && workspace.recovery.is_some())
         {
             return Err("FLAC移動履歴の計画が不正です".into());
         }
@@ -251,7 +252,7 @@ impl Source {
             if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
                 return Err("FLAC変換中は所有記録を移動しません".into());
             }
-            for name in [PARTIAL_PLAN] {
+            for name in [PARTIAL_PLAN, COMPLETED_PLAN] {
                 let Some((bytes, stamp)) = root.read_json(name).unwrap_or(None) else {
                     continue;
                 };
@@ -706,8 +707,9 @@ pub(super) fn effective_plan(
         .strip_prefix(&storage.root)
         .map_err(|e| e.to_string())?
         .to_str()
-        .ok_or("FLAC所有対応のパスが不正です")?;
-    let Some((source, bound)) = aliases.plans.get(&(base.into(), name.into())) else {
+        .ok_or("FLAC所有対応のパスが不正です")?
+        .replace('\\', "/");
+    let Some((source, bound)) = aliases.plans.get(&(base, name.into())) else {
         return Ok(());
     };
     if hash(bytes) != source.plan_hash {
@@ -747,7 +749,7 @@ pub(super) fn effective_checkpoint(
         .map_err(|e| e.to_string())?
         .to_str()
         .ok_or("FLACチェックポイントのパスが不正です")?
-        .to_owned();
+        .replace('\\', "/");
     let Some((sha, recorded, copied)) = aliases.checkpoints.get(&path) else {
         return Ok(false);
     };

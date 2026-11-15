@@ -128,6 +128,31 @@ final class InputEventJournalFile {
     try requireExpected()
   }
 
+  /// Verify the exact receipt in the pinned directory without following a
+  /// replacement ancestor or accepting an independently-created pathname.
+  func verifyCurrent(_ data: Data) throws {
+    try requireExpected()
+    let descriptor = openat(directory, leaf.rawValue, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    defer { close(descriptor) }
+    var identity = stat()
+    guard fstat(descriptor, &identity) == 0, Self.same(identity, expected),
+      identity.st_size == Int64(data.count)
+    else { throw ProbeError.capture("input receipt identity changed") }
+    var actual = Data(count: data.count)
+    try actual.withUnsafeMutableBytes { bytes in
+      var offset = 0
+      while offset < data.count {
+        let count = Darwin.read(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
+        if count < 0 && errno == EINTR { continue }
+        guard count > 0 else { throw ProbeError.capture("input receipt readback failed") }
+        offset += count
+      }
+    }
+    guard actual == data else { throw ProbeError.capture("input receipt differs from committed prefix") }
+    try requireExpected()
+  }
+
   private func requireExpected() throws {
     var actual = stat()
     guard fstatat(directory, leaf.rawValue, &actual, AT_SYMLINK_NOFOLLOW) == 0,

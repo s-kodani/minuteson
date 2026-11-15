@@ -287,8 +287,10 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let factory = StartupFactory([old, next])
     let control = StartupControlClock()
     let time = StartupClock()
+    let commits = RawSegmentCommitWorker()
     let raw = try RawRecordingSegments(
-      output: dir, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "microphone")
+      output: dir, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "microphone",
+      commits: commits)
     let recorder = MicrophoneRecorder(
       outputURL: dir.appendingPathComponent("microphone.caf"),
       clock: try time.domain(), microphoneUID: nil,
@@ -329,7 +331,10 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(recorded, 3360)
     XCTAssertNil(raw.snapshot().failure)
     XCTAssertEqual(raw.snapshot().sealedFrames, recorded)
-    let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))
+    XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("microphone.caf").path))
+    try raw.verifyClosed(expected: recorder.snapshot())
+    let file = try AVAudioFile(forReading: dir.appendingPathComponent("raw-microphone-00000001.caf"))
     XCTAssertEqual(file.length, recorded)
     let saved = try XCTUnwrap(
       AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(recorded))
@@ -337,6 +342,70 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     try file.read(into: saved)
     XCTAssertEqual(saved.frameLength, AVAudioFrameCount(recorded))
     XCTAssertEqual(try XCTUnwrap(saved.floatChannelData)[0][600], 0.125, accuracy: 0.005)
+  }
+
+  @MainActor
+  func testSessionStopsBothAcquisitionsBeforeMicrophoneDiskFlushIncludingSystemFailure() async throws {
+    for failSystemStop in [false, true] {
+      let created = try directory()
+      defer { try? FileManager.default.removeItem(at: created) }
+      let canonical = try XCTUnwrap(realpath(created.path, nil))
+      defer { free(canonical) }
+      let dir = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+      let time = StartupClock()
+      let clock = try time.domain()
+      let native = RawRecordingSegments.StorageIO()
+      let raw = try RawRecordingSegments(
+        output: dir, owner: UUID().uuidString.lowercased(), lane: "microphone",
+        storageIO: .init(write: native.write, synchronize: { descriptor in
+          // Simulate two minutes spent in durable IO without sleeping. Native
+          // closure receipts must already be frozen before this callback runs.
+          time.set(121_100_000_000)
+          try native.synchronize(descriptor)
+        }))
+      let engine = SilentMicrophoneEngine()
+      let control = StartupControlClock()
+      let microphone = MicrophoneRecorder(
+        outputURL: dir.appendingPathComponent("microphone.caf"), clock: clock,
+        microphoneUID: "frozen-mic", rawSegments: raw, controlNow: control.read,
+        makeEngine: { engine }, devices: Self.devices, permission: { .authorized },
+        requestPermission: { false })
+      defer { microphone.stop() }
+      try await microphone.start()
+      control.settle(microphone)
+      try engine.emit(host: 1_000_000_000)
+      try raw.drainNormalization()
+      let origin = try XCTUnwrap(microphone.snapshot().firstCaptureNanoseconds)
+      time.set(1_100_000_000)
+      var systemClosure: CaptureClosure?
+      do {
+        systemClosure = try await CaptureSession.stopInputs(microphone: microphone) {
+          XCTAssertFalse(engine.isRunning)
+          XCTAssertNotNil(microphone.captureClosure)
+          XCTAssertFalse(raw.snapshot().producerClosed)
+          XCTAssertEqual(time.read().continuousNs, 1_100_000_510)
+          if failSystemStop { throw ProbeError.capture("synthetic system stop failed") }
+          return try clock.close(.system)
+        }
+        XCTAssertFalse(failSystemStop)
+      } catch {
+        XCTAssertTrue(failSystemStop)
+        XCTAssertTrue(String(describing: error).contains("synthetic system stop failed"))
+      }
+      // Failure of the other stop still drains the accepted microphone tail.
+      XCTAssertTrue(raw.snapshot().producerClosed)
+      XCTAssertEqual(raw.snapshot().sealedFrames, 160)
+      XCTAssertEqual(time.read().continuousNs, 121_100_000_510)
+      let inspectionSystem: CaptureClosure
+      if let systemClosure { inspectionSystem = systemClosure } else {
+        inspectionSystem = try clock.close(.system)
+      }
+      let (_, end) = try clock.ending(
+        originNanoseconds: origin, microphone: XCTUnwrap(microphone.captureClosure),
+        system: inspectionSystem)
+      XCTAssertEqual(end.microphoneClosedUs, 100_000)
+      if !failSystemStop { XCTAssertEqual(end.endUs, 100_000) }
+    }
   }
 
   func testRecordingCanSwitchFixedAndAutomaticWithoutAdmittingRetiredPCM() async throws {

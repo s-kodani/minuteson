@@ -48,6 +48,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let permission: @Sendable () -> AVAuthorizationStatus
   private let requestPermission: @Sendable () async -> Bool
   private let rawSegments: RawRecordingSegments?
+  private var recordingFinalizationAttempted = false
+  private let recordingFinalizationLock = NSLock()
   private let mayContinue: @Sendable () -> Bool
   private let controlNow: @Sendable () -> ContinuousClock.Instant
   private var initialPreparationCancelled = false
@@ -827,6 +829,13 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   func stop() {
+    stopAcquisition()
+    finishRecording()
+  }
+
+  /// Close native input and freeze its clock before any lane waits for disk.
+  /// Session orchestration stops the other input before finishRecording().
+  func stopAcquisition() {
     let pending = lock.withLock {
       stopped = true
       recovery?.stop()
@@ -862,6 +871,17 @@ final class MicrophoneRecorder: @unchecked Sendable {
         }
       }
     }
+  }
+
+  func finishRecording() {
+    recordingFinalizationLock.lock()
+    defer { recordingFinalizationLock.unlock() }
+    let shouldFinish = lock.withLock {
+      guard stopped, !initialNativePending, !recordingFinalizationAttempted else { return false }
+      recordingFinalizationAttempted = true
+      return true
+    }
+    guard shouldFinish else { return }
     do { try rawSegments?.finish() } catch {
       lock.withLock {
         stats.appendFailures += 1

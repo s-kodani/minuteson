@@ -15,5 +15,6 @@
 - [ADR 0010 範囲別PR検査とmain成果物の公開](0010-devsecops-release.md) — 公開前の検査、Releases画面でのタグ管理、署名処理の分離。
 - [ADR 0011 モデル利用条件の確認とStore成果物の出自検証](0011-oss-model-disclosure.md) — モデル条件の表示・オフライン原文確認と、Store提出前の成果物出自検証。
 - [ADR 0012 起動時の案内と明示操作の分離](0012-startup-notices.md) — 旧ランタイムの更新案内に関する過去の判断。
+- [ADR 0013 録音音声を分割CAFへ一本化する](0013-single-recording-segments.md) — 復旧の確定境界を維持し、二重書込みと同期保存による取得待ちを減らす。
 
 [ドキュメント目次へ戻る](../index.md)
