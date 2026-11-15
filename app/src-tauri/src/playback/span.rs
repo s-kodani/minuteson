@@ -210,9 +210,22 @@ mod tests {
         std::fs::rename(replacement, directory.join("0.caf")).unwrap();
         assert!(spans[0].check_unchanged().is_err());
         assert!(spans[0].read_frames(0, 1).is_err());
-        let mut bytes = std::fs::read(directory.join("3.caf")).unwrap();
+        let path = directory.join("3.caf");
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
         bytes[68] ^= 1;
-        std::fs::write(directory.join("3.caf"), bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        // Rapid same-size writes can share a Windows clock tick. Make this
+        // fixture's completed mutation observable without a timing-based sleep.
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(modified - std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
         assert!(spans[3].read_frames(0, 1).is_err());
         assert!(spans[3].check_unchanged().is_err());
     }
