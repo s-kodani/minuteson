@@ -8,6 +8,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
+pub(crate) mod live;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
@@ -507,6 +508,16 @@ impl Prefix {
     /// original affine map. Raw segment count is not the eventual DB chunk count.
     /// Each group still satisfies the existing per-chunk map admission limit.
     pub(crate) fn flac_groups(&self, origin_nanoseconds: i64) -> Result<Vec<FlacGroup>, String> {
+        self.flac_groups_with_seconds(origin_nanoseconds, 60)
+    }
+    pub(crate) fn flac_groups_with_seconds(
+        &self,
+        origin_nanoseconds: i64,
+        seconds: u64,
+    ) -> Result<Vec<FlacGroup>, String> {
+        if !matches!(seconds, 60 | 240) {
+            return Err("原音声の集約区間が不正です".into());
+        }
         let mut groups = Vec::<FlacGroup>::new();
         for (index, bound) in self.entries.iter().enumerate() {
             let entry = &bound.entry;
@@ -514,7 +525,7 @@ impl Prefix {
                 return Err("原音声の共通時計原点が不正です".into());
             }
             let start_new = groups.last().is_none_or(|group| {
-                group.frames + entry.frames > u64::from(entry.sample_rate) * 60
+                group.frames + entry.frames > u64::from(entry.sample_rate) * seconds
                     || group.clock_segments.len() + entry.clock_segments.len() > 1024
             });
             if start_new {
@@ -809,5 +820,9 @@ impl Prefix {
     }
 }
 
+#[cfg(test)]
+mod completed_group_tests;
 #[cfg(all(test, unix))]
 mod tests;
+#[cfg(test)]
+pub(crate) use completed_group_tests::maximum_prefix;

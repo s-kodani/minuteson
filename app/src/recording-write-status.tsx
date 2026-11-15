@@ -30,6 +30,6 @@ export function RecordingWriteValue({value}:{value:VisibleWrite}){
 export function RecordingWriteStatus({view}:{view:ReturnType<typeof useRecordingWrites>}){
   const confirmed=view.microphone.state==="written"&&view.system.state==="written";
   return <section aria-label="録音の書込み" className="recording-write-status" data-confirmed={confirmed}>
-    <div className="heading-with-info"><p role="status">{confirmed?"この端末に保存中":"音声の書込みを確認しています"}</p><InfoPopover label="録音の書込み">録音ファイルにある音声と更新時刻を確認しています。入力レベルや接続状態だけでは保存中と表示しません。録音の保存完了は停止後に確認します。電源断による末尾の損失を保証する表示ではありません。</InfoPopover></div>
+    <div className="heading-with-info"><p role="status">{confirmed?"この端末に保存中":"音声の書込みを確認しています"}</p><InfoPopover label="録音の書込み">約4秒ごとに確定する音声の書込みを確認しています。入力レベルや接続状態だけでは保存中と表示しません。録音の保存完了は停止後に確認します。保存先の応答が遅い間は音声を最大120秒分までメモリで待機させます。電源断などの異常終了では未確定の音声が失われる場合があります。</InfoPopover></div>
   </section>;
 }

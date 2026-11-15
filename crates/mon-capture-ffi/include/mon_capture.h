@@ -80,6 +80,12 @@ bool mon_capture_permits_pending(uint64_t bytes,
                                  uint64_t next_bytes,
                                  uint64_t next_nanoseconds);
 
+bool mon_capture_permits_storage_pending(uint64_t bytes,
+                                         uint64_t nanoseconds,
+                                         uint32_t jobs,
+                                         uint64_t next_bytes,
+                                         uint64_t next_nanoseconds);
+
 bool mon_capture_valid_owner(const uint8_t *ptr, size_t len);
 
 bool mon_capture_valid_uid(const uint8_t *ptr, size_t len);

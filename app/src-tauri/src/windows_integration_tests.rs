@@ -117,6 +117,17 @@ fn windows_finalization_requires_current_seals_and_exact_clock_maps() {
         let path = f.directory.join("manifest.json");
         let mut value: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut original_raw = Vec::new();
+        for lane in ["microphone", "system"] {
+            let segments = value[lane]["rawSegments"]["sealedSegments"]
+                .as_u64()
+                .unwrap();
+            assert!(segments > 0);
+            for sequence in 1..=segments {
+                let audio = f.directory.join(format!("raw-{lane}-{sequence:08}.caf"));
+                original_raw.push((audio.clone(), fs::read(&audio).unwrap()));
+            }
+        }
         match problem {
             "missing_marker" => {
                 value.as_object_mut().unwrap().remove("clockMappingSource");
@@ -144,7 +155,19 @@ fn windows_finalization_requires_current_seals_and_exact_clock_maps() {
         let error = f.storage.finalize_recording(&f.session).unwrap_err();
         assert_eq!(error, expected, "{problem}");
         assert_eq!(fs::read(&path).unwrap(), original);
-        assert!(f.directory.join("microphone.caf").is_file());
+        for (audio, original_audio) in original_raw {
+            assert!(
+                fs::read(&audio).unwrap() == original_audio,
+                "{problem}: manifest rejection changed sealed audio {}",
+                audio.display()
+            );
+        }
+        for lane in ["microphone", "system"] {
+            assert!(
+                !f.directory.join(format!("{lane}.caf")).exists(),
+                "{problem}"
+            );
+        }
         assert!(f.storage.recorded_audio_plan(&f.meeting).is_err());
     }
 }

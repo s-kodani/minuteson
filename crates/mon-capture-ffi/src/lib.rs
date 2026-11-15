@@ -118,6 +118,9 @@ pub extern "C" fn mon_capture_limit(key: u32) -> u64 {
         8 => u64::from(limits::MAX_PENDING_PACKETS),
         9 => limits::ACQUISITION_TIMEOUT_NANOSECONDS,
         10 => limits::RETRY_NANOSECONDS,
+        11 => limits::MAX_STORAGE_PENDING_BYTES,
+        12 => limits::MAX_STORAGE_PENDING_NANOSECONDS,
+        13 => u64::from(limits::MAX_STORAGE_PENDING_JOBS),
         _ => 0,
     }
 }
@@ -140,6 +143,16 @@ pub extern "C" fn mon_capture_permits_pending(
     next_nanoseconds: u64,
 ) -> bool {
     limits::permits_pending(bytes, nanoseconds, packets, next_bytes, next_nanoseconds)
+}
+#[no_mangle]
+pub extern "C" fn mon_capture_permits_storage_pending(
+    bytes: u64,
+    nanoseconds: u64,
+    jobs: u32,
+    next_bytes: u64,
+    next_nanoseconds: u64,
+) -> bool {
+    limits::permits_storage_pending(bytes, nanoseconds, jobs, next_bytes, next_nanoseconds)
 }
 unsafe fn utf8<'a>(ptr: *const u8, len: usize, max: usize) -> Option<&'a str> {
     if ptr.is_null() || len > max {

@@ -2,6 +2,8 @@ use super::*;
 use crate::audio::{flac::encode_segment_file, VerifiedAudio};
 use serde_json::{json, Value};
 use std::io::Write;
+#[path = "completed_tests.rs"]
+mod completed;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(target_os = "macos")]

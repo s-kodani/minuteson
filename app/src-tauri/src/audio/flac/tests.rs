@@ -318,7 +318,7 @@ fn prepared(audio: VerifiedAudio) -> crate::playback::PreparedAudio {
         track_kind: "imported".into(),
         alignment: "unverified".into(),
         spans: vec![crate::playback::AudioSpan {
-            audio,
+            audio: audio.into(),
             first_frame: 0,
             frames,
         }],

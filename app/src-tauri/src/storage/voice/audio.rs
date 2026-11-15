@@ -423,7 +423,7 @@ impl Storage {
             track_kind: "processed".into(),
             alignment: "unverified".into(),
             spans: vec![AudioSpan {
-                audio,
+                audio: audio.into(),
                 first_frame: 0,
                 frames: frames as u64,
             }],

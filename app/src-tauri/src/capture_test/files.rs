@@ -710,7 +710,7 @@ impl TrackProof {
             spans: vec![AudioSpan {
                 frames: self.format.frames,
                 first_frame: 0,
-                audio,
+                audio: audio.into(),
             }],
             clock: None,
         })

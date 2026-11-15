@@ -698,7 +698,7 @@ mod tests {
             track_kind: "imported".into(),
             alignment: "unverified".into(),
             spans: vec![AudioSpan {
-                audio: verified,
+                audio: verified.into(),
                 first_frame: 0,
                 frames,
             }],

@@ -5,7 +5,9 @@ struct CaptureSession {
   Settings s;
   explicit CaptureSession(Settings settings):s(std::move(settings)){}
   int run(){
-  Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;std::unique_ptr<Lane> mic_lane,system_lane;
+  Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;
+  auto storage_pending=std::make_shared<StoragePending>();std::shared_ptr<RawCommitWorker> commits;
+  std::unique_ptr<Lane> mic_lane,system_lane;
   IdleSleepGuard awake;
   auto diagnostics=[&](const char* state,const Json& error){
     if(mic_lane&&system_lane){auto diagnostic=Json{{"schemaVersion",1},{"ownerId",s.owner},{"state",state},{"error",error},{"qpcUnit","100ns"},{"sampleRate",48000},{"microphone",mic_lane->diagnostics()},{"system",system_lane->diagnostics()}};if(metadata)metadata->observe(L"capture-clock.json",std::move(diagnostic));else atomic_json(s.output/L"capture-clock.json",diagnostic,false);}
@@ -31,7 +33,7 @@ struct CaptureSession {
     auto attributes=GetFileAttributesW(s.output.c_str());if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT)||!fs::is_empty(s.output))throw std::runtime_error("capture destination must be an empty ordinary directory");
     mic_lane=std::make_unique<Lane>(s.output/L"microphone.caf",1,s.test);system_lane=std::make_unique<Lane>(s.output/L"system.caf",2,s.test);auto& mic=*mic_lane;auto& system=*system_lane;
     mic.holding_for_window=system.holding_for_window=s.test;
-    if(!s.test){mic.raw=std::make_unique<RawSegments>(s.output,s.owner,"microphone",1);system.raw=std::make_unique<RawSegments>(s.output,s.owner,"system",2);}
+    if(!s.test){commits=std::make_shared<RawCommitWorker>(storage_pending);mic.raw=std::make_unique<RawSegments>(s.output,s.owner,"microphone",1,commits);system.raw=std::make_unique<RawSegments>(s.output,s.owner,"system",2,commits);}
     manifest=Json{{"schemaVersion",4},{"captureMode",s.mode},{"backend","wasapi"},{"targetPIDs",s.pid?Json::array({s.pid}):Json::array()},{"targetApplicationIdentity",nullptr},{"microphoneDeviceUID",s.uid.empty()?Json(nullptr):Json(s.uid)},{"recordingOwnerId",s.owner},{"inputDiagnosticsState","reported"},{"state","starting"},{"errors",Json::array()}, {"microphone",mic.track(0)}, {"system",system.track(0)}};
     manifest["consoleWindowPresent"]=GetConsoleWindow()!=nullptr;
     manifest["clockDiagnosticsFile"]="capture-clock.json";
@@ -39,6 +41,7 @@ struct CaptureSession {
     // by the same strict reader used while the helper is still running.
     if(s.test)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",nullptr},{"windowEndNs",nullptr},{"firstSavedCaptureNs",nullptr},{"completed",false}};
     atomic_json(s.output/L"manifest.json",manifest);
+    metadata=std::make_unique<MetadataWorker>(s.output,s.owner);
     diagnostics("starting",nullptr);
     if(s.synthetic_startup_delay_ms)Sleep(s.synthetic_startup_delay_ms);
     Handle parent(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,s.parent));if(!parent.value)throw std::runtime_error("capture parent unavailable");
@@ -68,7 +71,7 @@ struct CaptureSession {
               // start configuration. Later switches belong to selection
               // status/history, not a rewrite of that initial identity.
               if(manifest["microphoneDeviceUID"].is_null()){
-                manifest["microphoneDeviceUID"]=selected;atomic_json(s.output/L"manifest.json",manifest);
+                manifest["microphoneDeviceUID"]=selected;metadata->manifest(manifest);
               }
             }
             lane.adopt(std::move(*ready));lane.preparation.reset();return;
@@ -99,8 +102,7 @@ struct CaptureSession {
     if(s.test&&start){mic.holding_for_window=system.holding_for_window=false;mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
     manifest["state"]=s.test&&!start?"starting":"recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
     if(s.test&&start)manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
-    atomic_json(s.output/L"manifest.json",manifest);
-    metadata=std::make_unique<MetadataWorker>(s.output,s.owner);
+    metadata->manifest(manifest);
     auto selection=[&]{auto value=microphone_selection_status(s.owner,revision,selection_revision,s.uid,selected,choice,!s.synthetic&&!mic.started);if(!value.is_null())metadata->observe(L"microphone-selection.status.json",std::move(value));};
     auto publish_status=[&](bool sealed){
       Json report={{"schemaVersion",3},{"ownerId",s.owner},{"revision",++revision},{"microphone",mic.binding.status()},{"system",system.binding.status()},{"microphoneHistory",mic.binding.history()},{"systemHistory",system.binding.history()}};
@@ -111,6 +113,7 @@ struct CaptureSession {
     PreparationSchedule selection_schedule;
     std::uint64_t next_status=0;
     while(true){
+      if(commits)commits->check();
       if(WaitForSingleObject(parent.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture parent exited");
       if(fs::exists(s.output/L"stop.request"))break;
       // Writer latency is not a clock change or a WASAPI device failure.
@@ -155,12 +158,12 @@ struct CaptureSession {
           mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;
           manifest["state"]="recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
           manifest["captureTest"]=Json{{"ownerId",s.owner},{"durationSeconds",5},{"windowStartNs",start*100},{"windowEndNs",start*100+5000000000ULL},{"firstSavedCaptureNs",nullptr},{"completed",false}};
-          atomic_json(s.output/L"manifest.json",manifest);
+          metadata->manifest(manifest);
         }
       }
       const auto estimates=mic.clock.estimated_packets+system.clock.estimated_packets;
       if(!last_diagnostics||qpc()-last_diagnostics>=10000000||(estimates&&!reported_estimates)){
-        ULARGE_INTEGER available{};if(!GetDiskFreeSpaceExW(s.output.c_str(),&available,nullptr,nullptr))throw std::runtime_error("保存先の空き容量を確認できません。確定済みの音声は保持しています");if(available.QuadPart<16ULL*1024*1024)throw std::runtime_error("保存先の空き容量が不足しています。確定済みの原音声は保持しています");
+        if(s.test){ULARGE_INTEGER available{};if(!GetDiskFreeSpaceExW(s.output.c_str(),&available,nullptr,nullptr))throw std::runtime_error("保存先の空き容量を確認できません。確定済みの音声は保持しています");if(available.QuadPart<16ULL*1024*1024)throw std::runtime_error("保存先の空き容量が不足しています。確定済みの原音声は保持しています");}
         diagnostics("recording",nullptr);last_diagnostics=qpc();reported_estimates=estimates;
       }
       if(GetTickCount64()>=next_status){
@@ -187,12 +190,15 @@ struct CaptureSession {
       if(s.synthetic||(!mic.queued()&&!system.queued()))Sleep(10);
     }
     if(selection_preparation)selection_preparation->cancel();
+    // Stop both native owners before draining or waiting for any disk job.
+    mic.cancel_preparation();system.cancel_preparation();
+    if(mic.reader)mic.reader->stop();if(system.reader)system.reader->stop();
     mic.close();auto mic_closed=std::max(qpc(),mic.clock.parts.empty()?0ULL:mic.clock.parts.back().last_end);system.close();auto closed=std::max(qpc(),system.clock.parts.empty()?0ULL:system.clock.parts.back().last_end);closed=std::max(closed,mic_closed);
     // Preserve the buffered tail even when an unreturned native preparation
     // prevents producer-closure proof. Only finish() may publish closed=true.
     if(mic.raw){mic.raw->seal();system.raw->seal();}
-    if(!mic.acquisition_closed()||!system.acquisition_closed())throw std::runtime_error("音声入力の準備処理の終了を確認できません。確定済み原音声を保持しています。録音を回復してください");
-    if(mic.raw){mic.raw->finish();system.raw->finish();}mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
+    if(!mic.acquisition_closed()||!system.acquisition_closed()){if(commits)commits->wait();throw std::runtime_error("音声入力の準備処理の終了を確認できません。確定済み原音声を保持しています。録音を回復してください");}
+    if(mic.raw){mic.raw->finish();system.raw->finish();commits->wait();}mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
     if(!mic.frames&&!system.frames)throw std::runtime_error("マイク・PC音声を取得できませんでした。Windowsのマイク権限と入力機器を確認してください");
     auto origin=mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
     manifest["microphone"]=mic.track(origin);manifest["system"]=system.track(origin);manifest["systemAudioUnreceived"]=system.frames==0;
@@ -208,6 +214,12 @@ struct CaptureSession {
     if(!journal_persistence.is_null())manifest["inputEventJournalPersistence"]=journal_persistence;
     metadata.reset();diagnostics("saved",nullptr);atomic_json(s.output/L"manifest.json",manifest);return 0;
   }catch(const std::exception& error){
+    // Stop every source first. Then preserve accepted queued/tail PCM where the
+    // disk owner is still usable; never publish producer closure after failure.
+    for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){lane->cancel_preparation();if(lane->reader)lane->reader->stop();}
+    for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){try{lane->close();}catch(...) {}if(lane->raw){try{lane->raw->drain();lane->raw->seal();}catch(...) {}}}
+    if(commits){try{commits->wait();}catch(...) {}}
+    if(metadata){metadata->finish();metadata.reset();}
     try{diagnostics("failed",error.what());}catch(...){}
     if(!manifest.is_null()){
       manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]="録音異常終了のため履歴の停止時封印を確認できません";

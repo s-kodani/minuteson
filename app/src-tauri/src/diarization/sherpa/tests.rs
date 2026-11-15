@@ -193,7 +193,7 @@ fn wav(directory: &Path) {
         track_kind: "imported".into(),
         alignment: "unverified".into(),
         spans: vec![AudioSpan {
-            audio: verified,
+            audio: verified.into(),
             first_frame: 0,
             frames: 16_000,
         }],
@@ -820,7 +820,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
         track_kind: "imported".into(),
         alignment: "unverified".into(),
         spans: vec![AudioSpan {
-            audio: verified,
+            audio: verified.into(),
             first_frame: 0,
             frames,
         }],

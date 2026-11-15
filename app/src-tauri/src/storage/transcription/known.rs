@@ -265,7 +265,7 @@ impl Storage {
         track: &TrackPlan,
         cancelled: &impl Fn() -> bool,
     ) -> Result<crate::playback::PreparedAudio, String> {
-        let audio = self.prepare_meeting_track_audio_cancellable(
+        let audio = self.prepare_verified_meeting_track_audio_cancellable(
             meeting,
             &track.id,
             track.start_us,

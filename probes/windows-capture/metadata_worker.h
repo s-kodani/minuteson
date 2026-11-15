@@ -10,6 +10,7 @@ class MetadataWorker {
   std::condition_variable changed_;
   std::map<std::wstring, Json> pending_;
   std::optional<Json> report_;
+  std::optional<Json> manifest_;
   Json persistence_=nullptr;
   std::string error_;
   bool stopping_=false;
@@ -20,13 +21,15 @@ class MetadataWorker {
     for(;;) {
       std::map<std::wstring,Json> files;
       std::optional<Json> report;
+      std::optional<Json> manifest;
       {
         std::unique_lock lock(mutex_);
-        changed_.wait_for(lock,std::chrono::milliseconds(250),[&]{return stopping_||report_||!pending_.empty();});
-        if(!report_&&pending_.empty()&&stopping_)break;
-        files.swap(pending_);report.swap(report_);
+        changed_.wait_for(lock,std::chrono::milliseconds(250),[&]{return stopping_||report_||manifest_||!pending_.empty();});
+        if(!report_&&!manifest_&&pending_.empty()&&stopping_)break;
+        files.swap(pending_);report.swap(report_);manifest.swap(manifest_);
       }
       try {
+        if(manifest)atomic_json(output_/L"manifest.json",*manifest);
         if(report) {
           const auto revision=report->at("report").at("revision").get<std::uint64_t>();
           Json content=*report;content["report"]["revision"]=0;
@@ -55,6 +58,7 @@ class MetadataWorker {
   ~MetadataWorker(){finish();}
   void publish(Json report,bool sealed){std::lock_guard lock(mutex_);report_=Json{{"schemaVersion",1},{"sealed",sealed},{"report",std::move(report)}};changed_.notify_one();}
   void observe(std::wstring name,Json value){std::lock_guard lock(mutex_);pending_.insert_or_assign(std::move(name),std::move(value));changed_.notify_one();}
+  void manifest(Json value){std::lock_guard lock(mutex_);manifest_=std::move(value);changed_.notify_one();}
   void finish(){ {std::lock_guard lock(mutex_);stopping_=true;changed_.notify_one();}if(thread_.joinable())thread_.join();}
   Json persistence(){std::lock_guard lock(mutex_);return persistence_;}
   std::string error(){std::lock_guard lock(mutex_);return error_;}

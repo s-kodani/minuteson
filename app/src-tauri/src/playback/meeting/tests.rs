@@ -31,7 +31,7 @@ fn audio(
         .unwrap();
         let frames = audio.format.frames;
         spans.push(AudioSpan {
-            audio,
+            audio: audio.into(),
             first_frame: 0,
             frames,
         });
@@ -268,7 +268,7 @@ fn prepared_source_mutation_is_not_hidden_by_resampling() {
         track_kind: "mic".into(),
         alignment: "unverified".into(),
         spans: vec![AudioSpan {
-            audio: verified,
+            audio: verified.into(),
             first_frame: 0,
             frames: 8000,
         }],

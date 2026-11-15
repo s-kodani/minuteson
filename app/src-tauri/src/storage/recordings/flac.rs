@@ -1,4 +1,4 @@
-//! Interrupted-prefix recovery publication. Durable plans bind original evidence,
+//! Completed and interrupted-prefix publication. Durable plans bind original evidence,
 //! output UUIDs and staging inodes; a DB rollback never removes raw audio.
 use super::*;
 use crate::audio::flac::{encode_segment_file_pending, SavedFlac};
@@ -87,6 +87,7 @@ struct Track {
 }
 pub(super) struct Publication {
     root: Directory,
+    plan_name: &'static str,
     lock: File,
     lock_stamp: Stamp,
     plan_stamp: Stamp,
@@ -96,6 +97,7 @@ pub(super) struct Publication {
     recovery_rebind: Option<relocation::RecoveryRebind>,
 }
 const PARTIAL_PLAN: &str = "partial-flac.json";
+const COMPLETED_PLAN: &str = "completed-flac.json";
 const LOCK: &str = ".final-flac.lock";
 
 /// Validate sealed capture evidence without producing an intermediate FLAC.
@@ -154,7 +156,7 @@ fn groups(
     track: &CaptureTrack,
     canonical: bool,
 ) -> Result<Vec<FlacGroup>, String> {
-    let groups = prefix.flac_groups(origin)?;
+    let groups = prefix.flac_groups_with_seconds(origin, 240)?;
     if groups.is_empty() || groups.len() > 1024 {
         return Err("最終FLAC区間数が対応範囲外です".into());
     }
@@ -265,6 +267,48 @@ fn verify_maps(
 }
 
 impl Publication {
+    pub(super) fn prepare_completed(
+        storage: &Storage,
+        base: &Path,
+        manifest_hash: &str,
+        origin: i64,
+        prefixes: &[Prefix],
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        let active: Vec<_> = prefixes
+            .iter()
+            .filter(|prefix| prefix.frames() > 0)
+            .collect();
+        let generations = active
+            .iter()
+            .map(|prefix| prefix.content_hash())
+            .collect::<Result<Vec<_>, _>>()?;
+        let input_hash = hash(
+            &serde_json::to_vec(&serde_json::json!({
+                "version":1,"kind":"completed","manifestHash":manifest_hash,
+                "originNanoseconds":origin,"prefixes":generations,
+            }))
+            .map_err(|e| e.to_string())?,
+        );
+        // Four-minute groups keep the complete raw-prefix capacity within the
+        // existing 1,024 DB chunks, including entries split by dense clocks.
+        let groups = active
+            .iter()
+            .map(|prefix| prefix.flac_groups_with_seconds(origin, 240))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::prepare_groups(
+            storage,
+            base,
+            input_hash,
+            &active,
+            groups,
+            COMPLETED_PLAN,
+            cancelled,
+            #[cfg(any(target_os = "macos", windows))]
+            None,
+        )
+    }
+
     pub(super) fn prepare_recovery(
         storage: &Storage,
         base: &Path,
@@ -325,6 +369,7 @@ impl Publication {
             input_hash,
             &prefixes.iter().collect::<Vec<_>>(),
             all_groups,
+            PARTIAL_PLAN,
             cancelled,
             #[cfg(any(target_os = "macos", windows))]
             recovery_rebind,
@@ -337,12 +382,35 @@ impl Publication {
         input_hash: String,
         prefixes: &[&Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
+        plan_name: &'static str,
         cancelled: &impl Fn() -> bool,
         #[cfg(any(target_os = "macos", windows))] recovery_rebind: Option<
             relocation::RecoveryRebind,
         >,
     ) -> Result<Self, String> {
         partial::check_cancel(cancelled)?;
+        if prefixes.is_empty()
+            || prefixes.len() > 2
+            || all_groups.len() != prefixes.len()
+            || all_groups
+                .iter()
+                .any(|groups| groups.is_empty() || groups.len() > 1024)
+        {
+            return Err("原音声の集約トラック・区間数が対応範囲外です".into());
+        }
+        for groups in &all_groups {
+            let maps: usize = groups.iter().map(|group| group.clock_segments.len()).sum();
+            let bytes: usize = groups
+                .iter()
+                .flat_map(|group| &group.clock_segments)
+                .map(|map| map.mapping_json.len())
+                .sum();
+            if maps > crate::audio_clock::MAX_CLOCK_SEGMENTS
+                || bytes > crate::audio_clock::MAX_CLOCK_MAPPING_BYTES
+            {
+                return Err("原音声の時刻対応が保存・読戻しの容量上限を超えています".into());
+            }
+        }
         storage.require_data_writable()?;
         storage.managed_anchor.verify()?;
         let root = Directory::open(&storage.root.join(base))?;
@@ -355,7 +423,7 @@ impl Publication {
         }
         let lock_stamp = Stamp::read(&lock)?;
         lock_stamp.require(&root.required(LOCK, false)?)?;
-        if root.read_json(PARTIAL_PLAN)?.is_none() {
+        if root.read_json(plan_name)?.is_none() {
             let parent = Directory::open(root.path.parent().ok_or("録音管理先がありません")?)?;
             let mut tracks = Vec::new();
             for groups in &all_groups {
@@ -373,11 +441,11 @@ impl Publication {
                 recording_directory: root.identity.clone(),
                 tracks,
             };
-            root.json(PARTIAL_PLAN, &plan, None)?;
+            root.json(plan_name, &plan, None)?;
         }
         // Value and stamp must describe one exact immutable generation.
         let (plan_bytes, plan_stamp) = root
-            .read_json(PARTIAL_PLAN)?
+            .read_json(plan_name)?
             .ok_or("FLAC確定計画がありません")?;
         #[cfg(any(target_os = "macos", windows))]
         if let Some(proof) = &recovery_rebind {
@@ -385,7 +453,7 @@ impl Publication {
         }
         let mut plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
         #[cfg(any(target_os = "macos", windows))]
-        relocation::effective_plan(storage, &root.path, PARTIAL_PLAN, &plan_bytes, &mut plan)?;
+        relocation::effective_plan(storage, &root.path, plan_name, &plan_bytes, &mut plan)?;
         if plan.schema_version != 1
             || plan.input_hash != input_hash
             || plan.recording_directory != root.identity
@@ -448,6 +516,7 @@ impl Publication {
         }
         let result = Self {
             root,
+            plan_name,
             lock,
             lock_stamp,
             plan_stamp,
@@ -516,7 +585,7 @@ impl Publication {
         self.lock_stamp.require(&self.lock)?;
         self.lock_stamp.require(&self.root.required(LOCK, false)?)?;
         self.plan_stamp
-            .require(&self.root.required(PARTIAL_PLAN, false)?)?;
+            .require(&self.root.required(self.plan_name, false)?)?;
         for (name, stamp) in &self.documents {
             stamp.require(&self.root.required(name, false)?)?;
         }
@@ -547,6 +616,45 @@ impl Publication {
         boundary_gaps: bool,
         now: i64,
     ) -> Result<(), String> {
+        self.insert_with_gaps(
+            tx,
+            meeting,
+            session,
+            config,
+            duration,
+            boundary_gaps.then_some(("partial_prefix_start_gap", "partial_prefix_end_gap")),
+            now,
+        )
+    }
+    pub(super) fn insert_completed(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        meeting: &str,
+        session: &str,
+        config: &str,
+        duration: i64,
+        now: i64,
+    ) -> Result<(), String> {
+        self.insert_with_gaps(
+            tx,
+            meeting,
+            session,
+            config,
+            duration,
+            Some(("capture_start_gap", "capture_stop_gap")),
+            now,
+        )
+    }
+    fn insert_with_gaps(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        meeting: &str,
+        session: &str,
+        config: &str,
+        duration: i64,
+        boundary_gaps: Option<(&str, &str)>,
+        now: i64,
+    ) -> Result<(), String> {
         let mut processing: serde_json::Value =
             serde_json::from_str(config).map_err(|e| e.to_string())?;
         processing["clock_mapping_source"] = serde_json::json!("sealed_raw_v1");
@@ -574,14 +682,10 @@ impl Publication {
                     previous = Some(map.timeline_end_us);
                 }
             }
-            if boundary_gaps {
+            if let Some((start_reason, end_reason)) = boundary_gaps {
                 for (start, end, reason) in [
-                    (
-                        0,
-                        track.chunks[0].maps[0].timeline_start_us,
-                        "partial_prefix_start_gap",
-                    ),
-                    (previous.unwrap(), duration, "partial_prefix_end_gap"),
+                    (0, track.chunks[0].maps[0].timeline_start_us, start_reason),
+                    (previous.unwrap(), duration, end_reason),
                 ] {
                     if start < end {
                         tx.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES(?1,?2,?3,?4,?5)",

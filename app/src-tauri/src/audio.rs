@@ -222,6 +222,11 @@ impl VerifiedAudio {
         ))
     }
 
+    pub(crate) fn identity_stamp(&self) -> Result<String, String> {
+        self.check_unchanged()?;
+        Ok(self.identity.clone())
+    }
+
     pub fn read_frames(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
         if frames == 0
             || frames > PREVIEW_FRAMES

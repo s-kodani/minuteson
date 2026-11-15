@@ -48,7 +48,8 @@ export class WriteSession{
       if(this.invalid||!this.snapshot)return {state:"unavailable"};
       const t=this.snapshot[name],e=this.evidence[name];if(t.state!=="written")return {state:t.state};
       if(!e)return {state:"unavailable"};const age=e.age+at-e.at;
-      return age>1000?{state:"stale"}:{state:"written",frames:t.frames,ageMs:age};
+      // A durable segment normally advances every four seconds.
+      return age>6000?{state:"stale"}:{state:"written",frames:t.frames,ageMs:age};
     };
     return {microphone:visible("microphone"),system:visible("system")};
   }

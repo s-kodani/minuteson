@@ -9,6 +9,19 @@ import ScreenCaptureKit
 /// Product session orchestration. CLI dispatch and native acquisition drivers
 /// are separate; lifecycle and raw-prefix decisions belong to the Rust core.
 enum CaptureSession {
+  /// Both acquisitions must stop and freeze their clocks before a microphone
+  /// disk backlog can delay the system input's stop/closure. Always finalize
+  /// the microphone's accepted prefix even when the other native stop fails.
+  @MainActor
+  static func stopInputs(
+    microphone: MicrophoneRecorder,
+    system: @MainActor () async throws -> CaptureClosure?
+  ) async throws -> CaptureClosure? {
+    microphone.stopAcquisition()
+    defer { microphone.finishRecording() }
+    return try await system()
+  }
+
   @MainActor
   static func run(_ options: Options) async throws {
     if let descriptor = options.captureTestLeaseFD, let owner = options.captureTestOwner {
@@ -63,14 +76,17 @@ enum CaptureSession {
       ? MicrophoneSelectionReader(output: options.output, owner: options.inputLevelOwner!) : nil
     var publishedMicrophoneSelection: MicrophoneSelectionStatus?
     defer { journalStatus?.removeIfOwned() }
+    let segmentCommits = RawSegmentCommitWorker()
     let rawMic =
       options.publishesInputStatus
       ? try RawRecordingSegments(
-        output: options.output, owner: options.inputLevelOwner!, lane: "microphone") : nil
+        output: options.output, owner: options.inputLevelOwner!, lane: "microphone",
+        commits: segmentCommits) : nil
     let rawSystem =
       options.publishesInputStatus
       ? try RawRecordingSegments(
-        output: options.output, owner: options.inputLevelOwner!, lane: "system") : nil
+        output: options.output, owner: options.inputLevelOwner!, lane: "system",
+        commits: segmentCommits) : nil
     let systemStopRequest = options.output.appendingPathComponent("stop.request")
     let systemParentPID = options.parentPID
     let systemControlled = options.stopOnFile
@@ -298,14 +314,13 @@ enum CaptureSession {
         }
       }
       testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
-      mic.stop()
-      var systemClosure: CaptureClosure?
-      if options.publishesInputStatus {
-        systemClosure =
-          options.usesStandaloneTapProbe
-          ? try tap.stopRecording() : try await system.stopRecording()
-      } else {
+      let systemClosure = try await stopInputs(microphone: mic) {
+        if options.publishesInputStatus {
+          return options.usesStandaloneTapProbe
+            ? try tap.stopRecording() : try await system.stopRecording()
+        }
         if options.usesStandaloneTapProbe { try tap.stop() } else { try await system.stop() }
+        return nil
       }
       let micStats = mic.snapshot()
       let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
@@ -330,11 +345,11 @@ enum CaptureSession {
           throw ProbeError.capture("unreceived input has an unexpected CAF payload")
         }
       }
-      if micStats.frames > 0 {
+      if let rawMic { try rawMic.verifyClosed(expected: micStats) } else if micStats.frames > 0 {
         try verifyRecordedCAF(
           options.output.appendingPathComponent("microphone.caf"), expected: micStats)
       }
-      if systemStats.frames > 0 {
+      if let rawSystem { try rawSystem.verifyClosed(expected: systemStats) } else if systemStats.frames > 0 {
         try verifyRecordedCAF(
           options.output.appendingPathComponent("system.caf"), expected: systemStats)
       }
@@ -356,9 +371,11 @@ enum CaptureSession {
       // input never started, but must not replace the permission/device error.
       manifest.errors.append(String(describing: error))
       testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
-      mic.stop()
       do {
-        if options.usesStandaloneTapProbe { try tap.stop() } else { try await system.stop() }
+        _ = try await stopInputs(microphone: mic) {
+          if options.usesStandaloneTapProbe { try tap.stop() } else { try await system.stop() }
+          return nil
+        }
       } catch { manifest.errors.append(String(describing: error)) }
       manifest.state = "failed"
     }

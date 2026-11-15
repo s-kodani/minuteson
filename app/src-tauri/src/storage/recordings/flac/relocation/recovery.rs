@@ -112,8 +112,11 @@ pub(in crate::storage::recordings) fn recovery_input(
         return Ok(None);
     };
     aliases.verify(storage)?;
-    let base = base.to_str().ok_or("部分救出の所属が不正です")?;
-    let Some((source, bound)) = aliases.plans.get(&(base.into(), PARTIAL_PLAN.into())) else {
+    let portable = base
+        .to_str()
+        .ok_or("部分救出の所属が不正です")?
+        .replace('\\', "/");
+    let Some((source, bound)) = aliases.plans.get(&(portable, PARTIAL_PLAN.into())) else {
         return Ok(None);
     };
     let Some(facts) = &source.recovery else {
@@ -122,7 +125,7 @@ pub(in crate::storage::recordings) fn recovery_input(
     if facts.content_hash != content_hash {
         return Err("部分救出の原音声・録音・会議状態が移動元から変更されています".into());
     }
-    let root = Directory::open(&storage.root.join(base))?;
+    let root = Directory::open(&crate::native_fs::join(&storage.root, base))?;
     if root.identity != bound.recording {
         return Err("部分救出の配置した録音管理先が変更されています".into());
     }
