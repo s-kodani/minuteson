@@ -1,7 +1,7 @@
 ---
 type: "Specification"
 title: "MinutesOnの製品概要"
-description: "公開前の機能範囲、対応環境と配布・評価の確認状況。"
+description: "機能範囲、対応環境と配布・評価の確認状況。"
 tags: ["product", "release"]
 status: "stable"
 sources:
@@ -15,7 +15,7 @@ sources:
 
 # MinutesOnの製品概要
 
-MinutesOnは会議の録音・文字起こし・話者分離・議事録生成をローカルで行うデスクトップアプリです。現在のリリース候補は1.0.2です。実行ファイル・保存形式などの内部識別子には略称monを使います。
+MinutesOnは会議の録音・文字起こし・話者分離・議事録生成をローカルで行うデスクトップアプリです。現在の公開版は[1.0.2](https://github.com/s-kodani/minuteson/releases/tag/v1.0.2)です。実行ファイル・保存形式などの内部識別子には略称monを使います。
 
 ## 対応環境
 
@@ -40,7 +40,17 @@ MinutesOnは会議の録音・文字起こし・話者分離・議事録生成�
 
 ## 配布と評価の確認状況
 
-2026-11-13（日本時間）に[1.0.0を公開](https://github.com/s-kodani/minuteson/releases/tag/v1.0.0)しました。Windowsストア公開時点のコミット`abaad2b56be302b22d31b2735d2499b3f27a9d29`を使い、下記の成功済みdry runの成果物を再ビルドせず公開しています。導入済みStore版のアプリファイル71件が当時のMSIX原本と一致し、マニフェストの差分はStoreによるPhoneIdentityの追加のみでした。その後の変更とPC音声取得の修正は1.0.1へ反映しました。1.0.2では起動時のデータ復元・適用済みモデル構成の再登録、更新確認と案内、検証済み配布物の再利用を追加しています。以下の確認記録は1.0.0を対象とし、1.0.2の実機確認結果を示すものではありません。
+### 1.0.2
+
+2026-11-15（日本時間）に、コミット`b0c65dd1d2f0c232d5b474f2e10b9c90b516ede1`を対象とする[1.0.2を公開](https://github.com/s-kodani/minuteson/releases/tag/v1.0.2)しました。[Main build](https://github.com/s-kodani/minuteson/actions/runs/43655189504)で全件CI・セキュリティ検査が成功しました。同じ実行で生成・照合したDeveloper ID署名・Apple公証済みのmacOS用DMGとWindows用未署名EXEを、SBOM・チェックサム・ビルド来歴証明とともに再ビルドせず公開しています。Store用未署名MSIXも同じ実行で生成・照合しています。
+
+1.0.2では起動時のデータ復元・適用済みモデル構成の再登録、更新確認と案内、検証済み配布物の再利用を追加しています。
+
+今回の公開作業では実機QA・ライセンス審査を新たに実施していません。配布記録の`runtimeQA`・`licenseReview`は`not_verified`、`distributionReady`は`false`を保持しています。macOSのGatekeeper・更新後データ保持、MSIXの導入確認・認定も、今回の自動検査で確認済みにはしていません。Store提出・認定・配信状況は別途確認します。
+
+### 1.0.0の確認記録
+
+2026-11-13（日本時間）に[1.0.0を公開](https://github.com/s-kodani/minuteson/releases/tag/v1.0.0)しました。Windowsストア公開時点のコミット`abaad2b56be302b22d31b2735d2499b3f27a9d29`を使い、下記の成功済みdry runの成果物を再ビルドせず公開しています。導入済みStore版のアプリファイル71件が当時のMSIX原本と一致し、マニフェストの差分はStoreによるPhoneIdentityの追加のみでした。その後の変更とPC音声取得の修正は1.0.1へ反映しました。以下の確認記録は1.0.0を対象とし、1.0.2の実機確認結果を示すものではありません。
 
 2026-11-13（日本時間）に、コミット`abaad2b56be302b22d31b2735d2499b3f27a9d29`を対象とする1.0.0のdry runが成功しました。この検証時点ではインストーラーをGitHub Actionsの成果物として保存し、`v1.0.0`のGitHub Releaseは下書きでした。以下はこの検証の確認記録です。最新の公開状況とダウンロードは[GitHub Releases](https://github.com/s-kodani/minuteson/releases)で確認してください。
 

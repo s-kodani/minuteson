@@ -8,7 +8,7 @@
 
 MinutesOn（略称 **mon**）は、会議の録音・文字起こし・話者分離・議事録生成をローカルで行う、Windows／macOS向けデスクトップアプリです。AIモデルの導入後は、録音した会議や取り込んだ音声をオフラインで解析できます。
 
-MinutesOn **1.0.2** は次回公開に向けたリリース候補です。署名済み配布物・Store公開・品質評価の確認状況は[製品概要](docs/spec/overview.md#配布と評価の確認状況)にまとめています。
+MinutesOn **1.0.2** は[GitHub Releases](https://github.com/s-kodani/minuteson/releases/tag/v1.0.2)で公開中です。配布物・Store公開・品質評価の確認状況は[製品概要](docs/spec/overview.md#配布と評価の確認状況)にまとめています。
 
 ## 主な機能
 
