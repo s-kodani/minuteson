@@ -365,6 +365,67 @@ fn capture_ending_does_not_salvage_failed_empty_or_corrupt_capture_as_saved() {
         unpublished(&storage, &meeting, &session);
     }
     write(&output, &good);
+    // The sealed segment is authoritative even while an old continuous copy
+    // remains valid. A damaged segment must never fall back to that duplicate.
+    let path = output.join("raw-system-00000001.caf");
+    let bytes = std::fs::read(&path).unwrap();
+    let continuous = std::fs::read(output.join("system.caf")).unwrap();
+    let mut changed_pcm = bytes.clone();
+    changed_pcm[68] ^= 1;
+    for corrupt in [bytes[..40].to_vec(), changed_pcm] {
+        std::fs::write(&path, &corrupt).unwrap();
+        assert!(storage.finalize_recording(&session).is_err());
+        unpublished(&storage, &meeting, &session);
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+        assert_eq!(
+            std::fs::read(output.join("system.caf")).unwrap(),
+            continuous
+        );
+    }
+    std::fs::write(&path, &bytes).unwrap();
+    let retained = output.join("retained-system-segment.caf");
+    std::fs::rename(&path, &retained).unwrap();
+    assert!(storage.finalize_recording(&session).is_err());
+    unpublished(&storage, &meeting, &session);
+    assert_eq!(std::fs::read(&retained).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(output.join("system.caf")).unwrap(),
+        continuous
+    );
+    std::fs::rename(&retained, &path).unwrap();
+    assert_eq!(storage.finalize_recording(&session).unwrap().state, "saved");
+}
+
+#[test]
+fn capture_ending_uses_verified_segments_when_obsolete_continuous_copy_is_corrupt() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, _) = ending(&storage);
+    std::fs::write(
+        output.join("system.caf"),
+        b"unfinished obsolete working copy",
+    )
+    .unwrap();
+    assert_eq!(storage.finalize_recording(&session).unwrap().state, "saved");
+    let audio = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    assert_eq!(audio.tracks.len(), 1);
+    assert_eq!(audio.tracks[0].sample_rate, 16000);
+    assert_eq!(audio.tracks[0].channels, 1);
+    assert_whole_gap_playback(&storage, &meeting, 1_100_000);
+}
+
+#[test]
+fn capture_ending_legacy_rawless_source_still_rejects_corrupt_continuous_audio() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, mut manifest) = ending(&storage);
+    for lane in ["microphone", "system"] {
+        manifest[lane]
+            .as_object_mut()
+            .unwrap()
+            .remove("rawSegments");
+    }
+    write(&output, &manifest);
     let path = output.join("system.caf");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::write(&path, &bytes[..40]).unwrap();

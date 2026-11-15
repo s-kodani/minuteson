@@ -11,6 +11,9 @@ enum CaptureCore {
   static let maximumPendingPackets = Int(mon_capture_limit(8))
   static let acquisitionTimeoutNanoseconds = Int64(mon_capture_limit(9))
   static let retryNanoseconds = Int64(mon_capture_limit(10))
+  static let maximumStoragePendingBytes = Int(mon_capture_limit(11))
+  static let maximumStoragePendingNanoseconds = Int64(mon_capture_limit(12))
+  static let maximumStoragePendingJobs = Int(mon_capture_limit(13))
 
   static func validOwner(_ value: String) -> Bool {
     Array(value.utf8).withUnsafeBufferPointer { bytes in
@@ -50,6 +53,17 @@ enum CaptureCore {
     return mon_capture_permits_commit(
       UInt32(segments), UInt64(metadata), UInt64(maps),
       UInt64(nextBytes), UInt64(nextMaps))
+  }
+  static func permitsStoragePending(
+    bytes: Int, nanoseconds: Int64, jobs: Int,
+    nextBytes: Int, nextNanoseconds: Int64
+  ) -> Bool {
+    guard bytes >= 0, nanoseconds >= 0, jobs >= 0, jobs <= Int(UInt32.max),
+      nextBytes >= 0, nextNanoseconds >= 0
+    else { return false }
+    return mon_capture_permits_storage_pending(
+      UInt64(bytes), UInt64(nanoseconds), UInt32(jobs),
+      UInt64(nextBytes), UInt64(nextNanoseconds))
   }
   static func catalogOrder<T: Encodable>(_ rows: [T], applications: Bool) throws -> [Int] {
     let data = try JSONEncoder().encode(rows)

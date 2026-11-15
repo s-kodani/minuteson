@@ -4,16 +4,19 @@
 #include <deque>
 #include <exception>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 #include "../../crates/mon-capture-ffi/include/mon_capture.h"
+#include "storage_pending.h"
 
 namespace product {
 struct CapturePacket {
   std::vector<float> samples;
   std::uint32_t frames=0,flags=0;
   std::uint64_t time=0,position=0,arrival=0;
+  std::uint64_t storage_end=0;
 };
 // At most 20 seconds per lane (11 MiB total PCM for mono + stereo).
 // Never discard old audio to make room; an exhausted writer stops explicitly.
@@ -27,7 +30,18 @@ class PacketQueue {
     if(!mon_capture_permits_pending(bytes_,nanoseconds_,
         static_cast<std::uint32_t>(packets_.size()),bytes,duration))
       throw std::runtime_error("音声の保存待ちが上限に達しました。保存先の負荷を確認してください。確定済み音声は保持しています");
+    if(storage_)packet.storage_end=storage_->acquire(lane_,packet.frames);
     bytes_+=bytes;nanoseconds_+=duration;frames_+=packet.frames;peak_=std::max(peak_,frames_);packets_.push_back(std::move(packet));
+  }
+  // Preparation may be cancelled before adoption, so only product-owned
+  // ingress is charged. Stamp the already bounded preparation queue atomically
+  // before any of its packets can enter the recording converter.
+  void attach_storage(std::shared_ptr<StoragePending> storage,unsigned lane){
+    std::lock_guard lock(mutex_);
+    if(storage_)throw std::logic_error("recording ingress already adopted");
+    auto end=storage->acquire(lane,frames_);auto cursor=end-frames_;
+    for(auto& packet:packets_){cursor+=packet.frames;packet.storage_end=cursor;}
+    storage_=std::move(storage);lane_=lane;
   }
   std::optional<CapturePacket> pop() {
     std::lock_guard lock(mutex_);
@@ -42,6 +56,7 @@ class PacketQueue {
   std::deque<CapturePacket> packets_;
   std::uint64_t frames_=0,peak_=0,bytes_=0,nanoseconds_=0;
   std::exception_ptr failure_;
+  std::shared_ptr<StoragePending> storage_;unsigned lane_=0;
 };
 class CaptureReader {
  public:

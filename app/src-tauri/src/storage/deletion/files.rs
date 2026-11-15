@@ -147,6 +147,7 @@ fn raw_recording_metadata_name(leaf: &str) -> bool {
         "raw-microphone.json"
             | "raw-system.json"
             | "partial-flac.json"
+            | "completed-flac.json"
             | "partial-recovery.json"
             | ".final-flac.lock"
     ) || raw_recording_sequence(leaf, ".json").is_some()

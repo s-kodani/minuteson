@@ -17,7 +17,8 @@ void atomic_json(const fs::path& path,const Json& value,bool durable=true){
   if(path.filename()=="input-events.json") {
     std::unique_lock lock(gate);blocked=true;entered.notify_one();entered.wait(lock,[]{return release;});
     if(!durable)throw std::runtime_error("journal lost durability");
-  } else if(durable)throw std::runtime_error("telemetry still forces disk flush");
+  } else if(durable&&path.filename()!="manifest.json")throw std::runtime_error("telemetry still forces disk flush");
+  if(path.filename()=="manifest.json"&&!durable)throw std::runtime_error("manifest lost durability");
   writes.emplace_back(path.filename().string(),value);
 }
 #include "metadata_worker.h"
@@ -29,6 +30,7 @@ int main(){try{
   {std::unique_lock lock(gate);if(!entered.wait_for(lock,std::chrono::seconds(5),[]{return blocked;}))throw std::runtime_error("writer never started");}
   const auto before=std::chrono::steady_clock::now();
   for(int revision=2;revision<=100;++revision){worker.observe(L"input-levels.json",Json{{"revision",revision}});worker.publish(Json{{"revision",revision},{"events",Json::array({"interrupted","recovered"})}},revision==100);}
+  worker.manifest(Json{{"state","recording"},{"microphoneDeviceUID","adopted-device"}});
   if(std::chrono::steady_clock::now()-before>std::chrono::milliseconds(250))throw std::runtime_error("blocked journal stalled producer");
   // Simulate storage delay longer than the old false clock-change threshold.
   std::this_thread::sleep_for(std::chrono::milliseconds(3200));
@@ -38,6 +40,8 @@ int main(){try{
   unsigned journals=0;bool ordered=false;
   for(const auto& [name,value]:writes)if(name=="input-events.json"){++journals;if(value["sealed"]==true)ordered=value["report"]["events"]==Json::array({"interrupted","recovered"});}
   if(journals!=2||!ordered)throw std::runtime_error("coalescing lost ordered transitions or retained unbounded heartbeat backlog");
+  bool manifest_saved=false;for(const auto& [name,value]:writes)if(name=="manifest.json")manifest_saved=value["microphoneDeviceUID"]=="adopted-device";
+  if(!manifest_saved)throw std::runtime_error("asynchronous adoption manifest was lost");
   writes.clear();
   MetadataWorker heartbeat(fs::path("unused"),"owner");heartbeat.publish(Json{{"revision",1},{"events",Json::array()}},false);
   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);

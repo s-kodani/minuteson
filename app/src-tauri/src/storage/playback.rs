@@ -2,7 +2,7 @@ use super::*;
 use crate::audio::VerifiedAudio;
 use crate::audio_clock::{ClockChunk, ClockLayout};
 use crate::playback::ClockAudio;
-use crate::playback::{AudioSpan, PreparedAudio};
+use crate::playback::{AudioSpan, PreparedAudio, SpanAudio, SpanCache};
 use std::fs::File;
 
 #[derive(PartialEq, Eq)]
@@ -161,6 +161,17 @@ impl Storage {
         self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, true)
     }
 
+    pub(in crate::storage) fn prepare_verified_meeting_track_audio_cancellable(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, false)
+    }
+
     fn prepare_track_audio_mode(
         &self,
         meeting_id: &str,
@@ -226,6 +237,8 @@ impl Storage {
         }
         let root = self.root.canonicalize().map_err(|e| e.to_string())?;
         let mut spans = Vec::new();
+        let span_cache = SpanCache::default();
+        let defer_readers = whole_meeting && !direct_playback && chunks.len() > 1;
         let mut position = start;
         let mut audio_format = None;
         let layout = if mappings.is_empty() && !whole_meeting {
@@ -277,7 +290,8 @@ impl Storage {
                 return Err("この音声は会議の管理領域内にありません".into());
             }
             let file = self.managed_path(relative)?;
-            if file.canonicalize().map_err(|e| e.to_string())? != root.join(relative) {
+            let source_path = file.canonicalize().map_err(|e| e.to_string())?;
+            if source_path != root.join(relative) {
                 return Err("音声ファイルが管理領域外を参照しています".into());
             }
             let file = File::open(file).map_err(|e| e.to_string())?;
@@ -326,7 +340,17 @@ impl Storage {
                 return Err("発言の音声フレームがありません".into());
             }
             spans.push(AudioSpan {
-                audio,
+                audio: if defer_readers {
+                    SpanAudio::deferred(
+                        source_path,
+                        audio,
+                        chunk.size as u64,
+                        &chunk.hash,
+                        span_cache.clone(),
+                    )?
+                } else {
+                    audio.into()
+                },
                 first_frame: first,
                 frames: last - first,
             });

@@ -11,6 +11,19 @@ pub(crate) fn release_all() {
         }
     });
 }
+// Deferred sources retain immutable proofs instead of an audit descriptor for
+// every chunk. Their bounded reader cache performs the same checks on reopen.
+pub(crate) fn forget(audio: &VerifiedAudio, hash: &str) {
+    CACHE.with(|cache| {
+        if let Some(cache) = cache.borrow_mut().as_mut() {
+            if let Some(entry) = cache.entries.remove(&format!("{hash}:{}", audio.identity)) {
+                cache.bytes = cache
+                    .bytes
+                    .saturating_sub(entry.index.as_ref().map_or(0, |index| index.bytes()));
+            }
+        }
+    });
+}
 #[derive(Default)]
 struct Cache {
     entries: HashMap<String, Entry>,

@@ -16,7 +16,7 @@ struct ActiveCapture {
     stop_operation_id: Option<String>,
     level_directory: PathBuf,
     levels: crate::input_levels::LevelReader,
-    writes: crate::recording_writes::WriteReader,
+    writes: Arc<Mutex<crate::recording_writes::WriteReader>>,
     input_status: Arc<Mutex<crate::input_status::StatusReader>>,
     selection_revision: u64,
     #[cfg(windows)]
@@ -392,34 +392,76 @@ impl RecorderController {
         app: &AppHandle,
         session_id: &str,
     ) -> Result<crate::recording_writes::Snapshot, String> {
+        app.state::<Storage>().require_data_writable()?;
         let controller = app.state::<Self>();
-        let mut active = controller
-            .0
+        let (reader, child, directory) =
+            controller.clone_write_owner(&app.state::<SessionStore>().snapshot(), session_id)?;
+        let mut writes = reader
             .lock()
-            .map_err(|_| "録音ロックを取得できません")?;
-        let current = active.as_mut().ok_or("書込み確認できる録音がありません")?;
-        require_level_session(
-            &current.session_id,
+            .map_err(|_| "書込み確認のロックを取得できません")?;
+        controller.verify_write_owner(
             &app.state::<SessionStore>().snapshot(),
             session_id,
+            &reader,
+            &child,
         )?;
-        let mut child = current
-            .child
-            .lock()
-            .map_err(|_| "録音プロセスのロックに失敗しました")?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("録音プロセスは終了しました".into());
+        // Hashing new segments may wait on the disk. Never retain the capture
+        // or child mutex needed for stop, levels and ownership transitions.
+        let result = writes.read(&directory, session_id)?;
+        app.state::<Storage>().require_data_writable()?;
+        controller.verify_write_owner(
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+            &reader,
+            &child,
+        )?;
+        app.state::<SessionStore>()
+            .with_active_owner(session_id, || Ok(result))
+    }
+    fn clone_write_owner(
+        &self,
+        snapshot: &RecordingSnapshot,
+        session_id: &str,
+    ) -> Result<
+        (
+            Arc<Mutex<crate::recording_writes::WriteReader>>,
+            Arc<Mutex<Child>>,
+            PathBuf,
+        ),
+        String,
+    > {
+        let active = self.0.lock().map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_ref().ok_or("書込み確認できる録音がありません")?;
+        require_level_session(&current.session_id, snapshot, session_id)?;
+        Ok((
+            current.writes.clone(),
+            current.child.clone(),
+            current.level_directory.clone(),
+        ))
+    }
+    fn verify_write_owner(
+        &self,
+        snapshot: &RecordingSnapshot,
+        session_id: &str,
+        reader: &Arc<Mutex<crate::recording_writes::WriteReader>>,
+        child: &Arc<Mutex<Child>>,
+    ) -> Result<(), String> {
+        let active = self.0.lock().map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_ref().ok_or("書込み確認の録音は終了しました")?;
+        if !Arc::ptr_eq(reader, &current.writes) || !Arc::ptr_eq(child, &current.child) {
+            return Err("書込み確認の録音所有者が変更されました".into());
         }
-        let result = current.writes.read(&current.level_directory, session_id)?;
-        require_level_session(
-            &current.session_id,
-            &app.state::<SessionStore>().snapshot(),
-            session_id,
-        )?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+        require_level_session(&current.session_id, snapshot, session_id)?;
+        if child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?
+            .try_wait()
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
             return Err("書込み確認中に録音プロセスが終了しました".into());
         }
-        Ok(result)
+        Ok(())
     }
     pub(crate) fn levels(
         app: &AppHandle,
@@ -656,7 +698,7 @@ impl RecorderController {
             stop_operation_id: None,
             level_directory,
             levels: Default::default(),
-            writes,
+            writes: Arc::new(Mutex::new(writes)),
             input_status: Arc::new(Mutex::new(input_status)),
             selection_revision: 0,
             #[cfg(windows)]
@@ -995,7 +1037,9 @@ mod tests {
                 stop_operation_id: None,
                 level_directory: output.clone(),
                 levels: Default::default(),
-                writes: crate::recording_writes::WriteReader::pin(&output).unwrap(),
+                writes: Arc::new(Mutex::new(
+                    crate::recording_writes::WriteReader::pin(&output).unwrap(),
+                )),
                 input_status: reader.clone(),
                 selection_revision: 0,
             })),
@@ -1013,8 +1057,15 @@ mod tests {
         // These are the exact locks used by stop_target and child termination.
         assert!(controller.0.try_lock().is_ok());
         assert!(owned_child.try_lock().is_ok());
+        let (write_reader, write_child, write_path) =
+            controller.clone_write_owner(&snapshot, SESSION).unwrap();
+        assert_eq!(write_path, output);
+        let _busy_write_verification = write_reader.lock().unwrap();
+        assert!(controller.0.try_lock().is_ok());
+        assert!(write_child.try_lock().is_ok());
         snapshot.phase = RecordingPhase::Stopping;
         assert!(controller.clone_input_owner(&snapshot, SESSION).is_err());
+        assert!(controller.clone_write_owner(&snapshot, SESSION).is_err());
         assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0);
     }
 

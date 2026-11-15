@@ -30,7 +30,7 @@ fn audio(
         spans.push(AudioSpan {
             frames: verified.format.frames,
             first_frame: 0,
-            audio: verified,
+            audio: verified.into(),
         });
     }
     let start_us = maps[0].timeline_start_us;
