@@ -446,7 +446,10 @@ class DesktopWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'output'
             with patch.dict(os.environ, {'MON_BASE': SHA, 'MON_FULL': 'false', 'GITHUB_OUTPUT': str(output)}), \
-                    patch.object(scope.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'docs/guides/testing.md\0README.md\0')) as diff:
+                    patch.object(scope.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0,
+                        b'docs/guides/testing.md\0README.md\0AGENTS.md\0.github/pull_request_template.md\0'
+                        b'.agents/skills/desktop-ui-quality/agents/openai.yaml\0'
+                        b'third-party/notices/README.md\0tests/fixtures/audio-import/README.md\0')) as diff:
                 scope.main()
                 self.assertIn('--no-renames', diff.call_args.args[0])
             values = dict(line.split('=', 1) for line in output.read_text().splitlines())
