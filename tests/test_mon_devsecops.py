@@ -30,6 +30,7 @@ import mon_macos_release as mac
 import mon_release as release
 import mon_main_build as main_build
 import mon_store_provenance as provenance
+import mon_updater_artifacts as updater
 import mon_release_artifacts as artifacts
 import mon_security as security
 import mon_store_submission as store
@@ -701,12 +702,30 @@ class ReleaseTests(unittest.TestCase):
                     'sbom': bom.name, 'sbomSha256': artifacts.digest(bom),
                 }))
             tag = 'v' + json.loads((artifacts.ROOT / 'app/package.json').read_text())['version']
+            version = tag[1:]
+            name = f"MinutesOn_{version}_aarch64.app.tar.gz"
+            (root / name).write_bytes(b"synthetic update archive")
+            (root / (name + ".sig")).write_text("synthetic signature")
+            (root / "latest.json").write_text(json.dumps({"version": version, "platforms": {"darwin-aarch64": {
+                "signature": "synthetic signature", "url": f"https://github.com/s-kodani/minuteson/releases/download/{tag}/{name}"
+            }}}))
+            record = json.loads((root / "macos-receipt.json").read_text())
+            record["updaterFiles"] = {n: artifacts.digest(root / n) for n in (name, name + ".sig", "latest.json")}
+            (root / "macos-receipt.json").write_text(json.dumps(record))
             artifacts.assemble(root, root / 'public', SHA, tag)
             manifest = json.loads((root / 'public/release-manifest.json').read_text())
             self.assertEqual(manifest['schemaVersion'], 2)
             self.assertEqual(manifest['producer'], {'kind': 'main-build', 'runId': 42, 'runAttempt': 2, 'event': 'push'})
             self.assertFalse((root / 'public/app.msix').exists())
             self.assertIn('store.cdx.json', manifest['publicFiles'])
+            self.assertIn('latest.json', manifest['publicFiles'])
+            self.assertIn(name, manifest['publicFiles'])
+            (root / name).write_bytes(b"tampered archive")
+            with self.assertRaises(ValueError):
+                artifacts.assemble(root, root / "tampered", SHA, tag)
+            (root / "latest.json").unlink()
+            with self.assertRaises(FileNotFoundError):
+                artifacts.assemble(root, root / "missing", SHA, tag)
             self.assertEqual(manifest['artifacts'][2]['sha256'], artifacts.digest(root / 'app.msix'))
 
 
@@ -741,7 +760,9 @@ class HandoffTests(unittest.TestCase):
             with patch.object(mac.sys, "platform", "darwin"), patch.object(mac, "command", side_effect=command), \
                     patch.object(mac, "layout"), patch.object(mac, "verify_notices", return_value={"state": "collected_not_reviewed"}), \
                     patch.object(mac, "verify_asr_runtime"), patch.object(mac, "verify_inference_runtime"):
-                result = mac.prepare(output, {"APPLE_SIGNING_IDENTITY": "must not reach dependency fetch"})
+                key = base64.b64encode(b"untrusted comment: test\n" + base64.b64encode(b"Ed" + bytes(40)) + b"\n").decode()
+                result = mac.prepare(output, {"APPLE_SIGNING_IDENTITY": "must not reach dependency fetch", "TAURI_UPDATER_PUBLIC_KEY": key})
+                self.assertEqual(result["updaterPublicKey"], key)
             self.assertEqual(result["archiveSha256"], artifacts.digest(output / "prepared-app.zip"))
             self.assertFalse((output / "build-cache").exists())
 

@@ -158,4 +158,5 @@ pub const COMMANDS: &[&str] = &[
     "get_app_update_status",
     "check_app_update",
     "open_app_update_page",
+    "apply_app_update",
 ];

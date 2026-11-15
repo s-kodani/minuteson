@@ -1022,3 +1022,67 @@ fn recording_cancellation_keeps_lease_through_real_partial_copy_and_db_finalizat
         .unwrap();
     assert_eq!(state, "unavailable");
 }
+
+#[test]
+fn updater_refuses_active_work_without_cancelling_and_seals_idle_admission() {
+    for gate in 0..10 {
+        let c = AnalysisController::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut s = c.state.lock().unwrap();
+            match gate {
+                0 => s.busy = true,
+                1 => s.recording_intent = true,
+                2 => s.import_intent = true,
+                3 => s.model_preparation = Some(cancel.clone()),
+                4 => s.data_maintenance = Some(cancel.clone()),
+                5 => s.model_deletion = Some(cancel.clone()),
+                6 => {
+                    s.meeting_deletions.insert("meeting".into(), cancel.clone());
+                }
+                7 => s.export_intent = true,
+                8 => s.export_owner = Some(cancel.clone()),
+                _ => s.storage_restart_required = true,
+            }
+        }
+        assert!(c.begin_update_exit().is_err());
+        assert!(!cancel.load(Ordering::SeqCst));
+        assert!(!c.shutdown.load(Ordering::SeqCst));
+    }
+    let c = AnalysisController::default();
+    let notice = c.begin_scoped_notice_storage(None).unwrap();
+    assert!(c.begin_update_exit().is_err());
+    drop(notice);
+    assert!(c.begin_update_exit().is_ok());
+    assert!(c.begin_export().is_err());
+    assert!(c.begin_update_exit().is_err());
+    c.abort_shutdown();
+    assert!(c.begin_export().is_ok());
+}
+
+#[test]
+fn updater_and_new_work_cannot_both_win_admission() {
+    for _ in 0..25 {
+        let c = Arc::new(AnalysisController::default());
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let finish = Arc::new(std::sync::Barrier::new(2));
+        let worker = {
+            let c = c.clone();
+            let start = start.clone();
+            let finish = finish.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                let lease = c.begin_export();
+                let admitted = lease.is_ok();
+                finish.wait();
+                drop(lease);
+                admitted
+            })
+        };
+        start.wait();
+        let updating = c.begin_update_exit().is_ok();
+        finish.wait();
+        let working = worker.join().unwrap();
+        assert!(!(updating && working));
+    }
+}

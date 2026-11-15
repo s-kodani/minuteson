@@ -118,6 +118,23 @@ async (page) => {
     stage = "quiet-close"; await boot(); await request(); await page.waitForFunction(() => window.closeFixture.calls.some(c => c.command === "finish_main_close")); check(await count("finish_main_close") === 1 && await page.getByRole("dialog").count() === 0 && await page.evaluate(() => window.closeFixture.flushes > 0), "quiet close missed save or prompted unnecessarily");
     results.push("quiet closing flushes edits and uses checked native tokens without a destructive prompt");
 
+    stage = "update-close"; await boot(true);
+    await page.locator("#recording-title").fill("更新前に保存する入力");
+    await page.evaluate(() => window.emitResidencyFixture("main-close-requested", { quit: true, update: true }));
+    await page.waitForFunction(() => window.closeFixture.calls.some(c => c.command === "finish_main_close" && c.args.update));
+    check(await page.evaluate(() => window.closeFixture.flushes > 0), "update bypassed draft saving");
+    check(await count("cancel_audio_import") === 0 && await count("cancel_data_operation") === 0 && await count("stop_recording") === 0, "update cancelled active work");
+    stage = "update-save-failure"; await boot(true);
+    await page.locator("#recording-title").fill("更新せず保持する入力");
+    await page.evaluate(() => { window.closeFixture.failFlush = true; return window.emitResidencyFixture("main-close-requested", {quit:true,update:true}); });
+    await page.getByRole("alert").filter({hasText:"終了できませんでした"}).waitFor();
+    check(await count("finish_main_close") === 0, "failed draft saving applied update");
+    stage = "update-new-work"; await boot();
+    await page.evaluate(() => { window.closeFixture.activity.analysisBusy = true; return window.emitResidencyFixture("main-close-requested", {quit:true,update:true}); });
+    await page.getByRole("alert").filter({hasText:"処理が完了してから更新してください"}).waitFor();
+    check(await page.getByRole("dialog").count() === 0 && await count("cancel_audio_import") === 0 && await count("cancel_data_operation") === 0, "update offered to stop new work");
+    results.push("updates save drafts, refuse failed saves and never cancel work to restart");
+
     stage = "close-layout"; await boot(); await page.evaluate(() => { window.closeFixture.activity.modelPreparationBusy = true; }); await request(); await modal(title).waitFor(); await page.setViewportSize({ width: 360, height: 640 });
     const box = await modal(title).boundingBox(); check(box.x >= 23.9 && box.x + box.width <= 336.1 && await modal(title).evaluate(e => e.scrollWidth <= e.clientWidth + 1), "close modal clipped on small screen"); await page.screenshot({ path: "application-close-360.png" }); await page.keyboard.press("Escape"); await modal(title).waitFor({ state: "hidden" }); check(await count("finish_main_close") === 0, "layout inspection quit");
     results.push("model preparation closing explains checkpoint retention and fits a 360px viewport");

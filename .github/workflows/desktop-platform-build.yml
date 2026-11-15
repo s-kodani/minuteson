@@ -441,6 +441,8 @@ jobs:
           digest=$(shasum -a 256 "$executable" | cut -d ' ' -f 1)
           node tools/mon_owned_engine_check.mjs --executable "$executable" --sha256 "$digest"
       - name: Prepare final macOS app without signing credentials
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS' && env.MON_BUILD_RELEASE == 'true'
         run: python tools/mon_macos_release.py --prepare --output-dir "$GITHUB_WORKSPACE/output/macos-prepare"
       - name: Save final macOS app for signing

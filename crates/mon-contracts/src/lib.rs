@@ -69,7 +69,7 @@ wire_enum!(PauseReason { User => "user", Recording => "recording", Exit => "exit
 wire_enum!(WindowRole { Main => "main", Recorder => "recorder", RecordingConfirmation => "recording-confirmation", StartupAttention => "startup-attention" });
 wire_enum!(Platform { Macos => "macos", Windows => "windows", Other => "other" });
 wire_enum!(AppUpdateChannel { WindowsStore => "windows_store", MacosRelease => "macos_release", Unsupported => "unsupported" });
-wire_enum!(AppUpdateState { NotChecked => "not_checked", Checking => "checking", Available => "available", NoUpdate => "no_update", Unavailable => "unavailable", Unsupported => "unsupported" });
+wire_enum!(AppUpdateState { NotChecked => "not_checked", Checking => "checking", Available => "available", Downloading => "downloading", Ready => "ready", Installing => "installing", Failed => "failed", NoUpdate => "no_update", Unavailable => "unavailable", Unsupported => "unsupported" });
 
 /// Availability is distinct from downloading, registration and installation.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -83,6 +83,8 @@ pub struct AppUpdateStatus {
     pub available_version: Option<String>,
     pub checked_at_ms: Option<u64>,
     pub error_message: Option<String>,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
 }
 wire_enum!(RetryDisposition { NotStarted => "not_started", Reconcile => "reconcile", Retry => "retry", Never => "never" });
 

@@ -2776,6 +2776,12 @@
             "optional": false
           },
           {
+            "name": "update",
+            "wireName": "update",
+            "type": "Option<bool>",
+            "optional": true
+          },
+          {
             "name": "expected",
             "wireName": "expected",
             "type": "Option<application_close::CloseExpectations>",
@@ -3837,6 +3843,22 @@
       ],
       "signature": {
         "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "apply_app_update",
+      "handler": "app_updates::apply_app_update",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
         "arguments": [],
         "response": {
           "type": "Result<(),mon_contracts::AppError>",

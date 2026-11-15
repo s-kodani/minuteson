@@ -536,6 +536,27 @@ impl AnalysisController {
 
     // Seal admission before waiting for imports/data cleanup. This also closes
     // the previous export/start-recording race between exit checks and shutdown.
+    /// Check and seal under the same admission lock: updates never cancel active work.
+    pub(crate) fn begin_update_exit(&self) -> Result<(), String> {
+        let state = self.state.lock().map_err(|_| "解析状態を取得できません")?;
+        if state.busy
+            || state.recording_intent
+            || state.import_intent
+            || state.model_preparation.is_some()
+            || state.data_maintenance.is_some()
+            || state.model_deletion.is_some()
+            || !state.meeting_deletions.is_empty()
+            || state.export_intent
+            || state.export_owner.is_some()
+            || !state.notice_writers.is_empty()
+            || self.shutdown.load(Ordering::SeqCst)
+            || state.storage_restart_required
+        {
+            return Err("録音・解析・保存などの処理が完了してから更新してください".into());
+        }
+        self.shutdown.store(true, Ordering::SeqCst);
+        Ok(())
+    }
     pub(crate) fn begin_exit(&self) -> Result<(), String> {
         self.begin_exit_inner(true)
     }

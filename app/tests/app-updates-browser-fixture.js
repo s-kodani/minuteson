@@ -1,7 +1,7 @@
 await import("./browser-fixture.js");
 const { emit } = await import("@tauri-apps/api/event");
 const fixture=window.appUpdateFixture={
-  status:{revision:1,channel:"windows_store",state:"available",currentVersion:"1.0.1",updateAvailable:true,availableVersion:null,checkedAtMs:1794600000000,errorMessage:null},
+  status:{revision:1,channel:"windows_store",state:"available",currentVersion:"1.0.1",updateAvailable:true,availableVersion:null,checkedAtMs:1794600000000,downloadedBytes:0,totalBytes:null,errorMessage:null},
   calls:[],holdRead:false,pendingReads:[],failOpen:false,
   async publish(patch){this.status={...this.status,...patch,revision:this.status.revision+1};await emit("app-update-status-changed",structuredClone(this.status));},
 };
@@ -16,9 +16,10 @@ window.__TAURI_INTERNALS__.invoke=async(command,args,options)=>{
   }
   if(command==="check_app_update"){
     fixture.calls.push(command);
-    await fixture.publish({state:"checking",errorMessage:null});
+    await fixture.publish({state:"checking",downloadedBytes:0,totalBytes:null,errorMessage:null});
     return structuredClone(fixture.status);
   }
+  if(command==="apply_app_update"){ fixture.calls.push(command); if(fixture.failApply)throw Error("録音・解析・保存などの処理が完了してから更新してください"); return null; }
   if(command==="open_app_update_page"){
     fixture.calls.push(command);
     if(fixture.failOpen)throw Error("synthetic launch error");

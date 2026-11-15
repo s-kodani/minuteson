@@ -1,3 +1,5 @@
+import base64
+import sys
 import importlib.util
 import io
 import json
@@ -10,6 +12,10 @@ import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import mon_updater_artifacts as updater
+KEY = base64.b64encode(b"untrusted comment: test\n" + base64.b64encode(b"Ed" + bytes(40)) + b"\n").decode()
 
 SPEC = importlib.util.spec_from_file_location(
     "mon_macos_release", Path(__file__).resolve().parents[1] / "tools/mon_macos_release.py")
@@ -110,7 +116,7 @@ class ReleaseConfigurationTests(unittest.TestCase):
             # Creating the Applications alias itself is covered by POSIX tests.
             stack.enter_context(patch.object(Path, "symlink_to"))
             output = self.root / "distribution"
-            result = release.build(output, IDENTITY, TEAM, None, {})
+            result = release.build(output, IDENTITY, TEAM, None, {"TAURI_UPDATER_PUBLIC_KEY": KEY})
 
         self.assertTrue((output / "MinutesOn Preview.app/source").is_file())
         self.assertTrue((output / "image-source/MinutesOn Preview.app/source").is_file())
@@ -231,13 +237,16 @@ class ReleaseTests(unittest.TestCase):
 
     def test_tauri_environment_removes_all_signing_and_notary_credentials_without_mutating_parent(self):
         source = {key: "private" for key in (*release.NOTARY_ENV, "APPLE_SIGNING_IDENTITY")}
-        source.update(PATH="keep", CARGO_TARGET_DIR="old", CARGO_INCREMENTAL="1")
+        source.update(TAURI_UPDATER_PUBLIC_KEY=KEY, TAURI_SIGNING_PRIVATE_KEY="private", TAURI_SIGNING_PRIVATE_KEY_PASSWORD="private", PATH="keep", CARGO_TARGET_DIR="old", CARGO_INCREMENTAL="1")
         result = release.build_environment(source, self.root)
         self.assertEqual(result["PATH"], "keep")
         self.assertEqual(result["CARGO_TARGET_DIR"], str(self.root))
         self.assertEqual(result["CARGO_INCREMENTAL"], "0")
         self.assertFalse(set(result) & set((*release.NOTARY_ENV, "APPLE_SIGNING_IDENTITY")))
         self.assertEqual(source["APPLE_PASSWORD"], "private")
+        self.assertNotIn("TAURI_SIGNING_PRIVATE_KEY", result)
+        self.assertNotIn("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", result)
+        self.assertEqual(json.loads(result["TAURI_CONFIG"])["plugins"]["updater"]["pubkey"], KEY)
 
     def test_missing_credentials_fail_before_any_file_build_sign_or_upload(self):
         target = self.root / "not-created"
@@ -379,7 +388,8 @@ class ReleaseTests(unittest.TestCase):
                 self.calls.pop()
             return result
         with patch.object(release.sys, "platform", "darwin"), patch.object(release, "release_configuration", return_value={"productName": "MinutesOn", "version": "1.0.0"}), patch.object(release, "command", side_effect=single), patch.object(release.shutil, "disk_usage", return_value=type("Disk", (), {"free": 8 * 1024 ** 3})()):
-            return output, release.build(output, IDENTITY, TEAM, profile, {"APPLE_PASSWORD": "secret", "PATH": "keep"})
+            with patch.object(updater, "create", return_value=[]):
+                return output, release.build(output, IDENTITY, TEAM, profile, {"APPLE_PASSWORD": "secret", "PATH": "keep", "TAURI_UPDATER_PUBLIC_KEY": KEY, "TAURI_SIGNING_PRIVATE_KEY": "synthetic"})
 
     def test_sign_only_pipeline_is_inside_out_creates_new_dmg_and_never_uploads_staples_or_launches(self):
         output, result = self.pipeline()

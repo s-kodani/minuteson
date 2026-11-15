@@ -39,12 +39,21 @@ async function readCloseContext(): Promise<CloseContext> {
 export function useWorkspaceClose(dependencies: CloseDependencies) {
   const appName = useAppName();
   const latest = useRef(dependencies); latest.current = dependencies;
-  const closeHandler = useRef<(request: { quit: boolean; afterRecording?: string }) => Promise<void>>(async () => {});
-  closeHandler.current = async ({ quit, afterRecording }) => {
+  const closeHandler = useRef<(request: { quit: boolean; afterRecording?: string; update?: boolean }) => Promise<void>>(async () => {});
+  closeHandler.current = async ({ quit, afterRecording, update }) => {
     const { platform, closing, starting, navigating, setClosingBusy, setMeetingError, captureTest, meetings, closeConfirm, withSavedEdits, recordingDecision } = latest.current;
     if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
     closing.current = true; setClosingBusy(true); setMeetingError("");
     try {
+      if (update) {
+        // Save drafts through the normal editor barrier, but never cancel work for an update.
+        await withConfirmedEdits(withSavedEdits, async () => {
+          await stopAllPlayback();
+          const context = await readCloseContext();
+          await invoke("finish_main_close", { quit: true, update: true, expected: { importToken: context.importing.token, dataToken: context.data.token } });
+        });
+        return;
+      }
       await captureTest.finish();
       if (!quit && platform !== "other") {
         const readBackground = async () => {
@@ -114,7 +123,7 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<{ quit: boolean; afterRecording?: string }>("main-close-requested", (event) => {
+    void listen<{ quit: boolean; afterRecording?: string; update?: boolean }>("main-close-requested", (event) => {
       if (disposed) return;
       void closeHandler.current(event.payload);
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((cause: unknown) => latest.current.setMeetingError(String(cause)));
