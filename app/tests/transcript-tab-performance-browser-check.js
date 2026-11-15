@@ -2,6 +2,9 @@
 // wall-clock threshold: timings are attached for comparison on the same host.
 async page => {
   const results = [], measurements = [];
+  // Opening 5,000 rows includes their first render. Allow the same preparation
+  // budget as cold navigation, including when another CI worker is rendering.
+  const preparationTimeout = 30_000;
   const check = (value, message) => { if (!value) throw Error(message); };
   for (const count of [347, 1284, 5000]) {
     if (measurements.length) await page.reload();
@@ -12,8 +15,8 @@ async page => {
       effectiveText:`発言${i}：会議の内容を確認するための合成発言です。`,
       attributionState:"assigned", speakerIds:[i%2 ? "speaker-a" : "speaker-b"],
     }))), count);
-    await page.getByRole("button", {name:"会議A",exact:true}).click();
-    await page.waitForFunction(count => document.querySelectorAll(".utterance-row").length === count, count);
+    await page.getByRole("button", {name:"会議A",exact:true}).click({timeout:preparationTimeout});
+    await page.waitForFunction(count => document.querySelectorAll(".utterance-row").length === count, count, {timeout:preparationTimeout});
     const measurement = await page.evaluate(async () => {
       const list = document.querySelector(".utterance-list");
       const original = [...list.children];
