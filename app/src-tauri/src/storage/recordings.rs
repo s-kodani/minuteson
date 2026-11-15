@@ -1482,6 +1482,26 @@ pub(in crate::storage) mod tests {
         (meeting.id, session.id, output, manifest)
     }
 
+    // The original float CAF decoder remains supported for recordings without
+    // raw-prefix proofs. Keep its format/finite-PCM tests on that actual path.
+    fn legacy_rawless_probe_fixture(
+        storage: &Storage,
+    ) -> (String, String, PathBuf, serde_json::Value) {
+        let (meeting, session, output, mut manifest) = saved_probe_fixture(storage);
+        for lane in ["microphone", "system"] {
+            manifest[lane]
+                .as_object_mut()
+                .unwrap()
+                .remove("rawSegments");
+        }
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        (meeting, session, output, manifest)
+    }
+
     // Make native ownership proofs once, before tests mutate any fields.
     pub(in crate::storage) fn seal_probe_fixture(output: &Path, manifest: &mut serde_json::Value) {
         use serde_json::{json, Value};
@@ -1811,10 +1831,10 @@ pub(in crate::storage) mod tests {
     }
 
     #[test]
-    fn physical_caf_mismatch_refuses_atomic_publication_and_preserves_retryable_files() {
+    fn legacy_rawless_caf_mismatch_refuses_atomic_publication_and_preserves_retryable_files() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().into()).unwrap();
-        let (meeting, session, output, _) = saved_probe_fixture(&storage);
+        let (meeting, session, output, _) = legacy_rawless_probe_fixture(&storage);
         let manifest = std::fs::read(output.join("manifest.json")).unwrap();
         for (name, channels) in [("microphone.caf", 1), ("system.caf", 2)] {
             let path = output.join(name);
@@ -1893,12 +1913,13 @@ pub(in crate::storage) mod tests {
     }
 
     #[test]
-    fn malformed_and_nonfinite_saved_audio_stays_interrupted_without_recovery_publication() {
+    fn legacy_rawless_malformed_and_nonfinite_audio_stays_interrupted_without_recovery_publication()
+    {
         for name in ["microphone.caf", "system.caf"] {
             for invalid in 0..3 {
                 let temp = tempfile::tempdir().unwrap();
                 let storage = Storage::open(temp.path().into()).unwrap();
-                let (meeting, session, output, _) = saved_probe_fixture(&storage);
+                let (meeting, session, output, _) = legacy_rawless_probe_fixture(&storage);
                 let path = output.join(name);
                 let channels = if name == "microphone.caf" { 1 } else { 2 };
                 let mut wrong = caf(channels);
@@ -2290,7 +2311,10 @@ pub(in crate::storage) mod tests {
         let session = load_session(&storage.connection.lock().unwrap(), &session_id)
             .unwrap()
             .unwrap();
-        std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
+        let source = output.join("raw-system-00000001.caf");
+        let original = std::fs::read(&source).unwrap();
+        let continuous = std::fs::read(output.join("system.caf")).unwrap();
+        std::fs::write(&source, b"bad!000000000000").unwrap();
         assert!(storage.finalize_recording(&session.id).is_err());
         assert_eq!(
             storage.interrupt_recording(&session.id).unwrap().state,
@@ -2304,7 +2328,12 @@ pub(in crate::storage) mod tests {
                 .state,
             "interrupted"
         );
-        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"bad!000000000000");
+        assert_eq!(
+            std::fs::read(output.join("system.caf")).unwrap(),
+            continuous
+        );
+        std::fs::write(&source, &original).unwrap();
         assert_eq!(
             storage.recover_completed_recordings().unwrap(),
             vec![session.id]
@@ -2358,7 +2387,9 @@ pub(in crate::storage) mod tests {
         let session = load_session(&storage.connection.lock().unwrap(), &session_id)
             .unwrap()
             .unwrap();
-        std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
+        let source = output.join("raw-system-00000001.caf");
+        let original = std::fs::read(&source).unwrap();
+        std::fs::write(&source, b"bad!000000000000").unwrap();
         manifest["captureMode"] = serde_json::json!("application");
         std::fs::write(
             output.join("manifest.json"),
@@ -2392,7 +2423,8 @@ pub(in crate::storage) mod tests {
             )
             .unwrap();
         assert_eq!(assets_before, 0);
-        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"bad!000000000000");
+        std::fs::write(&source, &original).unwrap();
         let saved = storage.finalize_recording(&session.id).unwrap();
         assert_eq!(saved.state, "saved");
         assert_eq!(saved.duration_us, 1_000_000);
