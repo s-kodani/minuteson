@@ -15,6 +15,9 @@ const MAX_PATH: usize = 4096;
 #[path = "model_operations.rs"]
 pub(crate) mod operations;
 
+#[path = "model_cleanup.rs"]
+pub(crate) mod cleanup;
+
 #[path = "model_startup.rs"]
 pub(in crate::storage) mod startup;
 

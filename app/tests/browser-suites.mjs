@@ -30,6 +30,7 @@ export const browserSuites = [
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["analysis-refresh-errors", "browser-fixture.js", "analysis-refresh-errors-browser-check.js"],
   ["model-management", "model-management-browser-fixture.tsx", "model-management-browser-check.js"],
+  ["model-runtime-guidance", "model-runtime-guidance-browser-fixture.tsx", "model-runtime-guidance-browser-check.js"],
   ["model-reuse", "model-reuse-browser-fixture.tsx", "model-reuse-browser-check.js"],
   ["model-license", "model-license-browser-fixture.tsx", "model-license-browser-check.js"],
   ["applied-model-status", null, "applied-model-status-browser-check.js"],

@@ -1,6 +1,7 @@
 // Synthetic metadata and IPC only; never opens user files or executes a model.
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "./startup-ready-mocks";
 import { useDataOperation } from "../src/data-operation";
 import { ModelDeletionDialog, useModelDeletion } from "../src/model-deletion";
@@ -15,6 +16,7 @@ const f = (window as any).modelDownloadFixture;
 f.entries[0].modelFiles = [{ role: "asr", size: 17, sha256: "b".repeat(64) }];
 const copy = structuredClone(f.entries[0]); copy.packageId = "55555555-5555-4555-8555-555555555555";
 f.entries.push(copy);
+f.cleanupUnused = async () => { f.entries[1].bodyRemoved = true; await emit("model-inventory-changed", null); };
 f.deletionMode = "normal";
 const idle = () => ({ revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, audioDeletionPreview: null, audioDeletionReceipt: null, modelDeletionPreview: null, modelDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false });
 let state: any = idle(), pending = false;

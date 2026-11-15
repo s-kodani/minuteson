@@ -14,7 +14,7 @@ pub(crate) struct Fixture {
     _source: tempfile::TempDir,
     _meetings: tempfile::TempDir,
     _app_data: tempfile::TempDir,
-    source: PathBuf,
+    pub(crate) source: PathBuf,
     pub(crate) root: PathBuf,
     pub(crate) package: String,
     pub(crate) review: String,

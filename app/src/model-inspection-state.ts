@@ -38,6 +38,7 @@ export interface ModelPlacementEntry {
   totalBytes: number;
   placementRecorded: boolean;
   bodyRemoved?: boolean;
+  cleanupPending?: boolean;
   sourceType?: "manual_import" | "download";
   download?: { operationId: string; recipeHash: string } | null;
   ready: false;

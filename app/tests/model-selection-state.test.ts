@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { canonicalRecipe, downloadByteTotals, downloadDigest, packageReviewHash, type OfficialModelOption } from "../src/model-download-state.ts";
-import { canReuseOfficialModel, installedModelGroups, matchesOfficialModel, modelChoices, modelChoiceAction, modelDisplayName } from "../src/model-selection-state.ts";
+import { canReuseOfficialModel, installedModelGroups, matchesOfficialModel, modelChoices, modelChoiceAction, modelDisplayName, runtimeUpdateChoices } from "../src/model-selection-state.ts";
 import type { ModelPlacementEntry } from "../src/model-inspection-state.ts";
 import type { ModelProfileView } from "../src/model-profile-state.ts";
 
@@ -15,6 +15,15 @@ const options: OfficialModelOption[] = await Promise.all(catalog.map(async (choi
     installed: false, ready: false, publisherAuthenticity: "not_verified" } };
 }));
 const qwen = options.find(option => option.id === "llama-b11533-qwen3-4b-q4km")!;
+
+test("startup runtime guidance includes unused installed models but excludes absent and unchanged packages", () => {
+  const changed = options.filter(option => ["whisper.cpp", "sherpa-onnx", "llama.cpp"].includes(option.review.manifest.engine));
+  const installed = changed.map(option => ({ ...entry(option, option.id), reviewHash: "f".repeat(64), download: { operationId: "33333333-3333-4333-8333-333333333333", recipeHash: "e".repeat(64) } }));
+  assert.equal(runtimeUpdateChoices(installed, options, []).length, changed.length);
+  assert.equal(runtimeUpdateChoices([], options, []).length, 0);
+  assert.equal(runtimeUpdateChoices(options.map(option => entry(option, option.id)), options, []).length, 0);
+  assert.equal(runtimeUpdateChoices(installed.map(e => ({ ...e, bodyRemoved: true })), options, []).length, 0);
+});
 function entry(option = qwen, packageId = "installed"): ModelPlacementEntry {
   const manifest = option.review.manifest;
   return { packageId, engine: manifest.engine, engineVersion: manifest.engineVersion, modelName: manifest.modelName,

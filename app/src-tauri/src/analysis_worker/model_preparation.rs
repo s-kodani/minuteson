@@ -96,6 +96,10 @@ impl AnalysisController {
         // cannot acquire another queued job ahead of this preparation.
         let cancel = Arc::new(AtomicBool::new(false));
         state.model_preparation = Some(cancel.clone());
+        // Preparation spans several IPC leases. Idle boundaries between placement,
+        // checking and applying must not retire the newly prepared package.
+        // Failed/cancelled attempts remain protected until the next launch.
+        self.model_cleanup_suspended.store(true, Ordering::Release);
         Ok(ModelPreparationLease {
             owner: self,
             cancel,

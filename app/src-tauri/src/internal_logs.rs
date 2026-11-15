@@ -361,6 +361,7 @@ pub(crate) fn record_background_read_failure(
             source.as_str(),
             "restore_labels"
                 | "model_download_guidance"
+                | "model_runtime_guidance"
                 | "window_title"
                 | "window_maximized"
                 | "window_resize_subscription"
