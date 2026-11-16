@@ -349,7 +349,7 @@ fn deletion_fence_blocks_backup_move_stage_and_startup_recording_import_recovery
         .is_err());
     assert!(f.storage.backup_stage().is_err());
     assert!(f.storage.require_data_writable().is_err());
-    assert!(f.storage.recover_completed_recordings().unwrap().is_empty());
+    assert!(f.storage.recover_completed_recordings().is_err());
     assert!(f
         .storage
         .recover_audio_imports_cancellable(&crate::test_support::never_cancelled)

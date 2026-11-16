@@ -360,6 +360,8 @@ class DesktopWorkflowTests(unittest.TestCase):
                             self.assertIn(capture, commands)
                         else:
                             self.assertNotIn(capture, commands)
+                    if operating_system == "macOS":
+                        self.assertLess(commands.index("swift test"), commands.index("--suite quick"))
 
     def test_reusable_full_and_manual_default_keep_packaging_and_native_checks(self):
         dispatch = self.events["workflow_dispatch"]["inputs"]["suite"]
