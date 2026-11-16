@@ -10,6 +10,7 @@ const report = { schemaVersion: 1, phase: "blocked", failure: { stage: "storage_
 const f = window.startupFixture = { calls: [], report, readFail: variant === "read-fail", quitFail: false, delay: false, pendingRead: null, pendingQuit: null };
 f.resetState = { operationId: null, busy: false, completed: false, message: "", error: null };
 if (variant === "restore-running") f.resetState = { operationId: "12345678-1234-4123-8123-123456789012", busy: true, completed: false, message: "モデル本体と設定を回収しています", error: null, restore: true };
+if (variant === "restore-stopped-empty") f.resetState = { operationId: "12345678-1234-4123-8123-123456789012", busy: false, completed: false, message: "", error: null, restore: true };
 f.emitResidency = (event,payload) => emit(event,payload);
 if (variant.startsWith("windows")) {
   f.report.platform = "windows";

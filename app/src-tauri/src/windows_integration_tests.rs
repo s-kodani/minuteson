@@ -759,6 +759,30 @@ fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, S
     (temp, storage, meeting.id, session.id, output)
 }
 #[test]
+fn windows_simultaneous_device_switches_and_stop_immediately_after_recovery_save() {
+    let (_temp, storage, meeting, session, output) = synthetic_recording("device-switch-stop");
+    let history = crate::input_status::journal::Reader::pin(&output.canonicalize().unwrap())
+        .unwrap()
+        .read(&session)
+        .unwrap();
+    let history = serde_json::to_value(history).unwrap();
+    assert_eq!(history["sealed"], true);
+    for input in ["microphoneHistory", "systemHistory"] {
+        assert_eq!(history[input]["lastSequence"], 4);
+        assert_eq!(history[input]["events"][3]["kind"], "recovered");
+        assert_eq!(history[input]["events"][3]["status"]["sourceEpoch"], 3);
+    }
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    let (plan, known) = storage.recorded_analysis_input(&meeting).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].kind, "processed");
+    assert!(
+        !known.unwrap().gaps.is_empty(),
+        "unreceived intervals must remain recorded"
+    );
+}
+
+#[test]
 fn windows_parity_independent_input_recovery_and_sealed_history() {
     let (_temp, storage, meeting, session, output) = synthetic_recording("input-recovery");
     let history = crate::input_status::journal::Reader::pin(&output.canonicalize().unwrap())

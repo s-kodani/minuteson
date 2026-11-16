@@ -19,6 +19,15 @@ int main(){
     if(packet.system_connected){require(i==120);++system_connections;}
   }
   require(recovery.finished()&&mic_losses==1&&mic_connections==1&&system_losses==1&&system_connections==1);
+  SyntheticDriver switches({"device-switch-stop"});
+  unsigned losses=0,connections=0;
+  for(std::uint64_t i=0;i<500;++i){
+    const auto packet=switches.next(start,0);
+    require(packet.microphone_lost==packet.system_lost&&packet.microphone_connected==packet.system_connected);
+    if(packet.microphone_lost){require(i==25||i==80);++losses;}
+    if(packet.microphone_connected){require(i==60||i==499);++connections;}
+  }
+  require(switches.finished()&&losses==2&&connections==2);
   SyntheticDriver only({"system-only"});
   require(only.next(start,0).microphone_lost&&!only.next(start,0).microphone_lost);
   SyntheticDriver cases({"",false,true});

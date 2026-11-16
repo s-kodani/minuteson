@@ -73,7 +73,7 @@ export function RecordingInputStatus({owner,input,indicator=false,showPrefix=tru
   return <span className="recording-input-status" data-input-kind={input} data-input-state={value.state} data-notice-reception={reception} aria-label={label} title={status+(waiting?"。通知の処理結果を確認中です。取得や保存の成功を示す状態ではありません。":"")}>{showPrefix?"接続状態: ":""}{status}{waiting?" / 通知確認待ち":""}</span>;
 }
 const message=(notice:InputNotice)=>notice.input==="microphone"?(notice.kind==="interrupted"?(notice.delivery.status.reason==="device_changed"?"マイクを切り替えています。切替中の欠損範囲は保存後に確認します。":"マイクの取得が中断しました。選択した機器と権限を確認してください。"):(notice.delivery.status.sourceEpoch>1?"マイクの取得が復帰しました。欠損範囲は保存後に確認します。":"マイクの取得が開始しました。")):
-  (notice.kind==="interrupted"?"PC音声の取得が中断しました。取得対象と権限を確認してください。":"同じ対象のPC音声取得が復帰しました。欠損範囲は保存後に確認します。");
+  (notice.kind==="interrupted"?"PC音声の取得が中断しました。取得対象と権限を確認してください。":"PC音声の取得が復帰しました。欠損範囲は保存後に確認します。");
 export function RecordingInputNotice({windowLabel}:{windowLabel:"main"}){
   const view=useContext(Context),notice=(input:InputKind)=>view.notices.find(n=>n.input===input&&n.target===windowLabel)??null;
   const microphone=notice("microphone"),system=notice("system"),closeMicrophone=()=>view.dismiss("microphone"),closeSystem=()=>view.dismiss("system");

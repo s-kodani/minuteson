@@ -612,7 +612,9 @@ pub(crate) fn import_configured(
             .map_err(|e| e.to_string())?;
         crate::native_fs::sync_directory(&base)?;
         progress("saving", decoded.frames);
-        storage.finalize_audio_import_cancellable(&snapshot.id, cancelled)
+        crate::audio_finalization::complete(&|| cancelled() || storage.data_write_blocked(), || {
+            storage.finalize_audio_import_cancellable(&snapshot.id, cancelled)
+        })
     })();
     match result {
         Ok(saved) => Ok(saved),
@@ -622,7 +624,7 @@ pub(crate) fn import_configured(
             if base.join("manifest.json").exists() && !cancellation {
                 storage.audio_import_pending_finalization(&snapshot.id, &error)?;
                 Err(format!(
-                    "取り込み音声を保持しました。次回起動時に保存を再検証します: {error}"
+                    "取り込み音声の保存を完了できませんでした。元音声は保持しています: {error}"
                 ))
             } else {
                 storage.fail_audio_import(

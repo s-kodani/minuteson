@@ -5,6 +5,7 @@ mod app_updates;
 mod application_close;
 mod audio;
 mod audio_clock;
+mod audio_finalization;
 mod audio_import;
 #[cfg(any(target_os = "macos", windows))]
 mod bootstrap;

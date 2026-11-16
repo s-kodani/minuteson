@@ -344,7 +344,9 @@ impl Storage {
             item.phase = "running".into();
             item.started_at_ms = Some(now_ms()?);
             progress(item.clone());
-            match self.finalize_recording(&item.session_id) {
+            match crate::audio_finalization::complete(&|| self.data_write_blocked(), || {
+                self.finalize_recording(&item.session_id)
+            }) {
                 Ok(_) => {
                     recovered.push(item.session_id.clone());
                     item.phase = "succeeded".into();

@@ -1582,7 +1582,12 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                         notify_session(&progress_app);
                     }
                 });
-            (storage.finalize_recording(&session_id).map(|_| ()), true)
+            (
+                crate::audio_finalization::complete(&|| storage.data_write_blocked(), || {
+                    storage.finalize_recording(&session_id).map(|_| ())
+                }),
+                true,
+            )
         }
         Ok(false) => (
             Err(manifest_error(&output).unwrap_or_else(|| {
@@ -1639,7 +1644,9 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.microphone_connected = false;
                 snapshot.system_audio_connected = false;
                 snapshot.error_message = Some(if recoverable {
-                    format!("録音ファイルの確定に失敗しました。元ファイルは保持し、次回起動時に再検証します: {error}")
+                    format!(
+                        "録音ファイルの保存を完了できませんでした。元音声は保持しています: {error}"
+                    )
                 } else {
                     error
                 });

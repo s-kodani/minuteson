@@ -3,6 +3,46 @@ use crate::audio::tests::caf_fixture;
 use crate::audio_import;
 use std::cell::Cell;
 
+#[test]
+fn crashed_import_reconciles_its_operation_in_process_without_duplicate_meetings() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    let (original, _, _) = pending(&storage, "crashed-import");
+    let recovered = storage
+        .reconcile_audio_import_operation("crashed-import", &|| false)
+        .unwrap();
+    assert_eq!(recovered.id, original.id);
+    assert_eq!(recovered.meeting_id, original.meeting_id);
+    assert_eq!(recovered.state, "ready");
+    let again = storage
+        .reconcile_audio_import_operation("crashed-import", &|| false)
+        .unwrap();
+    assert_eq!(again.id, recovered.id);
+    let db = storage.connection.lock().unwrap();
+    for table in ["meetings", "audio_imports"] {
+        assert_eq!(
+            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn crashed_import_before_manifest_keeps_source_and_stops_without_guessing_success() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    let (original, base, _) = pending(&storage, "incomplete-import");
+    let source = std::fs::read(base.join("original.wav")).unwrap();
+    std::fs::remove_file(base.join("manifest.json")).unwrap();
+    assert!(storage
+        .reconcile_audio_import_operation("incomplete-import", &|| false)
+        .is_err());
+    assert_eq!(storage.audio_import(&original.id).unwrap().state, "failed");
+    assert_eq!(std::fs::read(base.join("original.wav")).unwrap(), source);
+}
+
 fn info() -> AudioInfo {
     AudioInfo {
         schema_version: 1,

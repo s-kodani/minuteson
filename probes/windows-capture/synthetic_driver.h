@@ -31,6 +31,10 @@ public:
     packet.microphone_connected=index==60&&options_.scenario=="input-recovery";
     packet.system_lost=index==80&&options_.scenario=="input-recovery";
     packet.system_connected=index==120&&options_.scenario=="input-recovery";
+    if(options_.scenario=="device-switch-stop"){
+      packet.microphone_lost=packet.system_lost=index==25||index==80;
+      packet.microphone_connected=packet.system_connected=index==60||index==499;
+    }
     packet.time=start+index*100000-(options_.overlap&&index?10:0);
     if(options_.drift)packet.time+=std::min<std::uint64_t>(index,399)*10;
     packet.position=index*480;
