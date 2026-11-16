@@ -152,6 +152,30 @@ fn visible_window_selection_remains_explicit() {
 }
 
 #[test]
+fn current_telemetry_recovers_without_opening_or_writing_a_notice_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    write(temp.path(), &publication(1));
+    // A broken notification path must have no effect on current connectivity.
+    fs::create_dir(temp.path().join("input-notices.json")).unwrap();
+    let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+    let interrupted = reader.telemetry(OWNER).unwrap();
+    assert!(!interrupted.connected());
+    assert!(!interrupted.system_connected());
+    assert!(reader.ledger.is_none());
+    write(temp.path(), &publication(2));
+    let resumed = reader.telemetry(OWNER).unwrap();
+    assert!(resumed.connected() && resumed.system_connected());
+    assert!(resumed.notices.is_empty());
+    assert!(reader.ledger.is_none());
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+    reader.previous.as_mut().unwrap().1 = 2000;
+    let stale = reader.telemetry(OWNER).unwrap();
+    assert!(!stale.connected() && !stale.system_connected());
+    write(temp.path(), &publication(0));
+    assert!(reader.telemetry(OWNER).is_err());
+}
+
+#[test]
 #[ignore = "Swift-owned fixture; run make check-input-status without audio capture"]
 fn swift_generated_input_status_is_owner_bound_and_never_pcm_proof() {
     let path = std::path::PathBuf::from(

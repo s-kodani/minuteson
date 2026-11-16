@@ -2,6 +2,49 @@
 use crate::internal_logs::{self, Context};
 use tauri::WebviewWindow;
 
+pub(super) fn input_transitions(
+    current: &super::Publication,
+    previous: Option<&super::Publication>,
+) {
+    for (name, history, prior) in [
+        (
+            "microphone",
+            current.microphone_history.as_ref(),
+            previous.and_then(|p| p.microphone_history.as_ref()),
+        ),
+        (
+            "system",
+            current.system_history.as_ref(),
+            previous.and_then(|p| p.system_history.as_ref()),
+        ),
+    ] {
+        let Some(history) = history else { continue };
+        let through = prior.map_or(0, |h| h.last_sequence);
+        for event in history
+            .events
+            .iter()
+            .filter(|event| event.sequence > through)
+        {
+            internal_logs::detail(
+                Context {
+                    category: "recording_inputs".into(),
+                    operation_id: Some(current.owner_id.clone()),
+                    ..Context::default()
+                },
+                &event.kind,
+                "info",
+                std::time::Duration::ZERO,
+                &format!(
+                    "input={name} sequence={} epoch={} reason={}",
+                    event.sequence,
+                    event.status.source_epoch,
+                    event.status.reason.as_deref().unwrap_or("none")
+                ),
+            );
+        }
+    }
+}
+
 pub(crate) fn read_result(
     stage: &str,
     owner: Option<&str>,
@@ -38,7 +81,8 @@ fn validate(
     if !matches!(label, "main" | "recorder")
         || !matches!(
             stage,
-            "live-journal"
+            "live-status"
+                | "live-journal"
                 | "live-journal-notice"
                 | "archived-page"
                 | "archived-rows"

@@ -350,17 +350,8 @@ impl RecorderController {
             .lock()
             .map_err(|_| "入力通知のロックを取得できません")?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
-        // One backend owner chooses one notification destination. Both windows
-        // still read the same retained state; hiding a window never retries audio.
-        let main_visible = app.get_webview_window("main").is_some_and(|w| {
-            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
-        });
-        let recorder_visible = app.get_webview_window("recorder").is_some_and(|w| {
-            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
-        });
-        let target = crate::input_status::notice_target(main_visible, recorder_visible);
         lease.validate_active()?;
-        let result = input.read(session_id, target)?;
+        let result = input.telemetry(session_id)?;
         lease.validate_active()?;
         app.state::<Storage>().require_data_writable()?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;

@@ -49,6 +49,24 @@ class FakeCapture final : public IAudioCaptureClient {
 };
 int main(){
   try {
+    require(product::needs_render_loopback(true,false,false),"silent default output was not prepared");
+    require(!product::needs_render_loopback(false,false,false),"idle Bluetooth output would be activated");
+    require(product::needs_render_loopback(false,true,false),"application-routed output was not captured");
+    require(product::needs_render_loopback(false,std::nullopt,true),"metadata failure discarded a live output");
+    require(!product::needs_render_loopback(false,std::nullopt,false),"metadata failure activated an unused profile");
+    require(!product::render_session_uses_output(true,true),"loopback's own session kept retired Bluetooth output alive");
+    require(product::render_session_uses_output(true,false)&&product::render_session_uses_output(true,true,true),"real or multi-process playback was omitted");
+    require(!product::render_session_uses_output(false,false),"inactive playback was captured");
+    struct Output {int identity;unsigned pending=7;};
+    std::map<std::string,std::unique_ptr<Output>> outputs;
+    outputs.emplace("keep",std::make_unique<Output>(Output{1}));
+    outputs.emplace("old-profile",std::make_unique<Output>(Output{2}));
+    auto retained=outputs.at("keep").get();unsigned rescued=0;std::vector<std::string> operations;
+    product::reconcile_render_streams(outputs,std::map<std::string,int>{{"keep",1},{"new-profile",3}},
+      [&](Output& output){rescued+=output.pending;operations.push_back("retire");},
+      [&](int id){operations.push_back("open");return std::make_unique<Output>(Output{id});});
+    require(outputs.size()==2&&outputs.at("keep").get()==retained&&rescued==7,"route change restarted a retained output or lost its old tail");
+    require(operations==std::vector<std::string>{"retire","open"},"Bluetooth profiles were opened concurrently");
     constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
     auto pending_fixed=product::microphone_selection_status(owner,2,1,"B","A",{"A","systemDefault","application_input_unavailable"},true);
     require(pending_fixed["deviceUID"]=="B"&&pending_fixed["mode"]=="fixed"&&pending_fixed["source"]=="pending"&&pending_fixed["fallbackReason"].is_null(),"new fixed request was acknowledged with stale automatic selection");

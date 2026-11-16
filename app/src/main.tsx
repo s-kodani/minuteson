@@ -23,7 +23,6 @@ import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, NotificationList, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderOperationProvider, RecorderOperationNotifications } from "./recorder-operation-notices";
-import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { formatElapsed, useRecordingSession } from "./session";
@@ -63,7 +62,7 @@ import { MeetingAudioProvider } from "./meeting-audio";
 import {ActiveMicrophoneSelection,CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
-import {RecordingInputProvider,RecordingInputNotice} from "./recording-input-status";
+import {RecordingInputProvider} from "./recording-input-status";
 import {validRecordingPreparation,type RecordingPreparation} from "./recording-preparation-state";
 import {useRecordingMicrophoneSelection} from "./microphone-selection-status";
 import {useCaptureScope} from "./capture-applications";
@@ -143,7 +142,6 @@ function MainWindow() {
   const captureTest=useCaptureTest();
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false);
-  const [recoveredCount, setRecoveredCount] = useState(0);
   const { busy: navigationBusy, quietNavigation, running: navigating, withSavedEdits: saveEdits } = useSavedNavigation(setMeetingError);
   // Navigation and regeneration cannot leave a completed test holding the
   // native admission gate. Capture actions own their own confirmation barrier.
@@ -246,7 +244,6 @@ function MainWindow() {
     }).then(stop => { if (active) stopCleanup = stop; else stop(); }).catch(error => { if (active) setMeetingError(String(error)); });
     void listen<string[]>("recordings-recovered", (event) => {
       if (!active) return;
-      setRecoveredCount(event.payload.length);
       void invoke<Meeting[]>("list_meetings").then((items) => { if (active) setMeetings(items); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
       if (selectedMeeting && event.payload.some((id) => id === selectedMeeting.id)) {
         void invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }).then((item) => { if (active) setSelectedMeeting(item); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
@@ -418,7 +415,6 @@ function MainWindow() {
         <IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/>
         <RecorderOperationNotifications />
         <RecordingRecoveryNotifications snapshot={recovery.snapshot} error={recovery.error} />
-        <RecordingInputNotice windowLabel="main"/>
         <ThemeNotifications locked={writeLocked} />
         <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" && !recovery.snapshot?.items.some(item=>item.sessionId===state.snapshot.sessionId && item.phase==="failed") ? state.snapshot.errorMessage || (recordingDecision.snapshot?.phase === "failed" ? recordingDecision.snapshot.errorMessage : "") : ""} />
 
@@ -436,7 +432,6 @@ function MainWindow() {
         <AppUpdateBanner />
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
-          <ArchivedInputNotices meetingIds={meetings.map(meeting=>meeting.id)} locked={navigationLocked} paused={!dataOperation.connected||dataPending||!!dataOperation.snapshot?.busy||dataOperation.snapshot?.phase==="ready"||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
           <AudioImportPanel overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
@@ -480,7 +475,6 @@ function MainWindow() {
           }} /> : null}
           <section className="meetings-card" aria-label="保存済み会議" hidden={detail}>
             <div className="card-head"><input type="search" className="meeting-search" aria-label="会議名を検索" placeholder="会議名を検索" value={meetingQuery} onChange={event => setMeetingQuery(event.target.value)} /><IconButton label="再読込" icon="refresh" onClick={reloadMeetings} disabled={!isTauri() || writeLocked} /></div>
-            <ToastNotice scope="main" type="recording-recovered" message={recoveredCount > 0 ? `前回の音声保存 ${recoveredCount} 件を検証して復旧しました。` : ""} onClose={() => setRecoveredCount(0)} />
             {!detail && <IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} />}
             {restoredFilter && <p className="meeting-list-notice">今回復元した会議を表示しています。<button type="button" className="small-secondary" data-screen-navigation="write" disabled={writeLocked} onClick={() => void navigate(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}
             {shownMeetings.length === 0 ? <p className="empty-meetings">{meetingQuery ? "条件に合う会議はありません。" : restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <div className="meeting-table-frame"><table className="meeting-table"><thead><tr><th scope="col">会議名</th><th scope="col">作成日時</th><th scope="col">状態</th><th scope="col"><span className="sr-only">操作</span></th></tr></thead><tbody>{shownMeetings.map((meeting) => <tr key={meeting.id}>

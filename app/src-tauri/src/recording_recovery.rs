@@ -182,6 +182,15 @@ fn run_reserved(app: &tauri::AppHandle, session: Option<&str>) -> Result<(), Str
         .map(|i| i.meeting_id.clone())
         .collect();
     if !ids.is_empty() {
+        crate::internal_logs::transition(
+            crate::internal_logs::Context {
+                category: "recovery".into(),
+                ..Default::default()
+            },
+            "succeeded",
+            "info",
+            &format!("前回の音声保存 {} 件を検証して復旧しました。", ids.len()),
+        );
         for item in s.items.iter().filter(|item| item.phase == "succeeded") {
             crate::recorder::clear_recovered_error(app, &item.session_id);
         }

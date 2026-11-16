@@ -84,7 +84,7 @@ Json applications(){
 std::wstring endpoint_id(IMMDevice* device){LPWSTR id=nullptr;check(device->GetId(&id),"get endpoint identity");std::wstring value(id);CoTaskMemFree(id);return value;}
 ComPtr<IMMDeviceEnumerator> enumerator(){ComPtr<IMMDeviceEnumerator> e;check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(e.GetAddressOf())),"enumerate audio endpoints");return e;}
 Json microphones(){
-  auto e=enumerator();ComPtr<IMMDevice> selected;std::wstring current;if(SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&selected)))current=endpoint_id(selected.Get());
+  auto e=enumerator();ComPtr<IMMDevice> selected;std::wstring current;if(SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture,eConsole,&selected)))current=endpoint_id(selected.Get());
   ComPtr<IMMDeviceCollection> collection;check(e->EnumAudioEndpoints(eCapture,DEVICE_STATE_ACTIVE,&collection),"list microphones");UINT count=0;check(collection->GetCount(&count),"count microphones");Json devices=Json::array();
   if(count>128)throw std::runtime_error("too many input devices");
   for(UINT i=0;i<count;++i){ComPtr<IMMDevice> device;check(collection->Item(i,&device),"read microphone");auto id=endpoint_id(device.Get());std::string name=utf8(id);ComPtr<IPropertyStore> props;if(SUCCEEDED(device->OpenPropertyStore(STGM_READ,&props))){PROPVARIANT value;PropVariantInit(&value);if(SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName,&value))&&value.vt==VT_LPWSTR)name=utf8(value.pwszVal);PropVariantClear(&value);}devices.push_back(Json{{"uid",utf8(id)},{"name",name},{"isDefault",id==current}});}
