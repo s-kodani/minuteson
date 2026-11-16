@@ -8,7 +8,7 @@ class SystemCapture final : public CaptureReader {
     ComPtr<IAudioClient> client;
     ComPtr<IAudioCaptureClient> capture;
     PacketClock clock;
-    std::optional<std::uint64_t> next_frame;
+    EndpointCursor cursor;
     bool started=false;
     ~Stream(){if(started)client->Stop();}
   };
@@ -20,7 +20,6 @@ class SystemCapture final : public CaptureReader {
   std::exception_ptr startup_error_;
   std::mutex alignment_mutex_;
   AlignmentDiagnostics alignment_;
-  bool alignment_restart_=false;
   void observe_alignment(const EndpointMixer& mixer){std::lock_guard lock(alignment_mutex_);alignment_=mixer.diagnostics();}
   void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
   static std::map<std::wstring,ComPtr<IMMDevice>> endpoints(IMMDeviceEnumerator* e){
@@ -43,7 +42,7 @@ class SystemCapture final : public CaptureReader {
     acquisition(stream->client->GetService(IID_PPV_ARGS(stream->capture.GetAddressOf())),"get PC audio output capture service");
     return stream;
   }
-  void drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
+  bool drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
     UINT32 available=0;acquisition(stream.capture->GetNextPacketSize(&available),"poll PC audio output packets");
     for(unsigned drained=0;available&&drained<budget;++drained){
       BYTE* data=nullptr;UINT32 frames=0;DWORD flags=0;UINT64 position=0,time=0;
@@ -51,24 +50,18 @@ class SystemCapture final : public CaptureReader {
       try{
         if(frames){
           auto arrival=qpc();const auto mapped=stream.clock.observe(frames,time,position,flags,arrival);
-          auto first=EndpointMixer::frame_at(mapped.start);
-          // QPC rounding jitter must not double a boundary sample from the
-          // same endpoint. Real gaps larger than one frame remain gaps.
-          if(stream.next_frame&&(first>*stream.next_frame?first-*stream.next_frame:*stream.next_frame-first)<=1)first=*stream.next_frame;
-          stream.next_frame=first+frames;
+          const auto first=EndpointMixer::frame_at(mapped.start);
           if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
           if(stream.clock.estimated_packets)flags|=AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR;
-          const auto result=mixer.add(first,frames,reinterpret_cast<const float*>(data),flags);
-          if(result.late||result.capacity)observe_alignment(mixer);
-          alignment_restart_|=result.capacity!=0;
+          const auto result=mixer.add(stream.cursor,first,frames,reinterpret_cast<const float*>(data),flags,arrival,
+            [&](CapturePacket packet){queue.push(std::move(packet));});
+          if(result.adjusted||result.pressure)observe_alignment(mixer);
         }
       }catch(...){stream.capture->ReleaseBuffer(frames);throw;}
       acquisition(stream.capture->ReleaseBuffer(frames),"release PC audio output packet");
-      // The complete original WASAPI buffer is released before input resync.
-      // Lane catches InputFailure and reopens PC capture while the mic runs.
-      if(alignment_restart_)throw InputFailure(E_FAIL,"PC audio alignment resync");
       acquisition(stream.capture->GetNextPacketSize(&available),"poll next PC audio output packet");
     }
+    return available!=0;
   }
  public:
   SystemCapture(){
@@ -89,9 +82,12 @@ class SystemCapture final : public CaptureReader {
         auto emit=[&](CapturePacket packet){queue.push(std::move(packet));};
         try{
           while(!stopping_.load(std::memory_order_acquire)){
-            for(auto& [id,stream]:streams)drain(*stream,mixer);
+            bool backlog=false;
+            for(auto& [id,stream]:streams)backlog|=drain(*stream,mixer);
             const auto now=qpc(),frame=EndpointMixer::frame_at(now);
-            mixer.flush(frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0,now,emit);
+            auto through=frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0;
+            for(auto& [id,stream]:streams)through=stream->cursor.safe_through(now,through);
+            mixer.flush(through,now,emit);
             if(GetTickCount64()>=next_check){
               next_check=GetTickCount64()+1000;auto current=endpoints(e.Get());
               bool changed=current.size()!=streams.size();
@@ -100,21 +96,19 @@ class SystemCapture final : public CaptureReader {
               // output-device changes remain visible as capture interruptions.
               if(changed)throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output devices changed");
             }
-            Sleep(1);
+            // Round-robin packets keep endpoints fair, but sleeping with a
+            // backlog can make a 10 ms stream fall behind the Windows timer.
+            if(!backlog)Sleep(1);
           }
           for(auto& [id,stream]:streams){acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;drain(*stream,mixer,256);}
         }catch(...){
           auto error=std::current_exception();
           for(auto& [id,stream]:streams){
             if(stream->started){stream->client->Stop();stream->started=false;}
-            if(!alignment_restart_)try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(...){error=std::current_exception();}
+            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(...){error=std::current_exception();}
           }
           try{
-            if(alignment_restart_){
-              const auto now=qpc(),frame=EndpointMixer::frame_at(now);
-              mixer.flush(frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0,now,emit);
-              mixer.discard_pending();observe_alignment(mixer);
-            }else mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
+            mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
           }catch(const InputFailure&){}catch(...){error=std::current_exception();}
           // A device resync must never hide invalid PCM or storage failures.
           std::rethrow_exception(error);

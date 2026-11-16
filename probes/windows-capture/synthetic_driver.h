@@ -50,6 +50,12 @@ public:
     }
     // Synthetic clocks advance independently of scheduler latency.
     packet.arrival=std::max(now,start+(index+1)*100000);
+    if(options_.scenario=="endpoint-continuity"){
+      // The observed 127-frame phase and a delayed/batched host read. A wall
+      // clock-only flush used to cut 127 frames out of every 480-frame packet.
+      packet.time+=353*10000000/48000;
+      packet.arrival=std::max(packet.arrival,packet.time+100000+2500000+127*10000000/48000);
+    }
     return packet;
   }
 };

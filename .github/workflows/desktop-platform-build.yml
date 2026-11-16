@@ -339,7 +339,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
       - name: macOS Swift compiler and capture regression tests
-        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        # Native PR validation must exercise Swift capture too. Rust-only
+        # quick checks cannot validate device rebind/PCM format transitions.
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail

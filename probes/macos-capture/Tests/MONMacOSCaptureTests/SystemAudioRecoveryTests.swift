@@ -786,12 +786,14 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
   private func recorder(
     _ directory: URL, _ factory: SilentSystemFactory, _ time: SystemTestTime,
     retries: Bool = true,
+    rawSegments: RawRecordingSegments? = nil,
     requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void = { _ in }
   ) throws -> SystemAudioRecorder {
     SystemAudioRecorder(
       outputURL: directory.appendingPathComponent("system.caf"), clock: try clock(),
       levelsEnabled: true, retries: retries, factory: { try factory.make($0, $1) },
-      now: time.read, requireIdentity: requireIdentity, mayContinue: time.mayContinue)
+      now: time.read, requireIdentity: requireIdentity, mayContinue: time.mayContinue,
+      rawSegments: rawSegments)
   }
 
   func testFrozenApplicationScopeRejectsGlobalFallbackPIDReuseAndUnconfirmedRetry() throws {
@@ -1468,6 +1470,77 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(recorder.snapshot().appendFailures, 0)
     XCTAssertEqual(
       try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testOwnedRawSystemRebindingPreservesAllPCMThroughFormatRoundTrip() async throws {
+    let directory = try directory().resolvingSymlinksInPath()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sources = [SilentSystemSource(), SilentSystemSource(), SilentSystemSource()]
+    let factory = SilentSystemFactory(sources)
+    let time = SystemTestTime()
+    let raw = try RawRecordingSegments(
+      output: directory, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "system")
+    let recorder = try recorder(directory, factory, time, rawSegments: raw)
+    try await recorder.start(targetPID: nil)
+    for index in sources.indices {
+      if index > 0 {
+        recorder.sourceEnded(sources[index - 1])
+        time.set(Int64(index + 1) * 1_000_000_000)
+        recorder.maintain()
+        try await wait { !recorder.acquisitionPending }
+      }
+      let rate: Double = index == 1 ? 44100 : 48000
+      let value = Float(index + 1) * 0.25
+      recorder.receive(
+        from: sources[index],
+        sampleBuffer: try sample(frames: Int(rate / 100), value: value, rate: rate, rightValue: value),
+        observation: .timestamp(1_000_000_000 + Int64(index) * 10_000_000))
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+      XCTAssertNil(recorder.snapshot().systemRecovery?.reason)
+    }
+    // Obsolete callbacks cannot become authority for a new format/epoch.
+    recorder.receive(
+      from: sources[0], sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    _ = try await recorder.stopRecording()
+    let saved = recorder.snapshot()
+    XCTAssertEqual(factory.calls, 3)
+    XCTAssertEqual(saved.frames, 480)
+    XCTAssertEqual(saved.sampleRate, 16000)
+    XCTAssertEqual(saved.channels, 1)
+    XCTAssertEqual(saved.appendFailures, 0)
+    XCTAssertNil(saved.captureFailure)
+    XCTAssertTrue(raw.snapshot().producerClosed)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+    let audio = try AVAudioFile(forReading: directory.appendingPathComponent("raw-system-00000001.caf"))
+    XCTAssertEqual(audio.length, 480)
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 480))
+    try audio.read(into: buffer)
+    let pcm = try XCTUnwrap(buffer.floatChannelData)
+    for index in 0..<3 {
+      XCTAssertEqual(pcm[0][index * 160 + 80], Float(index + 1) * 0.25, accuracy: 0.002)
+    }
+  }
+
+  func testRawSystemFormatChangeWithoutANewOwnedEpochStillRejectsPCM() async throws {
+    let directory = try directory().resolvingSymlinksInPath()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let raw = try RawRecordingSegments(
+      output: directory, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "system")
+    let writer = SystemPCMWriter(
+      outputURL: directory.appendingPathComponent("system.caf"), rawSegments: raw)
+    try writer.append(
+      sample(), observation: .timestamp(1_000_000_000), sourceEpoch: 2,
+      levelsEnabled: false, receivedAt: nil)
+    for epoch in [UInt64(1), UInt64(2)] {
+      XCTAssertThrowsError(try writer.append(
+        sample(frames: 441, rate: 44100), observation: .timestamp(1_010_000_000),
+        sourceEpoch: epoch, levelsEnabled: false, receivedAt: nil))
+    }
+    try await writer.finish()
+    XCTAssertEqual(writer.stats.frames, 160)
+    XCTAssertEqual(writer.stats.callbackCount, 1)
+    XCTAssertEqual(writer.stats.appendFailures, 0)
+    XCTAssertTrue(raw.snapshot().producerClosed)
   }
 
   func testChangedSourceFormatBlocksRetriesWithoutOverwritingExistingCAF() async throws {

@@ -782,10 +782,39 @@ fn windows_delayed_endpoint_packets_continue_through_mixer_and_finalize() {
             .len()
             <= 32
     );
+    assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
+    assert!(
+        diagnostics["endpointAlignment"]["retimedFrames"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["state"], "saved");
     assert!(manifest["errors"].as_array().unwrap().is_empty());
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+}
+
+#[test]
+fn windows_endpoint_phase_and_batched_arrivals_keep_continuous_pcm() {
+    let (_temp, storage, meeting, _session, output) = synthetic_recording("endpoint-continuity");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["system"]["frames"], 80_000);
+    let maps = manifest["system"]["clockSegments"].as_array().unwrap();
+    for pair in maps.windows(2) {
+        assert!(
+            pair[1]["timelineStartUs"].as_i64().unwrap()
+                - pair[0]["timelineEndUs"].as_i64().unwrap()
+                <= 1,
+            "received PC audio acquired a synthetic capture gap"
+        );
+    }
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
+    assert_eq!(diagnostics["endpointAlignment"]["lateFrames"], 0);
+    assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
     storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }
 

@@ -99,7 +99,8 @@ struct CaptureSession {
     else{reconnect(mic,true);reconnect(system,false);}
     mon::capture::SyntheticDriver synthetic({s.scenario,s.synthetic_clock_overlap,s.synthetic_clock_cases,s.synthetic_clock_resampling,s.synthetic_clock_drift});
     EndpointMixer synthetic_mixer;
-    const bool synthetic_endpoints=s.synthetic&&s.scenario=="endpoint-switch-late";
+    EndpointCursor synthetic_primary,synthetic_delayed;
+    const bool synthetic_endpoints=s.synthetic&&(s.scenario=="endpoint-switch-late"||s.scenario=="endpoint-continuity");
     auto emit_synthetic=[&](CapturePacket packet){system.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);};
     std::uint64_t revision=0,selection_revision=0,last_diagnostics=0,reported_estimates=0;std::uint64_t start=s.test&&!s.synthetic?0:qpc();
     if(s.test&&start){mic.holding_for_window=system.holding_for_window=false;mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
@@ -134,13 +135,16 @@ struct CaptureSession {
           const auto first=EndpointMixer::frame_at(packet.time);
           if(system.binding.state=="connected"){
             std::vector<float> signal(packet.frames*2,0.25f);
-            synthetic_mixer.add(first,packet.frames,signal.data(),packet.flags);
+            synthetic_mixer.add(synthetic_primary,first,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
             // Old Bluetooth callbacks can arrive after newer output samples
             // have already been sealed. Exercise the real production mixer.
-            if(packet.position>=4800*5)synthetic_mixer.add(first-24000,packet.frames,signal.data(),packet.flags);
+            if(s.scenario=="endpoint-switch-late"&&packet.position>=4800*5)synthetic_mixer.add(synthetic_delayed,first-24000,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
           }
-          const auto through=first+packet.frames;
-          synthetic_mixer.flush(through>EndpointMixer::latency_frames?through-EndpointMixer::latency_frames:0,packet.arrival,emit_synthetic);
+          auto through=EndpointMixer::frame_at(packet.arrival);
+          through=through>EndpointMixer::latency_frames?through-EndpointMixer::latency_frames:0;
+          through=synthetic_primary.safe_through(packet.arrival,through);
+          through=synthetic_delayed.safe_through(packet.arrival,through);
+          synthetic_mixer.flush(through,packet.arrival,emit_synthetic);
           system.previous_alignment=synthetic_mixer.diagnostics();
         }else if(system.binding.state=="connected")system.append(silence.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
       }

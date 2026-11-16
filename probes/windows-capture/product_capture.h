@@ -172,8 +172,8 @@ class Lane {
   AlignmentDiagnostics previous_alignment;
   Json alignment_diagnostics(){
     auto value=previous_alignment;if(reader)value.merge(reader->alignment_diagnostics());
-    Json losses=Json::array();for(const auto& entry:value.losses)losses.push_back(Json{{"startQpc100ns",EndpointMixer::ticks_at(entry.first)},{"frames",entry.frames},{"reason",entry.reason}});
-    return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
+    Json losses=Json::array();for(const auto& entry:value.losses)losses.push_back(Json{{"startQpc100ns",EndpointMixer::ticks_at(entry.first)},{"frames",entry.frames},{"reason",entry.reason},{"mappedStartQpc100ns",EndpointMixer::ticks_at(entry.mapped_first)}});
+    return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"retimedPackets",value.retimed_packets},{"retimedFrames",value.retimed_frames},{"clockAdjustmentFrames",value.clock_adjustment_frames},{"pressureFlushes",value.pressure_flushes},{"discardedFrames",0},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
   }
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
   ~Lane(){if(reader)reader->stop();}

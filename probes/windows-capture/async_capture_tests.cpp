@@ -71,11 +71,13 @@ int main(){
     {
       product::Lane meter(meter_path,2,true);meter.clock.begin_stream(true);
       product::EndpointMixer mixer;
-      mixer.add(480000,480,nullptr,2);
-      std::vector<float> stereo(960,0.25f);mixer.add(480000,480,stereo.data(),0);
-      mixer.flush(480480,100100000,[&](product::CapturePacket packet){
+      product::EndpointCursor silent,signal;
+      auto emit=[&](product::CapturePacket packet){
         meter.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
-      });
+      };
+      mixer.add(silent,480000,480,nullptr,2,100100000,emit);
+      std::vector<float> stereo(960,0.25f);mixer.add(signal,480000,480,stereo.data(),0,100100000,emit);
+      mixer.flush(480480,100100000,emit);
       auto level=meter.level();meter.close();
       require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
     }
