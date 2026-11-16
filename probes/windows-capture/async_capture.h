@@ -1,6 +1,16 @@
 #pragma once
 // Included inside namespace product after InputFailure. Acquisition owns no
 // filesystem work. GetBuffer and ReleaseBuffer always run on this one thread.
+// A microphone continuously produces packets even for silence. A successful
+// Start alone is not proof that a Bluetooth capture engine is delivering data.
+struct MicrophoneFlow {
+  static constexpr std::uint64_t timeout_ms=3000;
+  std::uint64_t last_packet_at=0;
+  bool received=false;
+  explicit MicrophoneFlow(std::uint64_t now):last_packet_at(now){}
+  void packet(std::uint64_t now){last_packet_at=now;received=true;}
+  bool expired(std::uint64_t now)const{return now-last_packet_at>=timeout_ms;}
+};
 class AsyncCapture final : public CaptureReader {
   UINT32 channels_;
   std::atomic<bool> stopping_{false};
@@ -10,7 +20,8 @@ class AsyncCapture final : public CaptureReader {
   bool startup_finished_=false;
   std::exception_ptr startup_error_;
   void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
-  void drain(IAudioCaptureClient* capture) {
+  bool drain(IAudioCaptureClient* capture) {
+    bool received=false;
     UINT32 available=0;
     acquisition(capture->GetNextPacketSize(&available),"poll WASAPI packets");
     for(UINT32 drained=0;available&&drained<256;++drained) {
@@ -26,15 +37,17 @@ class AsyncCapture final : public CaptureReader {
             packet.samples.assign(samples,samples+std::size_t(count)*channels_);
           }
           queue.push(std::move(packet));
+          received=true;
         }
       }catch(...){capture->ReleaseBuffer(count);throw;}
       acquisition(capture->ReleaseBuffer(count),"release WASAPI packet");
       acquisition(capture->GetNextPacketSize(&available),"poll next WASAPI packet");
     }
+    return received;
   }
  public:
-  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels):channels_(channels) {
-    thread_=std::thread([this,client=std::move(client)]() mutable {
+  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,bool microphone=false,std::string uid={}):channels_(channels) {
+    thread_=std::thread([this,client=std::move(client),microphone,uid=std::move(uid)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
       DWORD index=0;HANDLE priority=nullptr;
       {
@@ -48,8 +61,16 @@ class AsyncCapture final : public CaptureReader {
           acquisition(client->Start(),"音声入力を開始できません");started=true;
           priority=AvSetMmThreadCharacteristicsW(L"Audio",&index);
           if(priority)AvSetMmThreadPriority(priority,AVRT_PRIORITY_HIGH);
-          startup();
-          while(!stopping_.load(std::memory_order_acquire)){drain(capture.Get());Sleep(1);}
+          MicrophoneFlow flow(GetTickCount64());
+          if(!microphone)startup(); // loopback can legitimately have no playback
+          while(!stopping_.load(std::memory_order_acquire)){
+            if(drain(capture.Get())){flow.packet(GetTickCount64());if(microphone)startup();}
+            if(microphone&&flow.expired(GetTickCount64())){
+              std::cerr<<"mon_capture_input: "+Json{{"event","no_packets"},{"uid",uid},{"receivedBefore",flow.received},{"elapsedMs",GetTickCount64()-flow.last_packet_at}}.dump()+"\n";
+              throw InputFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),flow.received?"microphone packet delivery stopped":"microphone Start succeeded without delivering packets");
+            }
+            Sleep(1);
+          }
           client->Stop();started=false;drain(capture.Get());
         }catch(...){auto error=std::current_exception();queue.fail(error);if(started)client->Stop();startup(error);}
       }
