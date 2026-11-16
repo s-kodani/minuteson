@@ -13,9 +13,11 @@ async page => {
   await savedNotice.waitFor();
   await page.getByRole("group", { name: "会議全体の音声再生", exact: true }).getByText("0:00 / 0:04", { exact: true }).waitFor();
   const saved = await page.evaluate(() => structuredClone(window.monImportFixture.import.saved));
-  check(await calls("start_audio_import") === 1 && await host.getByRole("button", { name: "保存した会議を開く", exact: true }).isEnabled(), "confirmed import duplicated or has no open action");
+  check(await calls("start_audio_import") === 1, "confirmed import duplicated");
+  // click waits for the saved action to become enabled after navigation and
+  // data-admission guards settle; the saved notice can appear before that.
   const before = await calls("get_meeting"); await host.getByRole("button", { name: "保存した会議を開く", exact: true }).click();
-  check(await calls("get_meeting") === before + 1 && await page.evaluate(id => window.monImportFixture.calls.filter(c => c.command === "get_meeting").at(-1).args.id === id, saved.meetingId), "open action used another saved meeting");
+  check(await calls("start_audio_import") === 1 && await calls("get_meeting") === before + 1 && await page.evaluate(id => window.monImportFixture.calls.filter(c => c.command === "get_meeting").at(-1).args.id === id, saved.meetingId), "open action used another saved meeting or repeated import");
   results.push("selection is not saving; confirmed import notifies audio-only success and opens the exact saved meeting without another import");
   await host.getByRole("button", { name: "成功通知を閉じる", exact: true }).click();
   await page.clock.runFor(1200);
