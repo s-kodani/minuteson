@@ -6,6 +6,7 @@ export interface CommandArguments {
   "record_background_read_failure": { "source": string; "message": string };
   "get_internal_logs": { "query": unknown };
   "get_recording_recovery": Record<string, never>;
+  "retry_recording_recovery": { "sessionId": string };
   "get_startup_report": Record<string, never>;
   "get_startup_reset_preview": { "restore"?: (boolean) | null };
   "choose_startup_reset_backup_directory": { "operationId": string };
@@ -249,6 +250,22 @@ export const commandContracts = {
   "get_recording_recovery": {
     "async": false,
     "arguments": [],
+    "response": {
+      "type": "Result<Snapshot,mon_contracts::AppError>",
+      "ok": "Snapshot",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "retry_recording_recovery": {
+    "async": false,
+    "arguments": [
+      {
+        "name": "session_id",
+        "wireName": "sessionId",
+        "type": "String",
+        "optional": false
+      }
+    ],
     "response": {
       "type": "Result<Snapshot,mon_contracts::AppError>",
       "ok": "Snapshot",

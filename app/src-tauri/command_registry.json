@@ -139,6 +139,29 @@
       }
     },
     {
+      "name": "retry_recording_recovery",
+      "handler": "recording_recovery::retry_recording_recovery",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [
+          {
+            "name": "session_id",
+            "wireName": "sessionId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_startup_report",
       "handler": "startup_attention::get_startup_report",
       "roles": [

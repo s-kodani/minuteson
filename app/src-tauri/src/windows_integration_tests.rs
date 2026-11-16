@@ -759,6 +759,37 @@ fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, S
     (temp, storage, meeting.id, session.id, output)
 }
 #[test]
+fn windows_delayed_endpoint_packets_continue_through_mixer_and_finalize() {
+    let (_temp, storage, meeting, _session, output) = synthetic_recording("endpoint-switch-late");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
+    assert!(
+        diagnostics["endpointAlignment"]["latePackets"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        diagnostics["endpointAlignment"]["lateFrames"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        diagnostics["endpointAlignment"]["ranges"]
+            .as_array()
+            .unwrap()
+            .len()
+            <= 32
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["state"], "saved");
+    assert!(manifest["errors"].as_array().unwrap().is_empty());
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+}
+
+#[test]
 fn windows_simultaneous_device_switches_and_stop_immediately_after_recovery_save() {
     let (_temp, storage, meeting, session, output) = synthetic_recording("device-switch-stop");
     let history = crate::input_status::journal::Reader::pin(&output.canonicalize().unwrap())

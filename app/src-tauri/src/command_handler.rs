@@ -6,6 +6,7 @@ tauri::generate_handler![
     internal_logs::record_background_read_failure,
     internal_logs::get_internal_logs,
     recording_recovery::get_recording_recovery,
+    recording_recovery::retry_recording_recovery,
     startup_attention::get_startup_report,
     startup_reset::get_startup_reset_preview,
     startup_reset::choose_startup_reset_backup_directory,

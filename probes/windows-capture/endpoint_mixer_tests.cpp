@@ -22,8 +22,16 @@ int main(){
       require(output[1].samples[i*2+ch]==0.5f,"silent endpoint suppressed another output");
     }
     require(output[1].position-output[0].position==480&&output[1].time-output[0].time==100000,"endpoint clocks not aligned");
-    bool late=false;try{mixer.add(first,1,a.data(),0);}catch(const std::runtime_error&){late=true;}
-    require(late,"late audio was silently discarded or duplicated");
+    const auto late=mixer.add(first,1,a.data(),0);
+    require(late.late==1&&late.accepted==0,"late audio was not accounted for");
+    const auto crossing=mixer.add(first+720,480,b.data(),0);
+    require(crossing.late==240&&crossing.accepted==240,"unsealed suffix was lost");
+    output.clear();mixer.flush(first+1440,100000000,emit);
+    require(output.size()==1&&output[0].frames==240&&output[0].position==first+960,"late prefix was duplicated");
+    require(mixer.diagnostics().late_frames==241,"late diagnostic lost frames");
+    auto invalid=a;invalid[0]=std::numeric_limits<float>::quiet_NaN();bool rejected=false;
+    try{mixer.add(first,1,invalid.data(),0);}catch(const std::runtime_error&){rejected=true;}
+    require(rejected,"late trimming hid invalid PCM");
     // A physical gap, including a hole inside a block, is absent from PCM.
     EndpointMixer gaps;output.clear();
     gaps.add(first+10,20,a.data(),0);gaps.add(first+40,20,nullptr,2);
@@ -36,10 +44,12 @@ int main(){
     clipping.add(first,480,loud.data(),0);clipping.add(first,480,loud.data(),1);
     clipping.flush(first+480,100000000,emit);
     require(output[0].flags==1&&output[0].samples[0]==1,"mixed level overflow or discontinuity hidden");
-    EndpointMixer bounded;bool overflow=false;
-    try{for(unsigned i=0;i<=EndpointMixer::max_blocks;++i)bounded.add(first+i*480,480,nullptr,2);}
-    catch(const std::runtime_error&){overflow=true;}
-    require(overflow,"endpoint alignment wait is unbounded");
+    EndpointMixer bounded;
+    for(unsigned i=0;i<EndpointMixer::max_blocks;++i)bounded.add(first+i*480,480,nullptr,2);
+    const auto overflow=bounded.add(first+EndpointMixer::max_blocks*480,480,nullptr,2);
+    require(overflow.capacity==480&&bounded.pending_blocks()==EndpointMixer::max_blocks,"endpoint alignment wait is unbounded");
+    bounded.discard_pending();require(bounded.pending_blocks()==0&&bounded.diagnostics().reset_frames==48000,"resync did not release bounded pending audio");
+    require(bounded.add(first+48000,480,nullptr,2).accepted==480,"resync did not resume capture");
     for(std::uint64_t frame:{0ULL,1ULL,479ULL,480ULL,480001ULL,480000000000ULL})
       require(EndpointMixer::frame_at(EndpointMixer::ticks_at(frame))==frame,"QPC conversion lost sample position");
     std::cout<<"endpoint mixer: concurrent output signals, silent peer, packet alignment, gaps, bounded wait and clipping passed\n";

@@ -28,7 +28,7 @@ test("manual recovery IPC remains removed and scoped model deletion uses shared 
   for (const name of ["get_recovery_items", "review_recovery_item", "get_partial_recording_items", "review_partial_recording", "get_partial_recording_results", "preview_model_deletion"]) assert.doesNotMatch(native, new RegExp(`\\b${name}\\b`));
   for (const name of ["review_model_body_deletion", "review_pending_model_deletion"]) assert.match(native, new RegExp(`\\b${name}\\b`));
   const cleanup = native.indexOf("data_controller::finish_interrupted_deletions(&handle)?");
-  const audio = native.indexOf("storage.finish_pending_meeting_audio()", cleanup);
+  const audio = native.indexOf("storage.finish_pending_import_audio()", cleanup);
   const ready = native.indexOf(".ready()?", audio);
   const kick = native.indexOf("AnalysisController::kick(&handle)", ready);
   assert.ok(cleanup > 0 && audio > cleanup && ready > audio && kick > ready);

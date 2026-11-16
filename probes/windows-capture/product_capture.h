@@ -169,11 +169,17 @@ class Lane {
   PreparationSchedule preparation_schedule;
   std::uint64_t peak_queued_frames=0,discontinuities=0;
   Json recent=Json::array(),anomalies=Json::array();std::uint64_t observed=0;
+  AlignmentDiagnostics previous_alignment;
+  Json alignment_diagnostics(){
+    auto value=previous_alignment;if(reader)value.merge(reader->alignment_diagnostics());
+    Json losses=Json::array();for(const auto& entry:value.losses)losses.push_back(Json{{"startQpc100ns",EndpointMixer::ticks_at(entry.first)},{"frames",entry.frames},{"reason",entry.reason}});
+    return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
+  }
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
   ~Lane(){if(reader)reader->stop();}
   void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
   void adopt(PreparedInput input){if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);clock.begin_stream(input.matching_position_rate);reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
-  void detach(const char* reason,bool unavailable=false){cancel_preparation();if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}reader.reset();}started=false;window_frames=0;binding.lost(reason,unavailable);}
+  void detach(const char* reason,bool unavailable=false){cancel_preparation();if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}previous_alignment.merge(reader->alignment_diagnostics());reader.reset();}started=false;window_frames=0;binding.lost(reason,unavailable);}
   void begin_file(){
     file.value=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("capture destination already exists");
     std::vector<BYTE> header={'c','a','f','f',0,1,0,0,'d','e','s','c'};

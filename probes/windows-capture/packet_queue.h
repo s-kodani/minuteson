@@ -12,6 +12,25 @@
 #include "storage_pending.h"
 
 namespace product {
+struct AlignmentLoss {
+  std::uint64_t first=0,frames=0;
+  const char* reason="late";
+};
+struct AlignmentDiagnostics {
+  std::uint64_t late_packets=0,late_frames=0,capacity_frames=0,reset_frames=0;
+  std::vector<AlignmentLoss> losses;
+  bool truncated=false;
+  void loss(std::uint64_t first,std::uint64_t frames,const char* reason){
+    if(!frames)return;
+    if(losses.size()<32)losses.push_back({first,frames,reason});else truncated=true;
+  }
+  void merge(const AlignmentDiagnostics& other){
+    late_packets+=other.late_packets;late_frames+=other.late_frames;
+    capacity_frames+=other.capacity_frames;reset_frames+=other.reset_frames;
+    for(const auto& entry:other.losses)loss(entry.first,entry.frames,entry.reason);
+    truncated|=other.truncated;
+  }
+};
 struct CapturePacket {
   std::vector<float> samples;
   std::uint32_t frames=0,flags=0;
@@ -61,6 +80,7 @@ class PacketQueue {
 class CaptureReader {
  public:
   PacketQueue queue;
+  virtual AlignmentDiagnostics alignment_diagnostics(){return {};}
   virtual void stop()=0;
   virtual ~CaptureReader()=default;
 };

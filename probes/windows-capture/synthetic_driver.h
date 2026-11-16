@@ -31,7 +31,7 @@ public:
     packet.microphone_connected=index==60&&options_.scenario=="input-recovery";
     packet.system_lost=index==80&&options_.scenario=="input-recovery";
     packet.system_connected=index==120&&options_.scenario=="input-recovery";
-    if(options_.scenario=="device-switch-stop"){
+    if(options_.scenario=="device-switch-stop"||options_.scenario=="endpoint-switch-late"){
       packet.microphone_lost=packet.system_lost=index==25||index==80;
       packet.microphone_connected=packet.system_connected=index==60||index==499;
     }

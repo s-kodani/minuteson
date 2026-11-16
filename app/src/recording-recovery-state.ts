@@ -6,6 +6,7 @@ export interface RecoveryItem {
   sessionId: string; meetingId: string; meetingTitle: string;
   phase: "queued" | "running" | "succeeded" | "failed" | "skipped";
   startedAtMs: number | null; error: string | null;
+  noAudio?: boolean;
 }
 export interface RecoverySnapshot {
   runId: string; revision: number; phase: "idle" | "scanning" | "running" | "completed" | "failed";
@@ -19,6 +20,7 @@ export function acceptRecovery(current: RecoverySnapshot | null, input: unknown)
     || !Array.isArray(s.items) || new Set(s.items.map(i => i?.sessionId)).size !== s.items.length
     || s.items.some(i => !i || ![i.sessionId, i.meetingId, i.meetingTitle].every(v => typeof v === "string" && !!v)
       || !["queued", "running", "succeeded", "failed", "skipped"].includes(i.phase) || !optionalText(i.error)
+      || i.noAudio !== undefined && typeof i.noAudio !== "boolean"
       || !(i.startedAtMs === null || Number.isSafeInteger(i.startedAtMs) && i.startedAtMs >= 0)
       || i.phase === "running" && i.startedAtMs === null)
     || ["idle", "completed", "failed"].includes(s.phase) && s.items.some(i => ["queued", "running"].includes(i.phase))) throw Error("録音回復の状態を確認できません。");

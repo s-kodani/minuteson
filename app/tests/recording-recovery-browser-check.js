@@ -1,7 +1,7 @@
-async (page, capturePath, platform = "windows") => {
+async (page, capturePath) => {
   const results=[];
   const check=(v,message)=>{if(!v)throw Error(message);};
-  const url=`http://127.0.0.1:1420/tests/recording-recovery-browser.html?resident=${platform}`;
+  const url="http://127.0.0.1:1420/tests/recording-recovery-browser.html?resident=windows";
   await page.goto(url);
   const common=()=>page.getByRole("region",{name:"進行中の処理",exact:true});
   await common().getByText("録音を回復中",{exact:true}).waitFor();
@@ -25,7 +25,7 @@ async (page, capturePath, platform = "windows") => {
   await page.evaluate(()=>{window.recordingRecoveryFixture.fail=true;});
   await page.clock.runFor(1200);
   check(await page.locator(".toast-card").filter({hasText:"回復状態を確認できません"}).count()===0,"automatic recovery read notified");
-  await common().getByText("録音を回復中",{exact:true}).waitFor();
+  await page.getByRole("row").filter({hasText:"回復中の会議"}).getByRole("cell",{name:/録音を回復中/}).waitFor();
   await page.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
   await page.getByRole("status").filter({hasText:"ジョブの状態を確認中"}).waitFor();
   check(await page.getByRole("heading",{name:"進行中のジョブはありません",exact:true}).count()===0,"failed read showed empty success");
@@ -42,10 +42,18 @@ async (page, capturePath, platform = "windows") => {
   check(await page.getByRole("cell",{name:"録音済み",exact:true}).count()===2,"missed events left stale meeting rows");
   results.push("silent completion is reconciled by polling, including meeting rows; stale replies cannot revive progress");
   await page.evaluate(async()=>{const r=window.recordingRecoveryFixture;r.stale=false;window.dataFixture.meetings[0].lifecycle="recording";await r.change({phase:"completed",items:[{...r.snapshot.items[0],phase:"failed",error:"合成manifest検証失敗"}]});});
-  await page.getByText(/回復できませんでした。録音は未完了のまま保持しています。/).first().waitFor();
+  await page.getByText(/音声を保存できませんでした。/).first().waitFor();
   await page.reload();
-  await page.getByRole("row").filter({hasText:"回復中の会議"}).getByRole("cell",{name:/録音未完了・要確認/}).waitFor();
+  await page.getByRole("row").filter({hasText:"回復中の会議"}).getByRole("cell",{name:/音声保存エラー/}).waitFor();
   if(capturePath)await page.screenshot({path:capturePath("recording-recovery-failure.png")});
   results.push("failed recovery remains visible without an endless progress bar");
+  const row=page.getByRole("row").filter({hasText:"回復中の会議"});
+  await row.getByRole("button",{name:"保存を再試行",exact:true}).click();
+  await row.getByRole("cell",{name:"録音を回復中",exact:true}).waitFor();
+  check(await page.evaluate(()=>window.recordingRecoveryFixture.calls.filter(command=>command==="retry_recording_recovery").length)===1,"retry submitted more than once");
+  await page.evaluate(()=>window.recordingRecoveryFixture.finish());
+  await row.getByRole("cell",{name:"録音済み",exact:true}).waitFor();
+  check(await row.getByRole("button",{name:"保存を再試行",exact:true}).count()===0,"saved recording still offers retry");
+  results.push("save retry completes without restart and removes the obsolete failed status");
   return {passed:results.length,results};
 }

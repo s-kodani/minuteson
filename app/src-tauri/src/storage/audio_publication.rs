@@ -11,16 +11,24 @@ mod writer;
 
 impl Storage {
     pub(crate) fn finish_pending_meeting_audio(&self) -> Result<(), String> {
+        self.finish_pending_audio(false)
+    }
+    pub(crate) fn finish_pending_import_audio(&self) -> Result<(), String> {
+        self.finish_pending_audio(true)
+    }
+    fn finish_pending_audio(&self, imports_only: bool) -> Result<(), String> {
         let meetings: Vec<String> = {
             let db = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
             let mut q=db.prepare("SELECT m.id FROM meetings m LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id
-                WHERE m.lifecycle IN ('recorded','imported') AND (a.phase IS NULL OR a.phase!='cleaned')
+                WHERE m.lifecycle IN ('recorded','imported') AND (a.phase IS NULL OR a.phase!='cleaned') AND (?1=0 OR m.source_type='audio_import')
                 AND (EXISTS(SELECT 1 FROM recording_sessions r WHERE r.meeting_id=m.id AND r.audio_manifest_hash IS NOT NULL)
                      OR EXISTS(SELECT 1 FROM audio_imports i WHERE i.meeting_id=m.id AND i.state='ready')) ORDER BY m.id").map_err(|e|e.to_string())?;
-            let rows = q.query_map([], |r| r.get(0)).map_err(|e| e.to_string())?;
+            let rows = q
+                .query_map([imports_only], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
             rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
         };
         for meeting in meetings {

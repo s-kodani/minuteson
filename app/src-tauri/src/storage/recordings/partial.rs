@@ -1,4 +1,4 @@
-//! Explicit recovery of durably advertised PCM only. This capability cannot
+//! Verified recovery of durably advertised PCM only. This capability cannot
 //! be deserialized from IPC. Closure, UTC alignment and lost-tail duration are
 //! not inferred from a prefix, a failed process or the time of recovery.
 use super::*;
@@ -65,8 +65,8 @@ pub(crate) struct ResultListing {
 }
 
 /// Only Storage inspection can mint this exact-generation capability. The UI
-/// controller must retain it until explicit consent; a client summary is not
-/// authority to recover a guessed path or an updated prefix.
+/// controller or automatic save policy retains it through publication; a client
+/// summary is not authority to recover a guessed path or an updated prefix.
 pub(crate) struct Review {
     pub summary: Summary,
     session: RecordingSession,
@@ -216,7 +216,6 @@ impl Storage {
         self.review_partial_recording_checked(session_id, &crate::test_support::never_cancelled)
     }
 
-    #[cfg(test)]
     pub(crate) fn review_partial_recording_checked(
         &self,
         session_id: &str,
@@ -390,7 +389,6 @@ impl Storage {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn recover_partial_recording_checked(
         &self,
         reviewed: &Review,

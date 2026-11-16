@@ -569,6 +569,9 @@ impl RecorderController {
         if active.is_some() {
             return Err("別の録音が進行中です".into());
         }
+        if app.state::<crate::recording_recovery::Recovery>().busy() {
+            return Err("音声の保存処理が完了するまで録音開始を待っています".into());
+        }
         let storage = app.state::<Storage>();
         if storage.request_pause_for_recording()? {
             return Err("解析処理の安全な停止を待っています。停止後に再試行してください".into());
@@ -1438,6 +1441,27 @@ fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> Reco
     snapshot
 }
 
+pub(crate) fn clear_recovered_error(app: &AppHandle, session: &str) {
+    if app
+        .state::<SessionStore>()
+        .update_if(|snapshot| {
+            if snapshot.phase != RecordingPhase::Error
+                || snapshot.session_id.as_deref() != Some(session)
+            {
+                return false;
+            }
+            *snapshot = RecordingSnapshot {
+                revision: snapshot.revision,
+                ..Default::default()
+            };
+            true
+        })
+        .is_some()
+    {
+        notify_session(app);
+    }
+}
+
 fn notify_session(app: &AppHandle) {
     let handle = app.clone();
     // Never synchronously wait for UI work while holding the lifecycle lock.
@@ -1512,6 +1536,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
             Err(error) => {
                 if let Ok(mut process) = child.lock() {
                     let _ = process.kill();
+                    let _ = process.wait();
                 }
                 break Err(error);
             }
@@ -1557,7 +1582,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
     };
     let storage = app.state::<Storage>();
     let (result, recoverable) = match exit {
-        Ok(true) => {
+        Ok(success) => {
             if !announced {
                 let _ = storage.mark_recording_started(&session_id);
             }
@@ -1582,19 +1607,19 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                         notify_session(&progress_app);
                     }
                 });
+            if !success {
+                if let Some(error) = manifest_error(&output) {
+                    crate::internal_logs::report_error("capture", &error);
+                }
+            }
+            // The child has exited and released its writers. Seal-prefix
+            // recovery and canonical publication happen before returning idle.
+            let _ = storage.interrupt_recording(&session_id);
             (
-                crate::audio_finalization::complete(&|| storage.data_write_blocked(), || {
-                    storage.finalize_recording(&session_id).map(|_| ())
-                }),
+                crate::recording_recovery::save_closed(&app, &session_id),
                 true,
             )
         }
-        Ok(false) => (
-            Err(manifest_error(&output).unwrap_or_else(|| {
-                "録音プローブが失敗しました。録音権限と保存先を確認してください".into()
-            })),
-            false,
-        ),
         Err(error) => (Err(format!("録音プロセスを確認できません: {error}")), false),
     };
     if result.is_err() {
@@ -1625,7 +1650,6 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
     }
     match result {
         Ok(()) => {
-            let completed_meeting = app.state::<SessionStore>().snapshot().meeting_id;
             publish(&app, |snapshot| {
                 snapshot.phase = RecordingPhase::Idle;
                 snapshot.progress = None;

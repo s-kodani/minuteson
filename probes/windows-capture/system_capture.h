@@ -18,6 +18,10 @@ class SystemCapture final : public CaptureReader {
   std::condition_variable startup_changed_;
   bool startup_finished_=false;
   std::exception_ptr startup_error_;
+  std::mutex alignment_mutex_;
+  AlignmentDiagnostics alignment_;
+  bool alignment_restart_=false;
+  void observe_alignment(const EndpointMixer& mixer){std::lock_guard lock(alignment_mutex_);alignment_=mixer.diagnostics();}
   void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
   static std::map<std::wstring,ComPtr<IMMDevice>> endpoints(IMMDeviceEnumerator* e){
     ComPtr<IMMDeviceCollection> devices;acquisition(e->EnumAudioEndpoints(eRender,DEVICE_STATE_ACTIVE,&devices),"enumerate PC audio outputs");
@@ -39,9 +43,9 @@ class SystemCapture final : public CaptureReader {
     acquisition(stream->client->GetService(IID_PPV_ARGS(stream->capture.GetAddressOf())),"get PC audio output capture service");
     return stream;
   }
-  static void drain(Stream& stream,EndpointMixer& mixer){
+  void drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
     UINT32 available=0;acquisition(stream.capture->GetNextPacketSize(&available),"poll PC audio output packets");
-    for(unsigned drained=0;available&&drained<256;++drained){
+    for(unsigned drained=0;available&&drained<budget;++drained){
       BYTE* data=nullptr;UINT32 frames=0;DWORD flags=0;UINT64 position=0,time=0;
       acquisition(stream.capture->GetBuffer(&data,&frames,&flags,&position,&time),"read PC audio output packet");
       try{
@@ -54,10 +58,15 @@ class SystemCapture final : public CaptureReader {
           stream.next_frame=first+frames;
           if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
           if(stream.clock.estimated_packets)flags|=AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR;
-          mixer.add(first,frames,reinterpret_cast<const float*>(data),flags);
+          const auto result=mixer.add(first,frames,reinterpret_cast<const float*>(data),flags);
+          if(result.late||result.capacity)observe_alignment(mixer);
+          alignment_restart_|=result.capacity!=0;
         }
       }catch(...){stream.capture->ReleaseBuffer(frames);throw;}
       acquisition(stream.capture->ReleaseBuffer(frames),"release PC audio output packet");
+      // The complete original WASAPI buffer is released before input resync.
+      // Lane catches InputFailure and reopens PC capture while the mic runs.
+      if(alignment_restart_)throw InputFailure(E_FAIL,"PC audio alignment resync");
       acquisition(stream.capture->GetNextPacketSize(&available),"poll next PC audio output packet");
     }
   }
@@ -93,14 +102,22 @@ class SystemCapture final : public CaptureReader {
             }
             Sleep(1);
           }
-          for(auto& [id,stream]:streams){acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;drain(*stream,mixer);}
+          for(auto& [id,stream]:streams){acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;drain(*stream,mixer,256);}
         }catch(...){
           auto error=std::current_exception();
           for(auto& [id,stream]:streams){
             if(stream->started){stream->client->Stop();stream->started=false;}
-            try{drain(*stream,mixer);}catch(const InputFailure&){}
+            if(!alignment_restart_)try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(...){error=std::current_exception();}
           }
-          mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);std::rethrow_exception(error);
+          try{
+            if(alignment_restart_){
+              const auto now=qpc(),frame=EndpointMixer::frame_at(now);
+              mixer.flush(frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0,now,emit);
+              mixer.discard_pending();observe_alignment(mixer);
+            }else mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
+          }catch(const InputFailure&){}catch(...){error=std::current_exception();}
+          // A device resync must never hide invalid PCM or storage failures.
+          std::rethrow_exception(error);
         }
         mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
       }catch(...){auto error=std::current_exception();queue.fail(error);startup(error);}
@@ -109,5 +126,6 @@ class SystemCapture final : public CaptureReader {
     if(startup_error_){auto error=startup_error_;lock.unlock();if(thread_.joinable())thread_.join();std::rethrow_exception(error);}
   }
   void stop() override{stopping_.store(true,std::memory_order_release);if(thread_.joinable())thread_.join();}
+  AlignmentDiagnostics alignment_diagnostics() override{std::lock_guard lock(alignment_mutex_);return alignment_;}
   ~SystemCapture() override{stop();}
 };

@@ -12,9 +12,9 @@ const ready = (phase: RecordingPhase, meetingId: string | null = meeting.id): Br
 
 test("stored recording without its live owner is not shown as running", () => {
   for (const state of [ready("idle", null), ready("recording", "other"), ready("error", "other")]) {
-    assert.equal(meetingStatusLabel(meeting, state), "録音未完了・要確認");
+    assert.equal(meetingStatusLabel(meeting, state), "音声保存エラー");
   }
-  assert.equal(meetingStatusLabel(meeting, ready("idle")), "録音未完了・要確認");
+  assert.equal(meetingStatusLabel(meeting, ready("idle")), "音声保存エラー");
 });
 
 test("unavailable runtime is unknown, not fabricated interruption or recording", () => {
@@ -25,15 +25,16 @@ test("unavailable runtime is unknown, not fabricated interruption or recording",
 
 test("matching owner presents each actual recording phase", () => {
   for (const [phase, label] of Object.entries({ preparing:"録音準備中", recording:"録音中",
-    stopping:"録音停止中", saving:"音声保存中", error:"録音エラー・要確認" })) {
+    stopping:"録音停止中", saving:"音声保存中", error:"音声保存エラー" })) {
     assert.equal(meetingStatusLabel(meeting, ready(phase as RecordingPhase)), label);
   }
 });
 
 test("failed recording drafts remain distinct from untouched drafts and saved audio", () => {
-  assert.equal(meetingStatusLabel({...meeting,lifecycle:"draft"},ready("idle",null)),"録音未完了・要確認");
+  assert.equal(meetingStatusLabel({...meeting,lifecycle:"draft"},ready("idle",null)),"音声保存エラー");
   assert.equal(meetingStatusLabel({...meeting,lifecycle:"draft",sourceType:null},ready("idle",null)),"下書き");
   assert.equal(meetingStatusLabel({...meeting,lifecycle:"recorded"},{kind:"loading"}),"録音済み");
+  assert.equal(meetingStatusLabel({...meeting,lifecycle:"recorded"},ready("saving")),"音声保存中");
   assert.equal(meetingStatusLabel({...meeting,lifecycle:"imported"},{kind:"loading"}),"取り込み済み");
 });
 

@@ -3297,22 +3297,8 @@ pub fn run() {
                         // Keep recovery controls available while writes remain fenced.
                         return handle.state::<startup_attention::Startup>().ready();
                     }
-                    let errors = std::sync::Mutex::new(Vec::new());
-                    storage.recover_recordings_observed(&|_| {}, &|item| {
-                        recording_recovery::observe_history(&handle, &item);
-                        if item.phase == "failed" {
-                            if let Some(error) = item.error {
-                                errors.lock().unwrap().push(error);
-                            }
-                        }
-                    })?;
-                    let errors = errors
-                        .into_inner()
-                        .map_err(|_| "録音復旧結果を取得できません")?;
-                    if !errors.is_empty() {
-                        return Err(errors.join("\n"));
-                    }
-                    storage.finish_pending_meeting_audio()?;
+                    recording_recovery::run(&handle)?;
+                    storage.finish_pending_import_audio()?;
                     handle.state::<startup_attention::Startup>().ready()?;
                     app_updates::start(&handle);
                     if let Err(error) = storage.retry_voice_audio_cleanup() {
