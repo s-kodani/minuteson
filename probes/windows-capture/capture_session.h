@@ -7,7 +7,6 @@ struct CaptureSession {
   int run(){
   Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;
   auto storage_pending=std::make_shared<StoragePending>();std::shared_ptr<RawCommitWorker> commits;
-  auto hardware=std::make_shared<HardwareCaptureGate>();
   std::unique_ptr<Lane> mic_lane,system_lane;
   IdleSleepGuard awake;
   auto diagnostics=[&](const char* state,const Json& error){
@@ -94,7 +93,7 @@ struct CaptureSession {
       lane.preparation_schedule.begin(now);
       lane.binding.began();
       // Capture values only: a cancelled preparation can outlive this run.
-      lane.preparation=std::make_unique<NativePreparation>([microphone,uid=s.uid,pid=s.pid,identity,hardware](NativePreparation::Cancellation cancelled){return prepare_input(microphone,uid,pid,identity,cancelled,hardware);});
+      lane.preparation=std::make_unique<NativePreparation>([microphone,uid=s.uid,pid=s.pid,identity](NativePreparation::Cancellation cancelled){return prepare_input(microphone,uid,pid,identity,cancelled);});
     };
     if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();mic.preparation_schedule.initial_resolved=system.preparation_schedule.initial_resolved=true;}
     else{reconnect(mic,true);reconnect(system,false);}

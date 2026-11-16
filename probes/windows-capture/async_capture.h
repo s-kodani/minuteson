@@ -33,12 +33,10 @@ class AsyncCapture final : public CaptureReader {
     }
   }
  public:
-  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,std::shared_ptr<HardwareCaptureGate> hardware=nullptr,std::string container={}):channels_(channels) {
-    thread_=std::thread([this,client=std::move(client),hardware=std::move(hardware),container=std::move(container)]() mutable {
+  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels):channels_(channels) {
+    thread_=std::thread([this,client=std::move(client)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
       DWORD index=0;HANDLE priority=nullptr;
-      std::unique_ptr<HardwareCaptureGate::Lease> retiring;
-      const auto release_render=[&]{if(hardware&&!container.empty()&&!retiring){retiring=std::make_unique<HardwareCaptureGate::Lease>(*hardware,container);if(!retiring->wait([]{return false;},std::chrono::milliseconds(PreparationSchedule::timeout_ms)))std::cerr<<"mon_capture_profile: render release deadline exceeded during microphone stop"<<std::endl;}};
       {
         // WASAPI requires releasing IAudioCaptureClient on the GetService
         // thread. Keep its sole service reference, start/stop and all buffer
@@ -47,18 +45,15 @@ class AsyncCapture final : public CaptureReader {
         try {
           acquisition(initialized,"initialize WASAPI acquisition thread");
           acquisition(client->GetService(IID_PPV_ARGS(capture.GetAddressOf())),"get WASAPI capture service");
-          if(channels_==2)prevent_capture_ducking(client.Get());
           acquisition(client->Start(),"音声入力を開始できません");started=true;
           priority=AvSetMmThreadCharacteristicsW(L"Audio",&index);
           if(priority)AvSetMmThreadPriority(priority,AVRT_PRIORITY_HIGH);
           startup();
           while(!stopping_.load(std::memory_order_acquire)){drain(capture.Get());Sleep(1);}
-          release_render();
           client->Stop();started=false;drain(capture.Get());
-        }catch(...){auto error=std::current_exception();queue.fail(error);release_render();if(started)client->Stop();startup(error);}
+        }catch(...){auto error=std::current_exception();queue.fail(error);if(started)client->Stop();startup(error);}
       }
       client.Reset();
-      retiring.reset();
       if(priority)AvRevertMmThreadCharacteristics(priority);
       if(SUCCEEDED(initialized))CoUninitialize();
     });

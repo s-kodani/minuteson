@@ -4,7 +4,6 @@
 #include "voice_pcm.h"
 #include "packet_queue.h"
 #include "input_preparation.h"
-#include "hardware_capture_gate.h"
 #include "endpoint_mixer.h"
 #include "synthetic_driver.h"
 #include <avrt.h>
@@ -84,14 +83,6 @@ Json applications(){
 }
 std::wstring endpoint_id(IMMDevice* device){LPWSTR id=nullptr;check(device->GetId(&id),"get endpoint identity");std::wstring value(id);CoTaskMemFree(id);return value;}
 ComPtr<IMMDeviceEnumerator> enumerator(){ComPtr<IMMDeviceEnumerator> e;check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(e.GetAddressOf())),"enumerate audio endpoints");return e;}
-std::string device_container(IMMDevice* device){
-  ComPtr<IPropertyStore> properties;if(FAILED(device->OpenPropertyStore(STGM_READ,&properties)))return {};
-  PROPVARIANT value;PropVariantInit(&value);std::string result;
-  if(SUCCEEDED(properties->GetValue(PKEY_Device_ContainerId,&value))&&value.vt==VT_CLSID&&value.puuid&&*value.puuid!=GUID_NULL){
-    wchar_t id[40]{};if(StringFromGUID2(*value.puuid,id,40))result=utf8(id);
-  }
-  PropVariantClear(&value);return result;
-}
 Json microphones(){
   auto e=enumerator();ComPtr<IMMDevice> selected;std::wstring current;if(SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&selected)))current=endpoint_id(selected.Get());
   ComPtr<IMMDeviceCollection> collection;check(e->EnumAudioEndpoints(eCapture,DEVICE_STATE_ACTIVE,&collection),"list microphones");UINT count=0;check(collection->GetCount(&count),"count microphones");Json devices=Json::array();
@@ -131,31 +122,21 @@ Json microphone_selection_status(const std::string& owner,std::uint64_t revision
   if(uid.empty())return nullptr;
   return Json{{"schemaVersion",1},{"ownerId",owner},{"revision",revision},{"requestRevision",request_revision},{"mode",requested.empty()?"automatic":"fixed"},{"deviceUID",uid},{"source",pending?"pending":choice.source},{"fallbackReason",pending||choice.fallback.empty()?Json(nullptr):Json(choice.fallback)}};
 }
-PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selected_pid,const Json& identity,NativePreparation::Cancellation cancelled,std::shared_ptr<HardwareCaptureGate> hardware){
-  // On failure, destroy PreparedInput (and its COM objects) before allowing
-  // the render owner to reopen this device.
-  std::unique_ptr<HardwareCaptureGate::Lease> transition;
+PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selected_pid,const Json& identity,NativePreparation::Cancellation cancelled){
   PreparedInput result;
-  std::string container;
   auto current=[&]{
     if(cancelled())throw InputFailure(E_ABORT,"obsolete WASAPI preparation");
     if(!microphone&&selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
   };
   current();
   if(!microphone&&!selected_pid){
-    result.reader=std::make_unique<SystemCapture>(hardware);result.matching_position_rate=true;
+    result.reader=std::make_unique<SystemCapture>();result.matching_position_rate=true;
     current();return result;
   }
   if(microphone){
     result.choice=current_microphone_choice(uid,selected_pid,identity);
     current();auto e=enumerator();ComPtr<IMMDevice> device;
     acquisition(e->GetDevice(wide(result.choice.uid).c_str(),&device),"get selected microphone");
-    container=device_container(device.Get());
-    if(hardware&&container.empty())std::cerr<<"mon_capture_profile: microphone device container unavailable; other outputs remain active"<<std::endl;
-    if(hardware&&!container.empty()){
-      transition=std::make_unique<HardwareCaptureGate::Lease>(*hardware,container);
-      if(!transition->wait(cancelled,std::chrono::milliseconds(PreparationSchedule::timeout_ms)))throw InputFailure(cancelled()?E_ABORT:HRESULT_FROM_WIN32(WAIT_TIMEOUT),"wait for Bluetooth render profile release");
-    }
     acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(result.client.GetAddressOf())),"activate WASAPI microphone");
   }else{
     if(selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
@@ -171,7 +152,7 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
   const UINT32 channels=microphone?1:2;
   WAVEFORMATEX format={};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=WORD(channels);format.nSamplesPerSec=48000;format.wBitsPerSample=32;format.nBlockAlign=WORD(channels*4);format.nAvgBytesPerSec=48000*format.nBlockAlign;
   acquisition(result.client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY|(microphone?0:AUDCLNT_STREAMFLAGS_LOOPBACK),5000000,0,&format,nullptr),"initialize 48 kHz floating-point WASAPI");
-  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels,microphone?hardware:nullptr,container);
+  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels);
   current();
   return result;
 }

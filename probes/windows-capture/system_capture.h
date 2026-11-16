@@ -20,7 +20,6 @@ class SystemCapture final : public CaptureReader {
     ComPtr<IAudioCaptureClient> capture;
     PacketClock clock;
     EndpointCursor cursor;
-    std::string container;
     bool started=false;
     ~Stream(){if(started)client->Stop();}
   };
@@ -65,7 +64,6 @@ class SystemCapture final : public CaptureReader {
   }
   static std::unique_ptr<Stream> open(IMMDevice* device){
     auto stream=std::make_unique<Stream>();
-    stream->container=device_container(device);
     acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(stream->client.GetAddressOf())),"activate PC audio output");
     WAVEFORMATEX* mix=nullptr;
     const bool matching=SUCCEEDED(stream->client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
@@ -74,7 +72,6 @@ class SystemCapture final : public CaptureReader {
     format.wBitsPerSample=32;format.nBlockAlign=8;format.nAvgBytesPerSec=384000;
     acquisition(stream->client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,5000000,0,&format,nullptr),"initialize PC audio output loopback");
     acquisition(stream->client->GetService(IID_PPV_ARGS(stream->capture.GetAddressOf())),"get PC audio output capture service");
-    prevent_capture_ducking(stream->client.Get());
     return stream;
   }
   bool drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
@@ -99,33 +96,19 @@ class SystemCapture final : public CaptureReader {
     return available!=0;
   }
  public:
-  SystemCapture(std::shared_ptr<HardwareCaptureGate> hardware=std::make_shared<HardwareCaptureGate>()){
-    thread_=std::thread([this,hardware=std::move(hardware)]{
+  SystemCapture(){
+    thread_=std::thread([this]{
       try{
         CaptureApartment apartment;
-        const auto owner=hardware->attach();
-        // Defined before streams: a retiring owner wakes microphone waiters
-        // only after every render COM object has actually been destroyed.
-        struct GateOwner {std::shared_ptr<HardwareCaptureGate> gate;std::uint64_t owner;~GateOwner(){gate->detach(owner);}} gate_owner{hardware,owner};
         auto e=enumerator();
         auto changes=Microsoft::WRL::Make<RenderChangeSignal>();
         const bool registered=SUCCEEDED(e->RegisterEndpointNotificationCallback(changes.Get()));
         struct Notifications {IMMDeviceEnumerator* e;RenderChangeSignal* signal;bool registered;~Notifications(){if(registered)e->UnregisterEndpointNotificationCallback(signal);}} notifications{e.Get(),changes.Get(),registered};
         std::map<std::wstring,std::unique_ptr<Stream>> streams;
-        auto profile=hardware->snapshot();
         auto devices=endpoints(e.Get(),streams);
         if(devices.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
-        const auto exclude_blocked=[&](auto& devices,const HardwareCaptureGate::Snapshot& snapshot){
-          exclude_gated_render_endpoints(devices,snapshot.blocked,[&](const auto& id,const auto& device){
-            auto prior=streams.find(id);
-            if(prior!=streams.end()&&!prior->second->container.empty())return prior->second->container;
-            return device_container(device.Get());
-          });
-        };
-        exclude_blocked(devices,profile);
         for(auto& [id,device]:devices)streams.emplace(id,open(device.Get()));
         for(auto& [id,stream]:streams){acquisition(stream->client->Start(),"start PC audio output loopback");stream->started=true;}
-        hardware->applied(owner,profile.revision);
         std::cerr<<"mon_capture_system: source=render_endpoints count="<<streams.size()<<std::endl;
         DWORD index=0;auto priority_handle=AvSetMmThreadCharacteristicsW(L"Audio",&index);
         // AVRT handles require AvRevertMmThreadCharacteristics, not CloseHandle.
@@ -135,17 +118,13 @@ class SystemCapture final : public CaptureReader {
         auto emit=[&](CapturePacket packet){queue.push(std::move(packet));};
         try{
           while(!stopping_.load(std::memory_order_acquire)){
-            const auto requested=hardware->snapshot();
-            if(requested.revision!=profile.revision||changes->changed.exchange(false)||GetTickCount64()>=next_check){
+            if(changes->changed.exchange(false)||GetTickCount64()>=next_check){
               next_check=GetTickCount64()+100;auto current=endpoints(e.Get(),streams);
               if(current.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
-              exclude_blocked(current,requested);
               reconcile_render_streams(streams,current,[&](Stream& stream){
                 if(stream.started){stream.client->Stop();stream.started=false;}
                 try{drain(stream,mixer,256);}catch(const InputFailure&){}
               },[&](const ComPtr<IMMDevice>& device){auto stream=open(device.Get());acquisition(stream->client->Start(),"start changed PC audio output loopback");stream->started=true;return stream;});
-              if(requested.revision!=profile.revision)std::cerr<<"mon_capture_profile: revision="<<requested.revision<<" blockedDevices="<<requested.blocked.size()<<" renderStreams="<<streams.size()<<std::endl;
-              profile=requested;hardware->applied(owner,profile.revision);
             }
             bool backlog=false;
             for(auto& [id,stream]:streams)backlog|=drain(*stream,mixer);

@@ -1,5 +1,4 @@
 #include "input_preparation.h"
-#include "hardware_capture_gate.h"
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -24,34 +23,6 @@ struct Value {
 };
 int main(){
   try{
-    product::HardwareCaptureGate hardware;
-    {
-      product::HardwareCaptureGate::Lease microphone(hardware,"headset");
-      require(microphone.wait([]{return false;},10ms),"microphone waited for a nonexistent render owner");
-      auto profile=hardware.snapshot();require(profile.blocked==std::set<std::string>{"headset"},"profile gate blocked unrelated outputs");
-      auto owner=hardware.attach();
-      require(!microphone.wait([]{return false;},10ms),"a new render owner inherited an unconfirmed release");
-      hardware.applied(owner,profile.revision);
-      require(microphone.wait([]{return false;},10ms),"confirmed render release did not allow microphone acquisition");
-      {
-        product::HardwareCaptureGate::Lease stop(hardware,"headset");
-        require(!stop.wait([]{return false;},10ms),"new transition reused an older release receipt");
-        hardware.applied(owner,hardware.snapshot().revision);
-        require(stop.wait([]{return false;},10ms),"nested microphone cleanup could not proceed");
-      }
-      require(hardware.snapshot().blocked.count("headset")==1,"inner cleanup released another pending acquisition");
-      hardware.detach(owner);
-      auto replacement=hardware.attach();
-      {
-        product::HardwareCaptureGate::Lease newer(hardware,"headset");
-        hardware.applied(owner,hardware.snapshot().revision);
-        require(!newer.wait([]{return false;},10ms),"retired render owner acknowledged a new generation");
-        require(!newer.wait([]{return true;},1s),"cancelled microphone was admitted");
-        hardware.detach(replacement);
-        require(newer.wait([]{return false;},10ms),"retired render owner left microphone waiting forever");
-      }
-    }
-    require(hardware.snapshot().blocked.empty(),"profile lease leaked after microphone cleanup");
     using Preparation=product::InputPreparation<Value,Context>;
     // Exercise the actual producer's schedule with a virtual control clock:
     // timeout is observable after five seconds, but is not operation completion.
