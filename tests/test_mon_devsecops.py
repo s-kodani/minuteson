@@ -342,7 +342,7 @@ class DesktopWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('incorrectly continued', result.stdout)
 
-    def test_pr_and_main_run_quick_without_native_resource_builds(self):
+    def test_pr_and_main_keep_quick_rust_and_validate_macos_capture(self):
         for event in ("pull_request", "push"):
             for operating_system in ("Windows", "macOS"):
                 with self.subTest(event=event, os=operating_system):
@@ -350,8 +350,16 @@ class DesktopWorkflowTests(unittest.TestCase):
                     self.assertIn("--suite quick --processes 2 --threads 4", commands)
                     self.assertIn("--timings-json", commands)
                     for excluded in ("tauri:windows:qa:build", "tauri:windows:store:build", "--swift-fixture",
-                                     "build-core.sh", "swift build", "ctest --test-dir", "--suite full"):
+                                     "ctest --test-dir", "--suite full"):
                         self.assertNotIn(excluded, commands)
+                    # Quick Rust tests cannot compile or exercise Swift capture.
+                    # Keep installer/resource packaging separate while requiring
+                    # the native capture tests on the supported macOS runner.
+                    for capture in ("build-core.sh", "swift build", "swift test"):
+                        if operating_system == "macOS":
+                            self.assertIn(capture, commands)
+                        else:
+                            self.assertNotIn(capture, commands)
 
     def test_reusable_full_and_manual_default_keep_packaging_and_native_checks(self):
         dispatch = self.events["workflow_dispatch"]["inputs"]["suite"]
