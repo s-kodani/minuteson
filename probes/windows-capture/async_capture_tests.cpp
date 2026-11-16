@@ -5,15 +5,22 @@
 #undef wmain
 
 void require(bool ok,const char* error){if(!ok)throw std::runtime_error(error);}
+class FakeDucking final : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IAudioClientDuckingControl> {
+ public:
+  std::atomic<unsigned> calls{0};AUDIO_DUCKING_OPTIONS option=AUDIO_DUCKING_OPTIONS_DEFAULT;
+  HRESULT STDMETHODCALLTYPE SetDuckingOptionsForCurrentStream(AUDIO_DUCKING_OPTIONS value) override{option=value;++calls;return S_OK;}
+};
 class FakeClient final : public IAudioClient {
   std::atomic<ULONG> references_{1};
   IAudioCaptureClient* capture_;
  public:
   std::atomic<unsigned> stops{0};DWORD service_thread=0,start_thread=0,stop_thread=0,service_release_thread=0;
+  std::function<void()> before_stop,after_stream_release;
+  FakeDucking* ducking=nullptr;bool ducking_before_start=false;
   explicit FakeClient(IAudioCaptureClient* capture):capture_(capture){}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** value) override{*value=nullptr;return E_NOINTERFACE;}
   ULONG STDMETHODCALLTYPE AddRef() override{return ++references_;}
-  ULONG STDMETHODCALLTYPE Release() override{auto n=--references_;if(n==1&&service_thread)service_release_thread=GetCurrentThreadId();if(!n)delete this;return n;}
+  ULONG STDMETHODCALLTYPE Release() override{auto n=--references_;if(n==1&&service_thread){service_release_thread=GetCurrentThreadId();if(after_stream_release)after_stream_release();}if(!n)delete this;return n;}
   HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE,DWORD,REFERENCE_TIME,REFERENCE_TIME,const WAVEFORMATEX*,LPCGUID) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetBufferSize(UINT32*) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetStreamLatency(REFERENCE_TIME*) override{return E_NOTIMPL;}
@@ -21,11 +28,11 @@ class FakeClient final : public IAudioClient {
   HRESULT STDMETHODCALLTYPE IsFormatSupported(AUDCLNT_SHAREMODE,const WAVEFORMATEX*,WAVEFORMATEX**) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetMixFormat(WAVEFORMATEX**) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetDevicePeriod(REFERENCE_TIME*,REFERENCE_TIME*) override{return E_NOTIMPL;}
-  HRESULT STDMETHODCALLTYPE Start() override{start_thread=GetCurrentThreadId();return S_OK;}
-  HRESULT STDMETHODCALLTYPE Stop() override{stop_thread=GetCurrentThreadId();++stops;return S_OK;}
+  HRESULT STDMETHODCALLTYPE Start() override{if(ducking)ducking_before_start=ducking->calls==1&&ducking->option==AUDIO_DUCKING_OPTIONS_DO_NOT_DUCK_OTHER_STREAMS;start_thread=GetCurrentThreadId();return S_OK;}
+  HRESULT STDMETHODCALLTYPE Stop() override{if(before_stop)before_stop();stop_thread=GetCurrentThreadId();++stops;return S_OK;}
   HRESULT STDMETHODCALLTYPE Reset() override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override{return E_NOTIMPL;}
-  HRESULT STDMETHODCALLTYPE GetService(REFIID iid,void** result) override{if(iid!=__uuidof(IAudioCaptureClient)){*result=nullptr;return E_NOINTERFACE;}service_thread=GetCurrentThreadId();capture_->AddRef();*result=capture_;return S_OK;}
+  HRESULT STDMETHODCALLTYPE GetService(REFIID iid,void** result) override{if(iid==__uuidof(IAudioClientDuckingControl)&&ducking){ducking->AddRef();*result=ducking;return S_OK;}if(iid!=__uuidof(IAudioCaptureClient)){*result=nullptr;return E_NOINTERFACE;}service_thread=GetCurrentThreadId();capture_->AddRef();*result=capture_;return S_OK;}
 };
 class FakeCapture final : public IAudioCaptureClient {
   std::atomic<ULONG> references_{1};
@@ -57,6 +64,9 @@ int main(){
     require(!product::render_session_uses_output(true,true),"loopback's own session kept retired Bluetooth output alive");
     require(product::render_session_uses_output(true,false)&&product::render_session_uses_output(true,true,true),"real or multi-process playback was omitted");
     require(!product::render_session_uses_output(false,false),"inactive playback was captured");
+    std::map<std::string,std::string> profiles{{"headset-stereo","headset"},{"headset-handsfree","headset"},{"speaker","other"},{"unknown",""}};
+    product::exclude_gated_render_endpoints(profiles,std::set<std::string>{"headset"},[](const auto&,const auto& container){return container;});
+    require(profiles==std::map<std::string,std::string>{{"speaker","other"},{"unknown",""}},"microphone transition stopped an unrelated output or retained an old headset profile");
     struct Output {int identity;unsigned pending=7;};
     std::map<std::string,std::unique_ptr<Output>> outputs;
     outputs.emplace("keep",std::make_unique<Output>(Output{1}));
@@ -100,15 +110,32 @@ int main(){
       require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
     }
     fs::remove(meter_path);
-    for(bool fail:{false,true}) {
-      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(fail);capture.Attach(input);
+    {
+      auto hardware=std::make_shared<product::HardwareCaptureGate>();auto owner=hardware->attach();
+      std::atomic<bool> done=false,render_open=true,closed_before_stop=false,held_through_release=false;
+      std::thread render([&]{
+        while(!done){auto state=hardware->snapshot();if(state.blocked.count("headset")){render_open=false;hardware->applied(owner,state.revision);}std::this_thread::yield();}
+        hardware->detach(owner);
+      });
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(false);capture.Attach(input);
       ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
+      device->before_stop=[&]{closed_before_stop=!render_open;};
+      device->after_stream_release=[&]{held_through_release=hardware->snapshot().blocked.count("headset")!=0;};
+      product::AsyncCapture microphone(client,1,hardware,"headset");microphone.stop();
+      done=true;render.join();
+      require(closed_before_stop&&held_through_release&&hardware->snapshot().blocked.empty(),"Bluetooth profile resumed before microphone COM objects were released");
+    }
+    for(bool fail:{false,true}) {
+      auto ducking=Microsoft::WRL::Make<FakeDucking>();
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(fail);capture.Attach(input);
+      ComPtr<IAudioClient> client;auto* device=new FakeClient(input);device->ducking=fail?ducking.Get():nullptr;client.Attach(device);
       product::AsyncCapture reader(client,2);
       const auto deadline=GetTickCount64()+10000;
       while(input->released<500&&GetTickCount64()<deadline)Sleep(1);
       require(input->released==500,"storage delay prevented acquisition from draining the device");
       Sleep(3200); // longer than the removed three-second false clock-change threshold
       reader.stop();
+      require(fail?device->ducking_before_start:ducking->calls==0,"recording did not set ducking before start or rejected an unavailable optional service");
       require(input->thread!=GetCurrentThreadId()&&device->stops>0,"reader was not independent or did not stop the device");
       require(device->service_thread==input->thread&&device->start_thread==input->thread&&device->stop_thread==input->thread&&input->service_release_thread==input->thread&&device->service_release_thread==input->thread,"WASAPI service acquisition, start, stop or release changed owning threads");
       for(unsigned p=0;p<500;++p){

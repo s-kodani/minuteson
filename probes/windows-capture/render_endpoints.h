@@ -9,6 +9,15 @@ inline bool needs_render_loopback(bool is_default,std::optional<bool> playing,bo
   return is_default||playing.value_or(already_open);
 }
 
+template<class Devices,class Blocked,class ContainerOf>
+void exclude_gated_render_endpoints(Devices& devices,const Blocked& blocked,ContainerOf container_of){
+  if(blocked.empty())return;
+  for(auto it=devices.begin();it!=devices.end();){
+    if(blocked.count(container_of(it->first,it->second)))it=devices.erase(it);
+    else ++it;
+  }
+}
+
 template<class Streams,class Devices,class Retire,class Open>
 void reconcile_render_streams(Streams& streams,const Devices& devices,Retire retire,Open open){
   // Close retired profiles before starting a new one, preserving every queued

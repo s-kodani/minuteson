@@ -7,6 +7,14 @@ struct InputFailure : std::runtime_error {
   InputFailure(HRESULT code,const char* operation):std::runtime_error(operation),result(code){}
 };
 void acquisition(HRESULT result,const char* operation){if(FAILED(result))throw InputFailure(result,operation);}
+void prevent_capture_ducking(IAudioClient* client){
+  // A loopback is a render-side stream, but it must never attenuate playback
+  // from another app. This is local to our stream, not a Windows volume change.
+  ComPtr<IAudioClientDuckingControl> control;
+  auto result=client->GetService(IID_PPV_ARGS(control.GetAddressOf()));
+  if(SUCCEEDED(result))result=control->SetDuckingOptionsForCurrentStream(AUDIO_DUCKING_OPTIONS_DO_NOT_DUCK_OTHER_STREAMS);
+  std::cerr<<"mon_capture_playback: prevent_other_stream_ducking="<<(SUCCEEDED(result)?"enabled":"unavailable")<<" result="<<static_cast<unsigned long>(result)<<std::endl;
+}
 struct Binding {
   std::string state="reconnecting";Json reason=nullptr;
   MonCaptureLifecycle lifecycle{};
@@ -57,8 +65,6 @@ MicrophoneChoice choose_microphone(const std::string& fixed,DWORD application){
     if(candidates.size()==1)return {*candidates.begin(),"application",""};
     if(candidates.size()>1)fallback="application_input_ambiguous";
   }catch(...){fallback="application_input_unavailable";}}
-  // Follow the ordinary Windows input choice. Opening a separate Bluetooth
-  // communications default can change playback profiles during media playback.
-  ComPtr<IMMDevice> device;acquisition(e->GetDefaultAudioEndpoint(eCapture,eConsole,&device),"既定のマイクがありません");
+  ComPtr<IMMDevice> device;acquisition(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&device),"既定のマイクがありません");
   return {utf8(endpoint_id(device.Get())),"systemDefault",fallback};
 }
