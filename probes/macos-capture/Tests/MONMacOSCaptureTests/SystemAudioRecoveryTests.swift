@@ -783,6 +783,12 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
     return url
   }
+  private func canonicalDirectory() throws -> URL {
+    let temporary = try directory()
+    let path = try XCTUnwrap(realpath(temporary.path, nil))
+    defer { free(path) }
+    return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+  }
   private func recorder(
     _ directory: URL, _ factory: SilentSystemFactory, _ time: SystemTestTime,
     retries: Bool = true,
@@ -1473,7 +1479,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
   }
 
   func testOwnedRawSystemRebindingPreservesAllPCMThroughFormatRoundTrip() async throws {
-    let directory = try directory().resolvingSymlinksInPath()
+    let directory = try canonicalDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let sources = [SilentSystemSource(), SilentSystemSource(), SilentSystemSource()]
     let factory = SilentSystemFactory(sources)
@@ -1522,7 +1528,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
   }
 
   func testRawSystemFormatChangeWithoutANewOwnedEpochStillRejectsPCM() async throws {
-    let directory = try directory().resolvingSymlinksInPath()
+    let directory = try canonicalDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let raw = try RawRecordingSegments(
       output: directory, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "system")
