@@ -170,6 +170,78 @@ fn completed_prefix_without_continuous_caf_matches_previous_wave_and_keeps_captu
 }
 
 #[test]
+fn completed_flac_missing_or_duplicated_bytes_rebuilds_in_process_and_preserves_timeline() {
+    for duplicate in [false, true] {
+        let fixture = compact_fixture(true);
+        let original = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap();
+        fixture.fail_db();
+        assert!(fixture
+            .storage
+            .finalize_recording(&fixture.session.id)
+            .is_err());
+        fixture.assert_no_registration();
+        let plan: Plan =
+            serde_json::from_slice(&std::fs::read(fixture.base.join(COMPLETED_PLAN)).unwrap())
+                .unwrap();
+        let track = &plan.tracks[0];
+        let directory = fixture.directory(track);
+        let name = format!("{}.flac", track.chunks[0]);
+        let path = directory.path.join(&name);
+        let mut bytes = std::fs::read(&path).unwrap();
+        if duplicate {
+            let audio = bytes[42..].to_vec();
+            bytes.extend(audio);
+        } else {
+            bytes.truncate(bytes.len() / 2);
+        }
+        write(&path, &bytes);
+        let unknown = directory.path.join("keep-unknown.part");
+        write(&unknown, b"not owned by a checkpoint");
+        assert!(fixture
+            .storage
+            .finalize_recording(&fixture.session.id)
+            .is_err());
+        assert_eq!(
+            std::fs::read(&unknown).unwrap(),
+            b"not owned by a checkpoint"
+        );
+        assert_eq!(
+            std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap(),
+            original
+        );
+        fixture.allow_db();
+        let saved = fixture
+            .storage
+            .finalize_recording(&fixture.session.id)
+            .unwrap();
+        assert_eq!(saved.state, "saved");
+        fixture
+            .storage
+            .verify_canonical_audio(&saved.meeting_id, &|| false)
+            .unwrap();
+        let baseline = compact_fixture(true);
+        baseline
+            .storage
+            .finalize_recording(&baseline.session.id)
+            .unwrap();
+        assert_eq!(
+            wave(&fixture),
+            wave(&baseline),
+            "capture gaps and meeting time must survive repair"
+        );
+        // WAV publication may retire the raw bodies only after successful verification.
+        if let Ok(raw) = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")) {
+            assert_eq!(raw, original);
+        }
+        let again = fixture
+            .storage
+            .finalize_recording(&fixture.session.id)
+            .unwrap();
+        assert_eq!(again, saved, "reconciliation must reuse the same session");
+    }
+}
+
+#[test]
 fn completed_prefix_failed_db_commit_retains_raw_and_reuses_verified_flac_after_restart() {
     let fixture = compact_fixture(true);
     for lane in ["microphone", "system"] {

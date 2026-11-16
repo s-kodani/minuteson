@@ -31,6 +31,10 @@ public:
     packet.microphone_connected=index==60&&options_.scenario=="input-recovery";
     packet.system_lost=index==80&&options_.scenario=="input-recovery";
     packet.system_connected=index==120&&options_.scenario=="input-recovery";
+    if(options_.scenario=="device-switch-stop"||options_.scenario=="endpoint-switch-late"){
+      packet.microphone_lost=packet.system_lost=index==25||index==80;
+      packet.microphone_connected=packet.system_connected=index==60||index==499;
+    }
     packet.time=start+index*100000-(options_.overlap&&index?10:0);
     if(options_.drift)packet.time+=std::min<std::uint64_t>(index,399)*10;
     packet.position=index*480;
@@ -46,6 +50,12 @@ public:
     }
     // Synthetic clocks advance independently of scheduler latency.
     packet.arrival=std::max(now,start+(index+1)*100000);
+    if(options_.scenario=="endpoint-continuity"){
+      // The observed 127-frame phase and a delayed/batched host read. A wall
+      // clock-only flush used to cut 127 frames out of every 480-frame packet.
+      packet.time+=353*10000000/48000;
+      packet.arrival=std::max(packet.arrival,packet.time+100000+2500000+127*10000000/48000);
+    }
     return packet;
   }
 };

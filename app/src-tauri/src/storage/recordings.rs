@@ -3,6 +3,9 @@ use rusqlite::{Row, TransactionBehavior};
 use serde::Deserialize;
 use std::fs::File;
 
+pub(crate) const NO_CAPTURED_AUDIO: &str =
+    "録音失敗: マイク・PC音声のどちらも音声を取得できませんでした";
+
 mod clock;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod flac;
@@ -305,17 +308,25 @@ impl Storage {
         inventory: &impl Fn(Vec<crate::recording_recovery::Item>),
         progress: &impl Fn(crate::recording_recovery::Item),
     ) -> Result<Vec<String>, String> {
+        self.recover_recordings_observed_for(None, inventory, progress)
+    }
+    pub(crate) fn recover_recordings_observed_for(
+        &self,
+        session_id: Option<&str>,
+        inventory: &impl Fn(Vec<crate::recording_recovery::Item>),
+        progress: &impl Fn(crate::recording_recovery::Item),
+    ) -> Result<Vec<String>, String> {
         if self.data_write_blocked() {
-            return Ok(vec![]);
+            return Err("保存先への書き込みが停止されています。音声は保持しています".into());
         }
         let interrupted = {
             let db = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state='interrupted' AND r.audio_manifest_hash IS NULL ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
+            let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id WHERE r.state IN ('interrupted','failed','saved') AND m.source_type='recording' AND ((r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft')) OR (r.audio_manifest_hash IS NOT NULL AND m.lifecycle='recorded' AND (a.phase IS NULL OR a.phase!='cleaned'))) AND (?1 IS NULL OR r.id=?1) AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id) ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
             let rows = query
-                .query_map([], |r| {
+                .query_map([session_id], |r| {
                     Ok(crate::recording_recovery::Item {
                         session_id: r.get(0)?,
                         meeting_id: r.get(1)?,
@@ -324,6 +335,7 @@ impl Storage {
                         started_at_ms: None,
                         error: None,
                         progress: None,
+                        no_audio: false,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -334,8 +346,20 @@ impl Storage {
         inventory(interrupted.clone());
         let mut recovered = Vec::new();
         for mut item in interrupted {
+            let deleted = {
+                let db = self
+                    .connection
+                    .lock()
+                    .map_err(|_| "DBロックを取得できません")?;
+                super::deletion::audio::source_deleted(&db, &item.meeting_id)?
+            };
+            if deleted {
+                item.phase = "skipped".into();
+                progress(item);
+                continue;
+            }
             let exists: bool = self.connection.lock().map_err(|_| "DBロックを取得できません")?
-                .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state='interrupted' AND audio_manifest_hash IS NULL)",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+                .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state IN ('interrupted','failed','saved'))",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
             if !exists {
                 item.phase = "skipped".into();
                 progress(item);
@@ -344,16 +368,19 @@ impl Storage {
             item.phase = "running".into();
             item.started_at_ms = Some(now_ms()?);
             progress(item.clone());
-            match self.finalize_recording(&item.session_id) {
+            match crate::audio_finalization::complete(&|| self.data_write_blocked(), || {
+                self.finalize_available_recording(&item.session_id, &|| self.data_write_blocked())
+            }) {
                 Ok(_) => {
                     recovered.push(item.session_id.clone());
                     item.phase = "succeeded".into();
                 }
                 Err(error) => {
                     let pending: bool = self.connection.lock().map_err(|_| "DBロックを取得できません")?
-                        .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state='interrupted' AND audio_manifest_hash IS NULL)",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+                        .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2)",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
                     item.phase = if pending { "failed" } else { "skipped" }.into();
                     if pending {
+                        item.no_audio = error == NO_CAPTURED_AUDIO;
                         item.error = Some(error);
                     }
                 }
@@ -361,6 +388,60 @@ impl Storage {
             progress(item);
         }
         Ok(recovered)
+    }
+
+    /// Called only after the owned capture child has exited, or during startup
+    /// under the workspace instance lock. Never adopts unadvertised raw tails.
+    pub(crate) fn finalize_available_recording(
+        &self,
+        session_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<RecordingSession, String> {
+        partial::check_cancel(cancelled)?;
+        self.require_data_writable()?;
+        let (session, registered) = {
+            let db = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            let session = load_session(&db, session_id)?.ok_or("録音セッションが見つかりません")?;
+            let registered: bool = db
+                .query_row(
+                    "SELECT audio_manifest_hash IS NOT NULL FROM recording_sessions WHERE id=?1",
+                    [session_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            (session, registered)
+        };
+        if registered {
+            let _owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
+            self.publish_single_wav(&session.meeting_id, cancelled, &|_, _| {})?;
+            return Ok(session);
+        }
+        match self.finalize_recording(session_id) {
+            Ok(saved) => return Ok(saved),
+            Err(error) => crate::internal_logs::report_error("recording_save", &error),
+        }
+        partial::check_cancel(cancelled)?;
+        if matches!(
+            session.state.as_str(),
+            "preparing" | "recording" | "stopping"
+        ) {
+            self.interrupt_recording(session_id)?;
+        }
+        let review = self.review_partial_recording_checked(session_id, cancelled)?;
+        if review
+            .summary
+            .lanes
+            .iter()
+            .all(|lane| lane.state == "empty")
+        {
+            return Err(NO_CAPTURED_AUDIO.into());
+        }
+        // The recording policy authorizes automatic salvage of verified audio.
+        // The existing generation/ownership checks remain unchanged.
+        self.recover_partial_recording_checked(&review, true, cancelled)
     }
 
     #[allow(dead_code)]
@@ -614,7 +695,7 @@ impl Storage {
         }
         if !matches!(
             session.state.as_str(),
-            "recording" | "stopping" | "interrupted"
+            "recording" | "stopping" | "interrupted" | "failed"
         ) {
             return Err("録音が確定可能な状態ではありません".into());
         }
@@ -1233,6 +1314,10 @@ pub(in crate::storage) mod tests {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().into()).unwrap();
         let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+        // No prefix was advertised by this interrupted writer.
+        for lane in ["microphone", "system"] {
+            std::fs::remove_file(output.join(format!("raw-{lane}.json"))).unwrap();
+        }
         let frames = 8_000_i64 * 14_460;
         for (name, channels) in [("microphone", 1_u32), ("system", 2_u32)] {
             // Valid sparse signed-int16 CAF: no waiting, audio capture, or large Vec.
@@ -1363,6 +1448,9 @@ pub(in crate::storage) mod tests {
             .unwrap();
         let (bad_meeting, bad, output, _) = saved_probe_fixture(&storage);
         std::fs::write(output.join("manifest.json"), b"{}").unwrap();
+        for lane in ["microphone", "system"] {
+            std::fs::write(output.join(format!("raw-{lane}-00000001.caf")), b"corrupt").unwrap();
+        }
         storage
             .connection
             .lock()
@@ -1493,6 +1581,10 @@ pub(in crate::storage) mod tests {
                 .as_object_mut()
                 .unwrap()
                 .remove("rawSegments");
+            // Legacy sources do not have current sealed-prefix evidence.
+            for suffix in [".json", "-00000001.json", "-00000001.caf"] {
+                std::fs::remove_file(output.join(format!("raw-{lane}{suffix}"))).unwrap();
+            }
         }
         std::fs::write(
             output.join("manifest.json"),
@@ -2313,8 +2405,11 @@ pub(in crate::storage) mod tests {
             .unwrap();
         let source = output.join("raw-system-00000001.caf");
         let original = std::fs::read(&source).unwrap();
+        let mic_source = output.join("raw-microphone-00000001.caf");
+        let mic_original = std::fs::read(&mic_source).unwrap();
         let continuous = std::fs::read(output.join("system.caf")).unwrap();
         std::fs::write(&source, b"bad!000000000000").unwrap();
+        std::fs::write(&mic_source, b"bad!000000000000").unwrap();
         assert!(storage.finalize_recording(&session.id).is_err());
         assert_eq!(
             storage.interrupt_recording(&session.id).unwrap().state,
@@ -2334,6 +2429,7 @@ pub(in crate::storage) mod tests {
             continuous
         );
         std::fs::write(&source, &original).unwrap();
+        std::fs::write(&mic_source, &mic_original).unwrap();
         assert_eq!(
             storage.recover_completed_recordings().unwrap(),
             vec![session.id]

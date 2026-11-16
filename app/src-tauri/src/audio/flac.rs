@@ -67,6 +67,33 @@ const MAX_METADATA: u64 = 16 * 1024 * 1024;
 const MAX_PACKET_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PACKETS: usize = 2_000_000;
 
+/// Only discontinuous derived audio may be rebuilt from pinned capture PCM.
+/// Ownership, source changes and a different (otherwise valid) recording remain
+/// errors; callers must never infer this decision from localized error text.
+#[derive(Debug)]
+pub(crate) enum VerificationError {
+    Intervals(&'static str),
+    Other(String),
+}
+impl From<String> for VerificationError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+impl From<&str> for VerificationError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.into())
+    }
+}
+impl std::fmt::Display for VerificationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Intervals(message) => f.write_str(message),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct FrameIndex {
     offset: u64,
@@ -235,14 +262,16 @@ impl FlacAudio {
         size: u64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(PcmFormat, Self), String> {
-        Self::open_compared(file, size, cancelled, None).map(|(format, audio, _)| (format, audio))
+        Self::open_compared(file, size, cancelled, None)
+            .map(|(format, audio, _)| (format, audio))
+            .map_err(|error| error.to_string())
     }
     fn open_compared(
         file: &mut File,
         size: u64,
         cancelled: &impl Fn() -> bool,
         mut source: Option<(&mut dyn PcmSource, u64)>,
-    ) -> Result<(PcmFormat, Self, String), String> {
+    ) -> Result<(PcmFormat, Self, String), VerificationError> {
         let (mut reader, parameters, mut byte_offset) = open_reader(file, size, cancelled)?;
         let rate = parameters.sample_rate.ok_or("FLACの周波数がありません")?;
         let channels = parameters
@@ -264,10 +293,12 @@ impl FlacAudio {
             let packet = match reader.next_packet() {
                 Ok(packet) => packet,
                 Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(format!("FLACの読出しに失敗しました: {e}")),
+                Err(e) => return Err(format!("FLACの読出しに失敗しました: {e}").into()),
             };
             if packet.track_id() != reader.tracks()[0].id || packet.ts() != frames {
-                return Err("FLACの音声区間に欠損または重複があります".into());
+                return Err(VerificationError::Intervals(
+                    "FLACの音声区間に欠損または重複があります",
+                ));
             }
             if packet.data.len() > MAX_PACKET_BYTES || index.len() >= MAX_PACKETS {
                 return Err("FLACの区間数または区間サイズが上限を超えています".into());
@@ -276,7 +307,9 @@ impl FlacAudio {
             // every encoded byte belongs to the contiguous verified packets.
             let bytes = read_at(file, byte_offset, packet.data.len())?;
             if bytes.as_slice() != packet.data.as_ref() || !valid_crc(&bytes) {
-                return Err("FLACの音声バイト列またはCRCが一致しません".into());
+                return Err(VerificationError::Intervals(
+                    "FLACの音声バイト列またはCRCが一致しません",
+                ));
             }
             sha.update(&bytes);
             crate::operation_observation::read(bytes.len());
@@ -337,7 +370,9 @@ impl FlacAudio {
             }
         }
         if frames == 0 || byte_offset != size || parameters.n_frames.is_some_and(|n| n != frames) {
-            return Err("FLACの実フレーム数が保存記録と一致しません".into());
+            return Err(VerificationError::Intervals(
+                "FLACの実フレーム数が保存記録と一致しません",
+            ));
         }
         if decoder.finalize().verify_ok == Some(false) {
             return Err("FLACのPCM検証ハッシュが一致しません".into());
@@ -724,7 +759,9 @@ pub(crate) fn encode_segment_file(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64),
 ) -> Result<SavedFlac, String> {
-    encode_segment_inner(source, first, frames, temporary, cancelled, progress, true)
+    encode_segment_inner(
+        source, first, frames, temporary, cancelled, progress, true, false,
+    )
 }
 /// Validate every encoded byte, CRC/MD5, sample format and source sample in
 /// one decoder pass. The proof is transient and binds this exact open object.
@@ -737,8 +774,23 @@ pub(crate) fn verify_source(
     frames: u64,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    verify_source_classified(file, size, expected_hash, source, first, frames, cancelled)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn verify_source_classified(
+    file: &mut File,
+    size: u64,
+    expected_hash: &str,
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), VerificationError> {
     if file.metadata().map_err(|e| e.to_string())?.len() != size {
-        return Err("FLACの容量が保存記録と一致しません".into());
+        return Err(VerificationError::Intervals(
+            "FLACの容量が保存記録と一致しません",
+        ));
     }
     let before =
         super::reuse::stamp(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?);
@@ -765,7 +817,25 @@ pub(crate) fn encode_segment_file_pending(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64),
 ) -> Result<SavedFlac, String> {
-    encode_segment_inner(source, first, frames, temporary, cancelled, progress, false)
+    encode_segment_inner(
+        source, first, frames, temporary, cancelled, progress, false, false,
+    )
+}
+
+/// Recovery deliberately uses a different block geometry and verbatim FLAC
+/// subframes. Repeating the same optimized encoding could reproduce a bad
+/// packet boundary. This path is still lossless and fully source-verified.
+pub(crate) fn rebuild_segment_file_pending(
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    temporary: &mut File,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u64),
+) -> Result<SavedFlac, String> {
+    encode_segment_inner(
+        source, first, frames, temporary, cancelled, progress, false, true,
+    )
 }
 fn encode_segment_inner(
     source: &mut impl PcmSource,
@@ -775,6 +845,7 @@ fn encode_segment_inner(
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(u64),
     verify: bool,
+    rebuilding: bool,
 ) -> Result<SavedFlac, String> {
     let _permit = ConversionPermit::acquire(cancelled)?;
     if frames == 0
@@ -789,14 +860,23 @@ fn encode_segment_inner(
     check_cancelled(cancelled)?;
     let rate = source.format().sample_rate;
     let channels = source.format().channels;
+    let block = if rebuilding { 2048 } else { BLOCK };
     let mut info =
         StreamInfo::new(rate as usize, channels as usize, 24).map_err(|e| e.to_string())?;
-    info.set_block_sizes(BLOCK, BLOCK)
+    info.set_block_sizes(block, block)
         .map_err(|e| e.to_string())?;
-    let config = flacenc::config::Encoder::default()
-        .into_verified()
-        .map_err(|(_, e)| e.to_string())?;
-    let mut fb = FrameBuf::with_size(channels as usize, BLOCK).map_err(|e| e.to_string())?;
+    let mut config = flacenc::config::Encoder::default();
+    config.block_size = block;
+    if rebuilding {
+        config.subframe_coding.use_constant = false;
+        config.subframe_coding.use_fixed = false;
+        config.subframe_coding.use_lpc = false;
+        config.stereo_coding.use_leftside = false;
+        config.stereo_coding.use_rightside = false;
+        config.stereo_coding.use_midside = false;
+    }
+    let config = config.into_verified().map_err(|(_, e)| e.to_string())?;
+    let mut fb = FrameBuf::with_size(channels as usize, block).map_err(|e| e.to_string())?;
     // Fixed-size metadata can be replaced after the last frame is complete.
     let header = stream_header(&info)?;
     temporary.write_all(&header).map_err(|e| e.to_string())?;
@@ -805,8 +885,11 @@ fn encode_segment_inner(
     let mut frame_number = 0;
     while offset < frames {
         check_cancelled(cancelled)?;
-        let count = (frames - offset).min(BLOCK as u64);
+        let count = (frames - offset).min(block as u64);
         let pcm = source.read_frames(first + offset, count)?;
+        if pcm.len() != count as usize * channels as usize * 4 {
+            return Err("FLAC保存PCMの長さが要求したフレーム数と一致しません".into());
+        }
         let mut samples = Vec::with_capacity(pcm.len() / 4);
         for sample in pcm.chunks_exact(4) {
             let value = f32::from_le_bytes(sample.try_into().unwrap());
@@ -820,6 +903,9 @@ fn encode_segment_inner(
             samples.push(quantized);
         }
         fb.fill_interleaved(&samples).map_err(|e| e.to_string())?;
+        if fb.filled_size() != count as usize {
+            return Err("FLAC保存ブロックの長さがPCMと一致しません".into());
+        }
         let frame = flacenc::encode_fixed_size_frame(&config, &fb, frame_number, &info)
             .map_err(|e| e.to_string())?;
         info.update_frame_info(&frame);
@@ -835,7 +921,7 @@ fn encode_segment_inner(
     }
     // Fixed-block STREAMINFO must report the nominal size, excluding the
     // short last block, as required by RFC 9639 section 8.2.
-    info.set_block_sizes(BLOCK, BLOCK)
+    info.set_block_sizes(block, block)
         .map_err(|e| e.to_string())?;
     info.set_md5_digest(&md5.finalize().into());
     info.set_total_samples(frames as usize);

@@ -309,6 +309,27 @@ jobs:
         run: cargo fmt --all --check
       - name: Shared Rust core tests
         run: cargo test --workspace --exclude mon-desktop --locked --lib
+      - name: macOS Swift compiler and capture regression tests
+        # Native PR validation must exercise Swift capture too. Rust-only
+        # quick checks cannot validate device rebind/PCM format transitions.
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer an installed toolchain satisfying the package tools version.
+          # macos-15 images may default to an older Xcode despite carrying 26.x.
+          for developer in "$(xcode-select -p)" /Applications/Xcode*.app/Contents/Developer; do
+            if DEVELOPER_DIR="$developer" /usr/bin/swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else 1)'; then
+              export DEVELOPER_DIR="$developer"
+              echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          swift --version
+          swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)", sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else "Swift 6.2 or later is required")'
+          sh probes/macos-capture/build-core.sh
+          swift build --package-path probes/macos-capture --configuration release
+          swift test --package-path probes/macos-capture
       - name: Quick native Rust tests without packaged resources
         if: env.MON_CI_FULL != 'true'
         env:
@@ -338,25 +359,6 @@ jobs:
           python tools/mon_ci_native_tests.py --suite full --timings-json output/rust-tests/${{ runner.os }}.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --experimental-strip-types --test app/tests/windows-model-download-state.test.ts
-      - name: macOS Swift compiler and capture regression tests
-        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Prefer an installed toolchain satisfying the package tools version.
-          # macos-15 images may default to an older Xcode despite carrying 26.x.
-          for developer in "$(xcode-select -p)" /Applications/Xcode*.app/Contents/Developer; do
-            if DEVELOPER_DIR="$developer" /usr/bin/swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else 1)'; then
-              export DEVELOPER_DIR="$developer"
-              echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
-              break
-            fi
-          done
-          swift --version
-          swift --version | python -c 'import re,sys; m=re.search(r"Swift version (\d+)\.(\d+)", sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups())) >= (6,2) else "Swift 6.2 or later is required")'
-          sh probes/macos-capture/build-core.sh
-          swift build --package-path probes/macos-capture --configuration release
-          swift test --package-path probes/macos-capture
       - name: macOS common and native regression tests
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         env:

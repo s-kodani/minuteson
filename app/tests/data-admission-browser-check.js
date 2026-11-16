@@ -50,11 +50,14 @@ async page => {
   await choose();
   await region().getByText('準備の終了待ち。停止・完了後にバックアップ／復元できます。', { exact: true }).waitFor();
   const notices = await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length);
-  await page.clock.runFor(1200); // Cross two normal 500 ms notice polling ticks.
+  check(notices === 0, 'removed historical notifications still performed background reads');
+  await page.clock.runFor(1200);
   check(await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length) === notices,
-    'ready backup restarted historical notification writes before publication');
+    'ready backup restarted removed historical notification delivery');
   await finish();
-  await page.waitForFunction(n => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length > n, notices);
-  results.push('historical notice polling stays paused across ready-to-publish handoff and resumes after completion');
+  await page.clock.runFor(1200);
+  check(await page.evaluate(() => window.dataFixture.calls.filter(c => c.command === 'get_archived_recording_input_notices').length) === 0,
+    'completed backup restarted removed historical notification delivery');
+  results.push('backup admission still waits for availability and removed input notifications stay inactive after completion');
   return results;
 }

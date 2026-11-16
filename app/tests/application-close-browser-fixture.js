@@ -3,7 +3,7 @@ import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 window.emitResidencyFixture = (event,payload) => emit(event,payload);
 import { registerPendingEdits } from "../src/draft-save.ts";
-import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";
+import { queuedAction } from "./input-notice-queue-browser-fixture.js";
 import {archivedFixture,archivedPage,archivedRows,archivedAction,newArchivedRow,reopenArchived} from "./archived-input-browser-fixture.js";
 import { validVocabulary } from "../src/vocabulary-state.ts";
 import { toasts } from "../src/toast";
@@ -168,7 +168,7 @@ mockIPC(async (command, args) => {
     if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬マイク状態所有変更／停止済み");
     if(f.refreshInputStatus&&f.inputStatus)f.inputStatus.revision++;
     if(f.holdInputStatus)await new Promise(resolve=>f.pendingInputStatus.push(resolve));
-    if(f.failInputStatus||f.inputStatus?.schemaVersion!==4||!f.queueState)throw Error("模擬マイク状態未確認");return queuedProjection(f);
+    if(f.failInputStatus||f.inputStatus?.schemaVersion!==4)throw Error("模擬マイク状態未確認");return {...clone(f.inputStatus),notices:[],noticeLoss:{microphone:0,system:0}};
   }
   if(["receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"].includes(command))return queuedAction(f,command,args);
   if (command === "get_capture_inputs") {

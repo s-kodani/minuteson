@@ -37,8 +37,10 @@ test("meeting labels distinguish recovery, waiting, failure and normal saved aud
   assert.equal(meetingStatusLabel(meeting,bridge,running),"録音を回復中");
   assert.equal(meetingStatusLabel({...meeting,id:"meeting-b"},bridge,running),"録音の回復待ち");
   const failed={...running,items:[{...running.items[0],phase:"failed" as const,error:"invalid audio"}]};
-  assert.equal(meetingStatusLabel(meeting,bridge,failed),"録音未完了・要確認");
-  assert.equal(meetingStatusLabel({...meeting,lifecycle:"recorded"},bridge,failed),"録音済み");
+  assert.equal(meetingStatusLabel(meeting,bridge,failed),"音声保存エラー");
+  assert.equal(meetingStatusLabel({...meeting,lifecycle:"recorded"},bridge,failed),"音声保存エラー");
+  assert.equal(meetingStatusLabel(meeting,bridge,{...failed,items:failed.items.map(item=>({...item,noAudio:true}))}),"録音失敗");
+  assert.throws(()=>acceptRecovery(null,{...failed,phase:"completed",items:failed.items.map(item=>({...item,noAudio:"unknown"}))}));
   assert.equal(recoveryMeetingState(running,"another"),undefined);
   assert.equal(meetingStatusLabel({...meeting,lifecycle:"recorded"},bridge,{...running,phase:"completed",items:[]}),"録音済み");
 });

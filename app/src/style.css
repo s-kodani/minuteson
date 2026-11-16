@@ -8,6 +8,7 @@
 .startup-attention .startup-attention-cause pre { margin:0; padding:0; background:transparent; font:inherit; font-size:14px; }
 .startup-attention-actions { display:flex; align-items:center; flex-wrap:nowrap; gap:8px; margin-top:28px; }
 .startup-attention-actions > button { flex:none; white-space:nowrap; }
+.startup-reset-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .startup-restore-progress { display:grid; gap:10px; margin-top:20px; }
 .startup-restore-progress > progress { display:block; width:100%; height:10px; accent-color:var(--primary); }
 .startup-restore-progress > p { margin:0; }

@@ -759,6 +759,90 @@ fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, S
     (temp, storage, meeting.id, session.id, output)
 }
 #[test]
+fn windows_delayed_endpoint_packets_continue_through_mixer_and_finalize() {
+    let (_temp, storage, meeting, _session, output) = synthetic_recording("endpoint-switch-late");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
+    assert!(
+        diagnostics["endpointAlignment"]["latePackets"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        diagnostics["endpointAlignment"]["lateFrames"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        diagnostics["endpointAlignment"]["ranges"]
+            .as_array()
+            .unwrap()
+            .len()
+            <= 32
+    );
+    assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
+    assert!(
+        diagnostics["endpointAlignment"]["retimedFrames"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["state"], "saved");
+    assert!(manifest["errors"].as_array().unwrap().is_empty());
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+}
+
+#[test]
+fn windows_endpoint_phase_and_batched_arrivals_keep_continuous_pcm() {
+    let (_temp, storage, meeting, _session, output) = synthetic_recording("endpoint-continuity");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["system"]["frames"], 80_000);
+    let maps = manifest["system"]["clockSegments"].as_array().unwrap();
+    for pair in maps.windows(2) {
+        assert!(
+            pair[1]["timelineStartUs"].as_i64().unwrap()
+                - pair[0]["timelineEndUs"].as_i64().unwrap()
+                <= 1,
+            "received PC audio acquired a synthetic capture gap"
+        );
+    }
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
+    assert_eq!(diagnostics["endpointAlignment"]["lateFrames"], 0);
+    assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+}
+
+#[test]
+fn windows_simultaneous_device_switches_and_stop_immediately_after_recovery_save() {
+    let (_temp, storage, meeting, session, output) = synthetic_recording("device-switch-stop");
+    let history = crate::input_status::journal::Reader::pin(&output.canonicalize().unwrap())
+        .unwrap()
+        .read(&session)
+        .unwrap();
+    let history = serde_json::to_value(history).unwrap();
+    assert_eq!(history["sealed"], true);
+    for input in ["microphoneHistory", "systemHistory"] {
+        assert_eq!(history[input]["lastSequence"], 4);
+        assert_eq!(history[input]["events"][3]["kind"], "recovered");
+        assert_eq!(history[input]["events"][3]["status"]["sourceEpoch"], 3);
+    }
+    storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+    let (plan, known) = storage.recorded_analysis_input(&meeting).unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].kind, "processed");
+    assert!(
+        !known.unwrap().gaps.is_empty(),
+        "unreceived intervals must remain recorded"
+    );
+}
+
+#[test]
 fn windows_parity_independent_input_recovery_and_sealed_history() {
     let (_temp, storage, meeting, session, output) = synthetic_recording("input-recovery");
     let history = crate::input_status::journal::Reader::pin(&output.canonicalize().unwrap())

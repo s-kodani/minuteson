@@ -19,6 +19,10 @@ mockIPC(async(command,args)=>{
     if(r.hold)return new Promise(resolve=>r.holds.push(()=>resolve(structuredClone(initial))));
     return structuredClone(r.stale?initial:r.snapshot);
   }
+  if(command==="retry_recording_recovery") {
+    await r.change({phase:"running",items:r.snapshot.items.map(item=>item.sessionId===args.sessionId?{...item,phase:"running",startedAtMs:Date.now(),error:null}:item)});
+    return structuredClone(r.snapshot);
+  }
   if(command==="get_application_close_activity")return {analysisBusy:false,modelPreparationBusy:false,recordingRecoveryBusy:r.snapshot.phase==="running"};
   if(command==="get_meeting_deletion_availability")return args.meetingIds.map(meetingId=>{
     const active=r.snapshot.items.some(i=>i.meetingId===meetingId&&i.phase==="running");

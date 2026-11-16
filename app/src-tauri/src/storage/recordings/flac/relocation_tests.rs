@@ -1012,7 +1012,7 @@ fn flac_relocation_partial_owned_sigkill_resumes_with_fresh_consent_and_current_
         }
         let bootstrap = Bootstrap::open(&config, &source).unwrap();
         let storage = bootstrap.open_storage().unwrap();
-        assert!(storage.recover_completed_recordings().unwrap().is_empty());
+        // Exercise the manual capability without first running automatic save.
         let review = storage.review_partial_recording(&session.id).unwrap();
         let before = tree(&target.join("meetings"));
         assert!(storage.recover_partial_recording(&review, false).is_err());
@@ -1182,7 +1182,8 @@ fn flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files() 
         }
         let bootstrap = Bootstrap::open(&config, &source).unwrap();
         let storage = bootstrap.open_storage().unwrap();
-        assert!(storage.recover_completed_recordings().unwrap().is_empty());
+        // Automatic startup save now resumes this same verified checkpoint.
+        // This test exercises the lower-level explicit resume path directly.
         resume(&storage, &session.id);
         if let Some(identity) = copied_identity {
             let receipt: Checkpoint = serde_json::from_slice(

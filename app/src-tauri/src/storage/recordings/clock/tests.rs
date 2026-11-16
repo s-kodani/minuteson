@@ -454,18 +454,12 @@ fn corrected_capture_clock_or_gap_insert_failure_rolls_back_all_publication_and_
 }
 
 #[test]
-fn corrected_capture_restart_uses_the_saved_shared_origin_and_retains_bad_clock_outputs() {
+fn corrected_capture_restart_uses_the_saved_shared_origin() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, session, output, original) = corrected(&storage);
-    let mut bad = original.clone();
-    bad["system"]["clockSegments"][0]["sourceFrameEnd"] = json!(47999);
-    write(&output, &bad);
+    let (meeting, session, _, _) = corrected(&storage);
     drop(storage);
     let reopened = Storage::open(root.path().into()).unwrap();
-    assert!(reopened.recover_completed_recordings().unwrap().is_empty());
-    unpublished(&reopened, &meeting, &session);
-    write(&output, &original);
     assert_eq!(
         reopened.recover_completed_recordings().unwrap(),
         vec![session.clone()]
@@ -490,6 +484,36 @@ fn corrected_capture_restart_uses_the_saved_shared_origin_and_retains_bad_clock_
         .unwrap();
     let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&json).unwrap();
     assert_eq!(source.tracks[0].chunks[0].clock_segments.len(), 2);
+}
+
+#[test]
+fn corrected_capture_invalid_manifest_clock_recovers_only_verified_prefix_without_fake_utc() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, mut manifest) = corrected(&storage);
+    let original_start = load_session(&storage.connection.lock().unwrap(), &session)
+        .unwrap()
+        .unwrap()
+        .started_at_utc_ms;
+    manifest["system"]["clockSegments"][0]["sourceFrameEnd"] = json!(47999);
+    write(&output, &manifest);
+    assert!(storage.finalize_recording(&session).is_err());
+    drop(storage);
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        reopened.recover_completed_recordings().unwrap(),
+        vec![session.clone()]
+    );
+    let saved = load_session(&reopened.connection.lock().unwrap(), &session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.state, "interrupted");
+    assert_eq!(saved.started_at_utc_ms, original_start);
+    assert_eq!(saved.ended_at_utc_ms, None);
+    assert_eq!(saved.duration_us, 1_005_100);
+    reopened
+        .verify_canonical_audio(&meeting, &|| false)
+        .unwrap();
 }
 
 #[test]

@@ -707,6 +707,28 @@ fn convert(
     id: String,
     requested_cancel: &impl Fn() -> bool,
 ) -> Result<Chunk, String> {
+    convert_inner(
+        storage,
+        directory,
+        prefix,
+        group,
+        input_hash,
+        id,
+        requested_cancel,
+        true,
+    )
+}
+
+fn convert_inner(
+    storage: &Storage,
+    directory: &Directory,
+    prefix: &Prefix,
+    group: &FlacGroup,
+    input_hash: &str,
+    id: String,
+    requested_cancel: &impl Fn() -> bool,
+    may_rebuild: bool,
+) -> Result<Chunk, String> {
     let cancelled = || requested_cancel() || storage.data_write_blocked();
     let _permit = crate::audio::flac::ConversionPermit::acquire(&cancelled)?;
     partial::check_cancel(&cancelled)?;
@@ -822,14 +844,25 @@ fn convert(
         file.rewind().map_err(|e| e.to_string())?;
         let mut source = prefix.source_group(group, &cancelled)?;
         crate::operation_observation::stage("converting_audio", Some(group.frames), "frames");
-        let saved = encode_segment_file_pending(
-            &mut source,
-            0,
-            group.frames,
-            &mut file,
-            &cancelled,
-            &|_| {},
-        )?;
+        let saved = if may_rebuild {
+            encode_segment_file_pending(
+                &mut source,
+                0,
+                group.frames,
+                &mut file,
+                &cancelled,
+                &|_| {},
+            )
+        } else {
+            crate::audio::flac::rebuild_segment_file_pending(
+                &mut source,
+                0,
+                group.frames,
+                &mut file,
+                &cancelled,
+                &|_| {},
+            )
+        }?;
         staging_identity.require(&directory.required(partial, false)?)?;
         receipt.audio = Some(saved.into());
         directory.json(&receipt_name, &receipt, Some(&receipt_stamp))?;
@@ -837,7 +870,7 @@ fn convert(
         #[cfg(test)]
         crash_point("encoded");
     }
-    let audio = receipt.audio.unwrap();
+    let audio = receipt.audio.clone().unwrap();
     if audio.frames != group.frames
         || audio.sample_rate != prefix.entries().nth(group.first_entry).unwrap().sample_rate
         || audio.channels != prefix.entries().nth(group.first_entry).unwrap().channels
@@ -855,7 +888,41 @@ fn convert(
     let file = directory.required(&final_name, false)?;
     staging_identity.require(&file)?;
     let stamp = Stamp::read(&file)?;
-    verify_derived_audio(storage, &file, &audio, prefix, group, &cancelled)?;
+    if let Err(error) = verify_derived_audio(storage, &file, &audio, prefix, group, &cancelled) {
+        if may_rebuild && matches!(error, crate::audio::flac::VerificationError::Intervals(_)) {
+            // The final name is still an unregistered, exclusively leased
+            // derivative. Never relax verification or alter the sealed PCM.
+            // Move its pinned inode back to the journal-owned staging name
+            // before clearing the proof. Either side of this checkpoint is
+            // resumable after a crash, without adopting an unknown file.
+            partial::check_cancel(&cancelled)?;
+            prefix.verify_unchanged(&cancelled)?;
+            stamp.require(&file)?;
+            stamp.require(&directory.required(&final_name, false)?)?;
+            receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
+            storage.require_data_writable()?;
+            directory.rename(&final_name, &receipt.staging_name, true)?;
+            receipt.audio = None;
+            directory.json(&receipt_name, &receipt, Some(&receipt_stamp))?;
+            crate::internal_logs::report_error(
+                "recording",
+                &format!("FLACの区間を原音声から再生成します: {error}"),
+            );
+            #[cfg(test)]
+            crash_point("repair-reserved");
+            return convert_inner(
+                storage,
+                directory,
+                prefix,
+                group,
+                input_hash,
+                id,
+                requested_cancel,
+                false,
+            );
+        }
+        return Err(error.to_string());
+    }
     stamp.require(&file)?;
     stamp.require(&directory.required(&final_name, false)?)?;
     receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
@@ -893,14 +960,14 @@ fn verify_derived_audio(
     prefix: &Prefix,
     group: &FlacGroup,
     requested_cancel: &impl Fn() -> bool,
-) -> Result<(), String> {
+) -> Result<(), crate::audio::flac::VerificationError> {
     let cancelled = || requested_cancel() || storage.data_write_blocked();
     if proof.frames != group.frames {
         return Err("最終FLACのフレーム数が一致しません".into());
     }
     let mut source = prefix.source_group(group, &cancelled)?;
     crate::operation_observation::stage("verifying_audio", Some(proof.size), "bytes");
-    crate::audio::flac::verify_source(
+    crate::audio::flac::verify_source_classified(
         &mut file.try_clone().map_err(|e| e.to_string())?,
         proof.size,
         &proof.sha256,

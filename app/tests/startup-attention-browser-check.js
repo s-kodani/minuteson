@@ -114,6 +114,30 @@ async (page, capturePath = path => path) => {
   await page.evaluate(() => { window.startupFixture.resetState.busy = false; window.startupFixture.resetState.message = "データ復元を完了できませんでした"; window.startupFixture.resetState.error = "回収できない音声があるため、元データを保持しました"; });
   await progress.waitFor({ state: "hidden" });
   await dialog.getByRole("alert").filter({ hasText: "元データを保持" }).waitFor();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  const restart = page.locator(".startup-reset-actions > button");
+  await restart.waitFor();
+  for (const width of [900, 360, 320]) {
+    await page.setViewportSize({ width, height: 740 });
+    const bounds = await page.evaluate(() => {
+      const above = document.querySelector(".startup-attention-actions").getBoundingClientRect();
+      const restart = document.querySelector(".startup-reset-actions > button").getBoundingClientRect();
+      return { gap: restart.top - above.bottom, left: restart.left, right: restart.right };
+    });
+    check(bounds.gap >= 16 && bounds.left >= 0 && bounds.right <= width, `failed restore restart has no reachable spacing at ${width}`);
+  }
+  await page.screenshot({ path: capturePath("startup-restore-failed.png"), fullPage: true });
+  await restart.click();
+  check((await commands()).filter(command => command === "retry_startup").length === 1, "spaced restart did not invoke one startup retry");
+  await boot("restore-stopped-empty");
+  await restart.waitFor();
+  check(await page.getByText("データ復元を完了できませんでした", { exact: true }).count() === 0, "empty recovery result unexpectedly supplied spacing text");
+  for (const width of [900, 360, 320]) {
+    await page.setViewportSize({ width, height: 740 });
+    const gap = await page.evaluate(() => document.querySelector(".startup-reset-actions > button").getBoundingClientRect().top - document.querySelector(".startup-attention-actions").getBoundingClientRect().bottom);
+    check(gap >= 16, `restart touches the upper actions before a result message at ${width}`);
+  }
+  await page.screenshot({ path: capturePath("startup-restart-without-result.png"), fullPage: true });
   await boot("restore-running");
   await dialog.getByRole("progressbar", { name: "データ復元の進捗", exact: true }).waitFor();
   check(!(await commands()).includes("start_startup_reset"), "reconnected progress restarted recovery");

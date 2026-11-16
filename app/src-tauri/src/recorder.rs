@@ -350,17 +350,8 @@ impl RecorderController {
             .lock()
             .map_err(|_| "入力通知のロックを取得できません")?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
-        // One backend owner chooses one notification destination. Both windows
-        // still read the same retained state; hiding a window never retries audio.
-        let main_visible = app.get_webview_window("main").is_some_and(|w| {
-            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
-        });
-        let recorder_visible = app.get_webview_window("recorder").is_some_and(|w| {
-            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
-        });
-        let target = crate::input_status::notice_target(main_visible, recorder_visible);
         lease.validate_active()?;
-        let result = input.read(session_id, target)?;
+        let result = input.telemetry(session_id)?;
         lease.validate_active()?;
         app.state::<Storage>().require_data_writable()?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
@@ -568,6 +559,9 @@ impl RecorderController {
             .map_err(|_| "録音ロックを取得できません".to_string())?;
         if active.is_some() {
             return Err("別の録音が進行中です".into());
+        }
+        if app.state::<crate::recording_recovery::Recovery>().busy() {
+            return Err("音声の保存処理が完了するまで録音開始を待っています".into());
         }
         let storage = app.state::<Storage>();
         if storage.request_pause_for_recording()? {
@@ -1438,6 +1432,27 @@ fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> Reco
     snapshot
 }
 
+pub(crate) fn clear_recovered_error(app: &AppHandle, session: &str) {
+    if app
+        .state::<SessionStore>()
+        .update_if(|snapshot| {
+            if snapshot.phase != RecordingPhase::Error
+                || snapshot.session_id.as_deref() != Some(session)
+            {
+                return false;
+            }
+            *snapshot = RecordingSnapshot {
+                revision: snapshot.revision,
+                ..Default::default()
+            };
+            true
+        })
+        .is_some()
+    {
+        notify_session(app);
+    }
+}
+
 fn notify_session(app: &AppHandle) {
     let handle = app.clone();
     // Never synchronously wait for UI work while holding the lifecycle lock.
@@ -1512,6 +1527,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
             Err(error) => {
                 if let Ok(mut process) = child.lock() {
                     let _ = process.kill();
+                    let _ = process.wait();
                 }
                 break Err(error);
             }
@@ -1557,7 +1573,7 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
     };
     let storage = app.state::<Storage>();
     let (result, recoverable) = match exit {
-        Ok(true) => {
+        Ok(success) => {
             if !announced {
                 let _ = storage.mark_recording_started(&session_id);
             }
@@ -1582,14 +1598,19 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                         notify_session(&progress_app);
                     }
                 });
-            (storage.finalize_recording(&session_id).map(|_| ()), true)
+            if !success {
+                if let Some(error) = manifest_error(&output) {
+                    crate::internal_logs::report_error("capture", &error);
+                }
+            }
+            // The child has exited and released its writers. Seal-prefix
+            // recovery and canonical publication happen before returning idle.
+            let _ = storage.interrupt_recording(&session_id);
+            (
+                crate::recording_recovery::save_closed(&app, &session_id),
+                true,
+            )
         }
-        Ok(false) => (
-            Err(manifest_error(&output).unwrap_or_else(|| {
-                "録音プローブが失敗しました。録音権限と保存先を確認してください".into()
-            })),
-            false,
-        ),
         Err(error) => (Err(format!("録音プロセスを確認できません: {error}")), false),
     };
     if result.is_err() {
@@ -1620,7 +1641,6 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
     }
     match result {
         Ok(()) => {
-            let completed_meeting = app.state::<SessionStore>().snapshot().meeting_id;
             publish(&app, |snapshot| {
                 snapshot.phase = RecordingPhase::Idle;
                 snapshot.progress = None;
@@ -1639,7 +1659,9 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.microphone_connected = false;
                 snapshot.system_audio_connected = false;
                 snapshot.error_message = Some(if recoverable {
-                    format!("録音ファイルの確定に失敗しました。元ファイルは保持し、次回起動時に再検証します: {error}")
+                    format!(
+                        "録音ファイルの保存を完了できませんでした。元音声は保持しています: {error}"
+                    )
                 } else {
                     error
                 });

@@ -10,7 +10,7 @@ struct CaptureSession {
   std::unique_ptr<Lane> mic_lane,system_lane;
   IdleSleepGuard awake;
   auto diagnostics=[&](const char* state,const Json& error){
-    if(mic_lane&&system_lane){auto diagnostic=Json{{"schemaVersion",1},{"ownerId",s.owner},{"state",state},{"error",error},{"qpcUnit","100ns"},{"sampleRate",48000},{"microphone",mic_lane->diagnostics()},{"system",system_lane->diagnostics()}};if(metadata)metadata->observe(L"capture-clock.json",std::move(diagnostic));else atomic_json(s.output/L"capture-clock.json",diagnostic,false);}
+    if(mic_lane&&system_lane){auto diagnostic=Json{{"schemaVersion",1},{"ownerId",s.owner},{"state",state},{"error",error},{"qpcUnit","100ns"},{"sampleRate",48000},{"microphone",mic_lane->diagnostics()},{"system",system_lane->diagnostics()},{"endpointAlignment",system_lane->alignment_diagnostics()}};if(metadata)metadata->observe(L"capture-clock.json",std::move(diagnostic));else atomic_json(s.output/L"capture-clock.json",diagnostic,false);}
   };
   try {
     if(s.lease_stdin){
@@ -98,6 +98,10 @@ struct CaptureSession {
     if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();mic.preparation_schedule.initial_resolved=system.preparation_schedule.initial_resolved=true;}
     else{reconnect(mic,true);reconnect(system,false);}
     mon::capture::SyntheticDriver synthetic({s.scenario,s.synthetic_clock_overlap,s.synthetic_clock_cases,s.synthetic_clock_resampling,s.synthetic_clock_drift});
+    EndpointMixer synthetic_mixer;
+    EndpointCursor synthetic_primary,synthetic_delayed;
+    const bool synthetic_endpoints=s.synthetic&&(s.scenario=="endpoint-switch-late"||s.scenario=="endpoint-continuity");
+    auto emit_synthetic=[&](CapturePacket packet){system.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);};
     std::uint64_t revision=0,selection_revision=0,last_diagnostics=0,reported_estimates=0;std::uint64_t start=s.test&&!s.synthetic?0:qpc();
     if(s.test&&start){mic.holding_for_window=system.holding_for_window=false;mic.window_start=system.window_start=start;mic.window_end=system.window_end=start+50000000ULL;}
     manifest["state"]=s.test&&!start?"starting":"recording";manifest["microphoneDeviceUID"]=selected.empty()?Json(nullptr):Json(selected);
@@ -127,7 +131,22 @@ struct CaptureSession {
         std::vector<float> tone(packet.frames,0.125f);
         if(mic.binding.state=="connected")mic.append(tone.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
         std::vector<float> silence(packet.frames*2,0);
-        if(system.binding.state=="connected")system.append(silence.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
+        if(synthetic_endpoints){
+          const auto first=EndpointMixer::frame_at(packet.time);
+          if(system.binding.state=="connected"){
+            std::vector<float> signal(packet.frames*2,0.25f);
+            synthetic_mixer.add(synthetic_primary,first,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
+            // Old Bluetooth callbacks can arrive after newer output samples
+            // have already been sealed. Exercise the real production mixer.
+            if(s.scenario=="endpoint-switch-late"&&packet.position>=4800*5)synthetic_mixer.add(synthetic_delayed,first-24000,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
+          }
+          auto through=EndpointMixer::frame_at(packet.arrival);
+          through=through>EndpointMixer::latency_frames?through-EndpointMixer::latency_frames:0;
+          through=synthetic_primary.safe_through(packet.arrival,through);
+          through=synthetic_delayed.safe_through(packet.arrival,through);
+          synthetic_mixer.flush(through,packet.arrival,emit_synthetic);
+          system.previous_alignment=synthetic_mixer.diagnostics();
+        }else if(system.binding.state=="connected")system.append(silence.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
       }
       else{
         // Endpoint/session enumeration can block too. Poll it independently of
@@ -189,6 +208,7 @@ struct CaptureSession {
       if(fs::exists(s.output/L"stop.request")||(s.synthetic?synthetic.finished():s.test&&start&&qpc()-start>=50000000ULL))break;
       if(s.synthetic||(!mic.queued()&&!system.queued()))Sleep(10);
     }
+    if(synthetic_endpoints){synthetic_mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit_synthetic);system.previous_alignment=synthetic_mixer.diagnostics();}
     if(selection_preparation)selection_preparation->cancel();
     // Stop both native owners before draining or waiting for any disk job.
     mic.cancel_preparation();system.cancel_preparation();

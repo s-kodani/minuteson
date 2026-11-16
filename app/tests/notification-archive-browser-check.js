@@ -1,35 +1,29 @@
-// Native delivery protocol is synthetic; no recording, playback or files.
+// Production main window with synthetic recovery and closed-input events.
 async page=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/bootstrap\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
     await route.fulfill({response,body});
   });
-  await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
-  await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"通知一覧の点検会議",both:true,loss:2,issue:"missing"})];return f.recordChanged({phase:"idle"});});
-  await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="acknowledge_archived_recording_input_notice"));
-  await page.clock.runFor(600);
-  check(await page.locator(".archived-input-notices,.issue-status").count()===0,"archive banner escaped workspace");
-  check(await page.locator(".toast-host").count()===1,"Sonner presenter missing");
-  results.push("archived input events reach Sonner while retained diagnostics have no workspace banner");
-  await page.getByRole("button",{name:"通知一覧",exact:true}).click();
-  const dialog=page.getByRole("dialog",{name:"通知一覧",exact:true});await dialog.waitFor();
-  await dialog.getByText(/マイクの取得が中断していました/).first().waitFor();
-  await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0].delivery.rendered));
-  const diagnostic=dialog.locator(".toast-card").filter({hasText:/接続通知を|中断・再開履歴/u});
-  check(await diagnostic.count()===0,"archived input diagnostics appeared in the list");
-  results.push("actual toast/list visibility acknowledges delivery while internal diagnostics stay out of the list");
-  const mic=dialog.locator(".toast-card").filter({hasText:"マイクの取得が中断していました"});
-  await mic.getByRole("button",{name:"注意通知を削除",exact:true}).click();
-  const recovered=dialog.locator(".toast-card").filter({hasText:"マイクの取得が復帰していました"});
-  await recovered.waitFor();
-  check(await page.evaluate(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.sequence)===1,"microphone dismissal advanced another lane");
-  results.push("deleting one notification advances only its exact lane");
-  await recovered.getByRole("button",{name:"会議を開く",exact:true}).click();await dialog.waitFor({state:"hidden"});
-  await page.getByRole("tab",{name:"文字起こし",exact:true}).waitFor();
-  check(await page.locator(".meeting-detail-status h1").innerText()==="通知一覧の点検会議","notification opened wrong meeting");
-  check(await page.locator(".archived-input-notices,.issue-status").count()===0,"navigation recreated inline notifications");
-  check(await page.evaluate(()=>!window.closeFixture.calls.some(c=>["start_recording","start_capture_test","prepare_meeting_playback","prepare_utterance_playback"].includes(c.command))),"notification action started recording or playback");
-  results.push("meeting action closes the list and opens the exact meeting without recording/playback");
-  return {passed:results.length,results};
+  try{
+    await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
+    await page.getByRole("navigation",{name:"メインナビゲーション",exact:true}).waitFor();
+    await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow({title:"通知を出さない会議",both:true})];return f.recordChanged({phase:"idle"});});
+    await page.clock.runFor(1600);
+    check(await page.evaluate(()=>window.closeFixture.notificationHistory().length===0),"closed input events created notifications");
+    check(await page.evaluate(()=>window.closeFixture.calls.every(c=>!c.command.includes("archived_recording_input"))),"retired input notification delivery still runs");
+    results.push("closed microphone and PC interruption/recovery events neither notify nor run delivery IO");
+    const before=await page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="list_meetings").length);
+    await page.evaluate(()=>window.emitResidencyFixture("recordings-recovered",[window.closeFixture.archived.rows[0].meetingId]));
+    await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="list_meetings").length>n,before);
+    check(await page.evaluate(()=>window.closeFixture.notificationHistory().length===0),"successful recovery created a notification");
+    results.push("successful recovery refreshes meetings silently");
+    await page.evaluate(()=>window.closeFixture.showQueueBlockers());
+    await page.getByRole("button",{name:"通知一覧",exact:true}).click();
+    const dialog=page.getByRole("dialog",{name:"通知一覧",exact:true});await dialog.waitFor();
+    await dialog.locator(".toast-card").filter({hasText:"合成優先通知 block1"}).waitFor();
+    check(!(await dialog.innerText()).match(/取得が中断|取得が復帰|前回の音声保存/u),"removed input/recovery notification appeared in the list");
+    results.push("other error notifications remain available in the notification list");
+    return {passed:results.length,results};
+  }finally{await page.context().unrouteAll();}
 }

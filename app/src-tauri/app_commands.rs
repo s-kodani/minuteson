@@ -7,6 +7,7 @@ pub const COMMANDS: &[&str] = &[
     "record_background_read_failure",
     "get_internal_logs",
     "get_recording_recovery",
+    "retry_recording_recovery",
     "get_startup_report",
     "get_startup_reset_preview",
     "choose_startup_reset_backup_directory",

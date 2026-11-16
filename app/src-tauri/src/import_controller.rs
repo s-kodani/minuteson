@@ -332,9 +332,9 @@ impl ImportController {
                     )
                 }))
                 .unwrap_or_else(|_| {
-                    Err(
-                        "取り込み処理が予期せず停止しました。保存状況は再起動時に再検証します"
-                            .into(),
+                    app.state::<Storage>().reconcile_audio_import_operation(
+                        &format!("import:{}", request.token),
+                        &cancelled,
                     )
                 });
             // Dropping the scope publishes its final observation. Do this while
@@ -569,7 +569,7 @@ impl ImportController {
                         .recover_audio_imports_cancellable(&cancelled)
                 }))
                 .unwrap_or_else(|_| {
-                    Err("取り込みの回復検証が停止しました。次回起動時に再検証します".into())
+                    Err("取り込みの回復処理を完了できませんでした。元音声は保持しています".into())
                 });
             if prepared {
                 AnalysisController::import_finished(&app);

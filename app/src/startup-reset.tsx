@@ -56,7 +56,7 @@ export function StartupReset({ availability, disabled = false, onBusy, children 
     )}
     {preview && allowed?.available === false && <p role="status">利用できない理由：{displayNativePathsInText(allowed.reason ?? "")}</p>}
     {!preview && !snapshot?.busy && snapshot?.message && <p role="status">{displayNativePathsInText(snapshot.message)}</p>}
-    {snapshot?.operationId && !snapshot.busy && <button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>{appName}を再起動</button>}
+    {snapshot?.operationId && !snapshot.busy && <div className="startup-reset-actions"><button type="button" onClick={() => void invoke("retry_startup").catch(cause => setError(String(cause)))}>{appName}を再起動</button></div>}
     {!preview && (error || snapshot?.error) && <p role="alert">{displayNativePathsInText(error || snapshot?.error || "")}</p>}
     <CommonModal open={!!preview?.availability.available} blocked={busy || selecting || loading} hideDismissButton onDismiss={() => { if (!busy && !selecting) setPreview(null); }} restoreTarget={() => restoring ? restoreOpener.current : opener.current} aria-labelledby="startup-reset-title" aria-describedby="startup-reset-description">
       {preview && <StartupResetForm restoring={restoring} productName={appName} preview={preview} archive={archive} busy={busy} accepted={!!snapshot?.operationId} selecting={selecting} message={snapshot?.message ?? ""} error={snapshot?.error || error} onArchive={setArchive} onChoose={() => void choose()} onCancel={() => setPreview(null)} onStart={() => { if (snapshot?.operationId) void invoke("retry_startup").catch(cause => setError(String(cause))); else void start(); }} />}

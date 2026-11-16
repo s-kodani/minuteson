@@ -240,6 +240,40 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Reconcile a crashed worker by its existing operation, never create or
+    /// decode another import. A complete manifest is the recovery boundary.
+    pub(crate) fn reconcile_audio_import_operation(
+        &self,
+        operation: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<ImportSnapshot, String> {
+        let id: Option<String> = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?
+            .query_row(
+                "SELECT import_id FROM audio_import_commits WHERE operation_id=?1",
+                [operation],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let id = id.ok_or("取り込み処理が予期せず停止しました。元音声は保持しています")?;
+        let before = self.audio_import(&id)?;
+        if before.state != "ready"
+            && !self
+                .audio_import_directory(&before)?
+                .join("manifest.json")
+                .is_file()
+        {
+            let error = "取り込み処理は音声確定前に停止しました。元音声から再度取り込んでください";
+            self.fail_audio_import(&id, "interrupted", error)?;
+            return Err(error.into());
+        }
+        crate::audio_finalization::complete(&|| cancelled() || self.data_write_blocked(), || {
+            self.finalize_audio_import_cancellable(&id, cancelled)
+        })
+    }
     #[cfg(test)]
     pub(crate) fn finalize_audio_import(&self, id: &str) -> Result<ImportSnapshot, String> {
         self.finalize_audio_import_cancellable(id, &crate::test_support::never_cancelled)
@@ -501,7 +535,10 @@ impl Storage {
             let base = self.audio_import_directory(&snapshot)?;
             if base.join("manifest.json").exists() {
                 // Complete but invalid evidence is retained for inspection.
-                match self.finalize_audio_import_cancellable(&id, cancelled) {
+                match crate::audio_finalization::complete(
+                    &|| cancelled() || self.data_write_blocked(),
+                    || self.finalize_audio_import_cancellable(&id, cancelled),
+                ) {
                     Ok(saved) => recovered.push(saved),
                     Err(error) => {
                         if cancelled() {

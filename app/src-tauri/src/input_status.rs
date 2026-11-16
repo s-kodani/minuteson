@@ -238,6 +238,27 @@ impl StatusReader {
         self.persistence.read(&self.directory, owner)
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
+        let (p, mut age_ms) = self.read_publication(owner)?;
+        self.deliver(p, &mut age_ms, target)
+    }
+    /// Current connection state must not depend on notification storage or a
+    /// WebView receiving/rendering an earlier interruption.
+    pub(crate) fn telemetry(&mut self, owner: &str) -> Result<Snapshot, String> {
+        let (p, age_ms) = self.read_publication(owner)?;
+        Ok(Snapshot {
+            schema_version: 4,
+            owner_id: p.owner_id,
+            revision: p.revision,
+            report_age_ms: age_ms,
+            microphone: p.microphone,
+            system: p.system,
+            notices: Vec::new(),
+            notice_loss: Some(Default::default()),
+            observed_at: self.clock.instant(),
+            observed_wall: self.clock.wall(),
+        })
+    }
+    fn read_publication(&mut self, owner: &str) -> Result<(Publication, u64), String> {
         let started = self.clock.instant();
         let file = crate::input_levels::open_capture_file_at(&self.directory, "input-status.json")?;
         let before = file.metadata().map_err(|e| e.to_string())?;
@@ -307,14 +328,25 @@ impl StatusReader {
                 );
                 age_ms = age_ms.max(first_age.saturating_add(millis(elapsed)?));
             } else {
+                diagnostics::input_transitions(&p, Some(previous));
                 self.previous = Some((p.clone(), age_ms, self.clock.instant(), now));
             }
         } else {
+            diagnostics::input_transitions(&p, None);
             self.previous = Some((p.clone(), age_ms, self.clock.instant(), now));
         }
         if age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
+        Ok((p, age_ms))
+    }
+    fn deliver(
+        &mut self,
+        p: Publication,
+        age_ms: &mut u64,
+        target: Option<&str>,
+    ) -> Result<Snapshot, String> {
+        let owner = p.owner_id.as_str();
         let queue_started = self.clock.instant();
         if self.ledger.is_none() {
             let (mut ledger, restored) = queue::Ledger::open(&self.directory, owner)?;
@@ -326,16 +358,16 @@ impl StatusReader {
             self.ledger = Some(ledger);
         }
         let mut candidate = self.queue.clone();
-        let mut notices = candidate.observe(&p, age_ms, target, self.clock.instant());
+        let mut notices = candidate.observe(&p, *age_ms, target, self.clock.instant());
         self.ledger.as_mut().unwrap().commit(&p, &candidate)?;
         self.queue = candidate;
         // File sync is not a new producer heartbeat. Account for time spent
         // persisting before any connection flag or delivery offer leaves Rust.
-        age_ms = age_ms.saturating_add(millis(self.clock.elapsed(queue_started))?);
-        if age_ms > SAFE {
+        *age_ms = age_ms.saturating_add(millis(self.clock.elapsed(queue_started))?);
+        if *age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
-        if age_ms > FRESH_MS {
+        if *age_ms > FRESH_MS {
             notices.clear();
         }
         let notice_loss = self.queue.loss();
@@ -344,7 +376,7 @@ impl StatusReader {
             schema_version: 4,
             owner_id: p.owner_id,
             revision: p.revision,
-            report_age_ms: age_ms,
+            report_age_ms: *age_ms,
             microphone: p.microphone,
             system: p.system,
             notices,

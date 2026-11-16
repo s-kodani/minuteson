@@ -54,7 +54,7 @@ async (page, capturePath) => {
   await clearNotices();await open();
   check(await term().inputValue()==="保存失敗の入力","save failure discarded dictionary input");
   await page.evaluate(()=>{window.monBrowserFixture.failVocabulary=false;});
-  await dialog().getByRole("button",{name:"用語保存を再試行",exact:true}).click();await saved();
+  await dialog().locator(".analysis-actions").getByRole("button",{name:"用語保存を再試行",exact:true}).click();await saved();
   results.push("failed dictionary save blocks regeneration, preserves input and permits explicit retry");
 
   await page.evaluate(()=>{window.monBrowserFixture.persistenceDelayMs=500;});

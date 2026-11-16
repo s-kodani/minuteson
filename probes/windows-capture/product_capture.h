@@ -10,6 +10,8 @@
 #include <functiondiscoverykeys_devpkey.h>
 #include <tlhelp32.h>
 #include <audiopolicy.h>
+#include <endpointvolume.h>
+#include <cstring>
 #include <bcrypt.h>
 #include <algorithm>
 #include <cmath>
@@ -83,6 +85,7 @@ Json applications(){
 }
 std::wstring endpoint_id(IMMDevice* device){LPWSTR id=nullptr;check(device->GetId(&id),"get endpoint identity");std::wstring value(id);CoTaskMemFree(id);return value;}
 ComPtr<IMMDeviceEnumerator> enumerator(){ComPtr<IMMDeviceEnumerator> e;check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(e.GetAddressOf())),"enumerate audio endpoints");return e;}
+#include "audio_inspection.h"
 Json microphones(){
   auto e=enumerator();ComPtr<IMMDevice> selected;std::wstring current;if(SUCCEEDED(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&selected)))current=endpoint_id(selected.Get());
   ComPtr<IMMDeviceCollection> collection;check(e->EnumAudioEndpoints(eCapture,DEVICE_STATE_ACTIVE,&collection),"list microphones");UINT count=0;check(collection->GetCount(&count),"count microphones");Json devices=Json::array();
@@ -147,12 +150,13 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
   current();
   WAVEFORMATEX* mix=nullptr;
   result.matching_position_rate=SUCCEEDED(result.client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
+  if(microphone)std::cerr<<"mon_capture_input: "+Json{{"event","open"},{"uid",result.choice.uid},{"source",result.choice.source},{"nativeRate",mix?Json(mix->nSamplesPerSec):Json(nullptr)},{"nativeChannels",mix?Json(mix->nChannels):Json(nullptr)}}.dump()+"\n";
   if(mix)CoTaskMemFree(mix);
   current();
   const UINT32 channels=microphone?1:2;
   WAVEFORMATEX format={};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=WORD(channels);format.nSamplesPerSec=48000;format.wBitsPerSample=32;format.nBlockAlign=WORD(channels*4);format.nAvgBytesPerSec=48000*format.nBlockAlign;
   acquisition(result.client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY|(microphone?0:AUDCLNT_STREAMFLAGS_LOOPBACK),5000000,0,&format,nullptr),"initialize 48 kHz floating-point WASAPI");
-  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels);
+  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels,microphone,result.choice.uid);
   current();
   return result;
 }
@@ -169,11 +173,17 @@ class Lane {
   PreparationSchedule preparation_schedule;
   std::uint64_t peak_queued_frames=0,discontinuities=0;
   Json recent=Json::array(),anomalies=Json::array();std::uint64_t observed=0;
+  AlignmentDiagnostics previous_alignment;
+  Json alignment_diagnostics(){
+    auto value=previous_alignment;if(reader)value.merge(reader->alignment_diagnostics());
+    Json losses=Json::array();for(const auto& entry:value.losses)losses.push_back(Json{{"startQpc100ns",EndpointMixer::ticks_at(entry.first)},{"frames",entry.frames},{"reason",entry.reason},{"mappedStartQpc100ns",EndpointMixer::ticks_at(entry.mapped_first)}});
+    return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"retimedPackets",value.retimed_packets},{"retimedFrames",value.retimed_frames},{"clockAdjustmentFrames",value.clock_adjustment_frames},{"pressureFlushes",value.pressure_flushes},{"discardedFrames",0},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
+  }
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
   ~Lane(){if(reader)reader->stop();}
   void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
   void adopt(PreparedInput input){if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);clock.begin_stream(input.matching_position_rate);reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
-  void detach(const char* reason,bool unavailable=false){cancel_preparation();if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}reader.reset();}started=false;window_frames=0;binding.lost(reason,unavailable);}
+  void detach(const char* reason,bool unavailable=false){cancel_preparation();if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}previous_alignment.merge(reader->alignment_diagnostics());reader.reset();}started=false;window_frames=0;binding.lost(reason,unavailable);}
   void begin_file(){
     file.value=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("capture destination already exists");
     std::vector<BYTE> header={'c','a','f','f',0,1,0,0,'d','e','s','c'};
@@ -221,6 +231,7 @@ class Lane {
 int run(int argc,wchar_t** argv){
   check(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"initialize product capture COM");
   if(argc==2&&std::wstring(argv[1])==L"--list-input-devices"){std::cout<<microphones().dump()<<std::endl;return 0;}
+  if(argc==2&&std::wstring(argv[1])==L"--inspect-audio-state"){std::cout<<audio_inspection::snapshot().dump()<<std::endl;return 0;}
   if(argc==2&&std::wstring(argv[1])==L"--list-capture-applications"){std::cout<<applications().dump()<<std::endl;return 0;}
   return CaptureSession(parse(argc,argv)).run();
 }

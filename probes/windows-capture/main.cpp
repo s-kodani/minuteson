@@ -464,7 +464,7 @@ int wmain(int argc, wchar_t** argv) {
     if(argc>1&&std::wstring(argv[1])==L"--import-audio")return audio_import::run(argc,argv);
     for (int i=1;i<argc;++i) {
       std::wstring flag=argv[i];
-      if(flag==L"--backend"||flag==L"--list-input-devices"||flag==L"--list-capture-applications")return product::run(argc,argv);
+      if(flag==L"--backend"||flag==L"--list-input-devices"||flag==L"--list-capture-applications"||flag==L"--inspect-audio-state")return product::run(argc,argv);
     }
     return diagnostic_main(argc,argv);
   } catch(const std::exception& error) { std::cerr<<error.what()<<std::endl;return 1; }

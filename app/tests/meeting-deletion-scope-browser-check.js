@@ -20,7 +20,7 @@ async (page, capturePath) => {
     await remove.click();
   };
   await scenario("stale");
-  await page.getByText("録音未完了・要確認",{exact:true}).waitFor();
+  await page.getByText("音声保存エラー",{exact:true}).waitFor();
   let remove=await menu("既存会議"); await allow(remove);
   await page.screenshot({path:capturePath("meeting-deletion-scope-enabled.png")});
   await remove.click(); await confirm();

@@ -8,6 +8,7 @@ pub fn permits(command: &str, role: &str) -> bool {
         "record_background_read_failure" => matches!(role, "main"),
         "get_internal_logs" => matches!(role, "main"),
         "get_recording_recovery" => matches!(role, "main"),
+        "retry_recording_recovery" => matches!(role, "main"),
         "get_startup_report" => matches!(role, "main"),
         "get_startup_reset_preview" => matches!(role, "main"),
         "choose_startup_reset_backup_directory" => matches!(role, "main"),

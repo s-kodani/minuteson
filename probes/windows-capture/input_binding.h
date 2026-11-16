@@ -57,6 +57,7 @@ MicrophoneChoice choose_microphone(const std::string& fixed,DWORD application){
     if(candidates.size()==1)return {*candidates.begin(),"application",""};
     if(candidates.size()>1)fallback="application_input_ambiguous";
   }catch(...){fallback="application_input_unavailable";}}
+  // Keep the user's communications microphone as the automatic fallback.
   ComPtr<IMMDevice> device;acquisition(e->GetDefaultAudioEndpoint(eCapture,eCommunications,&device),"既定のマイクがありません");
   return {utf8(endpoint_id(device.Get())),"systemDefault",fallback};
 }

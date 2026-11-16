@@ -20,12 +20,19 @@ async page=>{
     const dialog=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});await dialog.getByRole("button",{name:"録音を開始する",exact:true}).click();await dialog.waitFor({state:"hidden"});
     await page.evaluate(()=>{window.closeFixture.refreshInputStatus=true;return window.closeFixture.recordChanged({phase:"recording",microphoneConnected:true,systemAudioConnected:true});});
     await states("unknown","unknown");results.push("legacy connected flags do not create a live input claim");
-    await set(binding(),binding());await states("connected","connected");results.push("current queued schema binds both live tracks");
+    await set(binding(),binding());await states("connected","connected");results.push("current telemetry binds both live tracks");
     await set(binding("disconnected",1,1,"device_disconnected"),binding("disconnected",1,1,"stream_stopped"));await states("disconnected","disconnected");
     check((await page.locator('[data-input-kind="microphone"]').innerText()).includes("選択した機器が未接続"),"microphone reason missing");
     check((await page.locator('[data-input-kind="system"]').innerText()).includes("取得処理が停止"),"system reason missing");
     results.push("each disconnected input retains its own cause without an invented save claim");
     await set(binding("connected",2,1),binding("connected",2,1));await states("connected","connected");results.push("both tracks recover only with new source epochs");
+    for(let epoch=3;epoch<=5;epoch++){
+      await set(binding("disconnected",epoch-1,epoch-1,"device_disconnected"),binding("disconnected",epoch-1,epoch-1,"stream_stopped"));await states("disconnected","disconnected");
+      await set(binding("connected",epoch,epoch-1),binding("connected",epoch,epoch-1));await states("connected","connected");
+    }
+    check(await page.evaluate(()=>window.closeFixture.notificationHistory().length===0),"route changes created input notifications");
+    check(await page.evaluate(()=>window.closeFixture.calls.every(c=>!["receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"].includes(c.command))),"main status still depends on notification delivery");
+    results.push("repeated route changes restore connected status without input notifications or delivery IO");
     await page.evaluate(()=>window.closeFixture.refreshInputStatus=false);await states("stale","stale");results.push("frozen paired report expires both live statuses");
     await page.goto("http://127.0.0.1:1420/?window=recorder");await page.waitForFunction(()=>!!window.closeFixture);await page.setViewportSize({width:227,height:101});
     await page.evaluate(()=>{window.closeFixture.refreshInputStatus=true;return window.closeFixture.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID()});});

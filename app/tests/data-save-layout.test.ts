@@ -30,12 +30,7 @@ test("data availability must be read for the current snapshot revision before it
   assert.match(operation, /epoch === readEpoch.current && current.current\?\.revision === next.revision/);
   assert.match(operation, /invoke<DataAvailability>\("get_data_operation_availability"\)/);
 });
-test("historical notification IO stays paused across data selection and ready handoff", () => {
+test("historical acquisition notifications no longer run background delivery from the main window", () => {
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
-  const start = main.indexOf("<ArchivedInputNotices");
-  const notice = main.slice(start, main.indexOf("/>", start));
-  assert.match(notice, /paused=\{/);
-  assert.match(notice, /dataPending/);
-  assert.match(notice, /dataOperation.snapshot\?\.phase===\"ready\"/);
-  assert.match(notice, /dataOperation.snapshot\?\.busy/);
+  assert.doesNotMatch(main, /ArchivedInputNotices|RecordingInputNotice|recording-recovered/);
 });

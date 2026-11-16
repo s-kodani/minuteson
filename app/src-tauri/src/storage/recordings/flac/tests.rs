@@ -2,6 +2,8 @@ use super::*;
 use crate::audio::{flac::encode_segment_file, VerifiedAudio};
 use serde_json::{json, Value};
 use std::io::Write;
+#[path = "automatic_tests.rs"]
+mod automatic;
 #[path = "completed_tests.rs"]
 mod completed;
 #[cfg(unix)]
@@ -494,11 +496,6 @@ fn partial_registered_rows(fixture: &Fixture) -> i64 {
 #[test]
 fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fake_closure() {
     let fixture = partial_fixture();
-    assert!(fixture
-        .storage
-        .recover_completed_recordings()
-        .unwrap()
-        .is_empty());
     let review = fixture
         .storage
         .review_partial_recording(&fixture.session.id)
@@ -725,7 +722,6 @@ fn partial_recovery_failed_commit_keeps_all_audio_and_resumes_same_checkpoint_id
         .unwrap();
     drop(fixture.storage);
     let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
-    assert!(reopened.recover_completed_recordings().unwrap().is_empty());
     let review = reopened
         .review_partial_recording(&fixture.session.id)
         .unwrap();

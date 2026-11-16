@@ -11,6 +11,7 @@ final class SystemPCMWriter: @unchecked Sendable {
   private var writer: AVAssetWriter?
   private var input: AVAssetWriterInput?
   private var sourceFormat: AVAudioFormat?
+  private var sourceEpoch: UInt64?
   private var closed = false
   private var finishFailure: String?
   private var savedStats = TrackStats()
@@ -72,15 +73,22 @@ final class SystemPCMWriter: @unchecked Sendable {
       let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
     else { throw ProbeError.capture("system audio format or writer is unavailable") }
     let format = AVAudioFormat(cmAudioFormatDescription: description)
-    if let sourceFormat, !sourceFormat.isEqual(format) {
+    // A new, owned binding can have a different hardware format. The raw
+    // normalizer already drains its old converter at an epoch boundary and
+    // stores every epoch as 16 kHz mono. A legacy continuous CAF or an
+    // unexpected format change inside one live binding remains rejected.
+    let ownedRawTransition = rawSegments != nil
+      && self.sourceEpoch.map({ sourceEpoch > $0 }) == true
+    if let sourceFormat, !sourceFormat.isEqual(format), !ownedRawTransition {
       formatChanged = true
       throw AppendError.formatChanged
     }
     if let rawSegments {
+      try rawSegments.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
       sourceFormat = format
+      self.sourceEpoch = sourceEpoch
       savedStats.sampleRate = asbd.mSampleRate
       savedStats.channels = asbd.mChannelsPerFrame
-      try rawSegments.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
       savedStats.callbackCount += 1
       savedStats.frames += Int64(sample.numSamples)
       if levelsEnabled { savedStats.inputLevel.receive(sample, at: receivedAt) }

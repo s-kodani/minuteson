@@ -482,7 +482,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     <h2 tabIndex={-1}>導入済みモデル管理</h2>
     {!installed.length && <p>導入済みモデルはありません。「ローカルAI」からモデルを導入できます。</p>}
     <ul>{installed.map(group => <li key={group.key} className="model-inventory-item">{renderModel(group.entry)}
-      {(group.entries.length > 1 || group.entries.some(entry => entry.cleanupPending)) && <p className="model-cleanup-pending" role="status">未使用データの整理を保留しています。処理の完了後または次回起動時に自動で再確認します。</p>}
+      {(group.entries.length > 1 || group.entries.some(entry => entry.cleanupPending)) && <p className="model-cleanup-pending" role="status">未使用データの整理を保留しています。使用中の処理が完了すると自動で再確認します。</p>}
     </li>)}</ul>
     {installed.length > 0 && (!deletion?.canReviewModel || disabled) && <div id="model-deletion-unavailable" role="status"><p>{recordingActive ? "録音・音声保存が完了すると削除できます。" : busy || pending ? "モデル準備が完了すると削除できます。" : deletion?.reviewUnavailableReason ?? "ほかの操作が完了すると削除できます。"}</p></div>}
     {deletion?.listing?.items.map(item => <div key={item.operationId} className="model-deletion-pending"><p>{item.modelName ?? "モデル"}：削除の確認が必要です。{item.errorMessage}</p>

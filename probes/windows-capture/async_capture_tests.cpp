@@ -9,7 +9,7 @@ class FakeClient final : public IAudioClient {
   std::atomic<ULONG> references_{1};
   IAudioCaptureClient* capture_;
  public:
-  std::atomic<unsigned> stops{0};DWORD service_thread=0,start_thread=0,stop_thread=0,service_release_thread=0;
+  std::atomic<unsigned> starts{0},stops{0};DWORD service_thread=0,start_thread=0,stop_thread=0,service_release_thread=0;
   explicit FakeClient(IAudioCaptureClient* capture):capture_(capture){}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** value) override{*value=nullptr;return E_NOINTERFACE;}
   ULONG STDMETHODCALLTYPE AddRef() override{return ++references_;}
@@ -21,7 +21,7 @@ class FakeClient final : public IAudioClient {
   HRESULT STDMETHODCALLTYPE IsFormatSupported(AUDCLNT_SHAREMODE,const WAVEFORMATEX*,WAVEFORMATEX**) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetMixFormat(WAVEFORMATEX**) override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE GetDevicePeriod(REFERENCE_TIME*,REFERENCE_TIME*) override{return E_NOTIMPL;}
-  HRESULT STDMETHODCALLTYPE Start() override{start_thread=GetCurrentThreadId();return S_OK;}
+  HRESULT STDMETHODCALLTYPE Start() override{start_thread=GetCurrentThreadId();++starts;return S_OK;}
   HRESULT STDMETHODCALLTYPE Stop() override{stop_thread=GetCurrentThreadId();++stops;return S_OK;}
   HRESULT STDMETHODCALLTYPE Reset() override{return E_NOTIMPL;}
   HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override{return E_NOTIMPL;}
@@ -33,12 +33,12 @@ class FakeCapture final : public IAudioCaptureClient {
   bool fail_;
   void same_thread(){auto id=GetCurrentThreadId();if(!thread)thread=id;require(thread==id,"GetBuffer/ReleaseBuffer changed acquisition threads");}
  public:
-  std::atomic<unsigned> released{0};DWORD thread=0,service_release_thread=0;
+  std::atomic<unsigned> released{0},packet_limit{500};DWORD thread=0,service_release_thread=0;
   explicit FakeCapture(bool fail):fail_(fail){}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** value) override{*value=nullptr;return E_NOINTERFACE;}
   ULONG STDMETHODCALLTYPE AddRef() override{return ++references_;}
   ULONG STDMETHODCALLTYPE Release() override{auto n=--references_;if(n==1&&thread)service_release_thread=GetCurrentThreadId();if(!n)delete this;return n;}
-  HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* frames) override{same_thread();*frames=released<500?479:0;return !*frames&&fail_?AUDCLNT_E_DEVICE_INVALIDATED:S_OK;}
+  HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* frames) override{same_thread();*frames=released<packet_limit?479:0;return !*frames&&fail_?AUDCLNT_E_DEVICE_INVALIDATED:S_OK;}
   HRESULT STDMETHODCALLTYPE GetBuffer(BYTE** data,UINT32* count,DWORD* flags,UINT64* position,UINT64* time) override {
     same_thread();auto p=released.load();*count=479;*position=p*160;*time=p*75000;
     *flags=p%17==0?AUDCLNT_BUFFERFLAGS_SILENT:0;
@@ -49,6 +49,53 @@ class FakeCapture final : public IAudioCaptureClient {
 };
 int main(){
   try {
+    product::MicrophoneFlow flow(100);
+    require(!flow.expired(3099)&&flow.expired(3100)&&!flow.received,"microphone first-packet deadline changed");
+    flow.packet(3000);
+    require(flow.received&&!flow.expired(5999)&&flow.expired(6000),"microphone packet watchdog did not use reception time");
+    // Start returns S_OK but GetNextPacketSize stays successful and empty.
+    // This is the real PowerConf failure: it must not become connected or
+    // retain the Bluetooth capture client indefinitely.
+    {
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(false);capture.Attach(input);input->packet_limit=0;
+      ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
+      product::NativePreparation preparation([client](auto)mutable{product::PreparedInput value;value.reader=std::make_unique<product::AsyncCapture>(std::move(client),2,true,"no-first-packet");return value;});
+      auto deadline=GetTickCount64()+10000;
+      while(!device->starts&&GetTickCount64()<deadline)Sleep(1);
+      require(device->starts&&!preparation.take(),"microphone connected before receiving its first packet");
+      while(!preparation.finished()&&GetTickCount64()<deadline)Sleep(1);
+      require(preparation.finished()&&!preparation.take()&&device->stops==1,"empty microphone was not stopped and released");
+      bool timed_out=false;try{if(preparation.error())std::rethrow_exception(preparation.error());}catch(const product::InputFailure& error){timed_out=error.result==HRESULT_FROM_WIN32(ERROR_TIMEOUT);}
+      require(timed_out&&input->service_release_thread==input->thread&&device->service_release_thread==input->thread,"stalled startup hid failure or released COM on another thread");
+    }
+    {
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(false);capture.Attach(input);input->packet_limit=1;
+      ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
+      product::AsyncCapture reader(client,2,true,"stalled-after-silence");
+      auto first=reader.queue.pop();
+      require(first&&first->frames==479&&(first->flags&AUDCLNT_BUFFERFLAGS_SILENT),"silent microphone packet was mistaken for missing delivery");
+      auto deadline=GetTickCount64()+10000;while(!device->stops&&GetTickCount64()<deadline)Sleep(1);
+      reader.stop();bool timed_out=false;try{reader.queue.pop();}catch(const product::InputFailure& error){timed_out=error.result==HRESULT_FROM_WIN32(ERROR_TIMEOUT);}
+      require(timed_out&&device->stops==1,"microphone delivery stall did not invalidate and close capture");
+    }
+    require(product::needs_render_loopback(true,false,false),"silent default output was not prepared");
+    require(!product::needs_render_loopback(false,false,false),"idle Bluetooth output would be activated");
+    require(product::needs_render_loopback(false,true,false),"application-routed output was not captured");
+    require(product::needs_render_loopback(false,std::nullopt,true),"metadata failure discarded a live output");
+    require(!product::needs_render_loopback(false,std::nullopt,false),"metadata failure activated an unused profile");
+    require(!product::render_session_uses_output(true,true),"loopback's own session kept retired Bluetooth output alive");
+    require(product::render_session_uses_output(true,false)&&product::render_session_uses_output(true,true,true),"real or multi-process playback was omitted");
+    require(!product::render_session_uses_output(false,false),"inactive playback was captured");
+    struct Output {int identity;unsigned pending=7;};
+    std::map<std::string,std::unique_ptr<Output>> outputs;
+    outputs.emplace("keep",std::make_unique<Output>(Output{1}));
+    outputs.emplace("old-profile",std::make_unique<Output>(Output{2}));
+    auto retained=outputs.at("keep").get();unsigned rescued=0;std::vector<std::string> operations;
+    product::reconcile_render_streams(outputs,std::map<std::string,int>{{"keep",1},{"new-profile",3}},
+      [&](Output& output){rescued+=output.pending;operations.push_back("retire");},
+      [&](int id){operations.push_back("open");return std::make_unique<Output>(Output{id});});
+    require(outputs.size()==2&&outputs.at("keep").get()==retained&&rescued==7,"route change restarted a retained output or lost its old tail");
+    require(operations==std::vector<std::string>{"retire","open"},"Bluetooth profiles were opened concurrently");
     constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
     auto pending_fixed=product::microphone_selection_status(owner,2,1,"B","A",{"A","systemDefault","application_input_unavailable"},true);
     require(pending_fixed["deviceUID"]=="B"&&pending_fixed["mode"]=="fixed"&&pending_fixed["source"]=="pending"&&pending_fixed["fallbackReason"].is_null(),"new fixed request was acknowledged with stale automatic selection");
@@ -71,11 +118,13 @@ int main(){
     {
       product::Lane meter(meter_path,2,true);meter.clock.begin_stream(true);
       product::EndpointMixer mixer;
-      mixer.add(480000,480,nullptr,2);
-      std::vector<float> stereo(960,0.25f);mixer.add(480000,480,stereo.data(),0);
-      mixer.flush(480480,100100000,[&](product::CapturePacket packet){
+      product::EndpointCursor silent,signal;
+      auto emit=[&](product::CapturePacket packet){
         meter.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);
-      });
+      };
+      mixer.add(silent,480000,480,nullptr,2,100100000,emit);
+      std::vector<float> stereo(960,0.25f);mixer.add(signal,480000,480,stereo.data(),0,100100000,emit);
+      mixer.flush(480480,100100000,emit);
       auto level=meter.level();meter.close();
       require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
     }

@@ -5,6 +5,94 @@ use std::cell::Cell;
 mod saved_playback;
 
 #[test]
+fn missing_and_duplicated_flac_frames_are_classified_without_accepting_them() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut input, _) = source(root.path(), 16000, 1, 12_301);
+    let path = root.path().join("intervals.flac");
+    let saved = write_segment(&mut input, 0, 12_301, &path, &|| false, &|_| {}).unwrap();
+    let mut file = File::open(&path).unwrap();
+    let (_, audio) = FlacAudio::open(&mut file, saved.size, &|| false).unwrap();
+    let index = audio.index.clone();
+    let bytes = std::fs::read(&path).unwrap();
+    drop(audio);
+    drop(file);
+    for (which, duplicate) in [(0, false), (1, false), (0, true), (2, true)] {
+        let entry = &index[which];
+        let start = entry.offset as usize;
+        let end = start + entry.bytes;
+        let mut damaged = bytes.clone();
+        if duplicate {
+            damaged.splice(end..end, bytes[start..end].iter().copied());
+        } else {
+            damaged.drain(start..end);
+        }
+        std::fs::write(&path, &damaged).unwrap();
+        let error = verify_source_classified(
+            &mut File::open(&path).unwrap(),
+            damaged.len() as u64,
+            &format!("{:x}", Sha256::digest(&damaged)),
+            &mut input,
+            0,
+            saved.frames,
+            &|| false,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, VerificationError::Intervals(_)),
+            "frame {which}, duplicate {duplicate}: {error}"
+        );
+        assert!(
+            read(&path).is_err(),
+            "external FLAC validation must remain strict"
+        );
+    }
+}
+
+#[test]
+fn fixed_blocks_cover_exact_boundaries_and_multibyte_frame_numbers() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut input, samples) = source(root.path(), 16000, 1, 128 * BLOCK + 1);
+    for frames in [
+        BLOCK - 1,
+        BLOCK,
+        BLOCK + 1,
+        2 * BLOCK - 1,
+        2 * BLOCK,
+        2 * BLOCK + 1,
+        128 * BLOCK + 1,
+    ] {
+        let path = root.path().join(format!("{frames}.flac"));
+        write_segment(&mut input, 0, frames as u64, &path, &|| false, &|_| {}).unwrap();
+        let mut audio = read(&path).unwrap();
+        assert_eq!(audio.format.frames, frames as u64);
+        assert_samples(&mut audio, frames - 1, 1, &samples);
+    }
+}
+
+#[test]
+fn short_pcm_read_is_rejected_before_a_false_flac_frame_is_written() {
+    struct ShortSource(VerifiedAudio);
+    impl PcmSource for ShortSource {
+        fn format(&self) -> &PcmFormat {
+            &self.0.format
+        }
+        fn read_frames(&mut self, first: u64, count: u64) -> Result<Vec<u8>, String> {
+            self.0.read_frames(first, count - 1)
+        }
+        fn verify_unchanged(&self) -> Result<(), String> {
+            self.0.verify_unchanged()
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (input, _) = source(root.path(), 16000, 1, 5000);
+    let path = root.path().join("short.flac");
+    let error =
+        write_segment(&mut ShortSource(input), 0, 5000, &path, &|| false, &|_| {}).unwrap_err();
+    assert!(error.message.contains("要求したフレーム数"));
+    assert!(!path.exists());
+}
+
+#[test]
 fn canonical_verifier_rejects_valid_flac_from_another_source_and_trailing_data() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, _) = source(root.path(), 8000, 2, 12001);

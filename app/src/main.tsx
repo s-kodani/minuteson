@@ -23,7 +23,6 @@ import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, NotificationList, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderOperationProvider, RecorderOperationNotifications } from "./recorder-operation-notices";
-import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { formatElapsed, useRecordingSession } from "./session";
@@ -42,7 +41,7 @@ import { ModelInspectionPanel } from "./model-inspection";
 import { ModelDownloadGuidance } from "./model-download-guidance";
 import { ModelRuntimeGuidance } from "./model-runtime-guidance";
 import { CommonOperationProgress, usePublishProgress } from "./operation-progress";
-import { RecordingRecoveryNotifications, useRecordingRecovery } from "./recording-recovery";
+import { RecordingRecoveryNotifications, RecordingSaveRetry, useRecordingRecovery } from "./recording-recovery";
 import { recoveryMeetingState } from "./recording-recovery-state";
 import { recordingSaveProgress, deletionProgress, dataJobProgress } from "./operation-progress-state";
 import { JobCount, JobList } from "./job-list";
@@ -63,7 +62,7 @@ import { MeetingAudioProvider } from "./meeting-audio";
 import {ActiveMicrophoneSelection,CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
-import {RecordingInputProvider,RecordingInputNotice} from "./recording-input-status";
+import {RecordingInputProvider} from "./recording-input-status";
 import {validRecordingPreparation,type RecordingPreparation} from "./recording-preparation-state";
 import {useRecordingMicrophoneSelection} from "./microphone-selection-status";
 import {useCaptureScope} from "./capture-applications";
@@ -143,7 +142,6 @@ function MainWindow() {
   const captureTest=useCaptureTest();
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false);
-  const [recoveredCount, setRecoveredCount] = useState(0);
   const { busy: navigationBusy, quietNavigation, running: navigating, withSavedEdits: saveEdits } = useSavedNavigation(setMeetingError);
   // Navigation and regeneration cannot leave a completed test holding the
   // native admission gate. Capture actions own their own confirmation barrier.
@@ -246,7 +244,6 @@ function MainWindow() {
     }).then(stop => { if (active) stopCleanup = stop; else stop(); }).catch(error => { if (active) setMeetingError(String(error)); });
     void listen<string[]>("recordings-recovered", (event) => {
       if (!active) return;
-      setRecoveredCount(event.payload.length);
       void invoke<Meeting[]>("list_meetings").then((items) => { if (active) setMeetings(items); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
       if (selectedMeeting && event.payload.some((id) => id === selectedMeeting.id)) {
         void invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }).then((item) => { if (active) setSelectedMeeting(item); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
@@ -418,9 +415,8 @@ function MainWindow() {
         <IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/>
         <RecorderOperationNotifications />
         <RecordingRecoveryNotifications snapshot={recovery.snapshot} error={recovery.error} />
-        <RecordingInputNotice windowLabel="main"/>
         <ThemeNotifications locked={writeLocked} />
-        <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage || (recordingDecision.snapshot?.phase === "failed" ? recordingDecision.snapshot.errorMessage : "") : ""} />
+        <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" && !recovery.snapshot?.items.some(item=>item.sessionId===state.snapshot.sessionId && item.phase==="failed") ? state.snapshot.errorMessage || (recordingDecision.snapshot?.phase === "failed" ? recordingDecision.snapshot.errorMessage : "") : ""} />
 
         <header className="topbar"><nav className="screen-navigation" aria-label="画面の移動">{history.previous && <IconButton label="前の画面へ戻る" icon="previous" data-screen-navigation disabled={navigationLocked} onClick={() => void goBack()} />}{screen !== "meetings" && <><button type="button" className="breadcrumb-button" data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => { setSelectedMeeting(null);  setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button><span aria-hidden="true">/</span></>}<span aria-current="page">{detail ? "会議詳細" : screen === "recording" ? preparation ? "新しい録音" : "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : screen === "jobs" ? "ジョブ一覧" : screen === "logs" ? "内部ログ" : screen === "voices" ? "ボイス一覧" : screen === "prompts" ? "プロンプト" : "設定"}</span></nav><div className="topbar-actions"><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && screen!=="recording" && <button type="button" className="small-secondary" data-screen-navigation disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && screen!=="recording" && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={event => void stopRecording(event.currentTarget)}>録音を終了</button>}</div><NotificationPopover open={notificationsOpen} onOpenChange={setNotificationsOpen}><NotificationList visible={notificationsOpen} onOpen={openNotifiedMeeting} locked={navigationLocked}/></NotificationPopover></div><ToastHost docked={detail}/></header>
         <CommonOperationProgress onOpenJobs={showJobs} />
@@ -436,7 +432,6 @@ function MainWindow() {
         <AppUpdateBanner />
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
-          <ArchivedInputNotices meetingIds={meetings.map(meeting=>meeting.id)} locked={navigationLocked} paused={!dataOperation.connected||dataPending||!!dataOperation.snapshot?.busy||dataOperation.snapshot?.phase==="ready"||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
           <AudioImportPanel overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
@@ -480,13 +475,12 @@ function MainWindow() {
           }} /> : null}
           <section className="meetings-card" aria-label="保存済み会議" hidden={detail}>
             <div className="card-head"><input type="search" className="meeting-search" aria-label="会議名を検索" placeholder="会議名を検索" value={meetingQuery} onChange={event => setMeetingQuery(event.target.value)} /><IconButton label="再読込" icon="refresh" onClick={reloadMeetings} disabled={!isTauri() || writeLocked} /></div>
-            <ToastNotice scope="main" type="recording-recovered" message={recoveredCount > 0 ? `前回の音声保存 ${recoveredCount} 件を検証して復旧しました。` : ""} onClose={() => setRecoveredCount(0)} />
             {!detail && <IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} />}
             {restoredFilter && <p className="meeting-list-notice">今回復元した会議を表示しています。<button type="button" className="small-secondary" data-screen-navigation="write" disabled={writeLocked} onClick={() => void navigate(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}
             {shownMeetings.length === 0 ? <p className="empty-meetings">{meetingQuery ? "条件に合う会議はありません。" : restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <div className="meeting-table-frame"><table className="meeting-table"><thead><tr><th scope="col">会議名</th><th scope="col">作成日時</th><th scope="col">状態</th><th scope="col"><span className="sr-only">操作</span></th></tr></thead><tbody>{shownMeetings.map((meeting) => <tr key={meeting.id}>
               <td><button type="button" className="meeting-name" data-screen-navigation="write" onClick={() => selectMeeting(meeting.id)} disabled={writeLocked}>{meeting.title}</button>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}</td>
               <td className="meeting-date">{new Date(meeting.createdAt).toLocaleString("ja-JP")}</td>
-              <td><span className="state-pill">{meetingStatusLabel(meeting, state, recovery.snapshot)}</span>{!["recorded", "imported"].includes(meeting.lifecycle) && recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <small role="status">回復できませんでした。録音は未完了のまま保持しています。</small>}{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">回復状態を確認できません。表示は前回取得した状態です。</small>}</td>
+              <td><span className="state-pill">{meetingStatusLabel(meeting, state, recovery.snapshot)}</span>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">回復状態を確認できません。表示は前回取得した状態です。</small>}</td>
               <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked}><button type="button" role="menuitem" data-screen-navigation="write" onClick={() => selectMeeting(meeting.id)} disabled={writeLocked}>開く</button><MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id)?.phase === "running"} meeting={meeting} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} />{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">削除中・要確認</span>}</RowMenu></td>
             </tr>)}</tbody></table></div>}
           </section>
